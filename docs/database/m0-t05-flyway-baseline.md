@@ -43,7 +43,8 @@ Java `BigDecimal`. `real` and `double precision` are prohibited on that path.
 ## Evidence
 
 `PostgresMigrationIntegrationTests` runs only when an isolated PostgreSQL test
-URL is explicitly provided. CI supplies a fresh PostgreSQL service and proves:
+URL is explicitly provided and `RAMALS_TEST_POSTGRES_ALLOW_RESET=true` confirms
+that its schemas may be reset. CI supplies a fresh PostgreSQL service and proves:
 
 - installation from an empty database through V001;
 - a forward upgrade through V002 and a test-only V003;

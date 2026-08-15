@@ -19,6 +19,7 @@ import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 @EnabledIfEnvironmentVariable(named = "RAMALS_TEST_POSTGRES_URL", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "RAMALS_TEST_POSTGRES_ALLOW_RESET", matches = "(?i)true")
 @TestMethodOrder(OrderAnnotation.class)
 class PostgresMigrationIntegrationTests {
 
@@ -32,16 +33,38 @@ class PostgresMigrationIntegrationTests {
   @BeforeAll
   static void prepareRoles() throws SQLException {
     databaseUrl = requiredEnvironment("RAMALS_TEST_POSTGRES_URL");
+    String adminUser = requiredEnvironment("RAMALS_TEST_POSTGRES_ADMIN_USER");
     try (Connection connection = DriverManager.getConnection(
             databaseUrl,
-            requiredEnvironment("RAMALS_TEST_POSTGRES_ADMIN_USER"),
+            adminUser,
             requiredEnvironment("RAMALS_TEST_POSTGRES_ADMIN_PASSWORD"));
         Statement statement = connection.createStatement()) {
-      statement.execute("CREATE ROLE " + MIGRATION_USER + " LOGIN PASSWORD '" + MIGRATION_PASSWORD + "'");
-      statement.execute("CREATE ROLE " + RUNTIME_USER + " LOGIN PASSWORD '" + RUNTIME_PASSWORD + "'");
-      statement.execute("ALTER DATABASE ramals_test OWNER TO " + MIGRATION_USER);
-      statement.execute("REVOKE CONNECT ON DATABASE ramals_test FROM PUBLIC");
-      statement.execute("GRANT CONNECT ON DATABASE ramals_test TO " + MIGRATION_USER + ", " + RUNTIME_USER);
+      String databaseName = currentDatabase(statement);
+      String quotedDatabase = statement.enquoteIdentifier(databaseName, true);
+      String quotedAdmin = statement.enquoteIdentifier(adminUser, true);
+
+      statement.execute("""
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ramals_core_migration') THEN
+              CREATE ROLE ramals_core_migration LOGIN PASSWORD 'm0-t05-migration-test';
+            ELSE
+              ALTER ROLE ramals_core_migration WITH LOGIN PASSWORD 'm0-t05-migration-test';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ramals_core_runtime') THEN
+              CREATE ROLE ramals_core_runtime LOGIN PASSWORD 'm0-t05-runtime-test';
+            ELSE
+              ALTER ROLE ramals_core_runtime WITH LOGIN PASSWORD 'm0-t05-runtime-test';
+            END IF;
+          END
+          $$;
+          """);
+      statement.execute("ALTER DATABASE " + quotedDatabase + " OWNER TO " + quotedAdmin);
+      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit CASCADE");
+      statement.execute("ALTER DATABASE " + quotedDatabase + " OWNER TO " + MIGRATION_USER);
+      statement.execute("REVOKE CONNECT ON DATABASE " + quotedDatabase + " FROM PUBLIC");
+      statement.execute("GRANT CONNECT ON DATABASE " + quotedDatabase + " TO "
+          + MIGRATION_USER + ", " + RUNTIME_USER);
     }
   }
 
@@ -68,16 +91,16 @@ class PostgresMigrationIntegrationTests {
           + id + "', 0.750000)");
 
       assertThatThrownBy(() -> statement.execute("CREATE TABLE core.runtime_must_not_create (id UUID)"))
-          .isInstanceOf(SQLException.class);
+          .isInstanceOfSatisfying(SQLException.class, PostgresMigrationIntegrationTests::assertPermissionDenied);
       assertThatThrownBy(() -> statement.executeUpdate(
           "UPDATE core.flyway_schema_history SET description = 'tampered' WHERE installed_rank = 1"))
-          .isInstanceOf(SQLException.class);
+          .isInstanceOfSatisfying(SQLException.class, PostgresMigrationIntegrationTests::assertPermissionDenied);
       assertThatThrownBy(() -> statement.executeUpdate(
           "UPDATE ledger.privilege_probe SET mastery_value = 0.800000 WHERE id = '" + id + "'"))
-          .isInstanceOf(SQLException.class);
+          .isInstanceOfSatisfying(SQLException.class, PostgresMigrationIntegrationTests::assertPermissionDenied);
       assertThatThrownBy(() -> statement.executeUpdate(
           "DELETE FROM ledger.privilege_probe WHERE id = '" + id + "'"))
-          .isInstanceOf(SQLException.class);
+          .isInstanceOfSatisfying(SQLException.class, PostgresMigrationIntegrationTests::assertPermissionDenied);
     }
   }
 
@@ -131,5 +154,18 @@ class PostgresMigrationIntegrationTests {
       throw new IllegalStateException(name + " must be set for PostgreSQL integration tests");
     }
     return value;
+  }
+
+  private static String currentDatabase(Statement statement) throws SQLException {
+    try (ResultSet result = statement.executeQuery("SELECT current_database()")) {
+      if (!result.next()) {
+        throw new SQLException("PostgreSQL did not return current_database()");
+      }
+      return result.getString(1);
+    }
+  }
+
+  private static void assertPermissionDenied(SQLException exception) {
+    assertThat(exception.getSQLState()).isEqualTo("42501");
   }
 }
