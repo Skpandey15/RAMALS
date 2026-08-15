@@ -10,6 +10,9 @@ import io.ramals.learningplatform.assessment.UnknownAssessmentItemException;
 import io.ramals.learningplatform.curriculum.CurriculumNotFoundException;
 import io.ramals.learningplatform.learner.LearnerGoalNotSetException;
 import io.ramals.learningplatform.learner.UnknownLearningDomainException;
+import io.ramals.learningplatform.learning.InvalidSessionTransitionException;
+import io.ramals.learningplatform.learning.LearningSessionNotFoundException;
+import io.ramals.learningplatform.learning.SessionConflictException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -158,6 +161,50 @@ public class ApiExceptionHandler {
         "Invalid request",
         "IDEMPOTENCY_KEY_REQUIRED",
         "A valid Idempotency-Key header is required for this operation.",
+        request);
+  }
+
+  @ExceptionHandler(LearningSessionNotFoundException.class)
+  ResponseEntity<ApiProblem> handleSessionNotFound(
+      LearningSessionNotFoundException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        "Session not found",
+        "SESSION_NOT_FOUND",
+        "The requested learning session does not exist.",
+        request);
+  }
+
+  @ExceptionHandler(InvalidSessionTransitionException.class)
+  ResponseEntity<ApiProblem> handleInvalidSessionTransition(
+      InvalidSessionTransitionException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "Invalid session transition",
+        "INVALID_SESSION_TRANSITION",
+        "The command is not valid for the session's current state.",
+        request);
+  }
+
+  @ExceptionHandler(SessionConflictException.class)
+  ResponseEntity<ApiProblem> handleSessionConflict(
+      SessionConflictException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.CONFLICT,
+        "Session conflict",
+        "SESSION_CONFLICT",
+        "The session was modified concurrently; reload and retry.",
+        request);
+  }
+
+  @ExceptionHandler(IllegalArgumentException.class)
+  ResponseEntity<ApiProblem> handleIllegalArgument(
+      IllegalArgumentException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.BAD_REQUEST,
+        "Invalid request",
+        "VALIDATION_FAILED",
+        "The request contained an invalid value.",
         request);
   }
 
