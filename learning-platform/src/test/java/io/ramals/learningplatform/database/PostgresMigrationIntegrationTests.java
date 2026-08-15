@@ -82,7 +82,7 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(9);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 
