@@ -9,6 +9,20 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 1
       connection-timeout: 5000
+  flyway:
+    enabled: true
+    url: ${RAMALS_DB_URL}
+    user: ${RAMALS_DB_MIGRATION_USER:ramals_core_migration}
+    password: ${RAMALS_DB_MIGRATION_PASSWORD}
+    locations: classpath:db/migration
+    default-schema: core
+    schemas: core,ledger,audit
+    create-schemas: true
+    validate-migration-naming: true
+    validate-on-migrate: true
+    clean-disabled: true
+    baseline-on-migrate: false
+    out-of-order: false
   sql:
     init:
       mode: never

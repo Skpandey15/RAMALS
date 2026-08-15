@@ -1,0 +1,10 @@
+CREATE TABLE core.upgrade_probe (
+  id UUID PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE ledger.privilege_probe (
+  id UUID PRIMARY KEY,
+  mastery_value NUMERIC(8, 6) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
