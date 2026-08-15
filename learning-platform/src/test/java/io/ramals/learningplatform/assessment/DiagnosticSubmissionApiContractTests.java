@@ -12,6 +12,7 @@ import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.mastery.MasteryService;
+import io.ramals.learningplatform.recommendation.RecommendationService;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -59,6 +60,9 @@ class DiagnosticSubmissionApiContractTests {
 
   @MockitoBean
   MasteryService masteryService;
+
+  @MockitoBean
+  RecommendationService recommendationService;
 
   private static JwtRequestPostProcessor learner(String subject) {
     return jwt()

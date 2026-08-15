@@ -13,6 +13,9 @@ import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.recommendation.RecommendationPolicy;
+import io.ramals.learningplatform.recommendation.RecommendationRepository;
+import io.ramals.learningplatform.recommendation.RecommendationService;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -127,9 +130,11 @@ class MasteryEnginePersistenceIntegrationTests {
       AssessmentRepository assessments = new AssessmentRepository(runtimeJdbc, mapper);
       LearnerService learnerService = new LearnerService(learners);
       diagnostics = new DiagnosticService(assessments, learnerService);
+      RecommendationService recommendationService = new RecommendationService(
+          new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorer(),
-          new EvidenceService(evidence), masteryService, mapper);
+          new EvidenceService(evidence), masteryService, recommendationService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
   }

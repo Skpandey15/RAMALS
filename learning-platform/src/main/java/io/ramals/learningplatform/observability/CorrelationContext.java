@@ -17,6 +17,12 @@ public final class CorrelationContext {
     return value == null ? "" : value;
   }
 
+  /** The W3C traceId bound to the current request thread (via MDC), or empty if untraced. */
+  public static String currentTraceId() {
+    String value = MDC.get("traceId");
+    return value == null ? "" : value;
+  }
+
   public static String interactionId(HttpServletRequest request) {
     return stringAttribute(request, INTERACTION_ID_ATTRIBUTE);
   }

@@ -13,6 +13,9 @@ import io.ramals.learningplatform.mastery.MasteryRepository;
 import io.ramals.learningplatform.mastery.MasteryService;
 import io.ramals.learningplatform.mastery.MasteryStatusPolicy;
 import io.ramals.learningplatform.mastery.WeightedMasteryCalculator;
+import io.ramals.learningplatform.recommendation.RecommendationPolicy;
+import io.ramals.learningplatform.recommendation.RecommendationRepository;
+import io.ramals.learningplatform.recommendation.RecommendationService;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -120,8 +123,11 @@ class DiagnosticSubmissionPersistenceIntegrationTests {
       MasteryService masteryService = new MasteryService(
           new MasteryRepository(runtimeJdbc), evidenceRepository, new WeightedMasteryCalculator(),
           new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
+      RecommendationService recommendationService = new RecommendationService(
+          new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
-          assessments, learnerService, new DiagnosticScorer(), evidenceService, masteryService, mapper);
+          assessments, learnerService, new DiagnosticScorer(), evidenceService, masteryService,
+          recommendationService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
   }
