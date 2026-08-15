@@ -1,6 +1,9 @@
 package io.ramals.learningplatform.observability;
 
 import jakarta.servlet.http.HttpServletRequest;
+import io.ramals.learningplatform.admin.ContentPublicationException;
+import io.ramals.learningplatform.admin.ContentVersionNotFoundException;
+import io.ramals.learningplatform.admin.InvalidContentTransitionException;
 import io.ramals.learningplatform.assessment.AttemptNotFoundException;
 import io.ramals.learningplatform.assessment.DiagnosticNotFoundException;
 import io.ramals.learningplatform.assessment.InvalidAttemptStateException;
@@ -194,6 +197,39 @@ public class ApiExceptionHandler {
         "Session conflict",
         "SESSION_CONFLICT",
         "The session was modified concurrently; reload and retry.",
+        request);
+  }
+
+  @ExceptionHandler(ContentVersionNotFoundException.class)
+  ResponseEntity<ApiProblem> handleContentVersionNotFound(
+      ContentVersionNotFoundException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        "Content version not found",
+        "CONTENT_VERSION_NOT_FOUND",
+        "The requested curriculum version does not exist.",
+        request);
+  }
+
+  @ExceptionHandler(InvalidContentTransitionException.class)
+  ResponseEntity<ApiProblem> handleInvalidContentTransition(
+      InvalidContentTransitionException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "Invalid content transition",
+        "INVALID_CONTENT_TRANSITION",
+        "The lifecycle command is not valid for the version's current status.",
+        request);
+  }
+
+  @ExceptionHandler(ContentPublicationException.class)
+  ResponseEntity<ApiProblem> handleContentPublication(
+      ContentPublicationException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "Content cannot be published",
+        "CONTENT_NOT_PUBLISHABLE",
+        "The curriculum version does not satisfy the content-integrity rules for publication.",
         request);
   }
 
