@@ -183,6 +183,33 @@ CREATE TRIGGER trg_learning_objective_immutable
 BEFORE INSERT OR UPDATE OR DELETE ON core.learning_objective
 FOR EACH ROW EXECUTE FUNCTION core.protect_versioned_curriculum_row();
 
+CREATE FUNCTION core.protect_published_skill_identity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM core.skill_version skill_version
+    JOIN core.curriculum_version curriculum_version
+      ON curriculum_version.id = skill_version.curriculum_version_id
+    WHERE skill_version.skill_id = OLD.id
+      AND curriculum_version.status IN ('PUBLISHED', 'RETIRED')
+  ) THEN
+    RAISE EXCEPTION 'skill identity % is referenced by published curriculum history', OLD.id
+      USING ERRCODE = '55000';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_skill_identity_immutable
+BEFORE UPDATE OR DELETE ON core.skill
+FOR EACH ROW EXECUTE FUNCTION core.protect_published_skill_identity();
+
 CREATE FUNCTION core.validate_curriculum_publication()
 RETURNS TRIGGER
 LANGUAGE plpgsql

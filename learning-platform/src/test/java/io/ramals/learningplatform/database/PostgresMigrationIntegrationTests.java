@@ -184,6 +184,13 @@ class PostgresMigrationIntegrationTests {
           .isInstanceOfSatisfying(SQLException.class,
               exception -> assertThat(exception.getSQLState()).isEqualTo("55000"));
 
+      assertThatThrownBy(() -> statement.execute("""
+          UPDATE core.skill SET stable_code = 'KAFKA_BROKER_RENAMED'
+          WHERE id = '01900000-0000-7000-8000-000000000101'
+          """))
+          .isInstanceOfSatisfying(SQLException.class,
+              exception -> assertThat(exception.getSQLState()).isEqualTo("55000"));
+
       statement.execute("""
           INSERT INTO core.curriculum_version (id, domain_id, version_code)
           VALUES ('01900000-0000-7000-8000-000000009902',
@@ -238,7 +245,7 @@ class PostgresMigrationIntegrationTests {
     assertThat(graph.skills().stream()
         .filter(skill -> skill.stableCode().equals("KAFKA_FAILURE_RECOVERY"))
         .findFirst().orElseThrow().prerequisiteSkillCodes())
-        .containsExactly("KAFKA_REBALANCING", "KAFKA_ISR");
+        .containsExactly("KAFKA_ISR", "KAFKA_REBALANCING");
   }
 
   private static org.flywaydb.core.api.configuration.FluentConfiguration configuration(String... locations) {
