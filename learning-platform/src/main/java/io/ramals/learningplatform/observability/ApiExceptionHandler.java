@@ -2,12 +2,16 @@ package io.ramals.learningplatform.observability;
 
 import jakarta.servlet.http.HttpServletRequest;
 import io.ramals.learningplatform.curriculum.CurriculumNotFoundException;
+import io.ramals.learningplatform.learner.LearnerGoalNotSetException;
+import io.ramals.learningplatform.learner.UnknownLearningDomainException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -60,6 +64,55 @@ public class ApiExceptionHandler {
         "Curriculum not found",
         "CURRICULUM_NOT_FOUND",
         "The requested published curriculum resource does not exist.",
+        request);
+  }
+
+  @ExceptionHandler(LearnerGoalNotSetException.class)
+  ResponseEntity<ApiProblem> handleGoalNotSet(
+      LearnerGoalNotSetException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        "Learning goal not set",
+        "GOAL_NOT_SET",
+        "No learning goal has been set for this learner.",
+        request);
+  }
+
+  @ExceptionHandler(UnknownLearningDomainException.class)
+  ResponseEntity<ApiProblem> handleUnknownDomain(
+      UnknownLearningDomainException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "Unknown learning domain",
+        "UNKNOWN_LEARNING_DOMAIN",
+        "The requested learning domain does not exist or is not active.",
+        request);
+  }
+
+  @ExceptionHandler(MethodArgumentNotValidException.class)
+  ResponseEntity<ApiProblem> handleValidationFailure(
+      MethodArgumentNotValidException exception, HttpServletRequest request) {
+    String detail = exception.getBindingResult().getFieldErrors().stream()
+        .map(error -> error.getField() + " " + error.getDefaultMessage())
+        .sorted()
+        .reduce((left, right) -> left + "; " + right)
+        .orElse("The request payload failed validation.");
+    return problem(
+        HttpStatus.BAD_REQUEST,
+        "Invalid request",
+        "VALIDATION_FAILED",
+        detail,
+        request);
+  }
+
+  @ExceptionHandler(HttpMessageNotReadableException.class)
+  ResponseEntity<ApiProblem> handleUnreadableBody(
+      HttpMessageNotReadableException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.BAD_REQUEST,
+        "Invalid request",
+        "MALFORMED_REQUEST",
+        "The request body could not be parsed.",
         request);
   }
 
