@@ -1,10 +1,30 @@
+import { isAuthenticated, login, logout } from './auth/authClient';
+import { LearnerDashboard } from './learning/LearnerDashboard';
+
 export function App() {
+  if (!isAuthenticated()) {
+    return (
+      <main className="app">
+        <p className="eyebrow">RAMALS</p>
+        <h1>Adaptive learning</h1>
+        <p>Deterministic adaptive learning before agentic intelligence.</p>
+        <button
+          type="button"
+          onClick={() => {
+            void login();
+          }}
+        >
+          Log in
+        </button>
+      </main>
+    );
+  }
+
   return (
-    <main>
-      <p className="eyebrow">MVP-0 foundation</p>
-      <h1>RAMALS</h1>
-      <p>Deterministic adaptive learning before agentic intelligence.</p>
-    </main>
+    <LearnerDashboard
+      onLogout={() => {
+        void logout();
+      }}
+    />
   );
 }
-

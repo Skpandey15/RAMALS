@@ -18,3 +18,40 @@ export async function interactionFetch(
   return fetch(input, { ...init, headers });
 }
 
+/**
+ * A failed API call. `supportCode` is the interactionId the learner can quote to support; it never
+ * contains tokens or other sensitive data, so it is safe to display.
+ */
+export class RamalsApiError extends Error {
+  constructor(
+    readonly code: string,
+    readonly supportCode: string,
+    readonly httpStatus: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RamalsApiError';
+  }
+}
+
+/** Builds a display-safe error from a non-OK response, preferring the server's echoed interactionId. */
+export async function toApiError(
+  response: Response,
+  fallbackInteractionId: string,
+): Promise<RamalsApiError> {
+  let problem: Record<string, unknown>;
+  try {
+    problem = (await response.json()) as Record<string, unknown>;
+  } catch {
+    problem = {};
+  }
+  const echoed = response.headers.get(INTERACTION_ID_HEADER) ?? undefined;
+  const supportCode =
+    typeof problem.interactionId === 'string' && problem.interactionId
+      ? problem.interactionId
+      : (echoed ?? fallbackInteractionId);
+  const code = typeof problem.code === 'string' ? problem.code : 'UNKNOWN_ERROR';
+  const title = typeof problem.title === 'string' ? problem.title : 'The request could not be completed.';
+  return new RamalsApiError(code, supportCode, response.status, title);
+}
+
