@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import java.time.Instant;
@@ -51,6 +52,9 @@ class DiagnosticSubmissionApiContractTests {
 
   @MockitoBean
   LearnerRepository learnerRepository;
+
+  @MockitoBean
+  EvidenceService evidenceService;
 
   private static JwtRequestPostProcessor learner(String subject) {
     return jwt()
