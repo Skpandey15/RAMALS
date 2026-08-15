@@ -12,6 +12,9 @@ import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.mastery.MasteryRepository;
+import io.ramals.learningplatform.mastery.MasteryService;
+import io.ramals.learningplatform.mastery.WeightedMasteryCalculator;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -121,8 +124,10 @@ class EvidenceLedgerPersistenceIntegrationTests {
       evidenceService = new EvidenceService(evidence);
       LearnerService learnerService = new LearnerService(learners);
       diagnostics = new DiagnosticService(assessments, learnerService);
+      MasteryService masteryService = new MasteryService(
+          new MasteryRepository(runtimeJdbc), evidence, new WeightedMasteryCalculator());
       submissions = new DiagnosticSubmissionService(
-          assessments, learnerService, new DiagnosticScorer(), evidenceService, mapper);
+          assessments, learnerService, new DiagnosticScorer(), evidenceService, masteryService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
   }

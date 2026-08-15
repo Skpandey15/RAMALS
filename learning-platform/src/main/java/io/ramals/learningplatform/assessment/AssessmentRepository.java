@@ -38,6 +38,13 @@ public class AssessmentRepository {
         """, DIAGNOSTIC_MAPPER, domainCode).stream().findFirst();
   }
 
+  public Optional<UUID> findCurriculumVersionId(UUID assessmentVersionId) {
+    return jdbcTemplate.query(
+        "SELECT curriculum_version_id FROM core.assessment_version WHERE id = ?",
+        (result, row) -> result.getObject("curriculum_version_id", UUID.class), assessmentVersionId)
+        .stream().findFirst();
+  }
+
   public Optional<ResolvedDiagnostic> findDiagnosticByVersionId(UUID assessmentVersionId) {
     return jdbcTemplate.query("""
         SELECT av.id, d.code AS domain_code, a.stable_code AS assessment_code,
