@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.observability;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.MDC;
 
 public final class CorrelationContext {
 
@@ -8,6 +9,12 @@ public final class CorrelationContext {
   public static final String REQUEST_ID_ATTRIBUTE = CorrelationContext.class.getName() + ".requestId";
 
   private CorrelationContext() {
+  }
+
+  /** The interactionId bound to the current request thread (via MDC), or empty if none. */
+  public static String currentInteractionId() {
+    String value = MDC.get("interactionId");
+    return value == null ? "" : value;
   }
 
   public static String interactionId(HttpServletRequest request) {

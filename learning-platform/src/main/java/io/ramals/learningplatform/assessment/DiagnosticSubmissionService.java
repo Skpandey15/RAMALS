@@ -1,8 +1,11 @@
 package io.ramals.learningplatform.assessment;
 
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
+import io.ramals.learningplatform.evidence.EvidenceService;
+import io.ramals.learningplatform.evidence.SkillEvidenceInput;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.observability.CorrelationContext;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -26,16 +29,19 @@ public class DiagnosticSubmissionService {
   private final AssessmentRepository repository;
   private final LearnerService learnerService;
   private final DiagnosticScorer scorer;
+  private final EvidenceService evidenceService;
   private final ObjectMapper objectMapper;
 
   public DiagnosticSubmissionService(
       AssessmentRepository repository,
       LearnerService learnerService,
       DiagnosticScorer scorer,
+      EvidenceService evidenceService,
       ObjectMapper objectMapper) {
     this.repository = repository;
     this.learnerService = learnerService;
     this.scorer = scorer;
+    this.evidenceService = evidenceService;
     this.objectMapper = objectMapper;
   }
 
@@ -84,7 +90,21 @@ public class DiagnosticSubmissionService {
     }
 
     repository.completeAttempt(attempt.id());
-    return buildResult(withStatus(attempt, "COMPLETED"));
+    AssessmentAttempt completed = withStatus(attempt, "COMPLETED");
+    SubmissionResult result = buildResult(completed);
+    recordEvidence(completed, result);
+    return result;
+  }
+
+  private void recordEvidence(AssessmentAttempt attempt, SubmissionResult result) {
+    List<SkillEvidenceInput> observations = result.skillScores().stream()
+        .map(score -> new SkillEvidenceInput(
+            score.skillCode(), score.observedScore(), score.normalizedScore(),
+            score.itemsAnswered(), score.itemsCorrect()))
+        .toList();
+    evidenceService.recordDiagnosticEvidence(
+        attempt.learnerId(), attempt.id(), attempt.assessmentVersionId(),
+        DiagnosticScorer.SCORING_VERSION, observations, CorrelationContext.currentInteractionId());
   }
 
   private void validateSelection(AssessmentItemScoringView view, List<String> selectedOptions) {

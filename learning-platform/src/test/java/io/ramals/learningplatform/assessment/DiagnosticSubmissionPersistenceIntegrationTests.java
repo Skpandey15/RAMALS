@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
+import io.ramals.learningplatform.evidence.EvidenceRepository;
+import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
 import java.sql.Connection;
@@ -20,6 +22,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.slf4j.MDC;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -107,8 +110,9 @@ class DiagnosticSubmissionPersistenceIntegrationTests {
       learners = new LearnerRepository(runtimeJdbc);
       LearnerService learnerService = new LearnerService(learners);
       diagnostics = new DiagnosticService(assessments, learnerService);
-      submissions =
-          new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorer(), mapper);
+      EvidenceService evidenceService = new EvidenceService(new EvidenceRepository(runtimeJdbc));
+      submissions = new DiagnosticSubmissionService(
+          assessments, learnerService, new DiagnosticScorer(), evidenceService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
   }
@@ -118,8 +122,13 @@ class DiagnosticSubmissionPersistenceIntegrationTests {
   }
 
   private SubmissionResult submit(String subject, UUID attemptId, DiagnosticSubmissionRequest request) {
-    return transactionTemplate.execute(
-        status -> submissions.submit(subject, "kafka", attemptId.toString(), request));
+    MDC.put("interactionId", "01920000-0000-7000-8000-0000000000e1");
+    try {
+      return transactionTemplate.execute(
+          status -> submissions.submit(subject, "kafka", attemptId.toString(), request));
+    } finally {
+      MDC.remove("interactionId");
+    }
   }
 
   private long responseCount(UUID attemptId) {
