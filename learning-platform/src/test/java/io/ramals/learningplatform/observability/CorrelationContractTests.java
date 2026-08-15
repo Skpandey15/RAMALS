@@ -20,7 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 @SpringBootTest(properties = {
     "RAMALS_DB_URL=jdbc:h2:mem:correlation;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
     "RAMALS_DB_USER=sa",
-    "RAMALS_DB_PASSWORD="
+    "RAMALS_DB_PASSWORD=",
+    "spring.flyway.enabled=false"
 })
 @AutoConfigureMockMvc
 @Import(CorrelationContractTests.FailureController.class)

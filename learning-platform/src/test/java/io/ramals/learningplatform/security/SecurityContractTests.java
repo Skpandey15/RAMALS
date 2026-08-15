@@ -20,7 +20,8 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest(properties = {
     "RAMALS_DB_URL=jdbc:h2:mem:security;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
     "RAMALS_DB_USER=sa",
-    "RAMALS_DB_PASSWORD="
+    "RAMALS_DB_PASSWORD=",
+    "spring.flyway.enabled=false"
 })
 @AutoConfigureMockMvc
 class SecurityContractTests {

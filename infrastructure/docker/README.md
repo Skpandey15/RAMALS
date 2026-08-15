@@ -14,13 +14,26 @@ Fill every value in `.env`. Use unique, randomly generated local-development pas
 
 ```dotenv
 RAMALS_DB_NAME=ramals
-RAMALS_DB_USER=ramals_local
+RAMALS_DB_ADMIN_USER=ramals_bootstrap
+RAMALS_DB_RUNTIME_USER=ramals_core_runtime
+RAMALS_DB_MIGRATION_USER=ramals_core_migration
 KEYCLOAK_DB_NAME=keycloak
 KEYCLOAK_DB_USER=keycloak_local
 RAMALS_KEYCLOAK_ADMIN=choose-a-nondefault-admin-name
 RAMALS_OIDC_ISSUER_URI=http://keycloak:8080/realms/ramals
 RAMALS_WEB_ORIGIN=http://localhost:5173
 ```
+
+Use different generated values for `RAMALS_DB_ADMIN_PASSWORD`,
+`RAMALS_DB_MIGRATION_PASSWORD`, and `RAMALS_DB_RUNTIME_PASSWORD`. The bootstrap
+identity creates the two least-privilege identities only during initialization;
+the backend uses the runtime identity for requests and the migration identity
+only for Flyway.
+
+An existing PostgreSQL volume is never modified automatically because image
+initialization scripts run only for a new data directory. Reconcile an existing
+development database during a controlled maintenance window; do not delete the
+volume merely to apply M0-T05.
 
 Then start the platform:
 
@@ -60,4 +73,4 @@ Destructive reset for disposable local data only:
 docker compose --env-file .env -f infrastructure/docker/compose.yml down --volumes
 ```
 
-The last command permanently removes the local PostgreSQL volume. It is never part of normal stop/restart.
+The last command permanently removes the local PostgreSQL volume. It is never part of normal stop/restart or M0-T05 migration.
