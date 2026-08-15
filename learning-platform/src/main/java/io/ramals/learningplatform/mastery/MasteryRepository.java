@@ -121,6 +121,27 @@ public class MasteryRepository {
         """, SNAPSHOT_MAPPER, learnerId, skillId, curriculumVersionId);
   }
 
+  /** Latest mastery per skill for a learner in a curriculum version, with the stable skill code. */
+  public List<MasteryMapEntry> latestMasteryMap(UUID learnerId, UUID curriculumVersionId) {
+    return jdbcTemplate.query("""
+        SELECT skill_code, mastery_score, evidence_confidence, mastery_status, aggregate_version
+        FROM (
+          SELECT DISTINCT ON (ms.skill_id) s.stable_code AS skill_code, ms.mastery_score,
+                 ms.evidence_confidence, ms.mastery_status, ms.aggregate_version
+          FROM ledger.mastery_snapshot ms
+          JOIN core.skill s ON s.id = ms.skill_id
+          WHERE ms.learner_id = ? AND ms.curriculum_version_id = ?
+          ORDER BY ms.skill_id, ms.aggregate_version DESC
+        ) latest
+        ORDER BY skill_code
+        """, (result, row) -> new MasteryMapEntry(
+            result.getString("skill_code"),
+            result.getBigDecimal("mastery_score"),
+            result.getBigDecimal("evidence_confidence"),
+            result.getString("mastery_status"),
+            result.getInt("aggregate_version")), learnerId, curriculumVersionId);
+  }
+
   private static final String SNAPSHOT_SELECT = """
       SELECT id, learner_id, skill_id, curriculum_version_id, aggregate_version, mastery_score,
              mastery_status, threshold, evidence_confidence, confidence_threshold, evidence_count,
