@@ -9,6 +9,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.UUID;
+import io.ramals.learningplatform.curriculum.CurriculumGraph;
+import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
+import io.ramals.learningplatform.curriculum.CurriculumRepository;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.BeforeAll;
@@ -17,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 @EnabledIfEnvironmentVariable(named = "RAMALS_TEST_POSTGRES_URL", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "RAMALS_TEST_POSTGRES_ALLOW_RESET", matches = "(?i)true")
@@ -77,7 +82,7 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(3);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 
@@ -136,6 +141,106 @@ class PostgresMigrationIntegrationTests {
     }
   }
 
+  @Test
+  @Order(4)
+  void kafkaV1SeedIsPublishedVersionedAndDeterministic() throws SQLException {
+    try (Connection runtime = DriverManager.getConnection(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD);
+        Statement statement = runtime.createStatement()) {
+      assertThat(count(statement, """
+          SELECT count(*) FROM core.skill_version sv
+          JOIN core.curriculum_version cv ON cv.id = sv.curriculum_version_id
+          JOIN core.learning_domain d ON d.id = cv.domain_id
+          WHERE d.code = 'KAFKA' AND cv.version_code = 'v1' AND cv.status = 'PUBLISHED'
+          """)).isEqualTo(15);
+      assertThat(count(statement, """
+          SELECT count(*) FROM core.learning_objective objective
+          JOIN core.skill_version sv ON sv.id = objective.skill_version_id
+          WHERE sv.curriculum_version_id = '01900000-0000-7000-8000-000000000002'
+          """)).isEqualTo(15);
+      assertThat(count(statement, """
+          SELECT count(*) FROM core.skill_prerequisite
+          WHERE curriculum_version_id = '01900000-0000-7000-8000-000000000002'
+          """)).isEqualTo(16);
+    }
+  }
+
+  @Test
+  @Order(5)
+  void databaseRejectsCyclesDuplicateStableCodesAndPublishedMutation() throws SQLException {
+    try (Connection migration = DriverManager.getConnection(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD);
+        Statement statement = migration.createStatement()) {
+      assertThatThrownBy(() -> statement.execute("""
+          INSERT INTO core.skill (id, domain_id, stable_code)
+          VALUES ('01900000-0000-7000-8000-000000009901',
+                  '01900000-0000-7000-8000-000000000001', 'KAFKA_BROKER')
+          """))
+          .isInstanceOfSatisfying(SQLException.class,
+              exception -> assertThat(exception.getSQLState()).isEqualTo("23505"));
+
+      assertThatThrownBy(() -> statement.execute("""
+          UPDATE core.skill_version SET title = 'Changed'
+          WHERE id = '01900000-0000-7000-8000-000000000201'
+          """))
+          .isInstanceOfSatisfying(SQLException.class,
+              exception -> assertThat(exception.getSQLState()).isEqualTo("55000"));
+
+      statement.execute("""
+          INSERT INTO core.curriculum_version (id, domain_id, version_code)
+          VALUES ('01900000-0000-7000-8000-000000009902',
+                  '01900000-0000-7000-8000-000000000001', 'cycle-test')
+          """);
+      statement.execute("""
+          INSERT INTO core.skill_version
+            (id, skill_id, curriculum_version_id, title, description, difficulty,
+             estimated_learning_minutes, display_order)
+          VALUES
+            ('01900000-0000-7000-8000-000000009903','01900000-0000-7000-8000-000000000101','01900000-0000-7000-8000-000000009902','A','A','FOUNDATIONAL',10,1),
+            ('01900000-0000-7000-8000-000000009904','01900000-0000-7000-8000-000000000102','01900000-0000-7000-8000-000000009902','B','B','FOUNDATIONAL',10,2),
+            ('01900000-0000-7000-8000-000000009905','01900000-0000-7000-8000-000000000103','01900000-0000-7000-8000-000000009902','C','C','FOUNDATIONAL',10,3)
+          """);
+      statement.execute("""
+          INSERT INTO core.skill_prerequisite (curriculum_version_id, skill_id, prerequisite_skill_id)
+          VALUES
+            ('01900000-0000-7000-8000-000000009902','01900000-0000-7000-8000-000000000101','01900000-0000-7000-8000-000000000102'),
+            ('01900000-0000-7000-8000-000000009902','01900000-0000-7000-8000-000000000102','01900000-0000-7000-8000-000000000103')
+          """);
+      assertThatThrownBy(() -> statement.execute("""
+          INSERT INTO core.skill_prerequisite (curriculum_version_id, skill_id, prerequisite_skill_id)
+          VALUES ('01900000-0000-7000-8000-000000009902',
+                  '01900000-0000-7000-8000-000000000103',
+                  '01900000-0000-7000-8000-000000000101')
+          """))
+          .isInstanceOfSatisfying(SQLException.class,
+              exception -> assertThat(exception.getSQLState()).isEqualTo("23514"));
+    }
+  }
+
+  @Test
+  @Order(6)
+  void retiredHistoricalVersionRemainsQueryableWithoutNPlusOneReads() throws SQLException {
+    try (Connection migration = DriverManager.getConnection(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD);
+        Statement statement = migration.createStatement()) {
+      statement.execute("""
+          UPDATE core.curriculum_version SET status = 'RETIRED'
+          WHERE id = '01900000-0000-7000-8000-000000000002'
+          """);
+    }
+
+    DriverManagerDataSource dataSource =
+        new DriverManagerDataSource(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD);
+    CurriculumGraph graph = new CurriculumRepository(new JdbcTemplate(dataSource))
+        .findReadableGraph("KAFKA", "v1")
+        .orElseThrow();
+    new CurriculumGraphValidator().validate(graph);
+
+    assertThat(graph.status()).isEqualTo("RETIRED");
+    assertThat(graph.skills()).hasSize(15);
+    assertThat(graph.skills().stream()
+        .filter(skill -> skill.stableCode().equals("KAFKA_FAILURE_RECOVERY"))
+        .findFirst().orElseThrow().prerequisiteSkillCodes())
+        .containsExactly("KAFKA_REBALANCING", "KAFKA_ISR");
+  }
+
   private static org.flywaydb.core.api.configuration.FluentConfiguration configuration(String... locations) {
     return Flyway.configure()
         .dataSource(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD)
@@ -167,5 +272,12 @@ class PostgresMigrationIntegrationTests {
 
   private static void assertPermissionDenied(SQLException exception) {
     assertThat(exception.getSQLState()).isEqualTo("42501");
+  }
+
+  private static int count(Statement statement, String sql) throws SQLException {
+    try (ResultSet result = statement.executeQuery(sql)) {
+      result.next();
+      return result.getInt(1);
+    }
   }
 }

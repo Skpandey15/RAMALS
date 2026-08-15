@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.observability;
 
 import jakarta.servlet.http.HttpServletRequest;
+import io.ramals.learningplatform.curriculum.CurriculumNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -47,6 +48,18 @@ public class ApiExceptionHandler {
         "Access denied",
         "ACCESS_DENIED",
         "You are not authorized to perform this operation.",
+        request);
+  }
+
+  @ExceptionHandler(CurriculumNotFoundException.class)
+  ResponseEntity<ApiProblem> handleCurriculumNotFound(
+      CurriculumNotFoundException exception,
+      HttpServletRequest request) {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        "Curriculum not found",
+        "CURRICULUM_NOT_FOUND",
+        "The requested published curriculum resource does not exist.",
         request);
   }
 
