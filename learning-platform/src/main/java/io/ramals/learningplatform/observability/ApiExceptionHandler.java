@@ -3,7 +3,10 @@ package io.ramals.learningplatform.observability;
 import jakarta.servlet.http.HttpServletRequest;
 import io.ramals.learningplatform.assessment.AttemptNotFoundException;
 import io.ramals.learningplatform.assessment.DiagnosticNotFoundException;
+import io.ramals.learningplatform.assessment.InvalidAttemptStateException;
 import io.ramals.learningplatform.assessment.InvalidIdempotencyKeyException;
+import io.ramals.learningplatform.assessment.InvalidSubmissionException;
+import io.ramals.learningplatform.assessment.UnknownAssessmentItemException;
 import io.ramals.learningplatform.curriculum.CurriculumNotFoundException;
 import io.ramals.learningplatform.learner.LearnerGoalNotSetException;
 import io.ramals.learningplatform.learner.UnknownLearningDomainException;
@@ -111,6 +114,39 @@ public class ApiExceptionHandler {
         "Attempt not found",
         "ATTEMPT_NOT_FOUND",
         "The requested assessment attempt does not exist.",
+        request);
+  }
+
+  @ExceptionHandler(InvalidAttemptStateException.class)
+  ResponseEntity<ApiProblem> handleInvalidAttemptState(
+      InvalidAttemptStateException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.CONFLICT,
+        "Invalid attempt state",
+        "INVALID_ATTEMPT_STATE",
+        "The attempt is not open for submission.",
+        request);
+  }
+
+  @ExceptionHandler(UnknownAssessmentItemException.class)
+  ResponseEntity<ApiProblem> handleUnknownAssessmentItem(
+      UnknownAssessmentItemException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "Unknown assessment item",
+        "UNKNOWN_ASSESSMENT_ITEM",
+        "A submitted response references an item outside this assessment.",
+        request);
+  }
+
+  @ExceptionHandler(InvalidSubmissionException.class)
+  ResponseEntity<ApiProblem> handleInvalidSubmission(
+      InvalidSubmissionException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        "Invalid submission",
+        "INVALID_SUBMISSION",
+        "The submission could not be processed as provided.",
         request);
   }
 

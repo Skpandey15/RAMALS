@@ -68,6 +68,58 @@ public class AssessmentRepository {
         .stream().findFirst();
   }
 
+  /** Loads and row-locks an attempt so concurrent submissions serialize on its state transition. */
+  public Optional<AssessmentAttempt> findAttemptForUpdate(UUID attemptId) {
+    return jdbcTemplate.query(
+        ATTEMPT_SELECT + " WHERE id = ? FOR UPDATE", ATTEMPT_MAPPER, attemptId)
+        .stream().findFirst();
+  }
+
+  /** Server-only: loads items with their answer keys for correctness decisions during submit. */
+  public List<AssessmentItemScoringView> findItemScoringViews(UUID assessmentVersionId) {
+    return jdbcTemplate.query("""
+        SELECT iv.id, s.stable_code AS skill_code, iv.item_type,
+               iv.options_jsonb AS options, iv.answer_key_jsonb AS answer_key
+        FROM core.assessment_item_version iv
+        JOIN core.skill s ON s.id = iv.skill_id
+        WHERE iv.assessment_version_id = ?
+        """, scoringViewMapper(), assessmentVersionId);
+  }
+
+  public void insertResponse(
+      UUID attemptId, UUID itemVersionId, String responseJson, boolean correct) {
+    jdbcTemplate.update("""
+        INSERT INTO core.assessment_response
+          (id, attempt_id, item_version_id, response_jsonb, is_correct)
+        VALUES (?, ?, ?, ?::jsonb, ?)
+        """, UuidV7.generate(), attemptId, itemVersionId, responseJson, correct);
+  }
+
+  /** Reads persisted responses for scoring. Deliberately does not read the answer key. */
+  public List<ScoredResponse> findScoredResponses(UUID attemptId) {
+    return jdbcTemplate.query("""
+        SELECT s.stable_code AS skill_code,
+               jsonb_array_length(iv.options_jsonb) AS option_count,
+               r.is_correct
+        FROM core.assessment_response r
+        JOIN core.assessment_item_version iv ON iv.id = r.item_version_id
+        JOIN core.skill s ON s.id = iv.skill_id
+        WHERE r.attempt_id = ?
+        ORDER BY s.stable_code, r.item_version_id
+        """, (result, row) -> new ScoredResponse(
+            result.getString("skill_code"),
+            result.getInt("option_count"),
+            result.getBoolean("is_correct")), attemptId);
+  }
+
+  /** Transitions an in-progress attempt to COMPLETED. Returns true if this call finalized it. */
+  public boolean completeAttempt(UUID attemptId) {
+    return jdbcTemplate.update("""
+        UPDATE core.assessment_attempt SET status = 'COMPLETED'
+        WHERE id = ? AND status = 'IN_PROGRESS'
+        """, attemptId) == 1;
+  }
+
   /**
    * Inserts a new in-progress attempt. Throws a
    * {@link org.springframework.dao.DuplicateKeyException} if the scoped idempotency key or the
@@ -113,6 +165,22 @@ public class AssessmentRepository {
       return List.of();
     }
     return List.of(objectMapper.readValue(optionsJson, DiagnosticItemOption[].class));
+  }
+
+  private RowMapper<AssessmentItemScoringView> scoringViewMapper() {
+    return (result, row) -> {
+      List<String> optionIds = parseOptions(result.getString("options")).stream()
+          .map(DiagnosticItemOption::id)
+          .toList();
+      AnswerKey answerKey = objectMapper.readValue(result.getString("answer_key"), AnswerKey.class);
+      List<String> correct = answerKey.correct() == null ? List.of() : answerKey.correct();
+      return new AssessmentItemScoringView(
+          result.getObject("id", UUID.class),
+          result.getString("skill_code"),
+          result.getString("item_type"),
+          optionIds,
+          correct);
+    };
   }
 
   private static final String ATTEMPT_SELECT = """
