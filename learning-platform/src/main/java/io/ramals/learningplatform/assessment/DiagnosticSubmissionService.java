@@ -6,8 +6,10 @@ import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.evidence.SkillEvidenceInput;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.mastery.MasteryService;
 import io.ramals.learningplatform.observability.CorrelationContext;
+import io.ramals.learningplatform.recommendation.RecommendationService;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -34,6 +36,7 @@ public class DiagnosticSubmissionService {
   private final DiagnosticScorer scorer;
   private final EvidenceService evidenceService;
   private final MasteryService masteryService;
+  private final RecommendationService recommendationService;
   private final ObjectMapper objectMapper;
 
   public DiagnosticSubmissionService(
@@ -42,12 +45,14 @@ public class DiagnosticSubmissionService {
       DiagnosticScorer scorer,
       EvidenceService evidenceService,
       MasteryService masteryService,
+      RecommendationService recommendationService,
       ObjectMapper objectMapper) {
     this.repository = repository;
     this.learnerService = learnerService;
     this.scorer = scorer;
     this.evidenceService = evidenceService;
     this.masteryService = masteryService;
+    this.recommendationService = recommendationService;
     this.objectMapper = objectMapper;
   }
 
@@ -124,10 +129,13 @@ public class DiagnosticSubmissionService {
     UUID curriculumVersionId = repository.findCurriculumVersionId(attempt.assessmentVersionId())
         .orElseThrow(() -> new IllegalStateException(
             "No curriculum version for assessment version " + attempt.assessmentVersionId()));
+    String traceId = CorrelationContext.currentTraceId();
     Set<UUID> affectedSkills = new LinkedHashSet<>();
     evidence.forEach(observation -> affectedSkills.add(observation.skillId()));
     for (UUID skillId : affectedSkills) {
-      masteryService.recompute(attempt.learnerId(), skillId, curriculumVersionId, interactionId);
+      MasterySnapshot snapshot =
+          masteryService.recompute(attempt.learnerId(), skillId, curriculumVersionId, interactionId);
+      recommendationService.recommend(snapshot, interactionId, traceId);
     }
   }
 
