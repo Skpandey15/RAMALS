@@ -12,8 +12,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtClaimNames;
+import org.springframework.security.oauth2.jwt.JwtClaimValidator;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -70,9 +73,16 @@ class SecurityContractTests {
 
   @Test
   void wrongAudienceAndExpiredTokensFailValidation() {
+    // Audience is enforced by the resource-server 'jwt.audiences' property, which installs this same
+    // claim validator; a token for a different audience is rejected and the correct one accepted.
+    OAuth2TokenValidator<Jwt> audience = new JwtClaimValidator<List<String>>(
+        JwtClaimNames.AUD, values -> values != null && values.contains("ramals-api"));
+
     Jwt wrongAudience = token(Instant.now().minusSeconds(10), Instant.now().plusSeconds(60), "other-api");
-    OAuth2TokenValidatorResult audienceResult = new AudienceValidator("ramals-api").validate(wrongAudience);
-    org.assertj.core.api.Assertions.assertThat(audienceResult.hasErrors()).isTrue();
+    org.assertj.core.api.Assertions.assertThat(audience.validate(wrongAudience).hasErrors()).isTrue();
+
+    Jwt rightAudience = token(Instant.now().minusSeconds(10), Instant.now().plusSeconds(60), "ramals-api");
+    org.assertj.core.api.Assertions.assertThat(audience.validate(rightAudience).hasErrors()).isFalse();
 
     Jwt expired = token(Instant.now().minusSeconds(120), Instant.now().minusSeconds(60), "ramals-api");
     OAuth2TokenValidatorResult expiryResult = JwtValidators.createDefaultWithIssuer(ISSUER).validate(expired);

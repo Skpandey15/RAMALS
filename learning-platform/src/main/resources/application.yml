@@ -36,6 +36,10 @@ spring:
 ramals:
   security:
     web-origin: ${RAMALS_WEB_ORIGIN:http://localhost:5173}
+    rate-limit:
+      enabled: ${RAMALS_RATE_LIMIT_ENABLED:true}
+      capacity: ${RAMALS_RATE_LIMIT_CAPACITY:120}
+      refill-per-second: ${RAMALS_RATE_LIMIT_REFILL_PER_SECOND:60}
 
 management:
   otlp:

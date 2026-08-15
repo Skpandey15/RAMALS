@@ -4,9 +4,11 @@ import static org.springframework.security.config.Customizer.withDefaults;
 
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -19,6 +21,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 @Configuration
 @EnableMethodSecurity
+@EnableConfigurationProperties(RateLimitProperties.class)
 public class SecurityConfig {
 
   @Bean
@@ -37,7 +40,13 @@ public class SecurityConfig {
         .headers(headers -> headers
             .contentSecurityPolicy(csp -> csp.policyDirectives("default-src 'none'; frame-ancestors 'none'"))
             .frameOptions(frame -> frame.deny())
-            .referrerPolicy(referrer -> referrer.policy(ReferrerPolicy.NO_REFERRER)));
+            .referrerPolicy(referrer -> referrer.policy(ReferrerPolicy.NO_REFERRER))
+            .contentTypeOptions(Customizer.withDefaults())
+            .httpStrictTransportSecurity(hsts -> hsts
+                .includeSubDomains(true)
+                .maxAgeInSeconds(63072000))
+            .permissionsPolicyHeader(permissions -> permissions
+                .policy("geolocation=(), camera=(), microphone=(), payment=(), usb=()")));
     return http.build();
   }
 
