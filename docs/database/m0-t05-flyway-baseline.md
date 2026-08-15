@@ -47,7 +47,7 @@ URL is explicitly provided and `RAMALS_TEST_POSTGRES_ALLOW_RESET=true` confirms
 that its schemas may be reset. CI supplies a fresh PostgreSQL service and proves:
 
 - installation from an empty database through V001;
-- a forward upgrade through V002 and a test-only V003;
+- a forward upgrade through production migrations and a test-only V999;
 - Flyway validation;
 - runtime DDL denial;
 - runtime ledger UPDATE and DELETE denial;
