@@ -1,12 +1,15 @@
 package io.ramals.learningplatform.assessment;
 
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
+import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.evidence.SkillEvidenceInput;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.mastery.MasteryService;
 import io.ramals.learningplatform.observability.CorrelationContext;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,6 +33,7 @@ public class DiagnosticSubmissionService {
   private final LearnerService learnerService;
   private final DiagnosticScorer scorer;
   private final EvidenceService evidenceService;
+  private final MasteryService masteryService;
   private final ObjectMapper objectMapper;
 
   public DiagnosticSubmissionService(
@@ -37,11 +41,13 @@ public class DiagnosticSubmissionService {
       LearnerService learnerService,
       DiagnosticScorer scorer,
       EvidenceService evidenceService,
+      MasteryService masteryService,
       ObjectMapper objectMapper) {
     this.repository = repository;
     this.learnerService = learnerService;
     this.scorer = scorer;
     this.evidenceService = evidenceService;
+    this.masteryService = masteryService;
     this.objectMapper = objectMapper;
   }
 
@@ -92,19 +98,37 @@ public class DiagnosticSubmissionService {
     repository.completeAttempt(attempt.id());
     AssessmentAttempt completed = withStatus(attempt, "COMPLETED");
     SubmissionResult result = buildResult(completed);
-    recordEvidence(completed, result);
+    String interactionId = CorrelationContext.currentInteractionId();
+    List<Evidence> evidence = recordEvidence(completed, result, interactionId);
+    recomputeMastery(completed, evidence, interactionId);
     return result;
   }
 
-  private void recordEvidence(AssessmentAttempt attempt, SubmissionResult result) {
+  private List<Evidence> recordEvidence(
+      AssessmentAttempt attempt, SubmissionResult result, String interactionId) {
     List<SkillEvidenceInput> observations = result.skillScores().stream()
         .map(score -> new SkillEvidenceInput(
             score.skillCode(), score.observedScore(), score.normalizedScore(),
             score.itemsAnswered(), score.itemsCorrect()))
         .toList();
-    evidenceService.recordDiagnosticEvidence(
+    return evidenceService.recordDiagnosticEvidence(
         attempt.learnerId(), attempt.id(), attempt.assessmentVersionId(),
-        DiagnosticScorer.SCORING_VERSION, observations, CorrelationContext.currentInteractionId());
+        DiagnosticScorer.SCORING_VERSION, observations, interactionId);
+  }
+
+  private void recomputeMastery(
+      AssessmentAttempt attempt, List<Evidence> evidence, String interactionId) {
+    if (evidence.isEmpty()) {
+      return;
+    }
+    UUID curriculumVersionId = repository.findCurriculumVersionId(attempt.assessmentVersionId())
+        .orElseThrow(() -> new IllegalStateException(
+            "No curriculum version for assessment version " + attempt.assessmentVersionId()));
+    Set<UUID> affectedSkills = new LinkedHashSet<>();
+    evidence.forEach(observation -> affectedSkills.add(observation.skillId()));
+    for (UUID skillId : affectedSkills) {
+      masteryService.recompute(attempt.learnerId(), skillId, curriculumVersionId, interactionId);
+    }
   }
 
   private void validateSelection(AssessmentItemScoringView view, List<String> selectedOptions) {

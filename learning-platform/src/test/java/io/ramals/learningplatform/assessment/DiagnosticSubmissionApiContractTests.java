@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
+import io.ramals.learningplatform.mastery.MasteryService;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -55,6 +56,9 @@ class DiagnosticSubmissionApiContractTests {
 
   @MockitoBean
   EvidenceService evidenceService;
+
+  @MockitoBean
+  MasteryService masteryService;
 
   private static JwtRequestPostProcessor learner(String subject) {
     return jwt()
