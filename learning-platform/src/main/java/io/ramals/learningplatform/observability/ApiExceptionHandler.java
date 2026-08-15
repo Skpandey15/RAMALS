@@ -1,6 +1,9 @@
 package io.ramals.learningplatform.observability;
 
 import jakarta.servlet.http.HttpServletRequest;
+import io.ramals.learningplatform.assessment.AttemptNotFoundException;
+import io.ramals.learningplatform.assessment.DiagnosticNotFoundException;
+import io.ramals.learningplatform.assessment.InvalidIdempotencyKeyException;
 import io.ramals.learningplatform.curriculum.CurriculumNotFoundException;
 import io.ramals.learningplatform.learner.LearnerGoalNotSetException;
 import io.ramals.learningplatform.learner.UnknownLearningDomainException;
@@ -86,6 +89,39 @@ public class ApiExceptionHandler {
         "Unknown learning domain",
         "UNKNOWN_LEARNING_DOMAIN",
         "The requested learning domain does not exist or is not active.",
+        request);
+  }
+
+  @ExceptionHandler(DiagnosticNotFoundException.class)
+  ResponseEntity<ApiProblem> handleDiagnosticNotFound(
+      DiagnosticNotFoundException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        "Diagnostic not found",
+        "DIAGNOSTIC_NOT_FOUND",
+        "No published diagnostic is available for the requested domain.",
+        request);
+  }
+
+  @ExceptionHandler(AttemptNotFoundException.class)
+  ResponseEntity<ApiProblem> handleAttemptNotFound(
+      AttemptNotFoundException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        "Attempt not found",
+        "ATTEMPT_NOT_FOUND",
+        "The requested assessment attempt does not exist.",
+        request);
+  }
+
+  @ExceptionHandler(InvalidIdempotencyKeyException.class)
+  ResponseEntity<ApiProblem> handleInvalidIdempotencyKey(
+      InvalidIdempotencyKeyException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.BAD_REQUEST,
+        "Invalid request",
+        "IDEMPOTENCY_KEY_REQUIRED",
+        "A valid Idempotency-Key header is required for this operation.",
         request);
   }
 

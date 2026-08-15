@@ -1,5 +1,6 @@
 package io.ramals.learningplatform.learner;
 
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +21,12 @@ public class LearnerService {
   @Transactional
   public Learner currentLearner(String subject) {
     return repository.provisionForSubject(subject);
+  }
+
+  /** Looks up an existing learner without provisioning; used by read-only ownership checks. */
+  @Transactional(readOnly = true)
+  public Optional<Learner> findLearner(String subject) {
+    return repository.findBySubject(subject);
   }
 
   @Transactional
