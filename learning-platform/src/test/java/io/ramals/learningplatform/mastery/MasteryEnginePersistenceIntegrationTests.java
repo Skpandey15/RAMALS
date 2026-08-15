@@ -121,7 +121,9 @@ class MasteryEnginePersistenceIntegrationTests {
       learners = new LearnerRepository(runtimeJdbc);
       evidence = new EvidenceRepository(runtimeJdbc);
       masteryRepository = new MasteryRepository(runtimeJdbc);
-      masteryService = new MasteryService(masteryRepository, evidence, new WeightedMasteryCalculator());
+      masteryService = new MasteryService(
+          masteryRepository, evidence, new WeightedMasteryCalculator(),
+          new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
       AssessmentRepository assessments = new AssessmentRepository(runtimeJdbc, mapper);
       LearnerService learnerService = new LearnerService(learners);
       diagnostics = new DiagnosticService(assessments, learnerService);
@@ -191,11 +193,13 @@ class MasteryEnginePersistenceIntegrationTests {
     UUID learnerId = learners.provisionForSubject("m-duplicate").id();
     recomputeInTx(learnerId, BROKER_SKILL);  // creates version 1
 
-    MasteryOutcome outcome = new MasteryOutcome(
-        new BigDecimal("0.5000"), MasteryStatus.NEEDS_PRACTICE, new BigDecimal("0.8000"), 1, 1);
-    assertThatThrownBy(() -> transactionTemplate.execute(status -> masteryRepository.insertSnapshot(
-        learnerId, BROKER_SKILL, CURRICULUM_VERSION, 1, outcome,
-        WeightedMasteryCalculator.ALGORITHM_VERSION, INTERACTION_ID)))
+    MasterySnapshotDraft draft = new MasterySnapshotDraft(
+        learnerId, BROKER_SKILL, CURRICULUM_VERSION, 1, new BigDecimal("0.5000"),
+        MasteryStatus.NEEDS_PRACTICE, new BigDecimal("0.8000"), new BigDecimal("0.3300"),
+        new BigDecimal("0.7500"), 1, 1, WeightedMasteryCalculator.ALGORITHM_VERSION,
+        EvidenceConfidenceCalculator.ALGORITHM_VERSION, INTERACTION_ID);
+    assertThatThrownBy(() -> transactionTemplate.execute(
+        status -> masteryRepository.insertSnapshot(draft)))
         .isInstanceOf(DuplicateKeyException.class);
   }
 
@@ -222,6 +226,11 @@ class MasteryEnginePersistenceIntegrationTests {
     // one diagnostic item is below the required evidence volume, so the skill stays insufficient
     assertThat(broker.status()).isEqualTo(MasteryStatus.INSUFFICIENT_EVIDENCE);
     assertThat(broker.interactionId()).isEqualTo(INTERACTION_ID);
+    // sparse diagnostic: 0.40*0.20 + 0.35*0 + 0.15*1 + 0.10*1 = 0.3300, below the confidence threshold
+    assertThat(broker.evidenceConfidence()).isEqualByComparingTo("0.3300");
+    assertThat(broker.confidenceThreshold()).isEqualByComparingTo("0.7500");
+    assertThat(broker.confidenceAlgorithmVersion())
+        .isEqualTo(EvidenceConfidenceCalculator.ALGORITHM_VERSION);
   }
 
   @Test

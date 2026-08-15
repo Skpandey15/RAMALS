@@ -8,8 +8,10 @@ import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.mastery.EvidenceConfidenceCalculator;
 import io.ramals.learningplatform.mastery.MasteryRepository;
 import io.ramals.learningplatform.mastery.MasteryService;
+import io.ramals.learningplatform.mastery.MasteryStatusPolicy;
 import io.ramals.learningplatform.mastery.WeightedMasteryCalculator;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -116,7 +118,8 @@ class DiagnosticSubmissionPersistenceIntegrationTests {
       EvidenceRepository evidenceRepository = new EvidenceRepository(runtimeJdbc);
       EvidenceService evidenceService = new EvidenceService(evidenceRepository);
       MasteryService masteryService = new MasteryService(
-          new MasteryRepository(runtimeJdbc), evidenceRepository, new WeightedMasteryCalculator());
+          new MasteryRepository(runtimeJdbc), evidenceRepository, new WeightedMasteryCalculator(),
+          new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorer(), evidenceService, masteryService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));

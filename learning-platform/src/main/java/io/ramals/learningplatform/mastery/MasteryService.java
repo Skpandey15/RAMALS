@@ -2,33 +2,46 @@ package io.ramals.learningplatform.mastery;
 
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Recomputes deterministic mastery for a learner and skill. Each recompute takes the aggregate row
- * lock, advances the monotonic aggregate version, and appends exactly one snapshot for that version.
- * Concurrent recomputes for the same learner-skill therefore serialize into distinct, increasing
- * versions with one canonical snapshot each; the same evidence at the same version always produces
- * the identical persisted score.
+ * Recomputes deterministic mastery and evidence confidence for a learner and skill. Each recompute
+ * takes the aggregate row lock, advances the monotonic aggregate version, and appends exactly one
+ * snapshot for that version. Mastery is scored from evidence; confidence measures the sufficiency of
+ * that evidence; the status policy then gates the claim of mastery on confidence and difficulty-band
+ * coverage. Concurrent recomputes serialize into distinct versions with one canonical snapshot each.
  */
 @Service
 public class MasteryService {
 
+  private static final Set<String> OBSERVATION_TYPES =
+      Set.of("DIAGNOSTIC", "QUIZ", "PRACTICE", "SCENARIO");
+
   private final MasteryRepository masteryRepository;
   private final EvidenceRepository evidenceRepository;
-  private final WeightedMasteryCalculator calculator;
+  private final WeightedMasteryCalculator masteryCalculator;
+  private final EvidenceConfidenceCalculator confidenceCalculator;
+  private final MasteryStatusPolicy statusPolicy;
 
   public MasteryService(
       MasteryRepository masteryRepository,
       EvidenceRepository evidenceRepository,
-      WeightedMasteryCalculator calculator) {
+      WeightedMasteryCalculator masteryCalculator,
+      EvidenceConfidenceCalculator confidenceCalculator,
+      MasteryStatusPolicy statusPolicy) {
     this.masteryRepository = masteryRepository;
     this.evidenceRepository = evidenceRepository;
-    this.calculator = calculator;
+    this.masteryCalculator = masteryCalculator;
+    this.confidenceCalculator = confidenceCalculator;
+    this.statusPolicy = statusPolicy;
   }
 
   @Transactional
@@ -40,18 +53,43 @@ public class MasteryService {
                 + " in curriculum version " + curriculumVersionId));
 
     masteryRepository.ensureAggregate(learnerId, skillId, curriculumVersionId);
-    int currentVersion = masteryRepository.lockAggregateVersion(learnerId, skillId, curriculumVersionId);
-    int nextVersion = currentVersion + 1;
+    int nextVersion = masteryRepository.lockAggregateVersion(learnerId, skillId, curriculumVersionId) + 1;
 
     List<Evidence> evidence = evidenceRepository.findByLearnerAndSkill(learnerId, skillId);
-    MasteryOutcome outcome =
-        calculator.compute(evidence, config.masteryThreshold(), config.requiredEvidenceCount());
+    MasteryOutcome mastery =
+        masteryCalculator.compute(evidence, config.masteryThreshold(), config.requiredEvidenceCount());
+    ConfidenceOutcome confidence = confidenceCalculator.compute(confidenceInputs(evidence, config));
 
-    MasterySnapshot snapshot = masteryRepository.insertSnapshot(
-        learnerId, skillId, curriculumVersionId, nextVersion, outcome,
-        WeightedMasteryCalculator.ALGORITHM_VERSION, interactionId);
+    MasteryStatus status = statusPolicy.refine(
+        mastery.status(), confidence.confidence(), config.confidenceThreshold(),
+        Set.copyOf(config.requiredDifficultyBands()), Set.of());
+
+    MasterySnapshot snapshot = masteryRepository.insertSnapshot(new MasterySnapshotDraft(
+        learnerId, skillId, curriculumVersionId, nextVersion, mastery.masteryScore(), status,
+        mastery.threshold(), confidence.confidence(), config.confidenceThreshold(),
+        mastery.evidenceCount(), mastery.itemsConsidered(),
+        WeightedMasteryCalculator.ALGORITHM_VERSION, EvidenceConfidenceCalculator.ALGORITHM_VERSION,
+        interactionId));
     masteryRepository.advanceAggregateVersion(learnerId, skillId, curriculumVersionId, nextVersion);
     return snapshot;
+  }
+
+  private ConfidenceInputs confidenceInputs(List<Evidence> evidence, SkillMasteryConfig config) {
+    List<Evidence> observations = evidence.stream()
+        .filter(item -> OBSERVATION_TYPES.contains(item.evidenceType()))
+        .toList();
+    int uniqueScoredItems = observations.stream().mapToInt(Evidence::itemsAnswered).sum();
+    List<BigDecimal> normalizedScores = observations.stream().map(Evidence::normalizedScore).toList();
+    long ageDays = observations.stream()
+        .map(Evidence::occurredAt)
+        .filter(java.util.Objects::nonNull)
+        .max(Instant::compareTo)
+        .map(latest -> Math.max(ChronoUnit.DAYS.between(latest, Instant.now()), 0))
+        .orElse(0L);
+    // MVP-0 evidence is not objective-tagged, so no required objective is credited as covered.
+    return new ConfidenceInputs(
+        uniqueScoredItems, config.requiredEvidenceCount(), 0, config.requiredObjectives(),
+        ageDays, normalizedScores);
   }
 
   @Transactional(readOnly = true)

@@ -1,12 +1,10 @@
 package io.ramals.learningplatform.mastery;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.UUID;
 
-/** An immutable, versioned record of a learner's computed mastery and evidence confidence. */
-public record MasterySnapshot(
-    UUID id,
+/** All fields required to append one mastery snapshot for a given aggregate version. */
+public record MasterySnapshotDraft(
     UUID learnerId,
     UUID skillId,
     UUID curriculumVersionId,
@@ -20,6 +18,5 @@ public record MasterySnapshot(
     int itemsConsidered,
     String algorithmVersion,
     String confidenceAlgorithmVersion,
-    String interactionId,
-    Instant calculatedAt) {
+    String interactionId) {
 }

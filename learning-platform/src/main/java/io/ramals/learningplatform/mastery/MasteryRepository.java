@@ -1,7 +1,7 @@
 package io.ramals.learningplatform.mastery;
 
 import io.ramals.learningplatform.observability.UuidV7;
-import java.math.BigDecimal;
+import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -26,15 +26,29 @@ public class MasteryRepository {
   public Optional<SkillMasteryConfig> findSkillConfig(UUID skillId, UUID curriculumVersionId) {
     try {
       return Optional.ofNullable(jdbcTemplate.queryForObject("""
-          SELECT mastery_threshold, required_evidence_count
-          FROM core.skill_version
-          WHERE skill_id = ? AND curriculum_version_id = ?
+          SELECT sv.mastery_threshold, sv.confidence_threshold, sv.required_evidence_count,
+                 sv.required_difficulty_bands,
+                 (SELECT count(*) FROM core.learning_objective lo
+                  WHERE lo.skill_version_id = sv.id AND lo.required) AS required_objectives
+          FROM core.skill_version sv
+          WHERE sv.skill_id = ? AND sv.curriculum_version_id = ?
           """, (result, row) -> new SkillMasteryConfig(
               result.getBigDecimal("mastery_threshold"),
-              result.getInt("required_evidence_count")), skillId, curriculumVersionId));
+              result.getBigDecimal("confidence_threshold"),
+              result.getInt("required_evidence_count"),
+              result.getInt("required_objectives"),
+              strings(result.getArray("required_difficulty_bands"))),
+          skillId, curriculumVersionId));
     } catch (EmptyResultDataAccessException notConfigured) {
       return Optional.empty();
     }
+  }
+
+  private static List<String> strings(Array array) throws SQLException {
+    if (array == null) {
+      return List.of();
+    }
+    return List.of((String[]) array.getArray());
   }
 
   /** Ensures the coordination row exists so it can be row-locked for recomputation. */
@@ -68,19 +82,19 @@ public class MasteryRepository {
    * {@link org.springframework.dao.DuplicateKeyException} if a snapshot already exists for that
    * version, so a version can never carry two canonical snapshots.
    */
-  public MasterySnapshot insertSnapshot(
-      UUID learnerId, UUID skillId, UUID curriculumVersionId, int aggregateVersion,
-      MasteryOutcome outcome, String algorithmVersion, String interactionId) {
+  public MasterySnapshot insertSnapshot(MasterySnapshotDraft draft) {
     UUID id = UuidV7.generate();
     jdbcTemplate.update("""
         INSERT INTO ledger.mastery_snapshot
           (id, learner_id, skill_id, curriculum_version_id, aggregate_version, mastery_score,
-           mastery_status, threshold, evidence_count, items_considered, algorithm_version,
-           interaction_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, id, learnerId, skillId, curriculumVersionId, aggregateVersion, outcome.masteryScore(),
-        outcome.status().name(), outcome.threshold(), outcome.evidenceCount(),
-        outcome.itemsConsidered(), algorithmVersion, interactionId);
+           mastery_status, threshold, evidence_confidence, confidence_threshold, evidence_count,
+           items_considered, algorithm_version, confidence_algorithm_version, interaction_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, id, draft.learnerId(), draft.skillId(), draft.curriculumVersionId(),
+        draft.aggregateVersion(), draft.masteryScore(), draft.status().name(), draft.threshold(),
+        draft.evidenceConfidence(), draft.confidenceThreshold(), draft.evidenceCount(),
+        draft.itemsConsidered(), draft.algorithmVersion(), draft.confidenceAlgorithmVersion(),
+        draft.interactionId());
     return findById(id).orElseThrow(
         () -> new IllegalStateException("Mastery snapshot did not persist."));
   }
@@ -109,8 +123,9 @@ public class MasteryRepository {
 
   private static final String SNAPSHOT_SELECT = """
       SELECT id, learner_id, skill_id, curriculum_version_id, aggregate_version, mastery_score,
-             mastery_status, threshold, evidence_count, items_considered, algorithm_version,
-             interaction_id, calculated_at
+             mastery_status, threshold, evidence_confidence, confidence_threshold, evidence_count,
+             items_considered, algorithm_version, confidence_algorithm_version, interaction_id,
+             calculated_at
       FROM ledger.mastery_snapshot
       """;
 
@@ -123,9 +138,12 @@ public class MasteryRepository {
       result.getBigDecimal("mastery_score"),
       MasteryStatus.valueOf(result.getString("mastery_status")),
       result.getBigDecimal("threshold"),
+      result.getBigDecimal("evidence_confidence"),
+      result.getBigDecimal("confidence_threshold"),
       result.getInt("evidence_count"),
       result.getInt("items_considered"),
       result.getString("algorithm_version"),
+      result.getString("confidence_algorithm_version"),
       result.getString("interaction_id"),
       instant(result, "calculated_at"));
 
