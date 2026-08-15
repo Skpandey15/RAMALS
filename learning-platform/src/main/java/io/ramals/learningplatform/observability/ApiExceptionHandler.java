@@ -1,0 +1,87 @@
+package io.ramals.learningplatform.observability;
+
+import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+@RestControllerAdvice
+public class ApiExceptionHandler {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+  private final TraceContextAccessor traceContext;
+
+  public ApiExceptionHandler(TraceContextAccessor traceContext) {
+    this.traceContext = traceContext;
+  }
+
+  @ExceptionHandler(DataAccessException.class)
+  ResponseEntity<ApiProblem> handleDatabaseFailure(DataAccessException exception, HttpServletRequest request) {
+    LOGGER.atError()
+        .setCause(exception)
+        .addKeyValue("errorCode", "DATABASE_OPERATION_FAILED")
+        .addKeyValue("operation", "database.operation")
+        .log("Database operation failed");
+    return problem(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        "Database operation failed",
+        "DATABASE_OPERATION_FAILED",
+        "The operation could not be completed.",
+        request);
+  }
+
+  @ExceptionHandler(AccessDeniedException.class)
+  ResponseEntity<ApiProblem> handleAccessDenied(AccessDeniedException exception, HttpServletRequest request) {
+    LOGGER.atWarn()
+        .addKeyValue("errorCode", "ACCESS_DENIED")
+        .addKeyValue("operation", "authorization.check")
+        .log("Authorization denied");
+    return problem(
+        HttpStatus.FORBIDDEN,
+        "Access denied",
+        "ACCESS_DENIED",
+        "You are not authorized to perform this operation.",
+        request);
+  }
+
+  @ExceptionHandler(Exception.class)
+  ResponseEntity<ApiProblem> handleUnexpectedFailure(Exception exception, HttpServletRequest request) {
+    LOGGER.atError()
+        .setCause(exception)
+        .addKeyValue("errorCode", "UNEXPECTED_ERROR")
+        .addKeyValue("operation", "http.request")
+        .log("Unexpected request failure");
+    return problem(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        "Unexpected error",
+        "UNEXPECTED_ERROR",
+        "The operation could not be completed.",
+        request);
+  }
+
+  private ResponseEntity<ApiProblem> problem(
+      HttpStatus status,
+      String title,
+      String code,
+      String detail,
+      HttpServletRequest request) {
+    ApiProblem body = new ApiProblem(
+        "about:blank",
+        title,
+        status.value(),
+        code,
+        detail,
+        CorrelationContext.interactionId(request),
+        traceContext.traceId());
+    return ResponseEntity.status(status)
+        .header(CorrelationHeaders.INTERACTION_ID, body.interactionId())
+        .header(CorrelationHeaders.TRACE_ID, body.traceId())
+        .body(body);
+  }
+}

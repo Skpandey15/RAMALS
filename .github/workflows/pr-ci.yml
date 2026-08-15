@@ -1,0 +1,88 @@
+name: PR CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      database: ${{ steps.changes.outputs.database }}
+      infrastructure: ${{ steps.changes.outputs.infrastructure }}
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+    steps:
+      - name: Check out untrusted PR without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify changed paths
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ci/detect-changes.sh "$BASE_SHA" "$HEAD_SHA"
+
+  backend-ci:
+    name: Backend CI
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
+    uses: ./.github/workflows/reusable-backend-ci.yml
+
+  frontend-ci:
+    name: Frontend CI
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    uses: ./.github/workflows/reusable-frontend-ci.yml
+
+  security-ci:
+    name: Security CI
+    needs: detect-changes
+    uses: ./.github/workflows/reusable-security-ci.yml
+
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [detect-changes, backend-ci, frontend-ci, security-ci]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate required and conditional jobs
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          BACKEND_RESULT: ${{ needs.backend-ci.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-ci.result }}
+          SECURITY_RESULT: ${{ needs.security-ci.result }}
+        run: |
+          required=("detect-changes:$DETECT_RESULT" "security-ci:$SECURITY_RESULT")
+          conditional=("backend-ci:$BACKEND_RESULT" "frontend-ci:$FRONTEND_RESULT")
+
+          for entry in "${required[@]}"; do
+            name="${entry%%:*}"
+            result="${entry#*:}"
+            if [[ "$result" != "success" ]]; then
+              echo "::error::$name must succeed; result=$result"
+              exit 1
+            fi
+          done
+
+          for entry in "${conditional[@]}"; do
+            name="${entry%%:*}"
+            result="${entry#*:}"
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::$name failed merge assurance; result=$result"
+              exit 1
+            fi
+          done
+
+          echo "All required checks passed; conditional skips were policy-valid."

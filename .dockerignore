@@ -1,0 +1,13 @@
+.git
+.github
+.gradle
+**/build
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+docs/*.docx
+*.log
+.env
+.env.*
+!.env.example
+

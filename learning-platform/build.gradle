@@ -1,0 +1,38 @@
+plugins {
+  id 'java'
+  id 'org.springframework.boot'
+}
+
+java {
+  toolchain {
+    languageVersion = JavaLanguageVersion.of(25)
+  }
+}
+
+tasks.withType(JavaCompile).configureEach {
+  options.release = 25
+  options.encoding = 'UTF-8'
+}
+
+dependencies {
+  implementation platform(org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES)
+  implementation 'org.springframework.boot:spring-boot-starter-actuator'
+  implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+  implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'
+  implementation 'org.springframework.boot:spring-boot-starter-security'
+  implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
+  implementation 'org.springframework.boot:spring-boot-starter-web'
+  implementation 'net.ttddyy.observation:datasource-micrometer-spring-boot:2.2.1'
+  implementation 'net.ttddyy.observation:datasource-micrometer-opentelemetry:2.2.1'
+  runtimeOnly 'org.postgresql:postgresql'
+
+  testImplementation 'org.springframework.boot:spring-boot-starter-test'
+  testImplementation 'org.springframework.boot:spring-boot-webmvc-test'
+  testImplementation 'org.springframework.security:spring-security-test'
+  testRuntimeOnly 'com.h2database:h2'
+  testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+  useJUnitPlatform()
+}

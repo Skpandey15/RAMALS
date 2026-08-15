@@ -1,0 +1,33 @@
+name: Reusable Security CI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete history without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify workflow trust policy
+        run: python3 scripts/ci/verify-workflow-security.py
+      - name: Install checksum-verified Gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl --fail --silent --show-error --location --output "$archive" "$base/$archive"
+          curl --fail --silent --show-error --location --output checksums.txt "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep "  $archive$" checksums.txt | sha256sum --check --strict
+          tar -xzf "$archive" gitleaks
+      - name: Scan complete Git history for secrets
+        run: ./gitleaks git --redact --no-banner .
+

@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: ramals-learning-platform
+  datasource:
+    url: ${RAMALS_DB_URL}
+    username: ${RAMALS_DB_USER}
+    password: ${RAMALS_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 1
+      connection-timeout: 5000
+  sql:
+    init:
+      mode: never
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${RAMALS_OIDC_ISSUER_URI:http://localhost:8081/realms/ramals}
+          audiences: ${RAMALS_OIDC_AUDIENCE:ramals-api}
+
+ramals:
+  security:
+    web-origin: ${RAMALS_WEB_ORIGIN:http://localhost:5173}
+
+management:
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  tracing:
+    sampling:
+      probability: 1.0
+    propagation:
+      type: w3c
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
