@@ -1,0 +1,122 @@
+# Deployment topology for the shared dev environment.
+#
+# Unlike infrastructure/docker/compose.yml, which builds from source for local development, this
+# file never builds: it consumes the exact immutable digests exported by deploy-controller.sh from
+# the approved desired-version manifest. That is what makes build-once/promote-the-same-artifact
+# real — the bytes running here are the bytes that were built, scanned and attested in CI.
+name: ramals-deploy
+
+services:
+  postgres:
+    build:
+      context: ../
+      dockerfile: infrastructure/docker/postgres-init/Dockerfile
+    environment:
+      POSTGRES_DB: ${RAMALS_DB_NAME:?Set RAMALS_DB_NAME}
+      POSTGRES_USER: ${RAMALS_DB_ADMIN_USER:?Set RAMALS_DB_ADMIN_USER}
+      POSTGRES_PASSWORD: ${RAMALS_DB_ADMIN_PASSWORD:?Set RAMALS_DB_ADMIN_PASSWORD}
+      RAMALS_DB_MIGRATION_PASSWORD: ${RAMALS_DB_MIGRATION_PASSWORD:?Set RAMALS_DB_MIGRATION_PASSWORD}
+      RAMALS_DB_RUNTIME_PASSWORD: ${RAMALS_DB_RUNTIME_PASSWORD:?Set RAMALS_DB_RUNTIME_PASSWORD}
+      KEYCLOAK_DB_NAME: ${KEYCLOAK_DB_NAME:?Set KEYCLOAK_DB_NAME}
+      KEYCLOAK_DB_USER: ${KEYCLOAK_DB_USER:?Set KEYCLOAK_DB_USER}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - deploy-postgres-data:/var/lib/postgresql
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=\"$${POSTGRES_USER}\" --dbname=\"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+
+  keycloak:
+    build:
+      context: ../
+      dockerfile: infrastructure/docker/keycloak/Dockerfile
+    command: ["start", "--optimized", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:?Set KEYCLOAK_DB_NAME}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:?Set KEYCLOAK_DB_USER}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set KEYCLOAK_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${RAMALS_KEYCLOAK_ADMIN:?Set RAMALS_KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${RAMALS_KEYCLOAK_ADMIN_PASSWORD:?Set RAMALS_KEYCLOAK_ADMIN_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [data, edge]
+    ports: ["127.0.0.1:${RAMALS_KEYCLOAK_PORT:-8081}:8080"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '200 OK' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+
+  # Published, digest-pinned artefacts. deploy-controller.sh exports these from the manifest and
+  # refuses to proceed unless they are sha256 digests.
+  backend:
+    image: ${RAMALS_BACKEND_IMAGE:?deploy-controller.sh must export RAMALS_BACKEND_IMAGE}
+    environment:
+      RAMALS_DB_URL: jdbc:postgresql://postgres:5432/${RAMALS_DB_NAME:?Set RAMALS_DB_NAME}
+      RAMALS_DB_USER: ${RAMALS_DB_RUNTIME_USER:-ramals_core_runtime}
+      RAMALS_DB_PASSWORD: ${RAMALS_DB_RUNTIME_PASSWORD:?Set RAMALS_DB_RUNTIME_PASSWORD}
+      RAMALS_DB_MIGRATION_USER: ${RAMALS_DB_MIGRATION_USER:-ramals_core_migration}
+      RAMALS_DB_MIGRATION_PASSWORD: ${RAMALS_DB_MIGRATION_PASSWORD:?Set RAMALS_DB_MIGRATION_PASSWORD}
+      RAMALS_OIDC_ISSUER_URI: ${RAMALS_OIDC_ISSUER_URI:-http://keycloak:8080/realms/ramals}
+      RAMALS_OIDC_AUDIENCE: ${RAMALS_OIDC_AUDIENCE:-ramals-api}
+      RAMALS_WEB_ORIGIN: ${RAMALS_WEB_ORIGIN:-http://localhost:5173}
+    depends_on:
+      postgres: {condition: service_healthy}
+      keycloak: {condition: service_healthy}
+    networks: [data, edge]
+    ports: ["127.0.0.1:${RAMALS_BACKEND_PORT:-8080}:8080"]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    security_opt: [no-new-privileges:true]
+
+  web-ui:
+    image: ${RAMALS_WEBUI_IMAGE:?deploy-controller.sh must export RAMALS_WEBUI_IMAGE}
+    depends_on:
+      backend: {condition: service_healthy}
+    networks: [edge]
+    ports: ["127.0.0.1:${RAMALS_WEB_PORT:-5173}:8080"]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=32m,mode=0755
+      - /var/run:size=4m,mode=0755
+    security_opt: [no-new-privileges:true]
+
+networks:
+  data: {internal: true}
+  edge: {}
+
+volumes:
+  deploy-postgres-data:
