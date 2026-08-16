@@ -7,14 +7,15 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "8.2.0",
     "keycloak-js": "26.2.4",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "vite": "8.2.0"
   },
   "devDependencies": {
     "@eslint/js": "latest",
@@ -23,6 +24,7 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "latest",
     "eslint-plugin-react-hooks": "latest",
     "eslint-plugin-react-refresh": "latest",

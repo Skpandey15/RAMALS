@@ -1,5 +1,6 @@
 plugins {
   id 'java'
+  id 'jacoco'
   id 'org.springframework.boot'
 }
 
@@ -41,4 +42,20 @@ dependencies {
 
 tasks.named('test') {
   useJUnitPlatform()
+  finalizedBy tasks.named('jacocoTestReport')
+}
+
+jacoco {
+  toolVersion = '0.8.13'
+}
+
+// Coverage is reported over the whole module without exclusions: filtering out DTOs and records
+// would inflate the figure without telling us anything useful about the engine's tested behaviour.
+tasks.named('jacocoTestReport') {
+  dependsOn tasks.named('test')
+  reports {
+    xml.required = true
+    html.required = true
+    csv.required = true
+  }
 }
