@@ -9,6 +9,7 @@ mapfile -t changed < <(git diff --name-only "$base_sha" "$head_sha")
 
 backend=false
 frontend=false
+python=false
 database=false
 infrastructure=false
 docs_only=true
@@ -23,6 +24,12 @@ for path in "${changed[@]}"; do
       frontend=true
       docs_only=false
       ;;
+    ramals-ai/README.md)
+      ;;
+    ramals-ai/*)
+      python=true
+      docs_only=false
+      ;;
     infrastructure/*|.github/*|scripts/ci/*)
       infrastructure=true
       docs_only=false
@@ -30,7 +37,7 @@ for path in "${changed[@]}"; do
     docs/database/*)
       database=true
       ;;
-    docs/*|README.md|.editorconfig|.gitignore|.env.example|ramals-ai/README.md|knowledge/*)
+    docs/*|README.md|.editorconfig|.gitignore|.env.example|knowledge/*)
       ;;
     *)
       docs_only=false
@@ -47,6 +54,7 @@ done
 {
   echo "backend=$backend"
   echo "frontend=$frontend"
+  echo "python=$python"
   echo "database=$database"
   echo "infrastructure=$infrastructure"
   echo "docs_only=$docs_only"

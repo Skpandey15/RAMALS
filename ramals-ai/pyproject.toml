@@ -1,0 +1,64 @@
+[project]
+name = "ramals-ai"
+version = "0.1.0"
+description = "RAMALS MVP-1 AI execution plane. Proposes; never decides."
+requires-python = ">=3.14"
+
+# Exact pins, not ranges: the same discipline the Java and frontend builds use. A dependency bump is
+# a reviewed change, not something that happens between two CI runs.
+dependencies = [
+  "fastapi==0.141.1",
+  "pydantic==2.13.4",
+  "pydantic-settings==2.15.0",
+  "uvicorn[standard]==0.52.3",
+]
+
+# Deliberately absent, and asserted absent by tests/unit/test_no_database_access.py:
+#   - any PostgreSQL driver (psycopg, asyncpg, SQLAlchemy)
+#   - any migration tool (alembic)
+# The AI plane reaches learner state through the platform API under its own authorisation, never
+# through SQL. Flyway under ramals_core_migration is the sole DDL authority for the shared database.
+
+[project.optional-dependencies]
+dev = [
+  "httpx==0.28.1",
+  "mypy==2.3.1",
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "ruff==0.16.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ramals_ai"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "S", "A", "C4", "RET", "SIM", "ARG", "PTH"]
+# S101 (assert) is the point of a test file.
+per-file-ignores = { "tests/**" = ["S101"] }
+
+[tool.mypy]
+python_version = "3.14"
+files = ["src", "tests"]
+strict = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config"
+
+[tool.coverage.run]
+source = ["src/ramals_ai"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
