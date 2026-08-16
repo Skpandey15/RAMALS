@@ -131,10 +131,12 @@ the standard Problem Details envelope carrying `interactionId` and `traceId`.
    queries are index-served with no sequential scan. The **k6 latency/throughput baseline on the
    authoritative environment is still missing**, so MVP-0 ships engineering objectives, not measured
    SLOs.
-2. **Deployment Definition of Done is partially met.** The pipeline publishes attested artifacts and
-   the release-hold state machine is proven in isolation, but no pull-based deployment has run
-   against a live environment.
-3. **Live-token authorization is unproven.** All authorization evidence uses mock JWTs.
+2. ~~Deployment Definition of Done is partially met.~~ **Closed.** Pull-based deployment of the
+   approved manifest reached `HEALTHY` on both `rc1` and `rc2` digests, and a deliberately bad
+   version rolled back to a *verified* known-good digest and held the release. See
+   [live-stack drills](evidence/live-stack-drills.md).
+3. ~~Live-token authorization is unproven.~~ **Closed.** 26/26 checks against a token actually
+   issued by Keycloak, including the MFA-gated admin path.
 
 ## 6. MVP-1 entry criteria
 
@@ -157,8 +159,11 @@ MVP-1 code is included in this release.**
 
 ## 7. Release decision
 
-**Recommended: release as `v0.1.0-rc1` — a release *candidate*, not a general availability build.**
+**Released as `v0.1.0-rc2` — a release *candidate*, not a general availability build.**
 
 The deterministic adaptive learning baseline is complete, tested, auditable and reproducible, and it
-is fit to serve as the scientific control. It is **not** ready for a production availability or
-latency commitment until R1–R3 are closed.
+is fit to serve as the scientific control. R2 and R3 are closed. It is **not** ready for a production
+availability or latency commitment until **R1** is closed: there is still no calibrated latency or
+throughput baseline from an authoritative environment.
+
+The path from here is in the [MVP-1 entry plan](mvp1-entry-plan.md).
