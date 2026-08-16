@@ -3,37 +3,36 @@ package io.ramals.learningplatform.security;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 
 /**
  * Per-key token-bucket rate limiter. Each key (a client identity) refills continuously at a fixed
  * rate up to a capacity; a request consumes one token. Deterministic given its clock, so recovery is
  * testable. In-memory and per-instance, which is sufficient for MVP-0 abuse mitigation.
+ *
+ * <p>One instance serves one {@link RateLimitTier}; the application runs a pre-authentication tier
+ * keyed on client IP and a post-authentication tier keyed on the token subject.
  */
-@Component
 public class TokenBucketRateLimiter {
 
-  private final RateLimitProperties properties;
+  private final RateLimitTier tier;
   private final LongSupplier clockMillis;
   private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
 
-  @Autowired
-  public TokenBucketRateLimiter(RateLimitProperties properties) {
-    this(properties, System::currentTimeMillis);
+  public TokenBucketRateLimiter(RateLimitTier tier) {
+    this(tier, System::currentTimeMillis);
   }
 
-  TokenBucketRateLimiter(RateLimitProperties properties, LongSupplier clockMillis) {
-    this.properties = properties;
+  TokenBucketRateLimiter(RateLimitTier tier, LongSupplier clockMillis) {
+    this.tier = tier;
     this.clockMillis = clockMillis;
   }
 
   public Decision tryAcquire(String key) {
     Bucket bucket = buckets.computeIfAbsent(
-        key, ignored -> new Bucket(properties.getCapacity(), clockMillis.getAsLong()));
+        key, ignored -> new Bucket(tier.getCapacity(), clockMillis.getAsLong()));
     synchronized (bucket) {
       long now = clockMillis.getAsLong();
-      bucket.refill(now, properties);
+      bucket.refill(now, tier);
       if (bucket.tokens >= 1.0) {
         bucket.tokens -= 1.0;
         return new Decision(true, 0);
@@ -43,7 +42,7 @@ public class TokenBucketRateLimiter {
   }
 
   private long retryAfterSeconds(Bucket bucket) {
-    double refill = properties.getRefillPerSecond();
+    double refill = tier.getRefillPerSecond();
     if (refill <= 0) {
       return 60;
     }
@@ -63,9 +62,9 @@ public class TokenBucketRateLimiter {
       this.lastRefillMillis = nowMillis;
     }
 
-    private void refill(long now, RateLimitProperties properties) {
+    private void refill(long now, RateLimitTier tier) {
       double elapsedSeconds = Math.max(0, now - lastRefillMillis) / 1000.0;
-      tokens = Math.min(properties.getCapacity(), tokens + elapsedSeconds * properties.getRefillPerSecond());
+      tokens = Math.min(tier.getCapacity(), tokens + elapsedSeconds * tier.getRefillPerSecond());
       lastRefillMillis = now;
     }
   }

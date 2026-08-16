@@ -3,6 +3,8 @@ package io.ramals.learningplatform.security;
 import static org.springframework.security.config.Customizer.withDefaults;
 
 import java.util.List;
+import io.ramals.learningplatform.observability.TraceContextAccessor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -13,11 +15,13 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 @EnableMethodSecurity
@@ -26,7 +30,10 @@ public class SecurityConfig {
 
   @Bean
   SecurityFilterChain securityFilterChain(
-      HttpSecurity http, JwtAuthenticationConverter converter, SecurityDenialHandler denialHandler)
+      HttpSecurity http, JwtAuthenticationConverter converter, SecurityDenialHandler denialHandler,
+      @Qualifier("subjectRateLimiter") TokenBucketRateLimiter subjectRateLimiter,
+      RateLimitProperties rateLimitProperties, ObjectMapper objectMapper,
+      TraceContextAccessor traceContext)
       throws Exception {
     http
         .cors(withDefaults())
@@ -57,7 +64,26 @@ public class SecurityConfig {
                 .maxAgeInSeconds(63072000))
             .permissionsPolicyHeader(permissions -> permissions
                 .policy("geolocation=(), camera=(), microphone=(), payment=(), usb=()")));
+    // Per-learner fair-use limiting sits AFTER token validation, so the subject it keys on has
+    // actually been verified. It is constructed here rather than exposed as a bean so Boot does not
+    // also auto-register it as a plain servlet filter outside the security chain.
+    http.addFilterAfter(
+        new SubjectRateLimitFilter(
+            subjectRateLimiter, rateLimitProperties, objectMapper, traceContext),
+        BearerTokenAuthenticationFilter.class);
     return http.build();
+  }
+
+  /** Pre-authentication tier: keyed on client IP, sized to shed floods, not to police individuals. */
+  @Bean
+  TokenBucketRateLimiter ipRateLimiter(RateLimitProperties properties) {
+    return new TokenBucketRateLimiter(properties);
+  }
+
+  /** Post-authentication tier: keyed on the verified token subject; the per-learner fair-use limit. */
+  @Bean
+  TokenBucketRateLimiter subjectRateLimiter(RateLimitProperties properties) {
+    return new TokenBucketRateLimiter(properties.getSubject());
   }
 
   @Bean

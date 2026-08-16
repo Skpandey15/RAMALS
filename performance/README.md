@@ -62,23 +62,29 @@ k6 run scenarios/concurrency-idempotency.js
 RAMALS_DB_URL=postgresql://ramals_core_runtime@localhost:5432/ramals ./db/run-db-benchmarks.sh
 ```
 
-## The rate limiter will throttle a single-source load generator
+## Rate limiting and load generation
 
-`RateLimitFilter` keys its token bucket on the **client IP**, not the authenticated subject. A load
-generator is one IP, so every simulated learner shares one bucket no matter how many identities the
-harness authenticates as. At the shipped defaults (`capacity 120`, `refill 60/s`) a 60 rps run sits
-exactly on the limit and roughly 16% of requests come back **429**.
+Rate limiting has two tiers. A pre-authentication ceiling keyed on **client IP** sheds floods before
+any JWT is validated, and a post-authentication tier keyed on the **verified token subject** enforces
+per-learner fair use.
 
-Those 429s are the limiter working correctly — the giveaway is that p95 stays flat while a sixth of
-traffic is rejected, which is nothing like saturation. To measure the application rather than the
-limiter, bring the stack up with the override:
+Provision enough learners (`RAMALS_LOAD_LEARNERS`) that each stays under the fair-use limit, and a
+single-source load generator runs clean: the IP tier is sized for floods, not for a cohort.
+
+Before R9 the bucket was keyed on IP alone, so every simulated learner drew on one allowance and a
+60 rps run returned roughly **16% 429s** regardless of how many identities the harness used. If you
+ever see that shape again, the giveaway is that p95 stays flat while a large fraction of traffic is
+rejected — nothing like saturation.
+
+To probe above the IP ceiling itself, bring the stack up with the override:
 
 ```bash
 docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-override.yml up -d
 ```
 
-That override materially weakens a security control and is strictly a load-generation aid — never
-apply it to a real environment, and label any run made with it in the baseline metadata.
+It raises **both** tiers — raising only the IP tier leaves the subject tier throttling each simulated
+learner. It materially weakens a security control and is strictly a load-generation aid: never apply
+it to a real environment, and label any run made with it in the baseline metadata.
 
 ## Exported summaries are scrubbed
 

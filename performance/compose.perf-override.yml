@@ -1,21 +1,27 @@
-# Load-generation override. Compose this ON TOP of the deployment topology for a capacity run:
+# Load-generation override. Compose this ON TOP of the deployment topology when a capacity run needs
+# the rate limiter out of the way:
 #
 #   docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-override.yml up -d
 #
-# Why it exists: RateLimitFilter keys its token bucket on the client IP (X-Forwarded-For, else
-# the remote address). A load generator is a single IP, so every simulated learner shares one
-# bucket regardless of how many distinct identities the harness authenticates as. At the shipped
-# defaults (capacity 120, refill 60/s) a 60 rps arrival rate sits exactly on the limit and bursts
-# are rejected — roughly 16% of requests returned 429 in a measured run.
+# Since R9 this is usually NOT needed. Rate limiting now has two tiers: a pre-authentication ceiling
+# keyed on client IP (generous, sized to shed floods) and a post-authentication tier keyed on the
+# verified token subject (per-learner fair use). A load generator is a single IP but authenticates as
+# many distinct learners, so provisioning enough learners keeps each one under the fair-use limit and
+# the run measures the application rather than the limiter.
 #
-# Those 429s are the limiter working as designed, not application errors. But a run dominated by
-# them measures the limiter, not the system. This override raises the ceiling so a capacity number
-# reflects the application.
+# Before R9 the bucket was keyed on IP alone, so every simulated learner shared one allowance and a
+# 60 rps run returned roughly 16% 429s no matter how many identities the harness used.
 #
-# It is NOT a deployment artefact and must never be applied to a real environment: it materially
-# weakens a security control. Runs made with it must be labelled as such in the baseline metadata.
+# Reach for this only to probe above the IP ceiling itself. It materially weakens a security control
+# and is NOT a deployment artefact: never apply it to a real environment, and label any run made with
+# it in the baseline metadata.
 services:
   backend:
     environment:
+      # Pre-authentication tier, keyed on client IP.
       RAMALS_RATE_LIMIT_CAPACITY: "1000000"
       RAMALS_RATE_LIMIT_REFILL_PER_SECOND: "1000000"
+      # Post-authentication tier, keyed on the verified token subject. Raising only the IP tier
+      # leaves this one throttling each simulated learner.
+      RAMALS_RATE_LIMIT_SUBJECT_CAPACITY: "1000000"
+      RAMALS_RATE_LIMIT_SUBJECT_REFILL_PER_SECOND: "1000000"
