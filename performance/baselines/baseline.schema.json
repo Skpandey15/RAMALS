@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramals.io/perf/baseline.schema.json",
+  "title": "RAMALS MVP-0 performance baseline",
+  "description": "Machine-readable baseline result. Every published baseline records stable environment metadata so runs are comparable and regressions are judged against data, not one-off numbers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scenario",
+    "executor_model",
+    "environment",
+    "commit",
+    "dataset_version",
+    "script_version",
+    "measured_at",
+    "steady_state",
+    "latency_ms",
+    "error_rate",
+    "throughput_rps"
+  ],
+  "properties": {
+    "scenario": { "type": "string", "examples": ["mixed-learning", "diagnostic", "auth", "concurrency-idempotency"] },
+    "executor_model": { "type": "string", "enum": ["open", "closed"] },
+    "executor": {
+      "type": "string",
+      "enum": ["constant-arrival-rate", "ramping-arrival-rate", "constant-vus", "per-vu-iterations"]
+    },
+    "environment": { "type": "string", "description": "Authoritative fixed-spec env id, e.g. perf-standard-01. 'local-unqualified' marks informational runs." },
+    "commit": { "type": "string" },
+    "dataset_version": { "type": "string" },
+    "script_version": { "type": "string" },
+    "measured_at": { "type": "string", "format": "date-time" },
+    "arrival_rate_rps": { "type": "number" },
+    "observed_concurrency": { "type": "number" },
+    "think_time_ms": { "type": "number" },
+    "warmup_discarded": { "type": "boolean" },
+    "steady_state": {
+      "type": "object",
+      "required": ["window"],
+      "properties": { "window": { "type": "string" } }
+    },
+    "host": {
+      "type": "object",
+      "properties": {
+        "cpu_limit": { "type": "string" },
+        "memory_limit": { "type": "string" },
+        "jvm": { "type": "string" },
+        "db_version": { "type": "string" }
+      }
+    },
+    "latency_ms": {
+      "type": "object",
+      "required": ["p50", "p95", "p99"],
+      "properties": {
+        "p50": { "type": "number" },
+        "p95": { "type": "number" },
+        "p99": { "type": "number" }
+      }
+    },
+    "adaptive_decision_latency_ms": {
+      "type": "object",
+      "properties": {
+        "p50": { "type": "number" },
+        "p95": { "type": "number" },
+        "p99": { "type": "number" }
+      }
+    },
+    "error_rate": { "type": "number" },
+    "throughput_rps": { "type": "number" }
+  }
+}
