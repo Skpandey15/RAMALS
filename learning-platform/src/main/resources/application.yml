@@ -47,8 +47,11 @@ management:
       export:
         enabled: false
   tracing:
+    # Full sampling by default for MVP-0 so every failure is traceable; lower in production
+    # via RAMALS_TRACE_SAMPLE. Trace/span ids are safe identifiers; no tokens, credentials, or
+    # learner free text are ever placed on spans or in structured logs.
     sampling:
-      probability: 1.0
+      probability: ${RAMALS_TRACE_SAMPLE:1.0}
     propagation:
       type: w3c
   opentelemetry:
@@ -56,11 +59,21 @@ management:
       export:
         otlp:
           enabled: false
+  prometheus:
+    metrics:
+      export:
+        enabled: true
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       probes:
         enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

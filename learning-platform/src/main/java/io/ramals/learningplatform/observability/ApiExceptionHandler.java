@@ -16,6 +16,7 @@ import io.ramals.learningplatform.learner.UnknownLearningDomainException;
 import io.ramals.learningplatform.learning.InvalidSessionTransitionException;
 import io.ramals.learningplatform.learning.LearningSessionNotFoundException;
 import io.ramals.learningplatform.learning.SessionConflictException;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -33,9 +34,11 @@ public class ApiExceptionHandler {
   private static final Logger LOGGER = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
   private final TraceContextAccessor traceContext;
+  private final MeterRegistry meterRegistry;
 
-  public ApiExceptionHandler(TraceContextAccessor traceContext) {
+  public ApiExceptionHandler(TraceContextAccessor traceContext, MeterRegistry meterRegistry) {
     this.traceContext = traceContext;
+    this.meterRegistry = meterRegistry;
   }
 
   @ExceptionHandler(DataAccessException.class)
@@ -292,6 +295,10 @@ public class ApiExceptionHandler {
       String code,
       String detail,
       HttpServletRequest request) {
+    // One counter for every handled failure, tagged by stable error code and status, so support and
+    // dashboards can find forced failures at the security, service, and database layers by class.
+    meterRegistry.counter("ramals.api.errors", "code", code, "status", String.valueOf(status.value()))
+        .increment();
     ApiProblem body = new ApiProblem(
         "about:blank",
         title,

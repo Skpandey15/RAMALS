@@ -28,6 +28,7 @@ dependencies {
   implementation 'net.ttddyy.observation:datasource-micrometer-opentelemetry:2.2.1'
   runtimeOnly 'org.postgresql:postgresql'
   runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+  runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 
   testImplementation 'org.springframework.boot:spring-boot-starter-test'
   testImplementation 'org.springframework.boot:spring-boot-webmvc-test'

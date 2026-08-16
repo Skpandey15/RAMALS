@@ -1,0 +1,18 @@
+# MVP-0 Prometheus scrape configuration for the RAMALS learning platform.
+# The metrics endpoint is authenticated; the scraper uses a SERVICE-role bearer token
+# (never a standing learner or admin credential). Metrics contain no tokens or learner PII.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: ramals-learning-platform
+    metrics_path: /actuator/prometheus
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ramals-service-token
+    static_configs:
+      - targets: ["learning-platform:8080"]
+        labels:
+          environment: dev
