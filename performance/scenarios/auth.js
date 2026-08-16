@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Trend } from 'k6/metrics';
 import { url } from '../lib/config.js';
-import { acquireAccessToken, authHeaders } from '../lib/auth.js';
+import { acquireAccessToken, acquireAccessTokenPool, tokenForVu, authHeaders } from '../lib/auth.js';
 
 // JWT/JWKS benchmark. The resource server validates the JWT signature (against cached JWKS), issuer,
 // audience, and expiry locally on every request. Comparing a JWT-validated endpoint against the
@@ -31,14 +31,16 @@ export const options = {
 };
 
 export function setup() {
+  // One deliberately isolated issuance, timed. The pool that follows spreads VUs over distinct
+  // subjects so JWT validation is not measured against a single cached identity.
   const started = Date.now();
-  const token = acquireAccessToken();
+  acquireAccessToken();
   tokenIssuance.add(Date.now() - started);
-  return { token };
+  return { tokens: acquireAccessTokenPool() };
 }
 
 export default function (data) {
-  const validated = http.get(url('/api/v1/me'), authHeaders(data.token));
+  const validated = http.get(url('/api/v1/me'), authHeaders(tokenForVu(data.tokens)));
   jwtValidatedRequest.add(validated.timings.duration);
   check(validated, { 'jwt validated 200': (r) => r.status === 200 });
 

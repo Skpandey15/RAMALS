@@ -1,0 +1,21 @@
+# Load-generation override. Compose this ON TOP of the deployment topology for a capacity run:
+#
+#   docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-override.yml up -d
+#
+# Why it exists: RateLimitFilter keys its token bucket on the client IP (X-Forwarded-For, else
+# the remote address). A load generator is a single IP, so every simulated learner shares one
+# bucket regardless of how many distinct identities the harness authenticates as. At the shipped
+# defaults (capacity 120, refill 60/s) a 60 rps arrival rate sits exactly on the limit and bursts
+# are rejected — roughly 16% of requests returned 429 in a measured run.
+#
+# Those 429s are the limiter working as designed, not application errors. But a run dominated by
+# them measures the limiter, not the system. This override raises the ceiling so a capacity number
+# reflects the application.
+#
+# It is NOT a deployment artefact and must never be applied to a real environment: it materially
+# weakens a security control. Runs made with it must be labelled as such in the baseline metadata.
+services:
+  backend:
+    environment:
+      RAMALS_RATE_LIMIT_CAPACITY: "1000000"
+      RAMALS_RATE_LIMIT_REFILL_PER_SECOND: "1000000"
