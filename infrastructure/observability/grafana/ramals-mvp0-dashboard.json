@@ -1,0 +1,104 @@
+{
+  "uid": "ramals-mvp0",
+  "title": "RAMALS MVP-0",
+  "tags": ["ramals", "mvp0"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "application",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(http_server_requests_seconds_count, application)",
+        "current": { "text": "ramals-learning-platform", "value": "ramals-learning-platform" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Diagnostic & learning throughput (req/s by operation)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (uri, method) (rate(http_server_requests_seconds_count{application=\"$application\", uri=~\"/api/v1/(diagnostics|me).*\"}[5m]))",
+          "legendFormat": "{{method}} {{uri}}"
+        }
+      ],
+      "description": "Covers diagnostic attempt/submit (scoring, mastery, confidence, recommendation run inside submit), mastery map, recommendations, progression, and learning sessions."
+    },
+    {
+      "id": 2,
+      "title": "Request latency p95 (s) by operation",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (uri, le) (rate(http_server_requests_seconds_bucket{application=\"$application\"}[5m])))",
+          "legendFormat": "{{uri}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Errors by class (ramals.api.errors)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (code) (rate(ramals_api_errors_total{application=\"$application\"}[5m]))",
+          "legendFormat": "{{code}}"
+        }
+      ],
+      "description": "Every handled failure at the security, service, and database layers, tagged by stable error code."
+    },
+    {
+      "id": 4,
+      "title": "HTTP error rate by status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"$application\", status=~\"4..|5..\"}[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Optimistic-retry conflicts (HTTP 409/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (uri) (rate(http_server_requests_seconds_count{application=\"$application\", status=\"409\"}[5m]))",
+          "legendFormat": "{{uri}}"
+        }
+      ],
+      "description": "Attempt-creation and learning-session version conflicts surface as HTTP 409."
+    },
+    {
+      "id": 6,
+      "title": "Rate-limit rejections (HTTP 429/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(ramals_api_errors_total{application=\"$application\", code=\"RATE_LIMITED\"}[5m]))",
+          "legendFormat": "rate-limited"
+        }
+      ]
+    }
+  ]
+}
