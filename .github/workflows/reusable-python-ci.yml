@@ -35,7 +35,14 @@ jobs:
       # gate nobody could reproduce locally.
       - name: Test with coverage
         run: python -m pytest -q --cov --cov-report=term-missing
+      # Audits the declared dependencies, not the installed environment. The environment also
+      # contains ramals-ai itself, which is not on PyPI, and --strict fails on anything it cannot
+      # audit — so auditing the environment would report the local package as an audit gap.
+      # This keeps strict mode meaningful: a real dependency that cannot be audited still fails.
       - name: Audit dependencies
+        working-directory: .
         run: |
           python -m pip install --disable-pip-version-check pip-audit==2.9.0
-          python -m pip_audit --strict --progress-spinner off
+          python scripts/ci/export-python-requirements.py \
+            ramals-ai/pyproject.toml "${RUNNER_TEMP}/requirements.txt"
+          python -m pip_audit -r "${RUNNER_TEMP}/requirements.txt" --strict --progress-spinner off
