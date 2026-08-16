@@ -95,6 +95,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # OCI registry references must be lowercase, but a GitHub owner may contain capitals.
+      # metadata-action normalizes its own output; every reference we build by hand needs this.
+      - name: Resolve lowercase image name
+        id: image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          name="${REGISTRY}/$(printf '%s' "${OWNER}" | tr '[:upper:]' '[:lower:]')/ramals-${COMPONENT}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "Image name: ${name}"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
@@ -109,7 +121,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}
+          images: ${{ steps.image.outputs.name }}
           # Immutable identity first; :main is a convenience pointer only, never a deploy target.
           tags: |
             type=sha,prefix=sha-,format=long
@@ -135,7 +147,7 @@ jobs:
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.17.9
         with:
-          image: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+          image: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           artifact-name: sbom-${{ matrix.component }}.spdx.json
           output-file: sbom-${{ matrix.component }}.spdx.json
@@ -143,7 +155,7 @@ jobs:
       - name: Scan published image with Trivy
         uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+          image-ref: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
           format: table
           exit-code: '1'
           ignore-unfixed: true
@@ -152,7 +164,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v2.4.0
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}
+          subject-name: ${{ steps.image.outputs.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
