@@ -26,7 +26,9 @@ dependencies {
   implementation 'org.springframework.boot:spring-boot-starter-web'
   implementation 'net.ttddyy.observation:datasource-micrometer-spring-boot:2.2.1'
   implementation 'net.ttddyy.observation:datasource-micrometer-opentelemetry:2.2.1'
-  runtimeOnly 'org.postgresql:postgresql'
+  // Pinned ahead of the Spring Boot BOM: the managed 42.7.11 carries CVE-2026-54291 (HIGH,
+  // scram-client), fixed in 42.7.12. Drop the explicit version once the BOM catches up.
+  runtimeOnly 'org.postgresql:postgresql:42.7.12'
   runtimeOnly 'org.flywaydb:flyway-database-postgresql'
   runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 
