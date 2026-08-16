@@ -1,0 +1,30 @@
+# Normalise line endings so a Windows checkout produces artefacts that still run on Linux.
+#
+# Without this, Git converts LF to CRLF on checkout for Windows developers. Shell scripts and the
+# Gradle wrapper then carry a CRLF shebang, and copying them into a Linux container fails with
+# "not found" (exit 127) — which broke `docker compose build` from a Windows clone while CI stayed
+# green, because hosted runners check out with LF.
+
+# Let Git decide for anything it detects as text, but never rewrite line endings on checkout.
+* text=auto eol=lf
+
+# Files that MUST stay LF: they are executed inside Linux containers or by POSIX shells.
+*.sh            text eol=lf
+gradlew         text eol=lf
+*.sql           text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+.env.example    text eol=lf
+
+# Windows-only entrypoints keep CRLF.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# Binary files must never be normalised.
+*.jar           binary
+*.png           binary
+*.jpg           binary
+*.docx          binary
+*.pdf           binary
