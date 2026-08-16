@@ -43,6 +43,30 @@ dependencies {
 tasks.named('test') {
   useJUnitPlatform()
   finalizedBy tasks.named('jacocoTestReport')
+
+  // Several suites assert on files outside this module: the Keycloak realm, the release record and
+  // ADRs, the AI contract and its golden fixtures, and .env.example. Gradle cannot see those, so
+  // without declaring them it treats the task as up to date when only one of them changes -- and
+  // the guard silently does not run.
+  //
+  // Found by perturbing the realm: dropping the audience mapper, enabling direct grants and
+  // committing a client secret all left the build green, because the tests never re-ran. This
+  // affected the pre-existing learner_id and MFA assertions too.
+  inputs.file(rootProject.file('.env.example'))
+      .withPropertyName('envExample')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
+  inputs.file(rootProject.file('infrastructure/docker/keycloak/ramals-realm.json'))
+      .withPropertyName('keycloakRealm')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
+  inputs.dir(rootProject.file('contracts'))
+      .withPropertyName('aiContract')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
+  inputs.dir(rootProject.file('docs/adr'))
+      .withPropertyName('adrs')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
+  inputs.file(rootProject.file('docs/release/mvp0-release-candidate.md'))
+      .withPropertyName('releaseRecord')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 jacoco {

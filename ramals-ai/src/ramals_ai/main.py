@@ -16,7 +16,9 @@ from fastapi import FastAPI
 from ramals_ai import __version__
 from ramals_ai.api.capabilities import build_capabilities_router
 from ramals_ai.api.health import ServiceState, build_health_router
+from ramals_ai.api.internal import build_internal_router
 from ramals_ai.config.settings import Settings, get_settings
+from ramals_ai.security.workload_identity import build_verifier
 from ramals_ai.telemetry.logging import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -66,8 +68,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(build_health_router(state))
     app.include_router(build_capabilities_router(resolved))
+    # Agent endpoints join this router in M1-T07 and inherit its authentication, so a new endpoint
+    # is protected by default rather than only when someone remembers to protect it.
+    app.include_router(build_internal_router())
     app.state.service_state = state
     app.state.settings = resolved
+    app.state.workload_verifier = build_verifier(resolved)
     return app
 
 

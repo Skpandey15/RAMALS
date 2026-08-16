@@ -90,6 +90,31 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "implicitFlowEnabled": false
+    },
+    {
+      "clientId": "ramals-core-workload",
+      "name": "RAMALS core workload (Spring -> ramals-ai)",
+      "description": "Service account the Spring core uses to call the internal AI API (M1-ADR-003). Confidential, no user flows: it authenticates the platform itself, never a learner. The secret is supplied by the environment and is deliberately absent from this file.",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "ramals-ai-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "ramals-ai",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
     }
   ],
   "requiredActions": [

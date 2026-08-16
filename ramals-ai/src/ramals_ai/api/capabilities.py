@@ -28,7 +28,8 @@ class Capabilities(BaseModel):
 
 
 def build_capabilities_router(settings: Settings) -> APIRouter:
-    router = APIRouter(tags=["operational"])
+    # Path fixed by the contract. Public: it reports what this build serves, no learner data.
+    router = APIRouter(prefix="/internal/v1", tags=["operational"])
 
     @router.get("/capabilities", response_model=Capabilities)
     def capabilities() -> Capabilities:
