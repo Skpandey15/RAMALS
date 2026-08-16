@@ -8,7 +8,7 @@ allprojects {
   // Frozen for the MVP-0 release candidate (M0-T23). Bump deliberately for the next candidate or
   // release; the deterministic algorithm and policy versions are frozen independently so historical
   // decisions stay reproducible.
-  version = '0.1.0-rc1'
+  version = '0.1.0-rc2'
 
   repositories {
     mavenCentral()

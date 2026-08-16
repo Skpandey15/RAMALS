@@ -1,4 +1,4 @@
-# RAMALS MVP-0 Release Candidate — v0.1.0-rc1
+# RAMALS MVP-0 Release Candidate — v0.1.0-rc2
 
 **Status: releasable as the deterministic adaptive learning baseline, with three documented
 exclusions (§5).** This build is the scientific control against which later agentic versions are
@@ -13,16 +13,17 @@ measured.
 | Schema | Flyway `014` |
 | Backend tests | 209 — 0 failures, 0 skipped |
 | Frontend tests | 24 — lint clean, build succeeds |
-| Project version | `0.1.0-rc1` (frozen in `build.gradle`) |
+| Project version | `0.1.0-rc2` (frozen in `build.gradle`) |
 | Release pipeline | green: build → push → SBOM → scan → provenance attestation |
 
 Both images are addressed by immutable digest, scanned clean of fixable CRITICAL/HIGH findings, and
 carry signed build provenance. `deploy/desired-version.json` is frozen at these digests.
 
-> **The frozen `rc1` digests predate the conformance fixes below.** They were built at schema `013`,
-> before `V014` added `audit.security_audit` and attempt correlation. A new release candidate must be
-> cut from `main` before those fixes can be deployed; `rc1` remains the artefact that was actually
-> validated end to end, and is described as such throughout this document.
+> **`rc2` is being cut now and its digests are not yet published.** The version, commit and image
+> digests in the table above still describe `rc1` — the artefact that was validated end to end — and
+> are updated once the `v0.1.0-rc2` release build completes. `rc1` was built at schema `013`, before
+> `V014` added `audit.security_audit` and attempt correlation, and before rate limiting moved to
+> subject keying (R9); it cannot carry those fixes.
 
 ## 1. Architecture conformance
 
