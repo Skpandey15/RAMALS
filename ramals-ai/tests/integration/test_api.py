@@ -58,7 +58,7 @@ def test_readiness_drops_on_shutdown() -> None:
 
 
 def test_capabilities_reports_this_build(client: TestClient) -> None:
-    body = client.get("/capabilities").json()
+    body = client.get("/internal/v1/capabilities").json()
     assert body["contractVersion"] == "1.0"
     assert body["service"] == "ramals-ai"
     assert body["environment"] == "test"
@@ -66,12 +66,12 @@ def test_capabilities_reports_this_build(client: TestClient) -> None:
 
 def test_capabilities_declares_no_authority(client: TestClient) -> None:
     """A caller must be able to see on the wire that this service decides nothing."""
-    assert client.get("/capabilities").json()["authority"] == "NON_AUTHORITATIVE"
+    assert client.get("/internal/v1/capabilities").json()["authority"] == "NON_AUTHORITATIVE"
 
 
 def test_capabilities_advertises_no_agents_yet(client: TestClient) -> None:
     """Agents arrive in M1-T07; claiming one now would be a lie a caller could act on."""
-    assert client.get("/capabilities").json()["agents"] == []
+    assert client.get("/internal/v1/capabilities").json()["agents"] == []
 
 
 def test_capabilities_never_leaks_the_provider_credential() -> None:
@@ -84,8 +84,10 @@ def test_capabilities_never_leaks_the_provider_credential() -> None:
         )
     )
     with TestClient(app) as started:
-        assert "super-secret" not in started.get("/capabilities").text
+        assert "super-secret" not in started.get("/internal/v1/capabilities").text
 
 
-def test_unknown_route_is_not_served(client: TestClient) -> None:
+def test_agent_endpoints_are_not_served_yet(client: TestClient) -> None:
+    """Declared in the contract, implemented from M1-T07. Until then the service does not pretend
+    to offer them, and /internal/v1/capabilities reports an empty agent list to match."""
     assert client.get("/internal/v1/tutor/respond").status_code == 404

@@ -9,6 +9,8 @@ requires-python = ">=3.14"
 dependencies = [
   "fastapi==0.141.1",
   "pydantic==2.13.4",
+  # Workload identity (M1-ADR-003): JWKS-backed validation of the Keycloak workload token.
+  "pyjwt[crypto]==2.10.1",
   "pydantic-settings==2.15.0",
   "uvicorn[standard]==0.52.3",
 ]
@@ -53,7 +55,12 @@ exclude = ["src/ramals_ai/contracts/generated.py"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "S", "A", "C4", "RET", "SIM", "ARG", "PTH"]
 # S101 (assert) is the point of a test file.
-per-file-ignores = { "tests/**" = ["S101"] }
+# Test tokens and passwords are fixtures, not credentials.
+per-file-ignores = { "tests/**" = ["S101", "S105", "S106"] }
+
+[tool.ruff.lint.flake8-bugbear]
+# Depends() in a parameter default is the FastAPI dependency-injection idiom, not a mutable default.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path"]
 
 [tool.mypy]
 python_version = "3.14"
