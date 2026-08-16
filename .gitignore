@@ -16,3 +16,8 @@ Thumbs.db
 *.log
 *.tsbuildinfo
 
+
+# Generated coverage reports
+coverage/
+**/coverage/
+learning-platform/build/

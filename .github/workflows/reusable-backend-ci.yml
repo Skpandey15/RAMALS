@@ -47,3 +47,14 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Build and test backend
         run: ./gradlew --no-daemon clean test
+      # JaCoCo runs as a finalizer of the test task; surface the headline numbers in the run log.
+      - name: Summarise backend coverage
+        if: always()
+        run: |
+          report=learning-platform/build/reports/jacoco/test/jacocoTestReport.csv
+          if [ ! -f "$report" ]; then echo "no coverage report produced"; exit 0; fi
+          awk -F, 'NR>1 {lm+=$8; lc+=$9; bm+=$6; bc+=$7}
+            END {
+              printf "Line coverage:   %.1f%% (%d/%d)\n", 100*lc/(lc+lm), lc, lc+lm;
+              printf "Branch coverage: %.1f%% (%d/%d)\n", 100*bc/(bc+bm), bc, bc+bm;
+            }' "$report" | tee -a "$GITHUB_STEP_SUMMARY"
