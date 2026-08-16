@@ -36,18 +36,22 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve currently desired digest
+      # OCI references must be lowercase; a GitHub owner may contain capitals.
+      - name: Resolve desired digest and lowercase image name
         id: desired
         env:
           COMPONENT: ${{ matrix.component }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           digest="$(python3 -c "
           import json, os
           manifest = json.load(open('deploy/desired-version.json'))
           print(manifest['components'][os.environ['COMPONENT']]['digest'])
           ")"
+          name="${REGISTRY}/$(printf '%s' "${OWNER}" | tr '[:upper:]' '[:lower:]')/ramals-${COMPONENT}"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-          echo "Rescanning ${COMPONENT} at ${digest}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "Rescanning ${name} at ${digest}"
 
       - name: Authenticate to GHCR
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
@@ -59,7 +63,7 @@ jobs:
       - name: Rescan published image
         uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}@${{ steps.desired.outputs.digest }}
+          image-ref: ${{ steps.desired.outputs.name }}@${{ steps.desired.outputs.digest }}
           format: table
           exit-code: '1'
           ignore-unfixed: true
@@ -68,7 +72,7 @@ jobs:
       - name: Report rescan outcome
         if: always()
         env:
-          COMPONENT: ${{ matrix.component }}
+          COMPONENT: ${{ steps.desired.outputs.name }}
           DIGEST: ${{ steps.desired.outputs.digest }}
           RESULT: ${{ job.status }}
         run: |

@@ -87,6 +87,15 @@ def main() -> int:
             if 'docker/build-push-action' in text and 'type=sha' not in text:
                 errors.append(f'{name}: published images must carry an immutable sha tag')
 
+        # OCI references must be lowercase, but a GitHub owner may contain capitals. Interpolating
+        # the owner straight into an image reference silently produces an unparseable reference.
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if re.search(r'(image|image-ref|images|subject-name)\s*:.*github\.repository_owner', line):
+                errors.append(
+                    f'{name}:{line_number}: build image references from a lowercased owner, '
+                    'not github.repository_owner directly'
+                )
+
         # Supply-chain pinning applies to every workflow.
         for line_number, line in enumerate(text.splitlines(), start=1):
             match = re.search(r'uses:\s+([^@\s]+)@([^\s#]+)', line)
