@@ -23,6 +23,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import io.ramals.learningplatform.security.SecurityAuditRecorder;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -35,10 +36,14 @@ public class ApiExceptionHandler {
 
   private final TraceContextAccessor traceContext;
   private final MeterRegistry meterRegistry;
+  private final SecurityAuditRecorder securityAuditRecorder;
 
-  public ApiExceptionHandler(TraceContextAccessor traceContext, MeterRegistry meterRegistry) {
+  public ApiExceptionHandler(
+      TraceContextAccessor traceContext, MeterRegistry meterRegistry,
+      SecurityAuditRecorder securityAuditRecorder) {
     this.traceContext = traceContext;
     this.meterRegistry = meterRegistry;
+    this.securityAuditRecorder = securityAuditRecorder;
   }
 
   @ExceptionHandler(DataAccessException.class)
@@ -62,6 +67,11 @@ public class ApiExceptionHandler {
         .addKeyValue("errorCode", "ACCESS_DENIED")
         .addKeyValue("operation", "authorization.check")
         .log("Authorization denied");
+    // Method-security denials land here rather than in the filter chain's AccessDeniedHandler, so
+    // this is the only place a role-based refusal can be audited (Master Plan §8).
+    securityAuditRecorder.recordDenial(
+        SecurityAuditRecorder.AUTHORIZATION_DENIED, request, HttpStatus.FORBIDDEN.value(),
+        "ACCESS_DENIED");
     return problem(
         HttpStatus.FORBIDDEN,
         "Access denied",

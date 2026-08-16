@@ -16,6 +16,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.slf4j.MDC;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -180,4 +181,23 @@ class DiagnosticPersistenceIntegrationTests {
       return result.getString(1);
     }
   }
+
+  @Test
+  void attemptRecordsTheInteractionThatCreatedIt() {
+    // Master Plan §8: an attempt must be correlatable back to the logical interaction in SQL, not
+    // only through the application log, which has a retention horizon.
+    wire();
+    String interactionId = "01920000-0000-7000-8000-0000000000ab";
+    MDC.put("interactionId", interactionId);
+    try {
+      AttemptCreation created = diagnostics.createAttempt("pg-interaction", "kafka", "key-i1");
+      String stored = runtimeJdbc.queryForObject(
+          "SELECT interaction_id FROM core.assessment_attempt WHERE id = ?",
+          String.class, created.attempt().id());
+      assertThat(stored).isEqualTo(interactionId);
+    } finally {
+      MDC.remove("interactionId");
+    }
+  }
+
 }
