@@ -21,10 +21,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  # Contract tooling (M1-ADR-002). datamodel-code-generator emits the Python models from the
+  # canonical OpenAPI; the others lint it and keep the committed output honest.
+  "black==26.5.1",
+  # black and isort must match the versions used to generate the committed models, or the drift
+  # check fails on formatting rather than on a real contract change.
+  "datamodel-code-generator==0.73.0",
   "httpx==0.28.1",
+  "isort==8.0.1",
   "mypy==2.3.1",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
+  "openapi-spec-validator==0.9.0",
+  "pyyaml==6.0.3",
   "ruff==0.16.3",
 ]
 
@@ -44,12 +53,18 @@ target-version = "py314"
 select = ["E", "F", "I", "N", "UP", "B", "S", "A", "C4", "RET", "SIM", "ARG", "PTH"]
 # S101 (assert) is the point of a test file.
 per-file-ignores = { "tests/**" = ["S101"] }
+# Generated from the contract; correctness is enforced by the drift check and the golden fixtures.
+exclude = ["src/ramals_ai/contracts/generated.py"]
 
 [tool.mypy]
 python_version = "3.14"
 files = ["src", "tests"]
 strict = true
 warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = "ramals_ai.contracts.generated"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

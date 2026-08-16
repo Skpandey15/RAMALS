@@ -19,6 +19,7 @@ jobs:
       backend: ${{ steps.changes.outputs.backend }}
       frontend: ${{ steps.changes.outputs.frontend }}
       python: ${{ steps.changes.outputs.python }}
+      contract: ${{ steps.changes.outputs.contract }}
       database: ${{ steps.changes.outputs.database }}
       infrastructure: ${{ steps.changes.outputs.infrastructure }}
       docs_only: ${{ steps.changes.outputs.docs_only }}
@@ -53,6 +54,12 @@ jobs:
     if: needs.detect-changes.outputs.python == 'true'
     uses: ./.github/workflows/reusable-python-ci.yml
 
+  contract-ci:
+    name: Contract CI
+    needs: detect-changes
+    if: needs.detect-changes.outputs.contract == 'true'
+    uses: ./.github/workflows/reusable-contract-ci.yml
+
   security-ci:
     name: Security CI
     needs: detect-changes
@@ -61,7 +68,7 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [detect-changes, backend-ci, frontend-ci, python-ci, security-ci]
+    needs: [detect-changes, backend-ci, frontend-ci, python-ci, contract-ci, security-ci]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate required and conditional jobs
@@ -70,10 +77,11 @@ jobs:
           BACKEND_RESULT: ${{ needs.backend-ci.result }}
           FRONTEND_RESULT: ${{ needs.frontend-ci.result }}
           PYTHON_RESULT: ${{ needs.python-ci.result }}
+          CONTRACT_RESULT: ${{ needs.contract-ci.result }}
           SECURITY_RESULT: ${{ needs.security-ci.result }}
         run: |
           required=("detect-changes:$DETECT_RESULT" "security-ci:$SECURITY_RESULT")
-          conditional=("backend-ci:$BACKEND_RESULT" "frontend-ci:$FRONTEND_RESULT" "python-ci:$PYTHON_RESULT")
+          conditional=("backend-ci:$BACKEND_RESULT" "frontend-ci:$FRONTEND_RESULT" "python-ci:$PYTHON_RESULT" "contract-ci:$CONTRACT_RESULT")
 
           for entry in "${required[@]}"; do
             name="${entry%%:*}"

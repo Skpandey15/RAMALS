@@ -1,0 +1,10 @@
+{
+  "contractVersion": "1.0",
+  "service": "ramals-ai",
+  "version": "0.1.0",
+  "environment": "test",
+  "aiEnabled": false,
+  "modelRoute": "ci-fake",
+  "agents": [],
+  "authority": "NON_AUTHORITATIVE"
+}

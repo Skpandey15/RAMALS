@@ -1,0 +1,16 @@
+{
+  "contractVersion": "1.0",
+  "proposalId": "01920000-0000-7000-8000-0000000000c2",
+  "agentType": "ASSESSMENT",
+  "agentVersion": "ASSESSMENT_AGENT_V1",
+  "modelRoute": "assessment-default",
+  "trustLevel": "FORMATIVE_ONLY",
+  "reasonCodes": ["PARTIAL_UNDERSTANDING_OF_ACKS"],
+  "proposal": {
+    "feedback": "The answer conflates acks=1 with acks=all.",
+    "rubricSuggestions": ["Mention durability guarantees explicitly"]
+  },
+  "validation": {
+    "schemaValid": true
+  }
+}

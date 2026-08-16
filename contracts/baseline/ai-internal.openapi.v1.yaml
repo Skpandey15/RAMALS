@@ -1,0 +1,466 @@
+# FROZEN BASELINE for contract major version 1. Do not edit.
+#
+# scripts/ci/check-contract-compatibility.py compares the working contract against this file. A
+# breaking change means shipping a new major version and freezing a new baseline beside this one --
+# never editing this copy, which would make the check compare a change against itself.
+#
+openapi: 3.1.0
+
+# The single normative source for the Spring <-> Python boundary (Doc 03 §2).
+#
+# Python models are generated from this file; Java records are hand-written and validated against it
+# by the golden fixtures in contracts/golden/ (M1-ADR-002). Do not define a type on either side that
+# is not described here.
+#
+# Endpoints are declared now and implemented from M1-T07. A caller reaching one before then gets a
+# 404 from a service that never claimed the capability -- /internal/v1/capabilities reports the
+# agents this build actually serves.
+
+info:
+  title: RAMALS internal AI contract
+  version: 1.0.0
+  summary: Non-authoritative agent proposals for the RAMALS deterministic core.
+  description: |
+    Every response on this API is a **proposal**. Nothing returned here is authoritative learner
+    state. Spring validates each proposal against schema, semantics, trust level and deterministic
+    policy before any authoritative write, and the write happens in a new Spring transaction.
+
+    Authentication is a Keycloak client-credentials token carrying the `ramals-ai` audience
+    (M1-ADR-003). A learner token is never accepted, and is never forwarded by Spring.
+
+servers:
+  - url: http://ramals-ai:8000
+    description: In-cluster service address
+
+security:
+  - workloadIdentity: []
+
+tags:
+  - name: agents
+    description: Proposal endpoints. Implemented from M1-T07 onward.
+  - name: operational
+    description: Health and capability discovery. No learner data.
+
+paths:
+  /internal/v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [operational]
+      summary: Agents, routes and contract version this build serves
+      security: []
+      responses:
+        '200':
+          description: Capabilities of this build
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+
+  /internal/v1/tutor/respond:
+    post:
+      operationId: tutorRespond
+      tags: [agents]
+      summary: Personalized explanation or hint
+      description: Learner-facing instructional content only. Never alters mastery or evidence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIRequestEnvelope'
+      responses:
+        '200':
+          description: A non-authoritative tutor proposal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProposalEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableProposal' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+        '504': { $ref: '#/components/responses/DeadlineExceeded' }
+
+  /internal/v1/diagnostic/propose:
+    post:
+      operationId: diagnosticPropose
+      tags: [agents]
+      summary: Propose the next diagnostic probe
+      description: >
+        Suggests what to probe next. Deterministic curriculum and prerequisite policy decides
+        whether the proposal is eligible.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIRequestEnvelope'
+      responses:
+        '200':
+          description: A diagnostic proposal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProposalEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableProposal' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+        '504': { $ref: '#/components/responses/DeadlineExceeded' }
+
+  /internal/v1/assessment/propose:
+    post:
+      operationId: assessmentPropose
+      tags: [agents]
+      summary: Propose a candidate assessment item or rubric
+      description: >
+        Generated content is UNVERIFIED and cannot gate progression until promoted through approved
+        validation or review.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIRequestEnvelope'
+      responses:
+        '200':
+          description: An UNVERIFIED candidate item proposal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProposalEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableProposal' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+        '504': { $ref: '#/components/responses/DeadlineExceeded' }
+
+  /internal/v1/assessment/evaluate:
+    post:
+      operationId: assessmentEvaluate
+      tags: [agents]
+      summary: Formative evaluation assistance
+      description: |
+        **FORMATIVE_ONLY (M1-ADR-010).** May return feedback, classifications, rubric suggestions and
+        reviewer assistance. Must never create `ledger.evidence`, determine an authoritative score,
+        change attempt completion, or affect mastery, confidence, recommendation or progression.
+
+        The response `trustLevel` is always `FORMATIVE_ONLY`; any other value is a contract
+        violation and Spring rejects it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIRequestEnvelope'
+      responses:
+        '200':
+          description: A formative-only evaluation proposal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProposalEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableProposal' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+        '504': { $ref: '#/components/responses/DeadlineExceeded' }
+
+  /internal/v1/adaptation/propose:
+    post:
+      operationId: adaptationPropose
+      tags: [agents]
+      summary: Propose the next pedagogical action
+      description: >
+        Deterministic RecommendationPolicy remains authoritative. Where the agent and the policy
+        disagree, the policy wins and the disagreement is recorded for evaluation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIRequestEnvelope'
+      responses:
+        '200':
+          description: An adaptation proposal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProposalEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableProposal' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+        '504': { $ref: '#/components/responses/DeadlineExceeded' }
+
+components:
+  securitySchemes:
+    workloadIdentity:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak client-credentials token with audience `ramals-ai` (M1-ADR-003). A learner token
+        carries the `ramals-api` audience and is rejected here.
+
+  responses:
+    BadRequest:
+      description: The request envelope is malformed or violates a documented limit
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Missing, expired or wrong-audience workload token
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Authenticated, but not the RAMALS core workload
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    UnprocessableProposal:
+      description: No valid proposal could be produced within the bounded repair budget
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    AiUnavailable:
+      description: >
+        The model route or agent runtime is unavailable. Deterministic learning is unaffected; the
+        caller degrades the AI feature rather than failing the learner's action.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    DeadlineExceeded:
+      description: >
+        The caller's absolute deadline elapsed (M1-ADR-001). Fails closed: no partial proposal.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    ContractVersion:
+      type: string
+      pattern: '^\d+\.\d+$'
+      examples: ['1.0']
+      description: Envelope contract version. A breaking change ships a new major version.
+
+    TrustLevel:
+      type: string
+      description: |
+        What a proposal is permitted to influence (Doc 03 §4). None of these authorise an AI
+        component to create scored evidence in MVP-1.
+      enum:
+        - NON_AUTHORITATIVE
+        - UNVERIFIED
+        - VERIFIED_CONTENT
+        - FORMATIVE_ONLY
+        - REJECTED
+        - APPROVAL_REQUIRED
+
+    AgentType:
+      type: string
+      enum: [TUTOR, DIAGNOSTIC, ASSESSMENT, ADAPTATION]
+
+    InteractionClass:
+      type: string
+      description: Deadline class governing this call (M1-ADR-001). Stricter route limits win.
+      enum: [FAST, INTERACTIVE_AI, ASSESSMENT_PROPOSAL, LIMITED_DURABLE]
+
+    LearnerRef:
+      type: object
+      description: >
+        Opaque learner reference. Never a database primary key, and never enough on its own to
+        identify a person outside the platform.
+      additionalProperties: false
+      required: [learnerRef]
+      properties:
+        learnerRef:
+          type: string
+          minLength: 1
+          maxLength: 128
+        locale:
+          type: string
+          maxLength: 16
+          examples: ['en-IN']
+
+    LearningContext:
+      type: object
+      description: >
+        Minimized, purpose-specific learner state. Spring sends only what the agent use case needs;
+        no full history, no raw keys, no access token.
+      additionalProperties: false
+      required: [skillCode]
+      properties:
+        skillCode:
+          type: string
+          minLength: 1
+          maxLength: 64
+        masteryScore:
+          $ref: '#/components/schemas/DecimalString'
+        evidenceConfidence:
+          $ref: '#/components/schemas/DecimalString'
+        masteryStatus:
+          type: string
+          maxLength: 32
+          examples: ['NEEDS_PRACTICE']
+        prerequisites:
+          type: array
+          maxItems: 32
+          items:
+            type: string
+            maxLength: 64
+
+    DecimalString:
+      type: string
+      pattern: '^\d\.\d{4}$'
+      description: >
+        Fixed-scale decimal carried as a string. The deterministic engines use BigDecimal at a
+        canonical scale; a JSON number would invite a float round-trip and break reproducibility.
+      examples: ['0.7200']
+
+    Constraints:
+      type: object
+      additionalProperties: false
+      required: [interactionClass, deadlineMs]
+      properties:
+        interactionClass:
+          $ref: '#/components/schemas/InteractionClass'
+        deadlineMs:
+          type: integer
+          minimum: 1
+          maximum: 15000
+          description: >
+            Remaining budget when the call was made, not a per-hop timeout. The callee must not
+            exceed it and must not begin work it cannot finish within it (M1-ADR-001).
+        maxOutputTokens:
+          type: integer
+          minimum: 1
+          maximum: 4000
+        allowedTools:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+            maxLength: 64
+          description: Capability allowlist. An empty array means no tools.
+        policyVersion:
+          type: string
+          maxLength: 64
+
+    AIRequestEnvelope:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, interactionId, requestId, learner, constraints]
+      properties:
+        contractVersion: { $ref: '#/components/schemas/ContractVersion' }
+        interactionId:
+          type: string
+          maxLength: 64
+          description: Logical learner action. Stable across safe retries.
+        requestId:
+          type: string
+          maxLength: 64
+          description: One transport attempt. New per retry.
+        learner: { $ref: '#/components/schemas/LearnerRef' }
+        learningContext: { $ref: '#/components/schemas/LearningContext' }
+        constraints: { $ref: '#/components/schemas/Constraints' }
+        requestedCapability:
+          type: string
+          maxLength: 64
+
+    Usage:
+      type: object
+      additionalProperties: false
+      properties:
+        inputTokens: { type: integer, minimum: 0 }
+        cachedInputTokens: { type: integer, minimum: 0 }
+        outputTokens: { type: integer, minimum: 0 }
+        estimatedCostUsd: { type: string, pattern: '^\d+\.\d{1,6}$' }
+        latencyMs: { type: integer, minimum: 0 }
+
+    Validation:
+      type: object
+      description: What the AI plane checked before returning. Spring re-validates regardless.
+      additionalProperties: false
+      required: [schemaValid]
+      properties:
+        schemaValid: { type: boolean }
+        semanticValid: { type: boolean }
+        repairAttempts: { type: integer, minimum: 0, maximum: 2 }
+
+    AIProposalEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+        [contractVersion, proposalId, agentType, agentVersion, modelRoute, trustLevel, proposal]
+      properties:
+        contractVersion: { $ref: '#/components/schemas/ContractVersion' }
+        proposalId:
+          type: string
+          maxLength: 64
+          description: Identity of this proposal. Referenced by DecisionRecord when it influences one.
+        agentType: { $ref: '#/components/schemas/AgentType' }
+        agentVersion: { type: string, maxLength: 64 }
+        promptVersion: { type: string, maxLength: 64 }
+        modelRoute: { type: string, maxLength: 64 }
+        trustLevel: { $ref: '#/components/schemas/TrustLevel' }
+        confidence:
+          $ref: '#/components/schemas/DecimalString'
+          description: >
+            The agent's self-reported confidence. Never a basis for authority: Spring's deterministic
+            policy decides, and a high value here changes nothing.
+        reasonCodes:
+          type: array
+          maxItems: 16
+          items: { type: string, maxLength: 64 }
+        proposal:
+          type: object
+          description: >
+            Agent-specific payload. Deliberately open at v1.0 so each agent can define its own shape
+            in its own task without a breaking contract change; each agent's schema is pinned by its
+            own golden fixtures.
+          additionalProperties: true
+        validation: { $ref: '#/components/schemas/Validation' }
+        usage: { $ref: '#/components/schemas/Usage' }
+
+    Capabilities:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, service, version, environment, aiEnabled, modelRoute, agents, authority]
+      properties:
+        contractVersion: { $ref: '#/components/schemas/ContractVersion' }
+        service: { type: string, maxLength: 64 }
+        version: { type: string, maxLength: 32 }
+        environment: { type: string, maxLength: 32 }
+        aiEnabled: { type: boolean }
+        modelRoute: { type: string, maxLength: 64 }
+        agents:
+          type: array
+          maxItems: 8
+          items: { $ref: '#/components/schemas/AgentType' }
+        authority:
+          type: string
+          enum: [NON_AUTHORITATIVE]
+          description: Stated on the wire so no caller can mistake this service for a decision-maker.
+
+    Problem:
+      type: object
+      description: >
+        RFC 9457 problem document, matching the MVP-0 error contract so one support code works
+        across both runtimes.
+      additionalProperties: false
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, maxLength: 256 }
+        title: { type: string, maxLength: 256 }
+        status: { type: integer, minimum: 100, maximum: 599 }
+        code: { type: string, maxLength: 64 }
+        detail: { type: string, maxLength: 1024 }
+        interactionId: { type: string, maxLength: 64 }
+        traceId: { type: string, maxLength: 64 }
