@@ -34,6 +34,14 @@ SELECT format('CREATE ROLE ramals_core_runtime LOGIN PASSWORD %L', :'runtime_pas
 WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ramals_core_runtime')
 \gexec
 
+-- MVP-1 AI workload identity. Created NOLOGIN with no password: it exists so V015 has something to
+-- revoke privilege from, making the boundary an enforceable database fact before the Python runtime
+-- exists. Credentials, if that service is ever granted any access at all, belong to the
+-- environment's secret management rather than to a provisioning script in source control.
+SELECT 'CREATE ROLE ramals_ai_runtime NOLOGIN'
+WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ramals_ai_runtime')
+\gexec
+
 ALTER ROLE ramals_core_runtime SET search_path = core, pg_catalog;
 ALTER ROLE ramals_core_migration SET search_path = core, ledger, audit, pg_catalog;
 

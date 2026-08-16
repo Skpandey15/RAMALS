@@ -10,8 +10,8 @@ measured.
 | Commit | `3dc3d59` |
 | Backend image | `ghcr.io/skpandey15/ramals-learning-platform@sha256:29bd6bf8…` |
 | Web UI image | `ghcr.io/skpandey15/ramals-web-ui@sha256:7cea426a…` |
-| Schema | Flyway `014` |
-| Backend tests | 209 — 0 failures, 0 skipped |
+| Schema | Flyway `015` |
+| Backend tests | 216 — 0 failures, 0 skipped |
 | Frontend tests | 24 — lint clean, build succeeds |
 | Project version | `0.1.0-rc2` (frozen in `build.gradle`) |
 | Release pipeline | green: build → push → SBOM → scan → provenance attestation |
@@ -102,6 +102,10 @@ the standard Problem Details envelope carrying `interactionId` and `traceId`.
 - Database privilege attacks: runtime denied UPDATE/DELETE on all `ledger`/`audit` tables (`42501`),
   denied DDL, Flyway history protected.
 - Append-only triggers reject mutation even for the table owner (`55000`).
+- AI workload boundary: `ramals_ai_runtime` denied schema USAGE, all object privileges and CONNECT;
+  `42501` proven on read, write and DDL across every platform table (MVP-1 entry criterion 6).
+- Deterministic control frozen: all seven engine versions pinned by behaviour hash, with a guard
+  that fails if a new versioned engine is added without one.
 - Rate limiting, two tiers: a pre-authentication ceiling keyed on client IP sheds floods before any
   JWT is validated; a post-authentication tier keyed on the verified token subject enforces
   per-learner fair use. Both return 429 with `Retry-After` and a correlated Problem Details body.

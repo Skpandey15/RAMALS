@@ -39,10 +39,10 @@ Against the six entry criteria recorded in the [release candidate](mvp0-release-
 | 2 | Pull-based deployment proven, including rollback | ✅ Met | Full sequence executed on **both** `rc1` and `rc2` digests: `HEALTHY`, bad version rolled back to a *verified* known-good digest, held, then recovered |
 | 3 | Live-token authorization verified | ✅ Met | 26/26 against a real Keycloak token, including the MFA-gated admin path |
 | 4 | R1–R3 closed or explicitly accepted | ⚠️ Partial | R2 and R3 closed; **R1 open** |
-| 5 | Deterministic control frozen | ⚠️ Not formalised | The versions exist and are stamped on records; nothing yet *prevents* changing them |
-| 6 | Boundary respected | ⚠️ Not yet enforceable | Only two DB roles exist; there is no AI workload identity to constrain |
+| 5 | Deterministic control frozen | ✅ Met | `EngineVersionFreezeTests` pins all seven engines by behaviour hash and fails if a new engine is unfrozen |
+| 6 | Boundary respected | ⚠️ Partial | B1 done: `ramals_ai_runtime` exists and is denied everything, proven by `42501`. B2–B4 remain |
 
-Three met, three outstanding. Only one of the three is genuinely blocked on anything external.
+Five of six now met or substantially met. **R1 is the only item blocked on anything external.**
 
 ## 2. Gate A — finish MVP-0 before writing MVP-1 code
 
@@ -68,7 +68,7 @@ stated purpose of MVP-0.
 > is to have something to compare against. Starting MVP-1 without it discards most of that value for
 > the sake of a few days.
 
-### A2. Freeze the deterministic control
+### A2. Freeze the deterministic control — ✅ **done**
 
 Seven versioned engines currently define every consequential decision:
 
@@ -82,9 +82,16 @@ They are stamped onto persisted records, so a historical decision can be reconst
 missing is anything that *stops* someone editing a `_V1` constant in place — which would silently
 invalidate every decision already recorded under that identifier.
 
-**Do:** add a CI guard that fails when the behaviour behind an existing `_V*` identifier changes
-without a new identifier and an [ADR](../adr/README.md). A checksum over the engine constants,
-asserted in a test, is enough — the same shape as the existing migration-checksum protection.
+`EngineVersionFreezeTests` hashes each engine's output over fixed input vectors and asserts it
+against a recorded value. Refactoring is free; changing a weight, threshold, rounding mode or branch
+is not. A second test scans the sources for `_V*` identifiers and fails if any lacks a frozen vector,
+so a new engine cannot be added without being frozen.
+
+Verified by perturbing one weight (`QUIZ` 1.50 → 1.55): the guard tripped and named the engine.
+
+If it fails, the fix is never to update the expected hash. Either revert, or mint a new identifier,
+leave the old one untouched so existing records stay reconstructable, and record an
+[ADR](../adr/README.md).
 
 ### A3. Re-run the rollback drill on the released digests — ✅ **done**
 
@@ -104,14 +111,20 @@ document; there is nothing to enforce it, because there is no AI identity yet.
 Build the constraint **before** the thing it constrains, exactly as MVP-0 built database invariants
 before the features that rely on them.
 
-### B1. A third database identity
+### B1. A third database identity — ✅ **done**
 
-Only `ramals_core_migration` and `ramals_core_runtime` exist. Add `ramals_ai_runtime` with **no
-grants on `core` or `ledger` at all**. If the AI service needs learner context, it gets it from the
-platform API under its own authorisation, not from SQL.
+`ramals_ai_runtime` is provisioned NOLOGIN with no password, and `V015` revokes schema USAGE, all
+table/sequence/function privileges, future default privileges, and CONNECT to the database itself.
 
-Verify it the way MVP-0 verifies the runtime role: a privilege test asserting `42501` on every table
-the AI identity must not touch. That test is the boundary; the document is only a description of it.
+The role is **not** created by the migration: `ramals_core_migration` deliberately lacks `CREATEROLE`,
+and a migration able to mint roles is a privilege-escalation path. That surfaced while building this —
+the first attempt failed with `42501`, which is the least-privilege model working. Provisioning
+creates the role; the migration only removes privilege from it.
+
+`AiRuntimeBoundaryIntegrationTests` proves `42501` on read, write and DDL across all eight platform
+tables, and that no schema USAGE is held. It re-grants LOGIN and CONNECT to demonstrate the *object*
+denials positively — asserting only "the connection fails" would pass for uninteresting reasons, such
+as a wrong password.
 
 ### B2. Workload identity, not a borrowed learner token
 
@@ -159,9 +172,9 @@ are skipped.
 Start MVP-1 when:
 
 - [ ] R1 closed with a committed baseline, **or** accepted in writing by a named owner
-- [ ] Engine version identifiers frozen and guarded in CI
-- [ ] Rollback drill executed against the released digests
-- [ ] `ramals_ai_runtime` exists with a privilege test proving it cannot reach `core`/`ledger`
+- [x] Engine version identifiers frozen and guarded in CI
+- [x] Rollback drill executed against the released digests
+- [x] `ramals_ai_runtime` exists with a privilege test proving it cannot reach `core`/`ledger`
 - [ ] AI workload identity issued, distinct from any learner token
 - [ ] Trace/interaction continuation contract has a failing-then-passing test
 
