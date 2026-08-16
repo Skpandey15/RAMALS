@@ -1,0 +1,28 @@
+{
+  "contractVersion": "1.0",
+  "proposalId": "01920000-0000-7000-8000-0000000000c1",
+  "agentType": "TUTOR",
+  "agentVersion": "TUTOR_AGENT_V1",
+  "promptVersion": "TUTOR_PROMPT_V1",
+  "modelRoute": "tutor-default",
+  "trustLevel": "NON_AUTHORITATIVE",
+  "confidence": "0.8200",
+  "reasonCodes": ["LOW_CONFIDENCE_ON_PARTITION_COUNT"],
+  "proposal": {
+    "responseType": "EXPLAIN_WITH_ANALOGY",
+    "explanation": "A partition is an ordered append-only log.",
+    "checksForUnderstanding": ["What happens to ordering across two partitions?"]
+  },
+  "validation": {
+    "schemaValid": true,
+    "semanticValid": true,
+    "repairAttempts": 0
+  },
+  "usage": {
+    "inputTokens": 1100,
+    "cachedInputTokens": 0,
+    "outputTokens": 420,
+    "estimatedCostUsd": "0.014300",
+    "latencyMs": 2450
+  }
+}

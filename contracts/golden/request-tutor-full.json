@@ -1,0 +1,24 @@
+{
+  "contractVersion": "1.0",
+  "interactionId": "01920000-0000-7000-8000-0000000000a2",
+  "requestId": "01920000-0000-7000-8000-0000000000b2",
+  "learner": {
+    "learnerRef": "opaque-learner-ref-002",
+    "locale": "en-IN"
+  },
+  "learningContext": {
+    "skillCode": "KAFKA_PARTITIONING",
+    "masteryScore": "0.7200",
+    "evidenceConfidence": "0.6800",
+    "masteryStatus": "NEEDS_PRACTICE",
+    "prerequisites": ["KAFKA_TOPIC", "KAFKA_BROKER"]
+  },
+  "constraints": {
+    "interactionClass": "INTERACTIVE_AI",
+    "deadlineMs": 8000,
+    "maxOutputTokens": 700,
+    "allowedTools": [],
+    "policyVersion": "AI_INTERACTION_POLICY_V1"
+  },
+  "requestedCapability": "EXPLAIN"
+}

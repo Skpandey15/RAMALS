@@ -1,0 +1,12 @@
+{
+  "contractVersion": "1.0",
+  "interactionId": "01920000-0000-7000-8000-0000000000a1",
+  "requestId": "01920000-0000-7000-8000-0000000000b1",
+  "learner": {
+    "learnerRef": "opaque-learner-ref-001"
+  },
+  "constraints": {
+    "interactionClass": "INTERACTIVE_AI",
+    "deadlineMs": 12000
+  }
+}

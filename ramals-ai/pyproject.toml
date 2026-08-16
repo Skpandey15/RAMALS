@@ -21,10 +21,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  # Contract tooling (M1-ADR-002). datamodel-code-generator emits the Python models from the
+  # canonical OpenAPI; the others lint it and keep the committed output honest.
+  "datamodel-code-generator==0.73.0",
   "httpx==0.28.1",
   "mypy==2.3.1",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
+  "openapi-spec-validator==0.9.0",
+  "pyyaml==6.0.3",
   "ruff==0.16.3",
 ]
 
@@ -39,6 +44,11 @@ packages = ["src/ramals_ai"]
 line-length = 100
 src = ["src", "tests"]
 target-version = "py314"
+# Generated from the contract. Its correctness is enforced by the drift check and the cross-language
+# golden fixtures, not by our style rules -- and reformatting it would guarantee drift on every run.
+# This must sit at the top level: a [tool.ruff.lint] exclude applies to `ruff check` but not to
+# `ruff format`.
+exclude = ["src/ramals_ai/contracts/generated.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "S", "A", "C4", "RET", "SIM", "ARG", "PTH"]
@@ -50,6 +60,10 @@ python_version = "3.14"
 files = ["src", "tests"]
 strict = true
 warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = "ramals_ai.contracts.generated"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

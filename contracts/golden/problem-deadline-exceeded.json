@@ -1,0 +1,9 @@
+{
+  "type": "about:blank",
+  "title": "Gateway Timeout",
+  "status": 504,
+  "code": "AI_DEADLINE_EXCEEDED",
+  "detail": "The caller's deadline elapsed before a valid proposal was produced.",
+  "interactionId": "01920000-0000-7000-8000-0000000000a3",
+  "traceId": "c8e3421008773c10718ded88670f0de6"
+}
