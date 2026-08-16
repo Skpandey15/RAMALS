@@ -1,2 +1,4 @@
 # Run outputs are archived deliberately, not committed by default.
+.fixtures/
 results/
+__pycache__/

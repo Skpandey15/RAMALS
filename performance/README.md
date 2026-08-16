@@ -35,14 +35,25 @@ steady-state window (see thresholds and the baseline schema).
 
 ## Running
 
-Prerequisites: [k6](https://k6.io), `jq`, and a running platform + Keycloak with a seeded
-`load-learner`. All configuration is environment-driven (`performance/lib/config.js`).
+Prerequisites: [k6](https://k6.io), `python3`, and a running platform + Keycloak. Load learners do
+**not** need to be seeded in advance — `run-baseline.sh` provisions them at runtime via
+`fixtures.sh` and restores the realm afterwards, including on failure or interrupt. All
+configuration is environment-driven (`performance/lib/config.js`).
+
+The shipped realm has direct access grants disabled on `ramals-web-ui` and defines no users, so
+this provisioning step is what makes the scenarios runnable at all. The committed realm is never
+modified.
 
 ```bash
 export RAMALS_BASE_URL=http://localhost:8080
 export RAMALS_TOKEN_URL=http://localhost:8081/realms/ramals/protocol/openid-connect/token
-export RAMALS_LOAD_USER=load-learner RAMALS_LOAD_PASSWORD=***
+export RAMALS_KEYCLOAK_ADMIN=admin RAMALS_KEYCLOAK_ADMIN_PASSWORD=***
+export RAMALS_LOAD_PASSWORD=***          # load-only credential, never a real one
+export RAMALS_LOAD_LEARNERS=20           # VUs are spread across this pool of distinct learners
 export RAMALS_PERF_ENV=perf-standard-01   # authoritative env id; leave default for informational runs
+
+# If published ports are not reachable from the host, run provisioning inside the compose network:
+export RAMALS_FIXTURE_NETWORK=ramals-deploy_edge
 
 ./run-baseline.sh diagnostic          # ADL baseline
 ./run-baseline.sh mixed-learning      # authoritative whole-system SLO
@@ -50,6 +61,31 @@ k6 run scenarios/auth.js              # JWT/JWKS overhead
 k6 run scenarios/concurrency-idempotency.js
 RAMALS_DB_URL=postgresql://ramals_core_runtime@localhost:5432/ramals ./db/run-db-benchmarks.sh
 ```
+
+## The rate limiter will throttle a single-source load generator
+
+`RateLimitFilter` keys its token bucket on the **client IP**, not the authenticated subject. A load
+generator is one IP, so every simulated learner shares one bucket no matter how many identities the
+harness authenticates as. At the shipped defaults (`capacity 120`, `refill 60/s`) a 60 rps run sits
+exactly on the limit and roughly 16% of requests come back **429**.
+
+Those 429s are the limiter working correctly — the giveaway is that p95 stays flat while a sixth of
+traffic is rejected, which is nothing like saturation. To measure the application rather than the
+limiter, bring the stack up with the override:
+
+```bash
+docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-override.yml up -d
+```
+
+That override materially weakens a security control and is strictly a load-generation aid — never
+apply it to a real environment, and label any run made with it in the baseline metadata.
+
+## Exported summaries are scrubbed
+
+k6 embeds the return value of `setup()` in `--summary-export`, and `setup()` returns access tokens.
+Raw exports therefore contain live bearer credentials. `run-baseline.sh` strips `setup_data` before
+anything else touches the file, and `results/` is gitignored. If you export a summary by calling k6
+directly, scrub it yourself before archiving or sharing it.
 
 ## Reproducibility and metadata
 

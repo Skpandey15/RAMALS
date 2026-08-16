@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Trend } from 'k6/metrics';
 import { config, url } from '../lib/config.js';
-import { acquireAccessToken, authHeaders, idempotencyKey } from '../lib/auth.js';
+import { acquireAccessTokenPool, tokenForVu, authHeaders, idempotencyKey } from '../lib/auth.js';
 
 // Adaptive Decision Latency (ADL): elapsed time from acceptance of a diagnostic submission until the
 // authoritative mastery snapshot and resulting recommendation are available. In RAMALS this pipeline
@@ -32,11 +32,11 @@ export const options = {
 };
 
 export function setup() {
-  return { token: acquireAccessToken() };
+  return { tokens: acquireAccessTokenPool() };
 }
 
 export default function (data) {
-  const token = data.token;
+  const token = tokenForVu(data.tokens);
 
   const start = http.post(
     url(`/api/v1/diagnostics/${config.domain}/attempts`),
