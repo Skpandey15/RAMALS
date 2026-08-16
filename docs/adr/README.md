@@ -10,3 +10,19 @@ Consequential implementation decisions must be recorded as ADRs with context, de
 | [0004](0004-container-scanning-and-dependency-pinning.md) | Scan with the Trivy container image, and pin dependencies ahead of the BOM |
 | [0005](0005-correlation-component-naming.md) | Correlation components keep repository-idiomatic names |
 
+## MVP-1
+
+Decisions adopted from the MVP-1 Canonical Package. The package registers M1-ADR-000 through
+M1-ADR-010; only those listed here are authored and adopted in this repository. The remainder must
+be authored before the implementation task each one gates.
+
+| ADR | Decision | Gates |
+| --- | --- | --- |
+| [M1-ADR-000](M1-ADR-000-mvp1-engineering-before-r1.md) | MVP-1 engineering may begin before R1 closes; R1 still blocks the MVP-1 RC and any comparative claim | M1-T00 |
+| [M1-ADR-010](M1-ADR-010-assessment-evaluation-is-formative-only.md) | AI assessment evaluation is FORMATIVE_ONLY and can never create scored evidence | M1-T10 |
+
+Not yet authored: M1-ADR-001 (interaction classes/deadlines), 002 (OpenAPI ownership), 003 (workload
+identity), 004 (Tutor streaming), 005 (ai_execution persistence), 006 (generated-assessment
+promotion), 007 (LIMITED_DURABLE approval), 008 (model routing/rollback), 009 (evaluation
+thresholds). M1-T02 onward is gated on these.
+

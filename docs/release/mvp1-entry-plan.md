@@ -35,7 +35,7 @@ Against the six entry criteria recorded in the [release candidate](mvp0-release-
 
 | # | Criterion | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | Performance baseline on the authoritative environment | ❌ **Not met** | Harness repaired and produces clean data, but only from a developer workstation |
+| 1 | Performance baseline on the authoritative environment | ❌ **Not met** | Harness repaired and produces clean data, but only from a developer workstation. Sequencing exception adopted ([M1-ADR-000](../adr/M1-ADR-000-mvp1-engineering-before-r1.md)); R1 still blocks the MVP-1 RC |
 | 2 | Pull-based deployment proven, including rollback | ✅ Met | Full sequence executed on **both** `rc1` and `rc2` digests: `HEALTHY`, bad version rolled back to a *verified* known-good digest, held, then recovered |
 | 3 | Live-token authorization verified | ✅ Met | 26/26 against a real Keycloak token, including the MFA-gated admin path |
 | 4 | R1–R3 closed or explicitly accepted | ⚠️ Partial | R2 and R3 closed; **R1 open** |
@@ -46,7 +46,14 @@ Five of six now met or substantially met. **R1 is the only item blocked on anyth
 
 ## 2. Gate A — finish MVP-0 before writing MVP-1 code
 
-### A1. Close R1, or accept it in writing
+### A1. Close R1, or accept it in writing — sequencing exception adopted
+
+[M1-ADR-000](../adr/M1-ADR-000-mvp1-engineering-before-r1.md) is now adopted in the repository:
+isolated MVP-1 engineering may begin before R1 closes. **R1 itself remains open and owned** — it
+still blocks the MVP-1 release candidate, any calibrated deterministic-versus-agentic comparison and
+any performance claim, unless a named owner accepts the risk with scope and expiry.
+
+The rest of this section stands: it describes what closing R1 actually requires.
 
 This is the only item that needs infrastructure this project does not control.
 

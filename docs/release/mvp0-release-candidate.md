@@ -8,6 +8,7 @@ measured.
 | --- | --- |
 | Version | `v0.1.0-rc2` |
 | Commit | `3dc3d59` |
+| Deterministic control | tag `v0.1.0-rc2` at `3dc3d59e61c2` — the reference baseline for MVP-1 comparison |
 | Backend image | `ghcr.io/skpandey15/ramals-learning-platform@sha256:29bd6bf8…` |
 | Web UI image | `ghcr.io/skpandey15/ramals-web-ui@sha256:7cea426a…` |
 | Schema | Flyway `015` |
@@ -37,7 +38,8 @@ corrected manifest returned it to `HEALTHY`.
 | Principle | Conformance |
 | --- | --- |
 | Authoritative learner state outside the LLM | Yes — no AI runtime dependency exists in MVP-0 |
-| Deterministic, versioned decisioning | Yes — `WEIGHTED_MASTERY_V1`, `EVIDENCE_CONFIDENCE_V1`, `RECOMMENDATION_POLICY_V1`, `PROGRESSION_POLICY_V1`, `DIAGNOSTIC_SCORING_V1`, all stamped on persisted records |
+| Deterministic, versioned decisioning | Yes — all seven identifiers stamped on persisted records: `WEIGHTED_MASTERY_V1`, `EVIDENCE_CONFIDENCE_V1`, `MASTERY_STATUS_POLICY_V1`, `RECOMMENDATION_POLICY_V1`, `PROGRESSION_POLICY_V1`, `DIAGNOSTIC_SCORING_V1`, `SESSION_POLICY_V1` |
+| Control frozen against in-place change | Yes — `EngineVersionFreezeTests` pins each identifier by behaviour hash and fails if a new versioned engine is added unfrozen |
 | Append-only evidence, snapshots, decisions | Yes — enforced by privilege (`42501`) **and** trigger (`55000`) |
 | Versioned curriculum and assessments | Yes — published content immutable; attempts pin the assessment version |
 | Correlation on every consequential write | Yes — `interactionId` on attempts, evidence, snapshots, decisions, session transitions, admin audit and security audit (Master Plan §8 in full) |
@@ -151,6 +153,13 @@ MVP-1 code is included in this release.**
 1. **Baseline captured.** A performance baseline exists for `mixed-learning` and `diagnostic`
    (including ADL) on the authoritative environment, committed as machine-readable data. Without it
    there is no control to measure agentic versions against — this is the whole point of MVP-0.
+
+   > **Sequencing exception —
+   > [M1-ADR-000](../adr/M1-ADR-000-mvp1-engineering-before-r1.md).** Isolated MVP-1 engineering may
+   > begin before this criterion is met. R1 remains mandatory before an MVP-1 release candidate, a
+   > calibrated deterministic-versus-agentic comparison, or any performance claim, unless a named
+   > owner accepts the risk with explicit scope and expiry. **R1 stays open and owned; it is not
+   > reclassified.**
 2. **Deployment proven.** At least one pull-based deployment of an approved manifest has reached
    `HEALTHY`, and one deliberately bad version has been observed rolling back into `RELEASE_HELD`.
 3. **Live-token authorization verified.** An end-to-end test drives a token actually issued by
