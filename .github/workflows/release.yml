@@ -1,0 +1,199 @@
+# Trusted release pipeline. Runs ONLY from trusted refs (main and release tags) — never from a
+# pull request — so untrusted PR code can never publish an image or reach a deployment credential.
+# Build once, promote the same artifact: images are addressed by immutable digest thereafter.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Least privilege at the top level; publish/attest jobs raise only what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # Quality gate first: the same verification the PR path runs, re-executed on the trusted ref.
+  verify:
+    name: Verify trusted ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.1-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_DB: ramals_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=postgres --dbname=ramals_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      RAMALS_TEST_POSTGRES_URL: jdbc:postgresql://localhost:5432/ramals_test
+      RAMALS_TEST_POSTGRES_ADMIN_USER: postgres
+      RAMALS_TEST_POSTGRES_ADMIN_PASSWORD: postgres-test-only
+      RAMALS_TEST_POSTGRES_ALLOW_RESET: 'true'
+    steps:
+      - name: Check out trusted ref
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      - name: Set up Java 25
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      - name: Build and test backend
+        run: ./gradlew --no-daemon clean test
+      - name: Verify workflow trust boundary
+        run: python3 scripts/ci/verify-workflow-security.py
+
+  # Privileged publish job, separated from verification. Emits immutable sha-<commit> tags plus the
+  # resolved digest, which is what deployments consume.
+  publish:
+    name: Publish ${{ matrix.component }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: true
+      # Both Dockerfiles COPY from repository-root-relative paths (gradle wrapper / shared nginx
+      # config), so the build context is the repository root for both components.
+      matrix:
+        include:
+          - component: learning-platform
+            dockerfile: learning-platform/Dockerfile
+          - component: web-ui
+            dockerfile: web-ui/Dockerfile
+    outputs:
+      learning_platform_digest: ${{ steps.export.outputs.learning_platform_digest }}
+      web_ui_digest: ${{ steps.export.outputs.web_ui_digest }}
+    steps:
+      - name: Check out trusted ref
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}
+          # Immutable identity first; :main is a convenience pointer only, never a deploy target.
+          tags: |
+            type=sha,prefix=sha-,format=long
+            type=ref,event=branch
+            type=semver,pattern=v{{version}}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.17.9
+        with:
+          image: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          artifact-name: sbom-${{ matrix.component }}.spdx.json
+          output-file: sbom-${{ matrix.component }}.spdx.json
+
+      - name: Scan published image with Trivy
+        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v2.4.0
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Publish SBOM artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-${{ matrix.component }}
+          path: sbom-${{ matrix.component }}.spdx.json
+          retention-days: 90
+
+      - name: Export resolved digest
+        id: export
+        env:
+          COMPONENT: ${{ matrix.component }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "Published ${COMPONENT} at immutable digest ${DIGEST}"
+          if [[ "${COMPONENT}" == "learning-platform" ]]; then
+            echo "learning_platform_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          else
+            echo "web_ui_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # CI does not push to any environment. It records the candidate; a human approves the
+  # desired-version manifest, and the dev host pulls it. This keeps deployment credential-less.
+  candidate:
+    name: Record deployment candidate
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize immutable candidate
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          {
+            echo "## Deployment candidate"
+            echo
+            echo "Commit: \`${COMMIT}\`"
+            echo "Images are addressed by immutable digest; \`:main\` is never a deploy target."
+            echo
+            echo "To promote, update \`deploy/desired-version.json\` with the published digests and"
+            echo "have it approved. The dev host reconciles by pulling that manifest."
+          } >> "$GITHUB_STEP_SUMMARY"
