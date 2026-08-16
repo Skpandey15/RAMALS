@@ -14,8 +14,12 @@ export const config = {
       __ENV.RAMALS_TOKEN_URL ||
       'http://localhost:8081/realms/ramals/protocol/openid-connect/token',
     clientId: __ENV.RAMALS_CLIENT_ID || 'ramals-web-ui',
-    username: __ENV.RAMALS_LOAD_USER || 'load-learner',
+    username: __ENV.RAMALS_LOAD_USER || 'load-learner-000',
     password: __ENV.RAMALS_LOAD_PASSWORD || '',
+    // Pool of distinct learners, provisioned by provision-load-fixtures.py. VUs are spread across
+    // it so writes do not all contend on one learner's rows.
+    usernamePrefix: __ENV.RAMALS_LOAD_USER_PREFIX || 'load-learner',
+    learnerCount: Number(__ENV.RAMALS_LOAD_LEARNERS || 20),
   },
 
   // Stable metadata stamped into every baseline result so runs are comparable.

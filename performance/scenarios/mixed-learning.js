@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { config, url } from '../lib/config.js';
-import { acquireAccessToken, authHeaders, idempotencyKey } from '../lib/auth.js';
+import { acquireAccessTokenPool, tokenForVu, authHeaders, idempotencyKey } from '../lib/auth.js';
 
 // Authoritative whole-system workload: the documented MVP-0 request-class mix. This mixed-load
 // scenario (not the isolated per-endpoint benchmarks) is what SLO pass/fail is judged against.
@@ -43,15 +43,16 @@ export const options = {
 };
 
 export function setup() {
-  return { token: acquireAccessToken() };
+  return { tokens: acquireAccessTokenPool() };
 }
 
 export default function (data) {
+  const token = tokenForVu(data.tokens);
   let pick = Math.random() * totalWeight;
   for (const entry of mix) {
     pick -= entry.weight;
     if (pick <= 0) {
-      entry.run(data.token);
+      entry.run(token);
       return;
     }
   }
@@ -62,11 +63,13 @@ function tagged(cls) {
 }
 
 function progression(token) {
+  // Tags must be supplied in the request options. Assigning to response.request.tags afterwards
+  // does nothing — the sample is already recorded — so the heaviest class in the mix (35%) was
+  // emitting untagged samples and its p95 threshold was evaluated against no data at all.
   const response = http.get(
     url(`/api/v1/me/progression/${config.domain}/versions/${config.version}`),
-    authHeaders(token, {}),
+    { ...authHeaders(token), tags: tagged('skill_map_read') },
   );
-  response.request.tags = tagged('skill_map_read');
   check(response, { 'progression read': (r) => r.status === 200 }, tagged('skill_map_read'));
 }
 
