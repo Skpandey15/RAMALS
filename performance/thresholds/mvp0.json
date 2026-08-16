@@ -1,0 +1,19 @@
+{
+  "note": "Engineering objectives for MVP-0, to be calibrated on the authoritative performance environment. Endpoint targets must not exceed their request-class p95 budget. These are a reproducible baseline, not a production SLA.",
+  "request_class_p95_ms": {
+    "skill_map_read": 250,
+    "content_read": 300,
+    "assessment_write": 400,
+    "diagnostic": 500,
+    "recommendation_read": 250,
+    "mastery_read": 250,
+    "auth": 300
+  },
+  "adaptive_decision_latency_ms": {
+    "p50": 250,
+    "p95": 500,
+    "p99": 900
+  },
+  "error_rate_max": 0.01,
+  "correctness_check_rate_min": 0.99
+}

@@ -1,0 +1,25 @@
+{
+  "scenario": "mixed-learning",
+  "executor_model": "open",
+  "executor": "ramping-arrival-rate",
+  "environment": "perf-standard-01",
+  "commit": "<sha>",
+  "dataset_version": "mvp0-baseline-v1",
+  "script_version": "mvp0-perf-harness-v1",
+  "measured_at": "2026-08-16T00:00:00Z",
+  "arrival_rate_rps": 60,
+  "observed_concurrency": 42,
+  "think_time_ms": 0,
+  "warmup_discarded": true,
+  "steady_state": { "window": "last 2m of a 3m30s run" },
+  "host": {
+    "cpu_limit": "4 vCPU",
+    "memory_limit": "8 GiB",
+    "jvm": "Temurin 25",
+    "db_version": "PostgreSQL 18.1"
+  },
+  "latency_ms": { "p50": 82, "p95": 184, "p99": 291 },
+  "adaptive_decision_latency_ms": { "p50": 96, "p95": 210, "p99": 340 },
+  "error_rate": 0.001,
+  "throughput_rps": 105
+}
