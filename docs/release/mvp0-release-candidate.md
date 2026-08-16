@@ -28,8 +28,9 @@ The `rc2` digests were pulled and deployed on the validation host: all six healt
 a Problem Details body with both correlation ids **and** left a row in `audit.security_audit`, and a
 new attempt carried its `interaction_id` where an `rc1`-created attempt has none.
 
-**Not re-run against `rc2`:** the bad-deploy rollback sequence. It was proven against `rc1` and the
-controller is unchanged since, but it has not been executed on these digests.
+The bad-deploy rollback sequence was also executed against `rc2`: gates failed, the environment
+rolled back to the verified `rc2` digest, the held version was refused on the next reconcile, and a
+corrected manifest returned it to `HEALTHY`.
 
 ## 1. Architecture conformance
 

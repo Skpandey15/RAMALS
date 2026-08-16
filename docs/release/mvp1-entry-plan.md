@@ -36,7 +36,7 @@ Against the six entry criteria recorded in the [release candidate](mvp0-release-
 | # | Criterion | Status | Evidence |
 | --- | --- | --- | --- |
 | 1 | Performance baseline on the authoritative environment | ❌ **Not met** | Harness repaired and produces clean data, but only from a developer workstation |
-| 2 | Pull-based deployment proven, including rollback | ✅ Met | `HEALTHY` on `rc1` and `rc2`; bad version rolled back to a *verified* known-good digest and held |
+| 2 | Pull-based deployment proven, including rollback | ✅ Met | Full sequence executed on **both** `rc1` and `rc2` digests: `HEALTHY`, bad version rolled back to a *verified* known-good digest, held, then recovered |
 | 3 | Live-token authorization verified | ✅ Met | 26/26 against a real Keycloak token, including the MFA-gated admin path |
 | 4 | R1–R3 closed or explicitly accepted | ⚠️ Partial | R2 and R3 closed; **R1 open** |
 | 5 | Deterministic control frozen | ⚠️ Not formalised | The versions exist and are stamped on records; nothing yet *prevents* changing them |
@@ -86,11 +86,14 @@ invalidate every decision already recorded under that identifier.
 without a new identifier and an [ADR](../adr/README.md). A checksum over the engine constants,
 asserted in a test, is enough — the same shape as the existing migration-checksum protection.
 
-### A3. Re-run the rollback drill on the released digests
+### A3. Re-run the rollback drill on the released digests — ✅ **done**
 
-The rollback sequence was proven on `rc1`. The controller is unchanged since, and `rc2` reached
-`HEALTHY` from its published digests, but the deliberate-failure path has not been executed on `rc2`.
-It is one command and it removes an asterisk from criterion 2.
+Executed against the `rc2` digests: a bad version failed the gates, the environment rolled back to
+the verified `rc2` digest and held the release (exit 3), the held version was refused on the next
+reconcile (exit 2), and a corrected manifest returned it to `HEALTHY` (exit 0). Recorded in
+[live-stack drills](evidence/live-stack-drills.md#6-re-validated-against-the-v010-rc2-digests).
+
+Criterion 2 no longer carries an asterisk.
 
 ## 3. Gate B — the boundary, before any Python touches the platform
 
