@@ -10,7 +10,7 @@ dependencies = [
   "fastapi==0.141.1",
   "pydantic==2.13.4",
   # Workload identity (M1-ADR-003): JWKS-backed validation of the Keycloak workload token.
-  "pyjwt[crypto]==2.10.1",
+  "pyjwt[crypto]==2.13.0",
   "pydantic-settings==2.15.0",
   "uvicorn[standard]==0.52.3",
 ]
