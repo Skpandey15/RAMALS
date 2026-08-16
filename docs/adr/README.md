@@ -19,10 +19,13 @@ be authored before the implementation task each one gates.
 | ADR | Decision | Gates |
 | --- | --- | --- |
 | [M1-ADR-000](M1-ADR-000-mvp1-engineering-before-r1.md) | MVP-1 engineering may begin before R1 closes; R1 still blocks the MVP-1 RC and any comparative claim | M1-T00 |
+| [M1-ADR-001](M1-ADR-001-interaction-classes-and-deadlines.md) | Interaction classes, absolute deadlines, stricter-wins precedence and timeout semantics | M1-T02, M1-T08 |
+| [M1-ADR-002](M1-ADR-002-contract-generation-ownership.md) | Generate Python from the OpenAPI contract; hand-write Java records and validate them with golden round-trip fixtures | M1-T02 |
+| [M1-ADR-003](M1-ADR-003-workload-identity.md) | Spring authenticates to ramals-ai with Keycloak client credentials and a distinct `ramals-ai` audience | M1-T03 |
 | [M1-ADR-010](M1-ADR-010-assessment-evaluation-is-formative-only.md) | AI assessment evaluation is FORMATIVE_ONLY and can never create scored evidence | M1-T10 |
 
-Not yet authored: M1-ADR-001 (interaction classes/deadlines), 002 (OpenAPI ownership), 003 (workload
-identity), 004 (Tutor streaming), 005 (ai_execution persistence), 006 (generated-assessment
-promotion), 007 (LIMITED_DURABLE approval), 008 (model routing/rollback), 009 (evaluation
-thresholds). M1-T02 onward is gated on these.
+Not yet authored: M1-ADR-004 (Tutor streaming), 005 (ai_execution persistence), 006
+(generated-assessment promotion), 007 (LIMITED_DURABLE approval), 008 (model routing/rollback), 009
+(evaluation thresholds). Each gates the task named in the package register; M1-T02 and M1-T03 are
+now unblocked.
 
