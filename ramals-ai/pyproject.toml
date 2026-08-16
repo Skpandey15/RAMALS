@@ -23,12 +23,8 @@ dependencies = [
 dev = [
   # Contract tooling (M1-ADR-002). datamodel-code-generator emits the Python models from the
   # canonical OpenAPI; the others lint it and keep the committed output honest.
-  "black==26.5.1",
-  # black and isort must match the versions used to generate the committed models, or the drift
-  # check fails on formatting rather than on a real contract change.
   "datamodel-code-generator==0.73.0",
   "httpx==0.28.1",
-  "isort==8.0.1",
   "mypy==2.3.1",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
