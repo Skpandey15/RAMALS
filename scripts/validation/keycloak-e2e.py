@@ -23,6 +23,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 KEYCLOAK = "http://keycloak:8080"
 BACKEND = "http://backend:8080"
@@ -37,7 +38,7 @@ LEARNER_ID = "e2e-learner-001"
 # Scoped per run so the drill is repeatable against a database that already holds earlier runs.
 # A fixed key would legitimately return 200 for the previous attempt on the second execution — the
 # idempotency guarantee working correctly, read as a failure.
-RUN_KEY = f"e2e-key-{os.getpid()}-{int(__import__('time').time())}"
+RUN_KEY = f"e2e-key-{uuid.uuid4()}"
 
 failures: list[str] = []
 
