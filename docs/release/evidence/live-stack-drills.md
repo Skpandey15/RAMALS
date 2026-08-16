@@ -156,8 +156,18 @@ the environment to the new digests and the checks were repeated:
 | Denial is durably audited | row in `audit.security_audit`: `AUTHENTICATION_FAILED / DENIED / GET / /api/v1/me / 401`, with both ids |
 | Attempt correlation | `rc2`-created attempt carries `interaction_id`; an `rc1`-created attempt in the same table has none |
 
-**Not re-run on `rc2`:** the bad-deploy rollback sequence. It passed against `rc1` and the controller
-is unchanged since, but it has not been executed on these digests.
+The bad-deploy rollback sequence was subsequently executed against the `rc2` digests as well:
+
+| Step | Expected | Observed |
+| --- | --- | --- |
+| Deploy a bad version over healthy `rc2` | gates fail, roll back, hold | exit 3, `RELEASE_HELD` |
+| Verify what is running | the `rc2` backend digest | `ramals-learning-platform@sha256:29bd6bf8…`, `/actuator/health/liveness` returns `{"status":"UP"}` |
+| Reconcile the held version | refuse | exit 2, nothing redeployed |
+| Corrected manifest | deploy normally | exit 0, `HEALTHY` |
+
+`held_versions` accumulated both deliberately bad commits (`badc0de1` from the `rc1` drill and
+`badc0de2` from this one), so the anti-flapping record persists across releases rather than resetting
+with each deployment.
 
 ### Defect found and fixed by this re-run
 
