@@ -30,7 +30,7 @@ class ReleasePipelineTests {
     // Immutable identity, scanning, SBOM, and provenance are all part of publishing.
     assertThat(release)
         .contains("type=sha")
-        .contains("trivy-action")
+        .contains("aquasec/trivy")
         .contains("sbom-action")
         .contains("attest-build-provenance")
         .contains("packages: write");
@@ -53,7 +53,7 @@ class ReleasePipelineTests {
   void scheduledRescanRevalidatesPublishedImagesWithoutRebuilding() throws IOException {
     String rescan = read(".github/workflows/scheduled-rescan.yml");
 
-    assertThat(rescan).contains("schedule:").contains("cron:").contains("trivy-action");
+    assertThat(rescan).contains("schedule:").contains("cron:").contains("aquasec/trivy");
     // Re-scan must not rebuild or republish; it revalidates the deployed digest.
     assertThat(rescan).doesNotContain("build-push-action");
     assertThat(rescan).contains("desired-version.json");

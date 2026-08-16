@@ -60,14 +60,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # Same rationale as the release pipeline: run the pinned scanner image directly.
       - name: Rescan published image
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
-        with:
-          image-ref: ${{ steps.desired.outputs.name }}@${{ steps.desired.outputs.digest }}
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: CRITICAL,HIGH
+        env:
+          IMAGE: ${{ steps.desired.outputs.name }}@${{ steps.desired.outputs.digest }}
+          TRIVY_IMAGE: aquasec/trivy:0.64.1
+        run: |
+          docker run --rm \
+            -v "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
+            -v "${HOME}/.cache/trivy:/root/.cache/trivy" \
+            "${TRIVY_IMAGE}" image \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --exit-code 1 \
+              --format table \
+              "${IMAGE}"
 
       - name: Report rescan outcome
         if: always()

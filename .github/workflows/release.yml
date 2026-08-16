@@ -152,14 +152,25 @@ jobs:
           artifact-name: sbom-${{ matrix.component }}.spdx.json
           output-file: sbom-${{ matrix.component }}.spdx.json
 
+      # Trivy runs from its official container image rather than the setup action: the action's
+      # install script fails to fetch the release binary on the hosted runner, and running the
+      # pinned scanner image is both deterministic and one less third-party action in the
+      # supply chain. The GHCR credentials from the login step are mounted read-only so the
+      # scanner can pull the image it is scanning.
       - name: Scan published image with Trivy
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
-        with:
-          image-ref: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: CRITICAL,HIGH
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          TRIVY_IMAGE: aquasec/trivy:0.64.1
+        run: |
+          docker run --rm \
+            -v "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
+            -v "${HOME}/.cache/trivy:/root/.cache/trivy" \
+            "${TRIVY_IMAGE}" image \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --exit-code 1 \
+              --format table \
+              "${IMAGE}"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v2.4.0
