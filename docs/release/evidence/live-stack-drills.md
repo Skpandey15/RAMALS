@@ -141,6 +141,32 @@ realm has **direct access grants disabled** on that client and defines **no user
 scenarios cannot authenticate against a stock deployment as written. They need the same runtime
 fixture provisioning this drill performs. Recorded as a gap against R1.
 
+## 6. Re-validated against the `v0.1.0-rc2` digests
+
+The drills above were executed against `rc1`. After `rc2` was published, the controller reconciled
+the environment to the new digests and the checks were repeated:
+
+| Check | Result |
+| --- | --- |
+| Reconcile to `3dc3d59e` from published digests | exit 0, `HEALTHY`, all six gates passed |
+| Running artefact | `ramals-learning-platform@sha256:29bd6bf8…` |
+| Schema | `V014` applied; `audit.security_audit` present |
+| Keycloak authorization drill | **26/26** against a real token |
+| Denial returns correlation ids | 401 body carries `interactionId` and `traceId` (`rc1` returned an empty body) |
+| Denial is durably audited | row in `audit.security_audit`: `AUTHENTICATION_FAILED / DENIED / GET / /api/v1/me / 401`, with both ids |
+| Attempt correlation | `rc2`-created attempt carries `interaction_id`; an `rc1`-created attempt in the same table has none |
+
+**Not re-run on `rc2`:** the bad-deploy rollback sequence. It passed against `rc1` and the controller
+is unchanged since, but it has not been executed on these digests.
+
+### Defect found and fixed by this re-run
+
+The drill failed one check on its second execution: `diagnostic attempt created` expected 201 and got
+200. That was the drill, not the product. It used a fixed `Idempotency-Key`, so re-running it against
+a database that already held the first run's attempt correctly returned the existing attempt — the
+idempotency guarantee working exactly as designed, read as a failure. The key is now scoped per run,
+so the drill is repeatable against a persistent environment.
+
 ## Reproducing
 
 ```bash
