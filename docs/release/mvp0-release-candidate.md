@@ -84,9 +84,9 @@ numbering), [0004](../adr/0004-container-scanning-and-dependency-pinning.md) (sc
 
 | # | Risk | Severity | Mitigation / status |
 | --- | --- | --- | --- |
-| R1 | No calibrated latency/throughput baseline | **High** | DB hot-path plans archived (all index-served); k6 baseline must still run on the authoritative fixed-spec environment before any SLA claim |
-| R2 | No live deployment executed | Medium | Manifest now frozen at real digests; first pull-based deploy is the next action |
-| R3 | Keycloak-issued token path untested end to end | Medium | Authorization proven with mock JWTs; realm mints required claims but no live-token test exists |
+| R1 | No calibrated latency/throughput baseline | **High** | DB hot-path plans archived (all index-served); k6 baseline must still run on the authoritative fixed-spec environment before any SLA claim. Additionally the harness cannot authenticate as written — it uses `grant_type=password` against a client with direct grants disabled, in a realm with no users, so it needs runtime fixture provisioning before any run is meaningful |
+| R2 | No live deployment executed | ~~Medium~~ **Closed** | Published digests deployed, all six health gates passed, and the full rollback sequence executed against real containers. The drill found a defect that made rollback redeploy the *failed* digest while reporting success; fixed and regression-tested. See [live-stack drills](evidence/live-stack-drills.md#3-immutable-image-deployment-and-rollback--pass-r2-closed) |
+| R3 | Keycloak-issued token path untested end to end | ~~Medium~~ **Closed** | 26/26 checks against a genuine Keycloak-issued token. The drill found the M0-T18 `learner_id` mapper to be inert (undeclared in the realm user profile, so silently discarded); fixed. See [live-stack drills](evidence/live-stack-drills.md#2-keycloak-authorization-end-to-end--pass-r3-closed) |
 | R4 | Thresholds are uncalibrated | Medium | Mastery/confidence thresholds are engineering defaults, versioned so recalibration is traceable |
 | R5 | Single-host, non-redundant dev topology | Low | Documented; no availability SLA claimed |
 | R6 | `apk upgrade` reduces build reproducibility | Low | Bounded by per-commit rebuild and nightly re-scan (ADR 0004) |

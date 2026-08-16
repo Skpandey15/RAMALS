@@ -57,18 +57,23 @@ print(value if not isinstance(value,(dict,list)) else json.dumps(value))
 " "${STATE_FILE}" "$1" "$2"
 }
 
-write_state() { # write_state <state> <commit> <known_good_commit> <held_json> <failures>
+write_state() { # write_state <state> <commit> <known_good_commit> <held_json> <failures> <kg_backend> <kg_webui>
   "${PY}" -c "
 import json,sys
-state, commit, known_good, held, failures = sys.argv[1:6]
+state, commit, known_good, held, failures, kg_backend, kg_webui = sys.argv[1:8]
 json.dump({
   'state': state,
   'current_commit': commit,
   'known_good_commit': known_good,
+  # The digests that were actually healthy. The commit alone is not enough to roll back: by the
+  # time a rollback is needed the manifest already describes the BAD version, so the controller
+  # must carry the known-good image references itself or it has nothing to return to.
+  'known_good_backend_image': kg_backend,
+  'known_good_webui_image': kg_webui,
   'held_versions': json.loads(held),
   'failure_count': int(failures),
-}, open(sys.argv[6],'w'), indent=2)
-" "$1" "$2" "$3" "$4" "$5" "${STATE_FILE}"
+}, open(sys.argv[8],'w'), indent=2)
+" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "${STATE_FILE}"
 }
 
 is_held() {
@@ -98,6 +103,8 @@ done
 CURRENT_STATE="$(state_get state APPROVED)"
 CURRENT_COMMIT="$(state_get current_commit none)"
 KNOWN_GOOD="$(state_get known_good_commit none)"
+KNOWN_GOOD_BACKEND="$(state_get known_good_backend_image none)"
+KNOWN_GOOD_WEBUI="$(state_get known_good_webui_image none)"
 HELD="$(state_get held_versions '[]')"
 FAILURES="$(state_get failure_count 0)"
 
@@ -107,7 +114,8 @@ log "desired=${DESIRED_COMMIT} current=${CURRENT_COMMIT} state=${CURRENT_STATE}"
 if is_held "${DESIRED_COMMIT}"; then
   log "RELEASE_HELD: ${DESIRED_COMMIT} previously failed health gates and was rolled back."
   log "Refusing automatic redeploy. Correct or explicitly re-approve the manifest."
-  write_state RELEASE_HELD "${CURRENT_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "${FAILURES}"
+  write_state RELEASE_HELD "${CURRENT_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "${FAILURES}" \
+    "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}"
   exit 2
 fi
 
@@ -120,7 +128,8 @@ fi
 export RAMALS_BACKEND_IMAGE="$(json_get "${MANIFEST}" components.learning-platform.image)@${BACKEND_DIGEST}"
 export RAMALS_WEBUI_IMAGE="$(json_get "${MANIFEST}" components.web-ui.image)@${WEBUI_DIGEST}"
 
-write_state DEPLOYING "${DESIRED_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "${FAILURES}"
+write_state DEPLOYING "${DESIRED_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "${FAILURES}" \
+  "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}"
 log "DEPLOYING ${DESIRED_COMMIT}"
 
 attempt=0
@@ -129,7 +138,8 @@ until ${PULL_CMD}; do
   # Bounded retry for transient registry/network failures only.
   if [ "${attempt}" -ge "${MAX_TRANSIENT_RETRIES}" ]; then
     log "Transient pull failures exhausted after ${attempt} attempts."
-    write_state FAILED "${DESIRED_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "$((FAILURES + 1))"
+    write_state FAILED "${DESIRED_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "$((FAILURES + 1))" \
+      "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}"
     exit 1
   fi
   log "Transient pull failure; retry ${attempt}/${MAX_TRANSIENT_RETRIES} after backoff."
@@ -141,17 +151,35 @@ ${UP_CMD}
 # --- health gates -------------------------------------------------------------------------------
 if ${HEALTH_CMD}; then
   log "HEALTHY ${DESIRED_COMMIT}"
-  write_state HEALTHY "${DESIRED_COMMIT}" "${DESIRED_COMMIT}" "${HELD}" 0
+  # Record the digests that passed, not just the commit — this is what a future rollback restores.
+  write_state HEALTHY "${DESIRED_COMMIT}" "${DESIRED_COMMIT}" "${HELD}" 0 \
+    "${RAMALS_BACKEND_IMAGE}" "${RAMALS_WEBUI_IMAGE}"
   exit 0
 fi
 
 # A health-gate failure is NOT retryable: roll back and hold.
 log "FAILED health gates for ${DESIRED_COMMIT}; rolling back."
-if [ "${KNOWN_GOOD}" != "none" ]; then
+ROLLBACK_OK=0
+if [ "${KNOWN_GOOD}" != "none" ] \
+   && [ "${KNOWN_GOOD_BACKEND}" != "none" ] && [ "${KNOWN_GOOD_WEBUI}" != "none" ]; then
   log "ROLLBACK to last known-good ${KNOWN_GOOD}"
+  # Point the deployment back at the known-good digests. Without this the rollback re-applies the
+  # images exported for the FAILED version above and the environment silently keeps running the
+  # bad artefact while the state file claims otherwise.
+  export RAMALS_BACKEND_IMAGE="${KNOWN_GOOD_BACKEND}"
+  export RAMALS_WEBUI_IMAGE="${KNOWN_GOOD_WEBUI}"
   ${PULL_CMD} || log "WARN: rollback pull reported an error"
   ${UP_CMD} || log "WARN: rollback up reported an error"
-  log "ROLLED_BACK to ${KNOWN_GOOD}"
+  # Never claim a rollback we did not verify.
+  if ${HEALTH_CMD}; then
+    ROLLBACK_OK=1
+    log "ROLLED_BACK to ${KNOWN_GOOD}"
+  else
+    log "ERROR: rollback to ${KNOWN_GOOD} did not pass health gates; environment needs manual recovery."
+  fi
+elif [ "${KNOWN_GOOD}" != "none" ]; then
+  log "ERROR: known-good commit ${KNOWN_GOOD} recorded without its image digests; cannot roll back."
+  log "       This state predates digest tracking. Re-approve a known-good manifest manually."
 else
   log "WARN: no known-good version recorded; environment left stopped for investigation."
 fi
@@ -163,6 +191,14 @@ if sys.argv[2] not in held: held.append(sys.argv[2])
 print(json.dumps(held))
 " "${HELD}" "${DESIRED_COMMIT}")"
 
-write_state RELEASE_HELD "${KNOWN_GOOD}" "${KNOWN_GOOD}" "${HELD}" "$((FAILURES + 1))"
+# current_commit must describe what is RUNNING, not what we wish were running. If the rollback did
+# not happen or did not verify, the failed version is still deployed and the state must say so.
+if [ "${ROLLBACK_OK}" -eq 1 ]; then
+  RUNNING_COMMIT="${KNOWN_GOOD}"
+else
+  RUNNING_COMMIT="${DESIRED_COMMIT}"
+fi
+write_state RELEASE_HELD "${RUNNING_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "$((FAILURES + 1))" \
+  "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}"
 log "RELEASE_HELD: ${DESIRED_COMMIT} will not be redeployed automatically."
 exit 3
