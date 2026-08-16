@@ -13,6 +13,7 @@ measured.
 | Schema | Flyway `013` |
 | Backend tests | 200 across 56 classes — 0 failures, 0 skipped |
 | Frontend tests | 12 — lint clean, build succeeds |
+| Project version | `0.1.0-rc1` (frozen in `build.gradle`) |
 | Release pipeline | green: build → push → SBOM → scan → provenance attestation |
 
 Both images are addressed by immutable digest, scanned clean of fixable CRITICAL/HIGH findings, and
@@ -75,6 +76,7 @@ numbering), [0004](../adr/0004-container-scanning-and-dependency-pinning.md) (sc
 - Rate limiting: 429 with `Retry-After` and recovery, shed before authentication.
 - Security headers: CSP, HSTS, `nosniff`, frame-deny, referrer policy, permissions policy.
 - Secret hygiene: gitleaks over full history; no secrets in source, images or logs.
+- Performance: [DB hot-path plans archived](evidence/db-hot-path-plans.md) — all eight critical queries index-served.
 - Supply chain: SHA-pinned actions, PR path provably unable to publish, SBOM + Trivy gate +
   provenance attestation on every published image, nightly re-scan of deployed digests.
 
@@ -82,7 +84,7 @@ numbering), [0004](../adr/0004-container-scanning-and-dependency-pinning.md) (sc
 
 | # | Risk | Severity | Mitigation / status |
 | --- | --- | --- | --- |
-| R1 | No calibrated performance baseline | **High** | Harness ready; must run on the authoritative fixed-spec environment before any SLA claim |
+| R1 | No calibrated latency/throughput baseline | **High** | DB hot-path plans archived (all index-served); k6 baseline must still run on the authoritative fixed-spec environment before any SLA claim |
 | R2 | No live deployment executed | Medium | Manifest now frozen at real digests; first pull-based deploy is the next action |
 | R3 | Keycloak-issued token path untested end to end | Medium | Authorization proven with mock JWTs; realm mints required claims but no live-token test exists |
 | R4 | Thresholds are uncalibrated | Medium | Mastery/confidence thresholds are engineering defaults, versioned so recalibration is traceable |
@@ -93,8 +95,11 @@ numbering), [0004](../adr/0004-container-scanning-and-dependency-pinning.md) (sc
 
 ## 5. Exclusions — not claimed as passing
 
-1. **Performance Definition of Done is not met.** No baseline has been captured on the authoritative
-   environment; MVP-0 ships engineering objectives, not measured SLOs.
+1. **Performance Definition of Done is partially met.** The database benchmark dimension is executed
+   and archived — [hot-path query plans](evidence/db-hot-path-plans.md) show all eight critical
+   queries are index-served with no sequential scan. The **k6 latency/throughput baseline on the
+   authoritative environment is still missing**, so MVP-0 ships engineering objectives, not measured
+   SLOs.
 2. **Deployment Definition of Done is partially met.** The pipeline publishes attested artifacts and
    the release-hold state machine is proven in isolation, but no pull-based deployment has run
    against a live environment.
