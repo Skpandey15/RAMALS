@@ -8,6 +8,27 @@ The point of MVP-0 was never the features. It was to produce a *deterministic co
 whose decisions are reproducible from stored evidence — so that later agentic versions can be
 measured against something rather than asserted to be better. Every item below protects that.
 
+### Terms used here
+
+**Gate A** and **Gate B** are the two batches of work between here and the first line of MVP-1 code.
+They are release gates in the planning sense — a set of conditions that must hold before the next
+increment starts — and they are **unrelated** to the two other things this repository already calls
+gates:
+
+| Name | What it is | Where |
+| --- | --- | --- |
+| `ci-gate` | The single required status check on every PR | [CI branch protection](../architecture/ci-branch-protection.md) |
+| health gates | The six post-deploy probes the controller must pass before marking a version `HEALTHY` | `deploy/health-gates.sh` |
+| policy gate | The runtime check that constrains agent output so it cannot become authoritative | §3 B4 |
+| **Gate A / Gate B** *(this document)* | Planning checkpoints: A finishes MVP-0, B builds the boundary before Python exists | below |
+
+Gate A must close before MVP-1 code is written. Gate B must close before any Python workload touches
+the platform. They are independent of each other and can run in parallel.
+
+Section references are to the
+[Implementation Master Plan v1.0](../RAMALS_MVP0_Implementation_Master_Plan_v1.0.docx) unless stated
+otherwise. Decision records live in [docs/adr](../adr/README.md).
+
 ## 1. Where MVP-0 actually stands
 
 Against the six entry criteria recorded in the [release candidate](mvp0-release-candidate.md#6-mvp-1-entry-criteria):
@@ -62,8 +83,8 @@ missing is anything that *stops* someone editing a `_V1` constant in place — w
 invalidate every decision already recorded under that identifier.
 
 **Do:** add a CI guard that fails when the behaviour behind an existing `_V*` identifier changes
-without a new identifier and an ADR. A checksum over the engine constants, asserted in a test, is
-enough — the same shape as the existing migration-checksum protection.
+without a new identifier and an [ADR](../adr/README.md). A checksum over the engine constants,
+asserted in a test, is enough — the same shape as the existing migration-checksum protection.
 
 ### A3. Re-run the rollback drill on the released digests
 
@@ -98,7 +119,8 @@ decided to do this".
 
 ### B3. Trace context continuation
 
-Master Plan §5 already specifies it: the Python side **continues** the incoming W3C trace context and
+[Master Plan](../RAMALS_MVP0_Implementation_Master_Plan_v1.0.docx) §5 (Mandatory Propagation
+Contract) already specifies it: the Python side **continues** the incoming W3C trace context and
 propagates `X-Interaction-ID` rather than starting an unrelated trace. MVP-0 wired the correlation
 model precisely so this would not need redesign. A test that an interactionId survives a round trip
 through the AI boundary belongs in the first MVP-1 change set, not the last.
@@ -112,9 +134,10 @@ gone and MVP-0's guarantees stop holding.
 
 ## 4. Suggested MVP-1 sequencing
 
-Proposal, not an approved plan — the deferred scope in Master Plan §2 (LLM calls, LangGraph, RAG /
-pgvector, Temporal, Redis, Kafka event backbone, labs, Kubernetes, multi-tenancy, BKT/IRT/CAT) is
-larger than one increment and should be scoped deliberately.
+Proposal, not an approved plan. The deferred scope in
+[Master Plan](../RAMALS_MVP0_Implementation_Master_Plan_v1.0.docx) §2 (MVP-0 Scope Freeze) — LLM
+calls, LangGraph, RAG / pgvector, Temporal, Redis, Kafka event backbone, labs, Kubernetes,
+multi-tenancy, BKT/IRT/CAT — is larger than one increment and should be scoped deliberately.
 
 | Task | Outcome | Depends on |
 | --- | --- | --- |
