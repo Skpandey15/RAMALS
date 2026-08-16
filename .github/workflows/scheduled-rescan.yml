@@ -1,0 +1,84 @@
+# Scheduled re-scan of already-published images. Vulnerability databases evolve, so an image that
+# passed its release gate can become vulnerable without any code change. This re-scans the currently
+# deployed digests without rebuilding, preserving build-once/promote-the-same-artifact.
+name: Scheduled Rescan
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-rescan
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  rescan:
+    name: Rescan ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [learning-platform, web-ui]
+    steps:
+      - name: Check out trusted ref
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve currently desired digest
+        id: desired
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          digest="$(python3 -c "
+          import json, os
+          manifest = json.load(open('deploy/desired-version.json'))
+          print(manifest['components'][os.environ['COMPONENT']]['digest'])
+          ")"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Rescanning ${COMPONENT} at ${digest}"
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Rescan published image
+        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ramals-${{ matrix.component }}@${{ steps.desired.outputs.digest }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: Report rescan outcome
+        if: always()
+        env:
+          COMPONENT: ${{ matrix.component }}
+          DIGEST: ${{ steps.desired.outputs.digest }}
+          RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "## Rescan: ${COMPONENT}"
+            echo
+            echo "Digest: \`${DIGEST}\`"
+            echo "Result: **${RESULT}**"
+            echo
+            echo "A failure means a newly disclosed CRITICAL/HIGH affects a deployed image."
+            echo "Remediate by rebuilding from a patched base and promoting a new digest;"
+            echo "do not mutate the existing immutable tag."
+          } >> "$GITHUB_STEP_SUMMARY"

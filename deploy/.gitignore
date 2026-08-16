@@ -1,0 +1,2 @@
+# Runtime deployment state is host-local, not source.
+.deploy-state.json

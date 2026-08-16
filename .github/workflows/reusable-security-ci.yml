@@ -18,6 +18,8 @@ jobs:
           persist-credentials: false
       - name: Verify workflow trust policy
         run: python3 scripts/ci/verify-workflow-security.py
+      - name: Verify deployment release-hold state machine
+        run: bash scripts/ci/test-deploy-controller.sh
       - name: Install checksum-verified Gitleaks
         env:
           GITLEAKS_VERSION: 8.30.1

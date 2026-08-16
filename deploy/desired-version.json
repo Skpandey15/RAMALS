@@ -1,0 +1,21 @@
+{
+  "$comment": "Approved desired-version manifest for the shared dev environment. The dev host PULLS this; CI never pushes to an environment. Every component is addressed by an immutable digest so a deployment is byte-identical to what was built, scanned, and attested. Never reference :latest or :main here.",
+  "manifest_version": 1,
+  "environment": "dev",
+  "approved_by": "unset",
+  "approved_at": "unset",
+  "release": {
+    "commit": "0000000000000000000000000000000000000000",
+    "version": "v0.1.0-rc"
+  },
+  "components": {
+    "learning-platform": {
+      "image": "ghcr.io/skpandey15/ramals-learning-platform",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "web-ui": {
+      "image": "ghcr.io/skpandey15/ramals-web-ui",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}
