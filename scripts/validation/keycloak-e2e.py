@@ -23,6 +23,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 KEYCLOAK = "http://keycloak:8080"
 BACKEND = "http://backend:8080"
@@ -34,6 +35,10 @@ ADMIN_PASSWORD = os.environ["RAMALS_KEYCLOAK_ADMIN_PASSWORD"]
 LEARNER_USER = "e2e-learner"
 LEARNER_PASSWORD = "e2e-learner-local-only"
 LEARNER_ID = "e2e-learner-001"
+# Scoped per run so the drill is repeatable against a database that already holds earlier runs.
+# A fixed key would legitimately return 200 for the previous attempt on the second execution — the
+# idempotency guarantee working correctly, read as a failure.
+RUN_KEY = f"e2e-key-{uuid.uuid4()}"
 
 failures: list[str] = []
 
@@ -157,12 +162,12 @@ try:
 
     print("\n== 3. Full learner slice under a real token ==")
     status, attempt = request("POST", f"{BACKEND}/api/v1/diagnostics/kafka/attempts",
-                              token=token, headers={"Idempotency-Key": "e2e-key-1"})
+                              token=token, headers={"Idempotency-Key": RUN_KEY})
     check("diagnostic attempt created", status, 201)
     attempt_id = attempt["attemptId"]
 
     status, replay = request("POST", f"{BACKEND}/api/v1/diagnostics/kafka/attempts",
-                             token=token, headers={"Idempotency-Key": "e2e-key-1"})
+                             token=token, headers={"Idempotency-Key": RUN_KEY})
     check("retry with the same key returns the same attempt", replay["attemptId"], attempt_id)
     check("retry is not a fresh creation", status, 200)
 

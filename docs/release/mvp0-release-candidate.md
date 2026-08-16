@@ -6,10 +6,10 @@ measured.
 
 | | |
 | --- | --- |
-| Version | `v0.1.0-rc1` |
-| Commit | `36645cf` |
-| Backend image | `ghcr.io/skpandey15/ramals-learning-platform@sha256:a31d830a…` |
-| Web UI image | `ghcr.io/skpandey15/ramals-web-ui@sha256:e527dd43…` |
+| Version | `v0.1.0-rc2` |
+| Commit | `3dc3d59` |
+| Backend image | `ghcr.io/skpandey15/ramals-learning-platform@sha256:29bd6bf8…` |
+| Web UI image | `ghcr.io/skpandey15/ramals-web-ui@sha256:7cea426a…` |
 | Schema | Flyway `014` |
 | Backend tests | 209 — 0 failures, 0 skipped |
 | Frontend tests | 24 — lint clean, build succeeds |
@@ -19,11 +19,17 @@ measured.
 Both images are addressed by immutable digest, scanned clean of fixable CRITICAL/HIGH findings, and
 carry signed build provenance. `deploy/desired-version.json` is frozen at these digests.
 
-> **`rc2` is being cut now and its digests are not yet published.** The version, commit and image
-> digests in the table above still describe `rc1` — the artefact that was validated end to end — and
-> are updated once the `v0.1.0-rc2` release build completes. `rc1` was built at schema `013`, before
-> `V014` added `audit.security_audit` and attempt correlation, and before rate limiting moved to
-> subject keying (R9); it cannot carry those fixes.
+`rc2` supersedes `rc1`, which was built at schema `013` and could not carry the conformance fixes:
+it predates `V014` (`audit.security_audit` and attempt correlation) and the move to subject-keyed
+rate limiting (R9). The release build published both images green, including the Trivy gate.
+
+The `rc2` digests were pulled and deployed on the validation host: all six health gates passed,
+26/26 authorization checks passed against a real Keycloak token, an unauthenticated request returned
+a Problem Details body with both correlation ids **and** left a row in `audit.security_audit`, and a
+new attempt carried its `interaction_id` where an `rc1`-created attempt has none.
+
+**Not re-run against `rc2`:** the bad-deploy rollback sequence. It was proven against `rc1` and the
+controller is unchanged since, but it has not been executed on these digests.
 
 ## 1. Architecture conformance
 

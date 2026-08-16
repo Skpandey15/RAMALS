@@ -5,17 +5,17 @@
   "approved_by": "release-candidate-review",
   "approved_at": "2026-08-16T05:20:00Z",
   "release": {
-    "commit": "36645cfc",
-    "version": "v0.1.0-rc1"
+    "commit": "3dc3d59e",
+    "version": "v0.1.0-rc2"
   },
   "components": {
     "learning-platform": {
       "image": "ghcr.io/skpandey15/ramals-learning-platform",
-      "digest": "sha256:a31d830a022ce63ad44f19ed4bcda787c792fbdbf9c81511f5d3a3f7ba9d7f6d"
+      "digest": "sha256:29bd6bf881b87ae34d8283d0675850dee628898d4b7743a5319867c372a0aeeb"
     },
     "web-ui": {
       "image": "ghcr.io/skpandey15/ramals-web-ui",
-      "digest": "sha256:e527dd430a97644f009a097d69fa74567ad93897eb05df85c28efb09992905f1"
+      "digest": "sha256:7cea426abae5d42b157a846476be4efa1f14022cd6d6b1c4ad8445026653753a"
     }
   }
 }
