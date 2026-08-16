@@ -44,13 +44,16 @@ packages = ["src/ramals_ai"]
 line-length = 100
 src = ["src", "tests"]
 target-version = "py314"
+# Generated from the contract. Its correctness is enforced by the drift check and the cross-language
+# golden fixtures, not by our style rules -- and reformatting it would guarantee drift on every run.
+# This must sit at the top level: a [tool.ruff.lint] exclude applies to `ruff check` but not to
+# `ruff format`.
+exclude = ["src/ramals_ai/contracts/generated.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "S", "A", "C4", "RET", "SIM", "ARG", "PTH"]
 # S101 (assert) is the point of a test file.
 per-file-ignores = { "tests/**" = ["S101"] }
-# Generated from the contract; correctness is enforced by the drift check and the golden fixtures.
-exclude = ["src/ramals_ai/contracts/generated.py"]
 
 [tool.mypy]
 python_version = "3.14"
