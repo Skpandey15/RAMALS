@@ -102,8 +102,18 @@ The conventional shape is to key on the authenticated subject when a request car
 falling back to IP only for unauthenticated traffic — preserving IP-based protection against
 anonymous floods without penalising legitimate shared-origin users.
 
-This is **not changed here.** Rate-limit keying is a security-control decision with real trade-offs
-and belongs to the owner, not to a performance investigation. Recorded against R1/MVP-1.
+**Resolved.** Rate limiting was split into two tiers: a pre-authentication ceiling keyed on client
+IP that sheds floods before any JWT is validated, and a post-authentication tier keyed on the
+verified token subject that enforces per-learner fair use. Users behind a shared egress IP no longer
+throttle each other.
+
+The subject tier deliberately runs *after* token validation. Reading `sub` from an unverified token
+in the pre-authentication filter would let a caller drain a chosen victim's allowance by borrowing
+their subject, or mint unlimited fresh buckets by varying the claim.
+
+This also means a future load run needs `RAMALS_LOAD_LEARNERS` set high enough that the simulated
+learners are not individually over the fair-use limit; the override below is no longer required for
+that reason alone.
 
 ## Reproducing
 

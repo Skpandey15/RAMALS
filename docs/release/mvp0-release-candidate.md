@@ -11,7 +11,7 @@ measured.
 | Backend image | `ghcr.io/skpandey15/ramals-learning-platform@sha256:a31d830a…` |
 | Web UI image | `ghcr.io/skpandey15/ramals-web-ui@sha256:e527dd43…` |
 | Schema | Flyway `014` |
-| Backend tests | 206 — 0 failures, 0 skipped |
+| Backend tests | 209 — 0 failures, 0 skipped |
 | Frontend tests | 24 — lint clean, build succeeds |
 | Project version | `0.1.0-rc1` (frozen in `build.gradle`) |
 | Release pipeline | green: build → push → SBOM → scan → provenance attestation |
@@ -94,7 +94,9 @@ the standard Problem Details envelope carrying `interactionId` and `traceId`.
 - Database privilege attacks: runtime denied UPDATE/DELETE on all `ledger`/`audit` tables (`42501`),
   denied DDL, Flyway history protected.
 - Append-only triggers reject mutation even for the table owner (`55000`).
-- Rate limiting: 429 with `Retry-After` and recovery, shed before authentication.
+- Rate limiting, two tiers: a pre-authentication ceiling keyed on client IP sheds floods before any
+  JWT is validated; a post-authentication tier keyed on the verified token subject enforces
+  per-learner fair use. Both return 429 with `Retry-After` and a correlated Problem Details body.
 - Security headers: CSP, HSTS, `nosniff`, frame-deny, referrer policy, permissions policy.
 - Secret hygiene: gitleaks over full history; no secrets in source, images or logs.
 - Performance: [DB hot-path plans archived](evidence/db-hot-path-plans.md) — all eight critical queries index-served.
@@ -106,7 +108,7 @@ the standard Problem Details envelope carrying `interactionId` and `traceId`.
 | # | Risk | Severity | Mitigation / status |
 | --- | --- | --- | --- |
 | R1 | No calibrated latency/throughput baseline | **High** | Harness gap closed: it could not authenticate, shared one learner across all VUs, left the heaviest request class untagged, wrote null baselines, and leaked bearer tokens into exported summaries — all fixed. An indicative run now passes every class budget with 0% errors, but on a developer workstation; the calibrated baseline must still run on the authoritative fixed-spec environment before any SLA claim. See [performance baseline](evidence/performance-baseline.md) |
-| R9 | Rate limiting is keyed on client IP, not identity | Medium | All users behind a shared egress IP (school, office, carrier NAT, reverse proxy without a per-user forwarded header) share one 60 rps bucket and can throttle each other. Conventional fix is to key on the authenticated subject and fall back to IP for anonymous traffic. Deliberately not changed in MVP-0 — a security-control decision for the owner. See [performance baseline](evidence/performance-baseline.md#4-finding-for-mvp-1-rate-limiting-is-keyed-on-ip-not-identity) |
+| R9 | Rate limiting is keyed on client IP, not identity | ~~Medium~~ **Closed** | Split into two tiers: client IP pre-authentication (anti-flood, generous) and verified token subject post-authentication (per-learner fair use). Users behind a shared egress IP no longer throttle each other. The subject tier runs after token validation, so an unverified `sub` can never reach the limiter — otherwise a caller could drain a chosen victim's allowance or mint unlimited fresh buckets. See `SubjectRateLimitApiTests` |
 | R2 | No live deployment executed | ~~Medium~~ **Closed** | Published digests deployed, all six health gates passed, and the full rollback sequence executed against real containers. The drill found a defect that made rollback redeploy the *failed* digest while reporting success; fixed and regression-tested. See [live-stack drills](evidence/live-stack-drills.md#3-immutable-image-deployment-and-rollback--pass-r2-closed) |
 | R3 | Keycloak-issued token path untested end to end | ~~Medium~~ **Closed** | 26/26 checks against a genuine Keycloak-issued token. The drill found the M0-T18 `learner_id` mapper to be inert (undeclared in the realm user profile, so silently discarded); fixed. See [live-stack drills](evidence/live-stack-drills.md#2-keycloak-authorization-end-to-end--pass-r3-closed) |
 | R4 | Thresholds are uncalibrated | Medium | Mastery/confidence thresholds are engineering defaults, versioned so recalibration is traceable |
