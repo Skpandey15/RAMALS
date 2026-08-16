@@ -25,7 +25,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfig {
 
   @Bean
-  SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthenticationConverter converter)
+  SecurityFilterChain securityFilterChain(
+      HttpSecurity http, JwtAuthenticationConverter converter, SecurityDenialHandler denialHandler)
       throws Exception {
     http
         .cors(withDefaults())
@@ -36,7 +37,16 @@ public class SecurityConfig {
             .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
             .anyRequest().authenticated())
         .oauth2ResourceServer(resourceServer -> resourceServer
-            .jwt(jwt -> jwt.jwtAuthenticationConverter(converter)))
+            .jwt(jwt -> jwt.jwtAuthenticationConverter(converter))
+            // Also set on the resource server: it installs its own entry point otherwise, and the
+            // denial would bypass the audit and return an empty body.
+            .authenticationEntryPoint(denialHandler)
+            .accessDeniedHandler(denialHandler))
+        // Denials are audited and answered with a Problem Details body carrying the correlation
+        // ids (Master Plan §7, §8). Spring Security's defaults return an empty body.
+        .exceptionHandling(exceptions -> exceptions
+            .authenticationEntryPoint(denialHandler)
+            .accessDeniedHandler(denialHandler))
         .headers(headers -> headers
             .contentSecurityPolicy(csp -> csp.policyDirectives("default-src 'none'; frame-ancestors 'none'"))
             .frameOptions(frame -> frame.deny())

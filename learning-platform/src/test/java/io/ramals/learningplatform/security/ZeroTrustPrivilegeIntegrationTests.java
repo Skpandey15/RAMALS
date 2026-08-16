@@ -32,7 +32,8 @@ class ZeroTrustPrivilegeIntegrationTests {
   private static final String RUNTIME_PASSWORD = "m0-t05-runtime-test";
 
   private static final List<String> APPEND_ONLY_TABLES = List.of(
-      "ledger.evidence", "ledger.mastery_snapshot", "ledger.decision_record", "audit.admin_activity");
+      "ledger.evidence", "ledger.mastery_snapshot", "ledger.decision_record",
+      "audit.admin_activity", "audit.security_audit");
 
   private static String databaseUrl;
   private JdbcTemplate runtimeJdbc;

@@ -10,14 +10,19 @@ measured.
 | Commit | `36645cf` |
 | Backend image | `ghcr.io/skpandey15/ramals-learning-platform@sha256:a31d830a…` |
 | Web UI image | `ghcr.io/skpandey15/ramals-web-ui@sha256:e527dd43…` |
-| Schema | Flyway `013` |
-| Backend tests | 200 across 56 classes — 0 failures, 0 skipped |
-| Frontend tests | 12 — lint clean, build succeeds |
+| Schema | Flyway `014` |
+| Backend tests | 206 — 0 failures, 0 skipped |
+| Frontend tests | 24 — lint clean, build succeeds |
 | Project version | `0.1.0-rc1` (frozen in `build.gradle`) |
 | Release pipeline | green: build → push → SBOM → scan → provenance attestation |
 
 Both images are addressed by immutable digest, scanned clean of fixable CRITICAL/HIGH findings, and
 carry signed build provenance. `deploy/desired-version.json` is frozen at these digests.
+
+> **The frozen `rc1` digests predate the conformance fixes below.** They were built at schema `013`,
+> before `V014` added `audit.security_audit` and attempt correlation. A new release candidate must be
+> cut from `main` before those fixes can be deployed; `rc1` remains the artefact that was actually
+> validated end to end, and is described as such throughout this document.
 
 ## 1. Architecture conformance
 
@@ -27,7 +32,8 @@ carry signed build provenance. `deploy/desired-version.json` is frozen at these 
 | Deterministic, versioned decisioning | Yes — `WEIGHTED_MASTERY_V1`, `EVIDENCE_CONFIDENCE_V1`, `RECOMMENDATION_POLICY_V1`, `PROGRESSION_POLICY_V1`, `DIAGNOSTIC_SCORING_V1`, all stamped on persisted records |
 | Append-only evidence, snapshots, decisions | Yes — enforced by privilege (`42501`) **and** trigger (`55000`) |
 | Versioned curriculum and assessments | Yes — published content immutable; attempts pin the assessment version |
-| Correlation on every consequential write | Yes — `interactionId` on evidence, snapshots, decisions, session transitions, admin audit |
+| Correlation on every consequential write | Yes — `interactionId` on attempts, evidence, snapshots, decisions, session transitions, admin audit and security audit (Master Plan §8 in full) |
+| Durable security audit | Yes — `audit.security_audit` records every authentication and authorization denial with `interactionId` **and** `traceId` |
 | Zero Trust: RBAC + object-level ownership | Yes — `/me` surface makes cross-learner access unaddressable |
 | Least-privilege database identity | Yes — runtime holds SELECT/INSERT-only on `ledger` and `audit` |
 | Build once / promote the same artifact | Yes — digest-addressed deployment, PR path cannot publish |
@@ -36,7 +42,22 @@ carry signed build provenance. `deploy/desired-version.json` is frozen at these 
 **Deviations are recorded as ADRs**, not silent: [0001](../adr/0001-learner-identity-from-oidc-subject.md)
 (subject-based identity), [0002](../adr/0002-synchronous-adaptive-pipeline.md) (synchronous pipeline
 and ADL), [0003](../adr/0003-migration-numbering-follows-implementation-order.md) (migration
-numbering), [0004](../adr/0004-container-scanning-and-dependency-pinning.md) (scanning and pinning).
+numbering), [0004](../adr/0004-container-scanning-and-dependency-pinning.md) (scanning and pinning),
+[0005](../adr/0005-correlation-component-naming.md) (correlation component naming).
+
+A conformance audit of the schema and running system against the Implementation Master Plan — rather
+than against the design documents — found three deviations that the earlier review had missed, all
+now closed:
+
+| Finding | Plan reference | Resolution |
+| --- | --- | --- |
+| `audit.security_audit` was never implemented; authentication and authorization denials survived only in the application log | §8 (interactionId **and** traceId required) | Added in `V014` with append-only trigger and privilege enforcement; denials recorded on both the filter-chain and method-security paths |
+| `core.assessment_attempt` carried no `interaction_id`, so an attempt could not be correlated in SQL | §8 ("Yes / useful business-flow correlation") | Added in `V014` and written on every attempt creation |
+| Five of seven §16 Java components and all three frontend files use different names | §16 | Behaviour verified independently of naming; mapping recorded in ADR 0005 |
+
+The audit also closed a §7 gap found alongside them: Spring Security's default handlers returned 401
+with an empty body, so an authentication failure gave the caller no support code. Denials now return
+the standard Problem Details envelope carrying `interactionId` and `traceId`.
 
 ## 2. Traceability matrix
 
@@ -59,8 +80,8 @@ numbering), [0004](../adr/0004-container-scanning-and-dependency-pinning.md) (sc
 | T15 | Learning session state | `LearningSession*Tests` (optimistic conflict, resume) |
 | T16 | React learner experience | `LearnerDashboard.test.tsx` (E2E slice, a11y, no web storage) |
 | T17 | Admin/content minimum | `AdminContent*Tests` (role gating, audited rejections) |
-| T18 | Security hardening | `NegativeAuthorizationTests`, `ZeroTrustPrivilegeIntegrationTests`, rate-limit tests |
-| T19 | Observability and audit | `ObservabilityApiTests`, Grafana dashboard, runbook |
+| T18 | Security hardening | `NegativeAuthorizationTests`, `ZeroTrustPrivilegeIntegrationTests`, `SecurityDenialAuditTests`, rate-limit tests |
+| T19 | Observability and audit | `ObservabilityApiTests`, `SecurityDenialAuditTests`, Grafana dashboard, runbook |
 | T20 | Performance harness | `PerformanceHarnessTests` — harness verified, **baseline not captured** |
 | T21 | CI/CD release completion | green release run; `test-deploy-controller.sh` (RELEASE_HELD) |
 | T22 | End-to-end validation | `MvpZeroValidationTests` + backup/restore drill |

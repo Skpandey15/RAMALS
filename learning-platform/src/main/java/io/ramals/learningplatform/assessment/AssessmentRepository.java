@@ -1,5 +1,6 @@
 package io.ramals.learningplatform.assessment;
 
+import io.ramals.learningplatform.observability.CorrelationContext;
 import io.ramals.learningplatform.observability.UuidV7;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -135,11 +136,15 @@ public class AssessmentRepository {
   public AssessmentAttempt insertAttempt(
       UUID learnerId, UUID assessmentVersionId, String idempotencyKey) {
     UUID id = UuidV7.generate();
+    // Master Plan §8: the attempt row records the logical interaction that created it, so an
+    // attempt can be correlated back to a support ticket in SQL rather than only through logs.
+    String interactionId = CorrelationContext.currentInteractionId();
     jdbcTemplate.update("""
         INSERT INTO core.assessment_attempt
-          (id, learner_id, assessment_version_id, status, idempotency_key)
-        VALUES (?, ?, ?, 'IN_PROGRESS', ?)
-        """, id, learnerId, assessmentVersionId, idempotencyKey);
+          (id, learner_id, assessment_version_id, status, idempotency_key, interaction_id)
+        VALUES (?, ?, ?, 'IN_PROGRESS', ?, ?)
+        """, id, learnerId, assessmentVersionId, idempotencyKey,
+        interactionId.isBlank() ? null : interactionId);
     return findAttempt(id).orElseThrow(
         () -> new IllegalStateException("Attempt insert did not persist a row."));
   }
