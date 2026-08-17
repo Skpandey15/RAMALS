@@ -1,0 +1,204 @@
+"""Bounded graph execution (Doc 02 §3).
+
+The graph is the one in the design document, unchanged:
+
+    START -> load_context -> policy_precheck -> plan -> model_or_tool -> validate_output
+             valid   -> finalize -> END
+             invalid -> bounded_repair -> validate_output
+
+The interesting part is not the shape, it is that the loop terminates. ``validate_output`` can send
+control back through ``bounded_repair``, and without bounds that is an agent that retries a model
+until the money runs out. Three independent things stop it: the repair ceiling, the step ceiling,
+and the caller's deadline. Any one of them is sufficient, which is deliberate — the failure being
+guarded against is a bound that turns out not to have been enforced.
+
+Cost is bounded by the route's Doc 04 ceiling, read from the gateway's registry. Doc 02 §4 is
+explicit that it declares no cost constant of its own, so neither does this module.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from decimal import Decimal
+from typing import Any
+
+from opentelemetry import metrics
+
+from ramals_ai.config.settings import ModelRoute
+from ramals_ai.contracts.generated import AgentType
+from ramals_ai.gateway.budget import Deadline
+from ramals_ai.gateway.gateway import LLMGateway
+from ramals_ai.gateway.providers.base import Message
+from ramals_ai.graph import nodes
+from ramals_ai.graph.limits import CeilingExceeded, Ceilings
+from ramals_ai.graph.state import AgentState
+from ramals_ai.graph.tools import ToolRegistry, empty_registry
+
+logger = logging.getLogger(__name__)
+
+_meter = metrics.get_meter("ramals-ai")
+
+graph_runs = _meter.create_counter(
+    "ramals.ai.graph.runs",
+    description="Graph executions, by agent type and outcome",
+)
+graph_ceiling_stops = _meter.create_counter(
+    "ramals.ai.graph.ceiling.stops",
+    description="Graph runs stopped by a ceiling, by which control bound them",
+)
+
+FINALIZE = "finalize"
+REPAIR = "bounded_repair"
+
+STEPS_PER_REPAIR_CYCLE = 4
+"""bounded_repair, model_or_tool, validate_output, finalize -- what one repair still costs."""
+
+
+def route_for_validation(state: AgentState) -> str:
+    """The one branch in the graph: finish, or repair.
+
+    A pure function of state, with no side effects and no clock. Doc 02's acceptance criterion is
+    that budget and deadline stops are *deterministic*, and a routing decision that consulted the
+    time or a random value could not be.
+    """
+    if not state.validation_errors:
+        return FINALIZE
+    if state.repair_count >= state.ceilings.max_repairs:
+        # Out of repairs. Finalizing with the errors recorded beats looping, and beats raising:
+        # the caller gets a proposal marked invalid rather than an exception with nothing in it.
+        return FINALIZE
+    if state.steps_remaining < STEPS_PER_REPAIR_CYCLE:
+        # A repair cycle costs four further node executions: bounded_repair, model_or_tool,
+        # validate_output and finalize. Starting one that cannot complete would burn the remaining
+        # steps and still finish invalid -- strictly worse than finalizing now.
+        #
+        # At the Doc 02 §4 ceiling of 8 this branch is always taken, because the first
+        # validate_output lands on step 5 and leaves 3. See MAX_GRAPH_STEPS in limits.py: the
+        # documented step and repair ceilings cannot both be satisfied, and this code honours both
+        # rather than quietly widening one.
+        return FINALIZE
+    return REPAIR
+
+
+class GraphRun:
+    """One bounded execution of the standard graph."""
+
+    def __init__(
+        self,
+        gateway: LLMGateway,
+        *,
+        registry: ToolRegistry | None = None,
+        validator: Callable[[str], list[str]] | None = None,
+    ) -> None:
+        self._gateway = gateway
+        self._registry = registry if registry is not None else empty_registry()
+        self._validator = validator
+
+    def build_state(
+        self,
+        *,
+        agent_type: AgentType,
+        route: ModelRoute,
+        deadline: Deadline,
+        interaction_id: str,
+        request_id: str,
+        proposal_id: str,
+        minimized_learning_context: dict[str, Any],
+        policy_constraints: dict[str, Any] | None = None,
+        agent_version: str = "V1",
+    ) -> AgentState:
+        """Resolves the ceilings and budgets for a run before it starts.
+
+        The cost budget comes from the route configuration, not from a constant here. That is the
+        Doc 02 §4 rule made structural: there is no second number to drift.
+        """
+        config = self._gateway.registry.resolve(route)
+        return AgentState(
+            contract_version="1.0",
+            interaction_id=interaction_id,
+            request_id=request_id,
+            proposal_id=proposal_id,
+            agent_type=agent_type,
+            agent_version=agent_version,
+            prompt_version=config.prompt_version,
+            minimized_learning_context=minimized_learning_context,
+            policy_constraints=policy_constraints or {},
+            deadline=deadline,
+            ceilings=Ceilings.for_agent(agent_type),
+            token_budget=config.max_output_tokens,
+            cost_budget_usd=config.hard_cost_ceiling_usd,
+        )
+
+    def run(
+        self,
+        state: AgentState,
+        *,
+        route: ModelRoute,
+        messages: tuple[Message, ...],
+    ) -> AgentState:
+        """Executes the graph to completion or to the first ceiling.
+
+        A ceiling stop is not an error path bolted on: it is how a bounded run is expected to end
+        when the work does not fit. The state comes back with its counters intact, so the caller can
+        see which bound was reached and how much was spent getting there.
+        """
+        try:
+            nodes.load_context(state)
+            nodes.policy_precheck(state)
+            nodes.plan(state)
+
+            while True:
+                nodes.model_or_tool(
+                    state,
+                    gateway=self._gateway,
+                    route=route,
+                    messages=messages,
+                    registry=self._registry,
+                )
+                nodes.validate_output(state, validator=self._validator)
+
+                if route_for_validation(state) is FINALIZE:
+                    break
+                nodes.bounded_repair(state)
+
+            nodes.finalize(state)
+        except CeilingExceeded as stop:
+            graph_ceiling_stops.add(1, {"agent": state.agent_type.value, "control": stop.control})
+            graph_runs.add(1, {"agent": state.agent_type.value, "outcome": "ceiling_stop"})
+            logger.warning(
+                "graph run stopped by a ceiling",
+                extra={
+                    "operation": "graph.ceiling_stop",
+                    "control": stop.control,
+                    "limit": stop.limit,
+                    "stepCount": state.step_count,
+                    "modelCallCount": state.model_call_count,
+                    "repairCount": state.repair_count,
+                },
+            )
+            raise
+
+        graph_runs.add(1, {"agent": state.agent_type.value, "outcome": "completed"})
+        logger.info(
+            "graph run completed",
+            extra={
+                "operation": "graph.complete",
+                "agentType": state.agent_type.value,
+                "stepCount": state.step_count,
+                "modelCallCount": state.model_call_count,
+                "repairCount": state.repair_count,
+                "estimatedCostUsd": f"{state.cost_spent_usd:.6f}",
+                "trace": ",".join(state.trace),
+            },
+        )
+        return state
+
+
+def cost_budget_of(gateway: LLMGateway, route: ModelRoute) -> Decimal:
+    """The per-request cost bound, always read from the route.
+
+    Exposed so a test can assert the graph's budget *is* the route's ceiling rather than a copy that
+    happens to match today.
+    """
+    return gateway.registry.resolve(route).hard_cost_ceiling_usd

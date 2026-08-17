@@ -13,6 +13,8 @@ dependencies = [
   "pyjwt[crypto]==2.13.0",
   # Cross-service tracing (M1-T04). The Python side continues the trace Spring started; no exporter
   # is configured here, because where spans are shipped is a deployment concern.
+  # Bounded agent graph execution (M1-T06, Doc 02).
+  "langgraph==1.2.11",
   "opentelemetry-api==1.44.0",
   "opentelemetry-sdk==1.44.0",
   "pydantic-settings==2.15.0",
