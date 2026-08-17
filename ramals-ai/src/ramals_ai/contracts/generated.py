@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -54,7 +55,21 @@ class LearnerRef(BaseModel):
 
 
 class Prerequisite(RootModel[str]):
-    root: Annotated[str, Field(max_length=64)]
+    root: Annotated[str, Field(max_length=96)]
+
+
+class DomainType(StrEnum):
+    TECHNOLOGY = 'TECHNOLOGY'
+    ACADEMIC = 'ACADEMIC'
+    PROFESSIONAL = 'PROFESSIONAL'
+
+
+class GoalType(StrEnum):
+    LEARNING_DOMAIN = 'LEARNING_DOMAIN'
+    ACADEMIC_MASTERY = 'ACADEMIC_MASTERY'
+    DEGREE_COMPETENCY = 'DEGREE_COMPETENCY'
+    CAREER_ROLE = 'CAREER_ROLE'
+    CAREER_TRANSITION = 'CAREER_TRANSITION'
 
 
 class DecimalString(RootModel[str]):
@@ -187,11 +202,30 @@ class LearningContext(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    skillCode: Annotated[str, Field(max_length=64, min_length=1)]
+    skillCode: Annotated[str, Field(max_length=96, min_length=1)]
     masteryScore: DecimalString | None = None
     evidenceConfidence: DecimalString | None = None
     masteryStatus: Annotated[str | None, Field(examples=['NEEDS_PRACTICE'], max_length=32)] = None
     prerequisites: Annotated[list[Prerequisite] | None, Field(max_length=32)] = None
+
+
+class DomainContext(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    domainCode: Annotated[str, Field(examples=['KAFKA'], max_length=64, min_length=1)]
+    domainType: DomainType
+    curriculumVersion: Annotated[str | None, Field(examples=['v1'], max_length=64)] = None
+
+
+class LearningGoalContext(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    goalType: GoalType
+    goalCode: Annotated[str, Field(examples=['KAFKA'], max_length=96, min_length=1)]
+    targetDate: date | None = None
+    goalVersion: Annotated[str | None, Field(max_length=64)] = None
 
 
 class AIRequestEnvelope(BaseModel):
@@ -207,5 +241,7 @@ class AIRequestEnvelope(BaseModel):
     ]
     learner: LearnerRef
     learningContext: LearningContext | None = None
+    domainContext: DomainContext | None = None
+    learningGoalContext: LearningGoalContext | None = None
     constraints: Constraints
     requestedCapability: Annotated[str | None, Field(max_length=64)] = None

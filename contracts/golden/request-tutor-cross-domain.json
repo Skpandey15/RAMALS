@@ -1,0 +1,37 @@
+{
+  "contractVersion": "1.0",
+  "interactionId": "01920000-0000-7000-8000-0000000000a3",
+  "requestId": "01920000-0000-7000-8000-0000000000b3",
+  "learner": {
+    "learnerRef": "opaque-learner-ref-003",
+    "locale": "en-IN"
+  },
+  "learningContext": {
+    "skillCode": "RELATIONAL_TRANSACTION_ISOLATION_LEVELS_AND_CONCURRENCY_CONTROL_SEMANTICS",
+    "masteryScore": "0.4100",
+    "evidenceConfidence": "0.3500",
+    "masteryStatus": "NEEDS_PRACTICE",
+    "prerequisites": [
+      "RELATIONAL_SCHEMA_NORMALIZATION_AND_FUNCTIONAL_DEPENDENCY_ANALYSIS",
+      "SQL_QUERY_EXECUTION_PLANNING"
+    ]
+  },
+  "domainContext": {
+    "domainCode": "BTECH_DBMS",
+    "domainType": "ACADEMIC",
+    "curriculumVersion": "synthetic-v1"
+  },
+  "learningGoalContext": {
+    "goalType": "DEGREE_COMPETENCY",
+    "goalCode": "BTECH_DBMS",
+    "targetDate": "2027-05-31"
+  },
+  "constraints": {
+    "interactionClass": "INTERACTIVE_AI",
+    "deadlineMs": 8000,
+    "maxOutputTokens": 700,
+    "allowedTools": [],
+    "policyVersion": "AI_INTERACTION_POLICY_V1"
+  },
+  "requestedCapability": "EXPLAIN"
+}

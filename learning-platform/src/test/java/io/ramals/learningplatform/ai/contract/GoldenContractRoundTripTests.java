@@ -36,6 +36,39 @@ class GoldenContractRoundTripTests {
   }
 
   @Test
+  void crossDomainRequestSurvivesRoundTrip() throws IOException {
+    assertRoundTrip("request-tutor-cross-domain.json", AiRequestEnvelope.class);
+  }
+
+  @Test
+  void crossDomainRequestCarriesADomainTheAgentDidNotAssume() throws IOException {
+    // The point of the fixture: a domain that is not KAFKA, with no seed data and no curriculum
+    // behind it, must cross the boundary intact. If this ever fails, the platform has acquired an
+    // assumption about which domain it serves.
+    AiRequestEnvelope envelope =
+        MAPPER.readValue(read("request-tutor-cross-domain.json"), AiRequestEnvelope.class);
+
+    assertThat(envelope.domainContext()).isNotNull();
+    assertThat(envelope.domainContext().domainCode()).isEqualTo("BTECH_DBMS");
+    assertThat(envelope.domainContext().domainType()).isEqualTo(DomainType.ACADEMIC);
+    assertThat(envelope.learningGoalContext().goalType()).isEqualTo(GoalType.DEGREE_COMPETENCY);
+  }
+
+  @Test
+  void crossDomainRequestCarriesIdentifiersTheOldContractRejected() throws IOException {
+    // Regression fixture for the 64-vs-96 mismatch: core.skill.stable_code is VARCHAR(96), the
+    // boundary capped identifiers at 64, so a legal skill code was storable and unsendable. Both a
+    // skillCode and a prerequisite sit in the band that used to fail.
+    AiRequestEnvelope envelope =
+        MAPPER.readValue(read("request-tutor-cross-domain.json"), AiRequestEnvelope.class);
+
+    assertThat(envelope.learningContext().skillCode().length()).isGreaterThan(64);
+    assertThat(envelope.learningContext().skillCode().length()).isLessThanOrEqualTo(96);
+    assertThat(envelope.learningContext().prerequisites())
+        .anyMatch(prerequisite -> prerequisite.length() > 64);
+  }
+
+  @Test
   void tutorProposalSurvivesRoundTrip() throws IOException {
     assertRoundTrip("proposal-tutor.json", AiProposalEnvelope.class);
   }
@@ -91,7 +124,8 @@ class GoldenContractRoundTripTests {
     // Adding a fixture without a round-trip assertion would let the Python side pin a shape the Java
     // side never sees, which is exactly the drift these fixtures exist to prevent.
     List<String> covered = List.of(
-        "request-tutor-minimal.json", "request-tutor-full.json", "proposal-tutor.json",
+        "request-tutor-minimal.json", "request-tutor-full.json",
+        "request-tutor-cross-domain.json", "proposal-tutor.json",
         "proposal-assessment-evaluate.json", "capabilities.json",
         "problem-deadline-exceeded.json");
 
