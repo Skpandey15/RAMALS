@@ -15,11 +15,13 @@ from fastapi import FastAPI
 
 from ramals_ai import __version__
 from ramals_ai.api.capabilities import build_capabilities_router
+from ramals_ai.api.correlation import CorrelationMiddleware
 from ramals_ai.api.health import ServiceState, build_health_router
 from ramals_ai.api.internal import build_internal_router
 from ramals_ai.config.settings import Settings, get_settings
 from ramals_ai.security.workload_identity import build_verifier
 from ramals_ai.telemetry.logging import configure_logging
+from ramals_ai.telemetry.tracing import configure_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         level=resolved.log_level,
     )
 
+    configure_tracing(resolved)
     state = ServiceState()
 
     @asynccontextmanager
@@ -66,6 +69,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         summary="Non-authoritative agent proposals for the RAMALS deterministic core.",
         lifespan=lifespan,
     )
+    # First in the chain, ahead of authentication: a rejected request must still carry a support
+    # code, or the learner is told something went wrong with nothing to quote.
+    app.add_middleware(CorrelationMiddleware)
     app.include_router(build_health_router(state))
     app.include_router(build_capabilities_router(resolved))
     # Agent endpoints join this router in M1-T07 and inherit its authentication, so a new endpoint

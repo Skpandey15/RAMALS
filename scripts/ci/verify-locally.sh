@@ -64,8 +64,25 @@ if [ "${run_docker}" = true ]; then
   # The CI runner is Linux. Several failures only ever appeared there -- a formatter that behaved
   # differently per platform, a path-sensitive drift check -- so this is the honest rehearsal.
   echo "Running the full gate inside ${PYTHON_IMAGE}"
-  exec docker run --rm -v "${REPO}:/repo" -w /repo "${PYTHON_IMAGE}" \
-    bash -c 'pip install --quiet --disable-pip-version-check -e "ramals-ai[dev]" pip-audit==2.9.0 >/dev/null 2>&1 && bash scripts/ci/verify-locally.sh'
+
+  # Git Bash rewrites anything that looks like a Unix path before docker sees it, which breaks both
+  # sides of this command in different ways: `-w /repo` arrives as `C:/Program Files/Git/repo`, and
+  # the mount source `/d/...` is not a path Docker Desktop resolves -- it silently mounts an empty
+  # directory instead, so the install finds no project and the whole gate exits quietly green-ish.
+  # Convert the host path ourselves, then disable the rewriting entirely.
+  HOST_REPO="${REPO}"
+  if command -v cygpath >/dev/null 2>&1; then
+    HOST_REPO="$(cygpath -w "${REPO}")"
+  fi
+  export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+
+  # The install is not silenced. A failure here used to short-circuit the `&&` and produce no
+  # output at all, which reads exactly like a clean run.
+  exec docker run --rm -v "${HOST_REPO}:/repo" -w /repo "${PYTHON_IMAGE}" \
+    bash -c 'set -e
+      pip install --quiet --disable-pip-version-check --root-user-action=ignore \
+        -e "ramals-ai[dev]" pip-audit==2.9.0
+      bash scripts/ci/verify-locally.sh'
 fi
 
 echo "Python gate"

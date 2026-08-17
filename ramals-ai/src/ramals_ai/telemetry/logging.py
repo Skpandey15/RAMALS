@@ -1,8 +1,8 @@
 """Structured JSON logging.
 
-Matches the MVP-0 log contract so a single query spans both runtimes. Correlation fields
-(interactionId, traceId, spanId, proposalId) are added in M1-T04; the record shape reserves them now
-so the schema does not change under a working query later.
+Matches the MVP-0 log contract so a single query spans both runtimes. Correlation fields are
+attached to every record from the request context rather than passed by each call site: a log line
+that happens to omit them is exactly the line you need when something has gone wrong.
 
 Never log bearer tokens, provider keys, prompt text or learner content.
 """
@@ -13,6 +13,9 @@ import json
 import logging
 import sys
 from typing import Any
+
+from ramals_ai.telemetry.correlation import current_interaction_id, current_request_id
+from ramals_ai.telemetry.tracing import current_span_id, current_trace_id
 
 # Attributes LogRecord always carries. Anything else a caller attaches via `extra` is domain context
 # worth emitting, so allow-listing would silently drop it; deny-list instead.
@@ -40,6 +43,18 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
+        # Sourced from the request context, so no call site can forget them.
+        interaction_id = current_interaction_id()
+        if interaction_id:
+            payload["interactionId"] = interaction_id
+        request_id = current_request_id()
+        if request_id:
+            payload["requestId"] = request_id
+        trace_id = current_trace_id()
+        if trace_id:
+            payload["traceId"] = trace_id
+            payload["spanId"] = current_span_id()
+
         if record.exc_info:
             payload["exceptionType"] = record.exc_info[0].__name__ if record.exc_info[0] else None
             payload["stackTrace"] = self.formatException(record.exc_info)
