@@ -123,7 +123,11 @@ fi
 # The frontend gate runs whenever web-ui has a node_modules to run it with. It is not behind a flag
 # because leaving it out is exactly how a lint error reached CI: the tests passed, the build passed,
 # and `npm run lint` -- which CI runs and this script did not -- did not.
-if [ -d web-ui/node_modules ]; then
+# npm is absent inside the CI Python image, where this script re-runs itself under --docker. Running
+# the gate there produced three failures and the message "CI would fail for the same reason", which
+# was false -- CI has npm. A gate that reports a failure the pipeline would not have is worse than no
+# gate: it teaches you to disbelieve the output.
+if [ -d web-ui/node_modules ] && command -v npm >/dev/null 2>&1; then
   echo "Frontend gate"
   pushd web-ui >/dev/null || exit 1
   step "  eslint" npm run lint
@@ -132,8 +136,13 @@ if [ -d web-ui/node_modules ]; then
   popd >/dev/null || exit 1
 elif [ -d web-ui ]; then
   echo "Frontend gate"
-  printf '%-34s skipped (run npm ci in web-ui)
+  if command -v npm >/dev/null 2>&1; then
+    printf '%-34s skipped (run npm ci in web-ui)
 ' "  eslint/vitest/build"
+  else
+    printf '%-34s skipped (no npm on this host)
+' "  eslint/vitest/build"
+  fi
 fi
 
 echo
