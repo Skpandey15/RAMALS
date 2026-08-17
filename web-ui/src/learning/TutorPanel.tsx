@@ -55,7 +55,7 @@ export function TutorPanel({ skillCode, masteryStatus }: { skillCode: string; ma
     try {
       const outcome = await started.result;
       setState({ status: 'answered', outcome });
-    } catch (failure) {
+    } catch {
       if (controller.signal.aborted) {
         setState({ status: 'cancelled' });
         return;
