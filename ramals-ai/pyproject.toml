@@ -26,6 +26,15 @@ dependencies = [
 # through SQL. Flyway under ramals_core_migration is the sole DDL authority for the shared database.
 
 [project.optional-dependencies]
+# The provider SDK (M1-T05, M1-ADR-008). Optional and imported lazily, for two reasons: CI runs the
+# whole gateway path on the deterministic `ci-fake` route and never needs it, and a service
+# configured for that route should not fail to start because of a library it will never call.
+#
+# Still audited: scripts/ci/export-python-requirements.py projects every optional group into the
+# pip-audit input, so an advisory here fails the build whether or not the group is installed.
+provider = [
+  "litellm==1.97.0",
+]
 dev = [
   # Contract tooling (M1-ADR-002). datamodel-code-generator emits the Python models from the
   # canonical OpenAPI; the others lint it and keep the committed output honest.
@@ -42,6 +51,14 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[[tool.mypy.overrides]]
+# The provider SDK is an optional extra and is deliberately absent from the dev and CI
+# environments, which run the gateway on the deterministic `ci-fake` route. Type checking the
+# adapter's call into it is not possible without installing it, and installing it in CI would
+# defeat the point of the extra.
+module = ["litellm", "litellm.*"]
+ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ramals_ai"]

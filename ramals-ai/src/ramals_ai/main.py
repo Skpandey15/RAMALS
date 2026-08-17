@@ -18,7 +18,11 @@ from ramals_ai.api.capabilities import build_capabilities_router
 from ramals_ai.api.correlation import CorrelationMiddleware
 from ramals_ai.api.health import ServiceState, build_health_router
 from ramals_ai.api.internal import build_internal_router
-from ramals_ai.config.settings import Settings, get_settings
+from ramals_ai.config.settings import ModelRoute, Settings, get_settings
+from ramals_ai.gateway.gateway import LLMGateway
+from ramals_ai.gateway.providers.base import ProviderAdapter
+from ramals_ai.gateway.providers.fake import FakeProvider
+from ramals_ai.gateway.providers.litellm_adapter import LiteLLMProvider
 from ramals_ai.security.workload_identity import build_verifier
 from ramals_ai.telemetry.logging import configure_logging
 from ramals_ai.telemetry.tracing import configure_tracing
@@ -40,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     configure_tracing(resolved)
     state = ServiceState()
+    gateway = LLMGateway(_adapter_for(resolved))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -52,6 +57,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "version": __version__,
                 "aiEnabled": resolved.ai_enabled,
                 "modelRoute": resolved.model_route.value,
+                # Logged at startup so an operator verifying a rollback can read which route
+                # configuration this process is actually running, rather than inferring it.
+                "routeTableVersion": gateway.registry.version,
+                "promptVersion": gateway.registry.resolve(resolved.model_route).prompt_version,
             },
         )
         state.mark_ready()
@@ -80,7 +89,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.service_state = state
     app.state.settings = resolved
     app.state.workload_verifier = build_verifier(resolved)
+    # The handoff point for M1-T06/T07: agents take the gateway from here rather than constructing
+    # one, so every model call in the service shares one set of budgets.
+    app.state.gateway = gateway
     return app
+
+
+def _adapter_for(settings: Settings) -> ProviderAdapter:
+    """Chooses the provider for this configuration.
+
+    ``ci-fake`` is a real route, not a test double, so CI and a fresh checkout exercise the same
+    gateway path a provider call takes -- without a credential and without a bill.
+    """
+    if settings.model_route is ModelRoute.CI_FAKE:
+        return FakeProvider()
+    return LiteLLMProvider(api_key=settings.provider_api_key)
 
 
 app = create_app
