@@ -12,20 +12,24 @@ Consequential implementation decisions must be recorded as ADRs with context, de
 
 ## MVP-1
 
-Decisions adopted from the MVP-1 Canonical Package. The package registers M1-ADR-000 through
+Decisions adopted from the MVP-1 Canonical Package. **Which task each decision gates is recorded in
+[the MVP-1 release board](../release/mvp1-release-board.md), which owns that mapping.** This index
+says what each decision is; it deliberately does not restate what it blocks.
+
+The package registers M1-ADR-000 through
 M1-ADR-010; only those listed here are authored and adopted in this repository. The remainder must
 be authored before the implementation task each one gates.
 
-| ADR | Decision | Gates |
-| --- | --- | --- |
-| [M1-ADR-000](M1-ADR-000-mvp1-engineering-before-r1.md) | MVP-1 engineering may begin before R1 closes; R1 still blocks the MVP-1 RC and any comparative claim | M1-T00 |
-| [M1-ADR-001](M1-ADR-001-interaction-classes-and-deadlines.md) | Interaction classes, absolute deadlines, stricter-wins precedence and timeout semantics | M1-T02, M1-T08 |
-| [M1-ADR-002](M1-ADR-002-contract-generation-ownership.md) | Generate Python from the OpenAPI contract; hand-write Java records and validate them with golden round-trip fixtures | M1-T02 |
-| [M1-ADR-003](M1-ADR-003-workload-identity.md) | Spring authenticates to ramals-ai with Keycloak client credentials and a distinct `ramals-ai` audience | M1-T03 |
-| [M1-ADR-004](M1-ADR-004-tutor-response-is-bounded-non-streaming.md) | Tutor V1 returns one complete validated response and does not stream: unsupported learner-state claims are only detectable on a finished response, and streamed text cannot be un-read | M1-T08 |
-| [M1-ADR-006](M1-ADR-006-generated-assessment-trust-promotion.md) | Generated assessment content is UNVERIFIED on creation and only a human promotes it; automated validation may reject but never approve | M1-T10 |
-| [M1-ADR-008](M1-ADR-008-model-routing-fallback-and-rollback.md) | Routes are versioned configuration; hard budgets are enforced before dispatch; failure never escalates to a costlier route; rollback moves pointers and never rewrites recorded proposal metadata | M1-T05 |
-| [M1-ADR-010](M1-ADR-010-assessment-evaluation-is-formative-only.md) | AI assessment evaluation is FORMATIVE_ONLY and can never create scored evidence | M1-T10 |
+| ADR | Decision |
+| --- | --- |
+| [M1-ADR-000](M1-ADR-000-mvp1-engineering-before-r1.md) | MVP-1 engineering may begin before R1 closes; R1 still blocks the MVP-1 RC and any comparative claim |
+| [M1-ADR-001](M1-ADR-001-interaction-classes-and-deadlines.md) | Interaction classes, absolute deadlines, stricter-wins precedence and timeout semantics |
+| [M1-ADR-002](M1-ADR-002-contract-generation-ownership.md) | Generate Python from the OpenAPI contract; hand-write Java records and validate them with golden round-trip fixtures |
+| [M1-ADR-003](M1-ADR-003-workload-identity.md) | Spring authenticates to ramals-ai with Keycloak client credentials and a distinct `ramals-ai` audience |
+| [M1-ADR-004](M1-ADR-004-tutor-response-is-bounded-non-streaming.md) | Tutor V1 returns one complete validated response and does not stream: unsupported learner-state claims are only detectable on a finished response, and streamed text cannot be un-read |
+| [M1-ADR-006](M1-ADR-006-generated-assessment-trust-promotion.md) | Generated assessment content is UNVERIFIED on creation and only a human promotes it; automated validation may reject but never approve |
+| [M1-ADR-008](M1-ADR-008-model-routing-fallback-and-rollback.md) | Routes are versioned configuration; hard budgets are enforced before dispatch; failure never escalates to a costlier route; rollback moves pointers and never rewrites recorded proposal metadata |
+| [M1-ADR-010](M1-ADR-010-assessment-evaluation-is-formative-only.md) | AI assessment evaluation is FORMATIVE_ONLY and can never create scored evidence |
 
 Not yet authored: M1-ADR-005 (ai_execution persistence), 007 (LIMITED_DURABLE approval), 009
 (evaluation thresholds). Each is written just before the task it gates rather than as a batch, so

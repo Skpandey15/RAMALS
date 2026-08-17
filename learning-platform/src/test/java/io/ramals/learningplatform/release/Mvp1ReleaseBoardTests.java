@@ -96,12 +96,28 @@ class Mvp1ReleaseBoardTests {
     // Derived rather than hardcoded. A list of "outstanding" ADRs baked into a test goes stale the
     // moment one is written, and then passes because the name still appears somewhere on the page --
     // which is passing for the wrong reason.
-    String outstanding = outstandingSection(board());
+    String board = board();
+    String outstanding = outstandingSection(board);
     Path adrDirectory = Path.of("..", "docs", "adr");
 
-    for (int number : new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
-      String adr = "M1-ADR-%03d".formatted(number);
-      boolean written = adrExists(adrDirectory, adr);
+    // Derived from what the board and the directory actually name, rather than a second copy of the
+    // mapping. Rule: the board owns task -> decision; this test reads it, and never restates it.
+    java.util.Set<String> registered = new java.util.TreeSet<>();
+    Matcher onBoard = Pattern.compile("M1-ADR-\\d{3}").matcher(board);
+    while (onBoard.find()) {
+      registered.add(onBoard.group());
+    }
+    try (var entries = Files.list(adrDirectory)) {
+      entries
+          .map(path -> path.getFileName().toString())
+          .filter(name -> name.startsWith("M1-ADR-"))
+          .map(name -> name.substring(0, "M1-ADR-000".length()))
+          .forEach(registered::add);
+    }
+    assertThat(registered).as("the board and ADR directory should name some decisions").isNotEmpty();
+
+    for (String adr : registered) {
+      boolean written = adrAccepted(adrDirectory, adr);
       boolean owed = outstanding.contains(adr);
 
       assertThat(written || owed)
@@ -122,10 +138,28 @@ class Mvp1ReleaseBoardTests {
     return board.substring(start, end > start ? end : board.length());
   }
 
-  private static boolean adrExists(Path directory, String adr) throws IOException {
+  /**
+   * Whether a decision is settled, not merely filed.
+   *
+   * <p>An ADR file that exists is not a decision that has been made. A draft is a decision still
+   * being argued, and a task started against one is a task making that decision implicitly in code.
+   * The gate reads the status line.
+   */
+  private static boolean adrAccepted(Path directory, String adr) throws IOException {
+    Path file;
     try (var entries = Files.list(directory)) {
-      return entries.anyMatch(path -> path.getFileName().toString().startsWith(adr));
+      file = entries
+          .filter(path -> path.getFileName().toString().startsWith(adr))
+          .findFirst()
+          .orElse(null);
     }
+    if (file == null) {
+      return false;
+    }
+    return Files.readString(file, StandardCharsets.UTF_8)
+        .lines()
+        .filter(line -> line.startsWith("- **Status:**"))
+        .anyMatch(line -> line.toLowerCase(java.util.Locale.ROOT).contains("accepted"));
   }
 
   @Test
@@ -158,8 +192,8 @@ class Mvp1ReleaseBoardTests {
       Matcher required = Pattern.compile("M1-ADR-\\d{3}").matcher(gating);
       while (required.find()) {
         String adr = required.group();
-        assertThat(adrExists(adrDirectory, adr))
-            .as("%s is started or done but requires %s, which is not authored", task, adr)
+        assertThat(adrAccepted(adrDirectory, adr))
+            .as("%s is started or done but requires %s, which is not Accepted", task, adr)
             .isTrue();
         assertThat(outstanding.contains(adr))
             .as("%s is started or done but %s is still listed as outstanding", task, adr)

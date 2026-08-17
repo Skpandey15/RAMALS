@@ -20,7 +20,16 @@ risk-accepted by name under that ADR.
 
 Nothing in T00–T17 will close R1. It needs an environment decision, not a commit.
 
-## Task progress
+## Task progress — canonical task → decision mapping
+
+**This table is the single owner of which decisions gate which task.** Other documents reference it
+rather than restating it; `docs/adr/README.md` describes what each decision says, not what it gates.
+A mapping maintained in several places is a mapping that disagrees with itself, and the copy a
+reader happens to open is the one they believe.
+
+A task may be `next` or `done` only when every decision it requires has status **Accepted** in its
+ADR file. Having the file is not enough — an ADR in Draft is a decision still being made.
+
 
 | Task | Status | Gating decision |
 | --- | --- | --- |

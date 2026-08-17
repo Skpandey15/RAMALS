@@ -85,6 +85,26 @@ class AdrRegisterTests {
   }
 
   @Test
+  @DisplayName("the ADR index does not restate which task each decision gates")
+  void theIndexDoesNotDuplicateTheTaskMapping() throws IOException {
+    // One canonical owner: the release board maps task to decision. This index says what each
+    // decision *is*.
+    //
+    // Two copies of a mapping is a mapping that will disagree with itself, and the copy a reader
+    // happens to open is the one they believe. Enforced rather than asked for, because restating it
+    // here is the natural thing to do while editing an ADR entry -- it reads as helpful.
+    List<String> offending = Files
+        .readAllLines(adrDirectory().resolve("README.md"), StandardCharsets.UTF_8).stream()
+        .filter(line -> line.startsWith("|"))
+        .filter(line -> line.contains("M1-T"))
+        .toList();
+
+    assertThat(offending)
+        .as("the task -> decision mapping belongs to docs/release/mvp1-release-board.md alone")
+        .isEmpty();
+  }
+
+  @Test
   @DisplayName("nothing already written is still listed as unwritten")
   void unauthoredListExcludesWhatHasBeenWritten() throws IOException {
     String sentence = unauthoredSentence(index());
