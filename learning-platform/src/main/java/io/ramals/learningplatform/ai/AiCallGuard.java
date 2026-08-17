@@ -31,6 +31,14 @@ import org.slf4j.LoggerFactory;
  * injectable, so the state machine can be driven deterministically in tests instead of being coaxed
  * with sleeps. A guard whose behaviour can only be observed by waiting is a guard whose behaviour is
  * mostly assumed.
+ *
+ * <p><b>Resilience4j is the preferred long-term home for this.</b> The decision to keep a custom
+ * implementation is about not adding a dependency for its own sake while the requirements are this
+ * small, not a judgement that a library would be worse. Replace it when any of these become true:
+ * more than one call path needs guarding, retry or rate-limiting joins the picture, or the
+ * configuration wants to live in properties rather than in code. The tests in
+ * {@code AiCallGuardTests} assert behaviour rather than internals, so they should survive the swap
+ * and are the thing that makes it safe.
  */
 public class AiCallGuard {
 
