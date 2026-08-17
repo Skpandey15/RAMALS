@@ -11,6 +11,10 @@ dependencies = [
   "pydantic==2.13.4",
   # Workload identity (M1-ADR-003): JWKS-backed validation of the Keycloak workload token.
   "pyjwt[crypto]==2.13.0",
+  # Cross-service tracing (M1-T04). The Python side continues the trace Spring started; no exporter
+  # is configured here, because where spans are shipped is a deployment concern.
+  "opentelemetry-api==1.44.0",
+  "opentelemetry-sdk==1.44.0",
   "pydantic-settings==2.15.0",
   "uvicorn[standard]==0.52.3",
 ]

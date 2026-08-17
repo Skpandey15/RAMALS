@@ -47,6 +47,7 @@ class Settings(BaseSettings):
 
     environment: Environment = Environment.LOCAL
     service_name: str = "ramals-ai"
+    service_version: str = "0.1.0"
     log_level: str = "INFO"
 
     # AI execution is off until M1-T05 wires a real gateway. With it off the service starts, serves

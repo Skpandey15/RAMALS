@@ -67,6 +67,9 @@ tasks.named('test') {
   inputs.file(rootProject.file('docs/release/mvp0-release-candidate.md'))
       .withPropertyName('releaseRecord')
       .withPathSensitivity(PathSensitivity.RELATIVE)
+  inputs.file(rootProject.file('deploy/compose.deploy.yml'))
+      .withPropertyName('deployTopology')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 jacoco {

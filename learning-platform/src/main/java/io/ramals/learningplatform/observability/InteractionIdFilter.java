@@ -52,24 +52,31 @@ public class InteractionIdFilter extends OncePerRequestFilter {
     try (MDC.MDCCloseable ignoredInteraction = MDC.putCloseable("interactionId", interactionId);
          MDC.MDCCloseable ignoredRequest = MDC.putCloseable("requestId", requestId);
          MDC.MDCCloseable ignoredMethod = MDC.putCloseable("http.method", request.getMethod())) {
-      putTraceContext();
+      // This finally is nested *inside* the resource block on purpose. A try-with-resources closes
+      // its resources before an outer finally runs, so summarising the request out there emitted
+      // the one line per request that carried no interactionId -- precisely the line the diagnosis
+      // procedure tells an engineer to search for. traceId survived only because it is removed
+      // further down. The console pattern hid this until structured logging was switched on.
+      try {
+        putTraceContext();
 
-      if (!suppliedInteractionIdIsValid) {
-        writeInvalidInteractionId(response, interactionId);
-        return;
+        if (!suppliedInteractionIdIsValid) {
+          writeInvalidInteractionId(response, interactionId);
+          return;
+        }
+
+        filterChain.doFilter(request, response);
+      } finally {
+        putTraceResponseHeader(response);
+        long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
+        LOGGER.atInfo()
+            .addKeyValue("operation", "http.request")
+            .addKeyValue("statusCode", response.getStatus())
+            .addKeyValue("durationMs", durationMs)
+            .log("HTTP request completed");
+        MDC.remove("traceId");
+        MDC.remove("spanId");
       }
-
-      filterChain.doFilter(request, response);
-    } finally {
-      putTraceResponseHeader(response);
-      long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
-      LOGGER.atInfo()
-          .addKeyValue("operation", "http.request")
-          .addKeyValue("statusCode", response.getStatus())
-          .addKeyValue("durationMs", durationMs)
-          .log("HTTP request completed");
-      MDC.remove("traceId");
-      MDC.remove("spanId");
     }
   }
 

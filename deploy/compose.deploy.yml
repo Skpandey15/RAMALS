@@ -70,6 +70,11 @@ services:
   backend:
     image: ${RAMALS_BACKEND_IMAGE:?deploy-controller.sh must export RAMALS_BACKEND_IMAGE}
     environment:
+      # Without this the default profile wins and Spring's console pattern drops the MDC fields,
+      # so interactionId never reaches the log stream. The diagnosis procedure in
+      # docs/architecture/observability-correlation.md then cannot be carried out at all: the
+      # support code the learner was shown matches nothing. Guarded by DeploymentLoggingTests.
+      SPRING_PROFILES_ACTIVE: ${RAMALS_SPRING_PROFILES:-shared}
       RAMALS_DB_URL: jdbc:postgresql://postgres:5432/${RAMALS_DB_NAME:?Set RAMALS_DB_NAME}
       RAMALS_DB_USER: ${RAMALS_DB_RUNTIME_USER:-ramals_core_runtime}
       RAMALS_DB_PASSWORD: ${RAMALS_DB_RUNTIME_PASSWORD:?Set RAMALS_DB_RUNTIME_PASSWORD}
