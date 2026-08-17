@@ -3,12 +3,12 @@ package io.ramals.learningplatform.ai;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.DomainContext;
 import io.ramals.learningplatform.ai.contract.DomainType;
 import java.time.Duration;
 import java.time.Instant;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
@@ -41,44 +41,66 @@ class TutorDegradationTests {
     };
   }
 
+  private static SimpleMeterRegistry registry;
+
   private static TutorService serviceWith(TutorPort port) {
-    return new TutorService(port, assembler());
+    registry = new SimpleMeterRegistry();
+    return new TutorService(port, assembler(), registry);
+  }
+
+  private static double outcomeCount(String outcome, String reason) {
+    return registry.counter("ramals.ai.tutor.outcome", "outcome", outcome, "reason", reason).count();
   }
 
   // -- ramals-ai down does not block deterministic learning ------------------------------------------
 
   @Test
-  @DisplayName("an unreachable AI plane yields an empty proposal, not an exception")
+  @DisplayName("an unreachable AI plane is reported as a named failure, not an exception")
   void anUnreachableAiPlaneDegrades() {
     TutorService service = serviceWith((request, deadline) -> {
       throw new AiUnavailableException("AI_TRANSPORT_FAILURE", "unreachable");
     });
 
-    Optional<AiProposalEnvelope> proposal = service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN");
+    TutorOutcome outcome = service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN");
 
-    // Empty rather than thrown, so a caller has to go out of its way to turn a missing tutor into a
-    // failed learner request.
-    assertThat(proposal).isEmpty();
+    // Named rather than empty: a caller can tell a broken AI plane from a switched-off one, and an
+    // operator can see the difference without reading logs.
+    assertThat(outcome).isInstanceOf(TutorOutcome.Unavailable.class);
+    assertThat(((TutorOutcome.Unavailable) outcome).reason())
+        .isEqualTo(TutorUnavailableReason.TRANSPORT_FAILURE);
+    assertThat(((TutorOutcome.Unavailable) outcome).reason().expected())
+        .as("a transport failure is operational and must not be filed as an ordinary state")
+        .isFalse();
+    assertThat(outcomeCount("unavailable", "AI_TRANSPORT_FAILURE")).isEqualTo(1);
   }
 
   @Test
-  @DisplayName("an open circuit yields an empty proposal")
+  @DisplayName("an open circuit is reported as CIRCUIT_OPEN")
   void anOpenCircuitDegrades() {
     TutorService service = serviceWith((request, deadline) -> {
       throw new AiUnavailableException("AI_CIRCUIT_OPEN", "open");
     });
 
-    assertThat(service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN")).isEmpty();
+    TutorOutcome outcome = service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN");
+
+    assertThat(((TutorOutcome.Unavailable) outcome).reason())
+        .isEqualTo(TutorUnavailableReason.CIRCUIT_OPEN);
+    assertThat(outcomeCount("unavailable", "AI_CIRCUIT_OPEN")).isEqualTo(1);
   }
 
   @Test
-  @DisplayName("a saturated bulkhead yields an empty proposal")
+  @DisplayName("a saturated bulkhead is reported as BUSY, distinct from a broken dependency")
   void aSaturatedBulkheadDegrades() {
     TutorService service = serviceWith((request, deadline) -> {
       throw new AiUnavailableException("AI_BULKHEAD_FULL", "busy");
     });
 
-    assertThat(service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN")).isEmpty();
+    TutorOutcome outcome = service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN");
+
+    // Busy is not broken. Merging them would make load look like an outage on a dashboard.
+    assertThat(((TutorOutcome.Unavailable) outcome).reason())
+        .isEqualTo(TutorUnavailableReason.BUSY);
+    assertThat(outcomeCount("unavailable", "AI_BULKHEAD_FULL")).isEqualTo(1);
   }
 
   @Test
@@ -90,7 +112,12 @@ class TutorDegradationTests {
       return null;
     });
 
-    assertThat(service.explain("ref-1", "NO_SUCH_SKILL", "NEEDS_PRACTICE", "en-IN")).isEmpty();
+    TutorOutcome outcome = service.explain("ref-1", "NO_SUCH_SKILL", "NEEDS_PRACTICE", "en-IN");
+
+    assertThat(((TutorOutcome.Unavailable) outcome).reason())
+        .isEqualTo(TutorUnavailableReason.UNKNOWN_SKILL);
+    // A caller bug, not an AI failure, so it must not appear in the operational counters as one.
+    assertThat(((TutorOutcome.Unavailable) outcome).reason().expected()).isTrue();
     assertThat(calls).hasValue(0);
   }
 
@@ -109,6 +136,62 @@ class TutorDegradationTests {
 
     service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN");
     assertThat(calls).hasValue(1);
+  }
+
+  @Test
+  @DisplayName("every unavailability is distinguishable, and operational ones stay visible")
+  void unavailabilityIsNeverAnonymous() {
+    // The requirement this class exists for: an empty result must never silently stand in for an
+    // operational failure. Each reason is reachable, each is distinct, and the expected/operational
+    // split is what stops a live outage being filed alongside a configuration choice.
+    for (TutorUnavailableReason reason : TutorUnavailableReason.values()) {
+      assertThat(reason.code()).isNotBlank();
+    }
+
+    assertThat(java.util.Arrays.stream(TutorUnavailableReason.values())
+        .filter(TutorUnavailableReason::expected)
+        .map(TutorUnavailableReason::name))
+        .as("only a configuration state and a caller bug are ordinary; the rest need attention")
+        .containsExactlyInAnyOrder("NOT_CONFIGURED", "UNKNOWN_SKILL");
+
+    assertThat(java.util.Arrays.stream(TutorUnavailableReason.values())
+        .filter(reason -> !reason.expected())
+        .map(TutorUnavailableReason::name))
+        .containsExactlyInAnyOrder("CIRCUIT_OPEN", "BUSY", "TRANSPORT_FAILURE", "DEADLINE_EXCEEDED");
+  }
+
+  @Test
+  @DisplayName("an unrecognised failure code is treated as operational, not as expected")
+  void anUnknownCodeStaysVisible() {
+    // The safe default is the one that stays on the dashboard. A code nobody mapped must not
+    // quietly become an ordinary state.
+    assertThat(TutorUnavailableReason.fromCode("SOMETHING_NOBODY_MAPPED"))
+        .isEqualTo(TutorUnavailableReason.TRANSPORT_FAILURE);
+    assertThat(TutorUnavailableReason.fromCode("SOMETHING_NOBODY_MAPPED").expected()).isFalse();
+  }
+
+  @Test
+  @DisplayName("an unconfigured AI plane is an ordinary state, not an incident")
+  void anUnconfiguredPlaneIsExpected() {
+    TutorService service = serviceWith(new AiClientConfiguration.UnconfiguredTutorPort());
+
+    TutorOutcome outcome = service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN");
+
+    assertThat(((TutorOutcome.Unavailable) outcome).reason())
+        .isEqualTo(TutorUnavailableReason.NOT_CONFIGURED);
+    assertThat(((TutorOutcome.Unavailable) outcome).reason().expected()).isTrue();
+    assertThat(outcomeCount("unavailable", "AI_NOT_CONFIGURED")).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("a successful call is counted separately from every failure")
+  void successIsCountedSeparately() {
+    TutorService service = serviceWith((request, deadline) -> proposal());
+
+    TutorOutcome outcome = service.explain("ref-1", SKILL, "NEEDS_PRACTICE", "en-IN");
+
+    assertThat(outcome.hasProposal()).isTrue();
+    assertThat(outcomeCount("proposed", "none")).isEqualTo(1);
   }
 
   // -- no open DB transaction crosses the AI call ----------------------------------------------------
@@ -193,6 +276,18 @@ class TutorDegradationTests {
         .isInstanceOf(AiUnavailableException.class)
         .extracting(failure -> ((AiUnavailableException) failure).code())
         .isEqualTo("AI_DEADLINE_EXCEEDED");
+  }
+
+  private static io.ramals.learningplatform.ai.contract.AiProposalEnvelope proposal() {
+    return new io.ramals.learningplatform.ai.contract.AiProposalEnvelope(
+        AiRequestEnvelope.CONTRACT_VERSION,
+        "01920000-0000-7000-8000-0000000000c1",
+        io.ramals.learningplatform.ai.contract.AgentType.TUTOR,
+        "TUTOR_AGENT_V1",
+        "TUTOR_PROMPT_V1",
+        "tutor-default",
+        io.ramals.learningplatform.ai.contract.TrustLevel.NON_AUTHORITATIVE,
+        null, null, java.util.Map.of("responseType", "EXPLAIN"), null, null);
   }
 
   private static AiRequestEnvelope request() {

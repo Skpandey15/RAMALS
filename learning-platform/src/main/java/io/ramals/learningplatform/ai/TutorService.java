@@ -1,6 +1,6 @@
 package io.ramals.learningplatform.ai;
 
-import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.DomainContext;
@@ -9,6 +9,7 @@ import io.ramals.learningplatform.ai.contract.LearnerRef;
 import io.ramals.learningplatform.ai.contract.LearningContext;
 import io.ramals.learningplatform.observability.CorrelationContext;
 import java.util.Optional;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -17,16 +18,16 @@ import org.springframework.stereotype.Service;
  * Assembles a tutor request and hands it to the AI plane.
  *
  * <p>Notice what this class does not have: {@code @Transactional}. Everything the request needs is
- * read first, in its own short transaction owned by the repositories; by the time the AI call
- * happens, no connection is held. The ordering is the design — read, close, then call — and
+ * read first, in short transactions owned by the repositories; by the time the AI call happens, no
+ * connection is held. The ordering is the design — read, close, then call — and
  * {@code RamalsAiTutorClient} asserts at runtime that it was respected, because a future
  * {@code @Transactional} added here would otherwise be invisible until production ran out of
  * connections.
  *
- * <p>Tutoring degrades independently. Every failure path returns empty rather than throwing, so a
- * caller that cannot get a tutor response still serves the learner their assessments, mastery map
- * and recommendations. That is the M1-T08 acceptance criterion, and expressing it as an
- * {@link Optional} rather than an exception is what makes ignoring it the natural thing to do.
+ * <p>Tutoring degrades independently: a learner who loses their tutor keeps their assessments,
+ * mastery map and recommendations. But degradation is <em>named</em>. Returning an empty value would
+ * make "tutoring is switched off here" and "the AI plane is broken right now" the same result, and
+ * an outage that looks like a configuration choice is an outage nobody investigates.
  */
 @Service
 public class TutorService {
@@ -36,41 +37,41 @@ public class TutorService {
   /** Doc 01 INTERACTIVE_AI hard deadline. The complete-response budget, since V1 does not stream. */
   static final long INTERACTIVE_AI_DEADLINE_MS = 12_000;
 
+  private static final String OUTCOME_METRIC = "ramals.ai.tutor.outcome";
+
   private final TutorPort tutorPort;
   private final DomainContextAssembler domainContext;
+  private final MeterRegistry meterRegistry;
 
-  public TutorService(TutorPort tutorPort, DomainContextAssembler domainContext) {
+  public TutorService(
+      TutorPort tutorPort, DomainContextAssembler domainContext, MeterRegistry meterRegistry) {
     this.tutorPort = tutorPort;
     this.domainContext = domainContext;
+    this.meterRegistry = meterRegistry;
   }
 
   /**
    * Requests an explanation for a skill.
    *
-   * @return the proposal, or empty when the AI plane is unavailable. Never throws for an AI-side
-   *     failure: a learner losing their tutor must not lose their session.
+   * @return a proposal, or an {@link TutorOutcome.Unavailable} naming why there is none. Never
+   *     throws for an AI-side failure: a learner losing their tutor must not lose their session.
    */
-  public Optional<AiProposalEnvelope> explain(
+  public TutorOutcome explain(
       String learnerRef, String skillCode, String masteryStatus, String locale) {
 
     // Read phase. Each repository call manages its own transaction and releases the connection
     // before returning, so nothing is held open across the network call below.
     Optional<DomainContext> domain = domainContext.forSkill(skillCode);
     if (domain.isEmpty()) {
-      LOGGER.atWarn()
-          .addKeyValue("operation", "ai.tutor.request")
-          .addKeyValue("errorCode", "UNKNOWN_SKILL")
-          .addKeyValue("skillCode", skillCode)
-          .log("refused a tutor request for a skill the platform does not define");
-      return Optional.empty();
+      return unavailable(TutorUnavailableReason.UNKNOWN_SKILL, skillCode);
     }
 
     AiRequestEnvelope request = new AiRequestEnvelope(
         AiRequestEnvelope.CONTRACT_VERSION,
         CorrelationContext.currentInteractionId(),
-        java.util.UUID.randomUUID().toString(),
-        // An opaque reference, not a learner identifier the AI plane could correlate across
-        // requests. The AI plane is told which skill to explain, not who is asking.
+        UUID.randomUUID().toString(),
+        // An opaque reference, not an identifier the AI plane could correlate across requests. The
+        // AI plane is told which skill to explain, not who is asking.
         new LearnerRef(learnerRef, locale),
         new LearningContext(skillCode, null, null, masteryStatus, null),
         domain.get(),
@@ -80,15 +81,37 @@ public class TutorService {
         "EXPLAIN");
 
     try {
-      return Optional.of(tutorPort.requestTutorResponse(request, INTERACTIVE_AI_DEADLINE_MS));
+      TutorOutcome outcome =
+          new TutorOutcome.Proposed(tutorPort.requestTutorResponse(request, INTERACTIVE_AI_DEADLINE_MS));
+      meterRegistry.counter(OUTCOME_METRIC, "outcome", "proposed", "reason", "none").increment();
+      return outcome;
     } catch (AiUnavailableException unavailable) {
-      // Logged at INFO, not ERROR. An unavailable tutor is a designed-for state, and paging someone
-      // every time a circuit opens would train them to ignore the alert that matters.
-      LOGGER.atInfo()
-          .addKeyValue("operation", "ai.tutor.request")
-          .addKeyValue("errorCode", unavailable.code())
-          .log("tutoring unavailable; deterministic learning continues");
-      return Optional.empty();
+      return unavailable(TutorUnavailableReason.fromCode(unavailable.code()), skillCode);
     }
+  }
+
+  /**
+   * Records an unavailability and returns it as an outcome.
+   *
+   * <p>Every path through here increments a counter tagged with the reason, so an operator can see
+   * the difference between a quiet tutor and a broken one on a dashboard rather than by reading
+   * logs. The log level follows {@link TutorUnavailableReason#expected()}: a configuration state
+   * logged at WARN would train someone to ignore the level that matters.
+   */
+  private TutorOutcome unavailable(TutorUnavailableReason reason, String skillCode) {
+    meterRegistry
+        .counter(OUTCOME_METRIC, "outcome", "unavailable", "reason", reason.code())
+        .increment();
+
+    String supportCode = CorrelationContext.currentInteractionId();
+    var event = reason.expected() ? LOGGER.atInfo() : LOGGER.atWarn();
+    event
+        .addKeyValue("operation", "ai.tutor.request")
+        .addKeyValue("errorCode", reason.code())
+        .addKeyValue("expected", reason.expected())
+        .addKeyValue("skillCode", skillCode)
+        .log("tutoring unavailable; deterministic learning continues");
+
+    return new TutorOutcome.Unavailable(reason, supportCode);
   }
 }
