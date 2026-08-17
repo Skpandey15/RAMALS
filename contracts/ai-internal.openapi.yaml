@@ -291,10 +291,12 @@ components:
       additionalProperties: false
       required: [skillCode]
       properties:
+        # 96 matches core.skill.stable_code. The boundary was narrower than the authoritative
+        # schema, so a skill code of 65-96 characters was storable, legal, and rejected here.
         skillCode:
           type: string
           minLength: 1
-          maxLength: 64
+          maxLength: 96
         masteryScore:
           $ref: '#/components/schemas/DecimalString'
         evidenceConfidence:
@@ -303,12 +305,88 @@ components:
           type: string
           maxLength: 32
           examples: ['NEEDS_PRACTICE']
+        # Prerequisites are skill stable codes, so they carry the same width as skillCode. Widening
+        # only skillCode would have left the identical defect one field over.
         prerequisites:
           type: array
           maxItems: 32
           items:
             type: string
-            maxLength: 64
+            maxLength: 96
+
+    DomainContext:
+      type: object
+      description: >
+        Which learning domain this request is about, and which published curriculum version defines
+        it. Present so an agent never has to assume the domain: the platform is domain-neutral by
+        construction, and the first domain must not become the permanent one by accident.
+
+        Spring resolves every field from authoritative state. An agent must treat these as facts
+        about the request, not as hints it may reinterpret.
+      additionalProperties: false
+      required: [domainCode, domainType]
+      properties:
+        # 64 matches core.learning_domain.code. Deliberately not 96: each identifier carries the
+        # width of its own column, rather than the widest column in the schema.
+        domainCode:
+          type: string
+          minLength: 1
+          maxLength: 64
+          examples: ['KAFKA']
+        domainType:
+          $ref: '#/components/schemas/DomainType'
+        # 64 matches core.curriculum_version.version_code.
+        curriculumVersion:
+          type: string
+          maxLength: 64
+          examples: ['v1']
+
+    DomainType:
+      type: string
+      description: >
+        Generic classification of a learning domain. Mirrors core.learning_domain.domain_type;
+        adding a value is a curriculum governance decision, not an application concern.
+      enum: [TECHNOLOGY, ACADEMIC, PROFESSIONAL]
+
+    LearningGoalContext:
+      type: object
+      description: >
+        What the learner is working towards, when that is known and relevant to the request.
+
+        Optional throughout, because the authoritative learner model carries a single goal today and
+        richer goal structures are an MVP-5 concern. The shape exists now so that agents are written
+        against a general goal rather than against "the learner's one domain", which is the
+        assumption that would be expensive to unpick later.
+      additionalProperties: false
+      required: [goalType, goalCode]
+      properties:
+        goalType:
+          $ref: '#/components/schemas/GoalType'
+        # 96: a goal code may reference a skill-scale identifier.
+        goalCode:
+          type: string
+          minLength: 1
+          maxLength: 96
+          examples: ['KAFKA']
+        targetDate:
+          type: string
+          format: date
+        goalVersion:
+          type: string
+          maxLength: 64
+
+    GoalType:
+      type: string
+      description: >
+        Kind of goal the learner is pursuing. Only LEARNING_DOMAIN is produced today; the remaining
+        values are declared so that adding one later is not a breaking contract change. An agent
+        must not infer that a value is supported merely because it can be named here.
+      enum:
+        - LEARNING_DOMAIN
+        - ACADEMIC_MASTERY
+        - DEGREE_COMPETENCY
+        - CAREER_ROLE
+        - CAREER_TRANSITION
 
     DecimalString:
       type: string
@@ -363,6 +441,12 @@ components:
           description: One transport attempt. New per retry.
         learner: { $ref: '#/components/schemas/LearnerRef' }
         learningContext: { $ref: '#/components/schemas/LearningContext' }
+        # Optional rather than required: making a new property required would reject payloads a peer
+        # already sends, which the compatibility gate correctly refuses. Spring populates
+        # domainContext on every request it builds; the optionality is a contract-evolution
+        # concession, not permission for a caller to omit it.
+        domainContext: { $ref: '#/components/schemas/DomainContext' }
+        learningGoalContext: { $ref: '#/components/schemas/LearningGoalContext' }
         constraints: { $ref: '#/components/schemas/Constraints' }
         requestedCapability:
           type: string

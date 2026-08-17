@@ -82,7 +82,9 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(15);
+    // 16 with V016 (learning_domain.domain_type). Asserting the count rather than merely that the
+    // upgrade succeeds is what makes an accidentally unapplied migration visible.
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(16);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 

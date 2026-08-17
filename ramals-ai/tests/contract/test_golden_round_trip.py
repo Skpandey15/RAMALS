@@ -28,6 +28,10 @@ GOLDEN = Path(__file__).parents[3] / "contracts" / "golden"
 ROUND_TRIP_CASES: list[tuple[str, type[BaseModel]]] = [
     ("request-tutor-minimal.json", AIRequestEnvelope),
     ("request-tutor-full.json", AIRequestEnvelope),
+    # BTECH_DBMS is synthetic: no seed data, no curriculum, no content. It exists so the boundary is
+    # proven domain-neutral before a second domain is built, and its identifiers sit in the 65-96
+    # band that the contract used to reject while core.skill.stable_code accepted it.
+    ("request-tutor-cross-domain.json", AIRequestEnvelope),
     ("proposal-tutor.json", AIProposalEnvelope),
     ("proposal-assessment-evaluate.json", AIProposalEnvelope),
     ("capabilities.json", Capabilities),

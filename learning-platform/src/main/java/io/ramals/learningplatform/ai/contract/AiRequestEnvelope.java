@@ -10,6 +10,8 @@ public record AiRequestEnvelope(
     String requestId,
     LearnerRef learner,
     LearningContext learningContext,
+    DomainContext domainContext,
+    LearningGoalContext learningGoalContext,
     Constraints constraints,
     String requestedCapability) {
 
