@@ -9,6 +9,9 @@
 #   bash scripts/ci/verify-locally.sh --docker     # same, inside the CI Python image
 #   bash scripts/ci/verify-locally.sh --backend    # also run the Java build (needs PostgreSQL env)
 #
+# The frontend gate (eslint, vitest, tsc+vite build) runs automatically when web-ui/node_modules
+# exists, mirroring .github/workflows/reusable-frontend-ci.yml.
+#
 # Keep this in step with .github/workflows/reusable-python-ci.yml and reusable-contract-ci.yml. If
 # they diverge, this script is worse than useless: it reports success for a pipeline that no longer
 # exists.
@@ -115,6 +118,22 @@ step "  workflow trust boundary" "${PY}" scripts/ci/verify-workflow-security.py
 if [ "${run_backend}" = true ]; then
   echo "Backend gate"
   step "  gradle build" ./gradlew :learning-platform:build -q --console=plain
+fi
+
+# The frontend gate runs whenever web-ui has a node_modules to run it with. It is not behind a flag
+# because leaving it out is exactly how a lint error reached CI: the tests passed, the build passed,
+# and `npm run lint` -- which CI runs and this script did not -- did not.
+if [ -d web-ui/node_modules ]; then
+  echo "Frontend gate"
+  pushd web-ui >/dev/null || exit 1
+  step "  eslint" npm run lint
+  step "  vitest" npm run test -- --run
+  step "  tsc + vite build" npm run build
+  popd >/dev/null || exit 1
+elif [ -d web-ui ]; then
+  echo "Frontend gate"
+  printf '%-34s skipped (run npm ci in web-ui)
+' "  eslint/vitest/build"
 fi
 
 echo
