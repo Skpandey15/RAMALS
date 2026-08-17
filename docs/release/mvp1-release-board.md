@@ -46,10 +46,18 @@ Nothing in T00–T17 will close R1. It needs an environment decision, not a comm
 
 ## Decisions written just in time
 
-ADRs are authored immediately before the task they gate, rather than as a batch. A decision written
-far ahead of its implementation is written without the information the implementation produces —
-M1-ADR-004 is the example: the argument that settled it (validation needs a complete response) only
-became concrete once M1-T07 existed.
+**Operating rule: no implementation task may start while one of its required architectural decisions
+is still OPEN.** Each ADR is an architecture gate immediately before the task that depends on it —
+not a batch written ahead of time, and not something a task discovers it needed halfway through.
+
+The reasoning is that both failure modes are real. A decision written far ahead of its
+implementation is made without the information the implementation produces: M1-ADR-004 is the
+example, where the argument that settled it — validation needs a complete response — only became
+concrete once M1-T07 existed. A decision *not* written before the task is made anyway, implicitly,
+by whoever writes the first line of code that assumes an answer.
+
+`Mvp1ReleaseBoardTests` enforces the rule: a task cannot be marked started or done while the board
+lists a decision it requires as outstanding.
 
 Outstanding: **M1-ADR-007** (before T12), **M1-ADR-005** (before T13), **M1-ADR-009** (before T15).
 

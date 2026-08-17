@@ -6,6 +6,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -123,6 +125,46 @@ class Mvp1ReleaseBoardTests {
   private static boolean adrExists(Path directory, String adr) throws IOException {
     try (var entries = Files.list(directory)) {
       return entries.anyMatch(path -> path.getFileName().toString().startsWith(adr));
+    }
+  }
+
+  @Test
+  @DisplayName("no task is started or done while a decision it requires is still open")
+  void noTaskRunsAheadOfItsDecision() throws IOException {
+    // The operating rule, enforced rather than remembered. A decision not written before its task is
+    // still made -- implicitly, by whoever writes the first line of code that assumes an answer --
+    // and that is the version nobody reviews.
+    String board = board();
+    String outstanding = outstandingSection(board);
+    Path adrDirectory = Path.of("..", "docs", "adr");
+
+    for (String row : board.lines().toList()) {
+      if (!row.startsWith("| M1-T")) {
+        continue;
+      }
+      String[] cells = row.split("\\|");
+      if (cells.length < 4) {
+        continue;
+      }
+      String task = cells[1].trim();
+      String status = cells[2].trim();
+      String gating = cells[3].trim();
+
+      boolean notStarted = status.contains("⬜") && !status.contains("next");
+      if (notStarted) {
+        continue;
+      }
+
+      Matcher required = Pattern.compile("M1-ADR-\\d{3}").matcher(gating);
+      while (required.find()) {
+        String adr = required.group();
+        assertThat(adrExists(adrDirectory, adr))
+            .as("%s is started or done but requires %s, which is not authored", task, adr)
+            .isTrue();
+        assertThat(outstanding.contains(adr))
+            .as("%s is started or done but %s is still listed as outstanding", task, adr)
+            .isFalse();
+      }
     }
   }
 }
