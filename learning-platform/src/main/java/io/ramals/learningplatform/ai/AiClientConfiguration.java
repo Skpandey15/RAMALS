@@ -78,6 +78,25 @@ public class AiClientConfiguration {
     return new RamalsAiTutorClient(restClient, guard);
   }
 
+  @Bean
+  public AdaptationPort adaptationPort(
+      @Value("${ramals.ai.base-url:}") String baseUrl, AiCallGuard guard) {
+    if (baseUrl == null || baseUrl.isBlank()) {
+      return (request, deadlineMillis) -> {
+        throw new AiUnavailableException("AI_NOT_CONFIGURED", "Adaptation is not enabled in this environment.");
+      };
+    }
+
+    SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+    requestFactory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
+    requestFactory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
+    RestClient restClient = RestClient.builder()
+        .baseUrl(baseUrl)
+        .requestFactory(requestFactory)
+        .build();
+    return new RamalsAiAdaptationClient(restClient, guard);
+  }
+
   /**
    * The port used when no AI plane is configured.
    *

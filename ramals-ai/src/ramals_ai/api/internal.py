@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from ramals_ai.adaptation.agent import AdaptationAgent
 from ramals_ai.assessment.agent import AssessmentAgent
 from ramals_ai.contracts.generated import AIProposalEnvelope, AIRequestEnvelope
 from ramals_ai.diagnostic.agent import DiagnosticAgent
@@ -92,8 +93,7 @@ def _unauthorized(request: Request, reason: str) -> HTTPException:
 def build_internal_router() -> APIRouter:
     """Router for the authenticated, non-authoritative agent endpoints.
 
-    Adaptation is intentionally absent. Its contract remains declared, but activating it belongs to
-    M1-T11 after this boundary has been proven end to end.
+    Adaptation is activated by M1-T11 and follows the same authenticated proposal boundary.
     """
     router = APIRouter(
         prefix="/internal/v1",
@@ -120,11 +120,15 @@ def build_internal_router() -> APIRouter:
         request: Request, envelope: AIRequestEnvelope
     ) -> AIProposalEnvelope | JSONResponse:
         agent: AssessmentAgent = request.app.state.agents["assessment"]
-        return _run(
-            agent.propose,
-            envelope,
-            requested_difficulty=_requested_difficulty(envelope),
-        )
+        try:
+            requested_difficulty = _requested_difficulty(envelope)
+        except InvalidPolicyInputError as failure:
+            return _problem(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "INVALID_POLICY_INPUT",
+                str(failure),
+            )
+        return _run(agent.propose, envelope, requested_difficulty=requested_difficulty)
 
     @router.post("/assessment/evaluate", response_model=AIProposalEnvelope)
     def assessment_evaluate(
@@ -132,6 +136,13 @@ def build_internal_router() -> APIRouter:
     ) -> AIProposalEnvelope | JSONResponse:
         agent: AssessmentAgent = request.app.state.agents["assessment"]
         return _run(agent.evaluate, envelope)
+
+    @router.post("/adaptation/propose", response_model=AIProposalEnvelope)
+    def adaptation_propose(
+        request: Request, envelope: AIRequestEnvelope
+    ) -> AIProposalEnvelope | JSONResponse:
+        agent: AdaptationAgent = request.app.state.agents["adaptation"]
+        return _run(agent.propose, envelope)
 
     return router
 
@@ -164,14 +175,26 @@ def _run(
             "UNPROCESSABLE_PROPOSAL",
             "No valid proposal was produced within the bounded repair budget.",
         )
+    except InvalidPolicyInputError as failure:
+        return _problem(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "INVALID_POLICY_INPUT",
+            str(failure),
+        )
 
 
 def _requested_difficulty(envelope: AIRequestEnvelope) -> str:
     """Read the deterministic difficulty selected by Spring when it is carried by the capability."""
     requested = envelope.requestedCapability
-    return (
-        requested if requested in {"FOUNDATIONAL", "INTERMEDIATE", "ADVANCED"} else "FOUNDATIONAL"
-    )
+    if requested not in {"FOUNDATIONAL", "INTERMEDIATE", "ADVANCED"}:
+        raise InvalidPolicyInputError(
+            "Spring must provide requestedCapability as FOUNDATIONAL, INTERMEDIATE, or ADVANCED."
+        )
+    return requested
+
+
+class InvalidPolicyInputError(ValueError):
+    """A required deterministic policy input was absent or outside the contract policy."""
 
 
 def _problem(code_status: int, code: str, detail: str) -> JSONResponse:

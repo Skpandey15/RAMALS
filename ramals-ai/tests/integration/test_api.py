@@ -74,6 +74,7 @@ def test_capabilities_advertises_activated_agents(client: TestClient) -> None:
         "DIAGNOSTIC",
         "TUTOR",
         "ASSESSMENT",
+        "ADAPTATION",
     ]
 
 
@@ -90,5 +91,10 @@ def test_capabilities_never_leaks_the_provider_credential() -> None:
         assert "super-secret" not in started.get("/internal/v1/capabilities").text
 
 
-def test_adaptation_endpoint_is_not_served_in_s0_06(client: TestClient) -> None:
-    assert client.post("/internal/v1/adaptation/propose", json={}).status_code == 404
+def test_capabilities_advertises_adaptation_after_activation(client: TestClient) -> None:
+    assert client.get("/internal/v1/capabilities").json()["agents"] == [
+        "DIAGNOSTIC",
+        "TUTOR",
+        "ASSESSMENT",
+        "ADAPTATION",
+    ]
