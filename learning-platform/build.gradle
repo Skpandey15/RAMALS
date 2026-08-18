@@ -42,25 +42,84 @@ dependencies {
 
 tasks.named('test') {
   useJUnitPlatform()
-  finalizedBy tasks.named('jacocoTestReport')
+  // Keep the default task fast: integration, architecture, and governance suites run through
+  // their own tasks below and are wired into check.
+  filter {
+    excludeTestsMatching '**/*IntegrationTests'
+    excludeTestsMatching '**/*ContractTests'
+    excludeTestsMatching '**/*MigrationContractTests'
+    excludeTestsMatching '**/*AdrRegisterTests'
+    excludeTestsMatching '**/*DeploymentLoggingTests'
+    excludeTestsMatching '**/*DomainNeutralityTests'
+    excludeTestsMatching '**/*EngineVersionFreezeTests'
+    excludeTestsMatching '**/*EvaluationAuthorityBoundaryTests'
+    excludeTestsMatching '**/*Mvp0ReleaseRecordConformanceTests'
+    excludeTestsMatching '**/*Mvp1ReleaseBoardTests'
+    excludeTestsMatching '**/*MvpZeroValidationTests'
+    excludeTestsMatching '**/*NegativeAuthorizationTests'
+    excludeTestsMatching '**/*RealmHardeningTests'
+    excludeTestsMatching '**/*ReleasePipelineTests'
+    excludeTestsMatching '**/*SecurityDenialAuditTests'
+    excludeTestsMatching '**/*SecurityHeadersApiTests'
+    excludeTestsMatching '**/*SecurityContractTests'
+    excludeTestsMatching '**/*SubjectRateLimitApiTests'
+  }
+}
 
-  // PostgreSQL persistence suites are enabled by environment variables. Include their test-mode
-  // inputs in Gradle's up-to-date checks; otherwise a plain unit-test run can be cached and reused
-  // after PostgreSQL integration tests are enabled, producing an incomplete JaCoCo report.
-  inputs.property('postgresTestUrl', providers.environmentVariable('RAMALS_TEST_POSTGRES_URL').orElse(''))
-  inputs.property('postgresTestAdminUser', providers.environmentVariable('RAMALS_TEST_POSTGRES_ADMIN_USER').orElse(''))
-  inputs.property('postgresTestEnabled', providers.environmentVariable('RAMALS_TEST_POSTGRES_ALLOW_RESET').orElse(''))
-  inputs.property('postgresTestAdminPasswordConfigured',
-      providers.environmentVariable('RAMALS_TEST_POSTGRES_ADMIN_PASSWORD').map { it.isBlank() ? 'false' : 'true' }.orElse('false'))
+def registerCategoryTest = { String name, String description, List<String> includes ->
+  tasks.register(name, Test) {
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    description = description
+    dependsOn tasks.named('testClasses')
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    filter {
+      includes.each { includeTestsMatching(it) }
+    }
+  }
+}
 
-  // Several suites assert on files outside this module: the Keycloak realm, the release record and
-  // ADRs, the AI contract and its golden fixtures, and .env.example. Gradle cannot see those, so
-  // without declaring them it treats the task as up to date when only one of them changes -- and
-  // the guard silently does not run.
-  //
-  // Found by perturbing the realm: dropping the audience mapper, enabling direct grants and
-  // committing a client secret all left the build green, because the tests never re-ran. This
-  // affected the pre-existing learner_id and MFA assertions too.
+def integrationTest = registerCategoryTest(
+    'integrationTest',
+    'Runs PostgreSQL- and runtime-backed integration tests.',
+    ['*IntegrationTests'])
+
+// Architecture tests protect security, authority, and platform-boundary decisions. They are
+// intentionally named explicitly so a new governance test cannot silently land in this category.
+def architectureTest = registerCategoryTest(
+    'architectureTest',
+    'Runs architecture and security-boundary tests.',
+    [
+      '*DomainNeutralityTests',
+      '*EvaluationAuthorityBoundaryTests',
+      '*NegativeAuthorizationTests',
+      '*RealmHardeningTests',
+      '*SecurityContractTests',
+      '*SecurityDenialAuditTests',
+      '*SecurityHeadersApiTests',
+      '*SubjectRateLimitApiTests'
+    ])
+
+// Governance tests validate contracts, migrations, release records, and repository policy. Keep
+// the external-file inputs on this task only: changing a contract or ADR should not invalidate a
+// unit-test task that cannot observe those files.
+def governanceTest = registerCategoryTest(
+    'governanceTest',
+    'Runs contract, migration, release, and governance tests.',
+    [
+      '*ContractTests',
+      '*MigrationContractTests',
+      '*AdrRegisterTests',
+      '*DeploymentLoggingTests',
+      '*EngineVersionFreezeTests',
+      '*Mvp0ReleaseRecordConformanceTests',
+      '*Mvp1ReleaseBoardTests',
+      '*MvpZeroValidationTests',
+      '*ReleasePipelineTests'
+    ])
+
+governanceTest.configure {
   inputs.file(rootProject.file('.env.example'))
       .withPropertyName('envExample')
       .withPathSensitivity(PathSensitivity.RELATIVE)
@@ -82,6 +141,26 @@ tasks.named('test') {
   inputs.file(rootProject.file('docs/release/mvp1-release-board.md'))
       .withPropertyName('releaseBoard')
       .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+integrationTest.configure {
+  // PostgreSQL persistence suites are enabled by environment variables. Keep these inputs on the
+  // integration task so changing test mode cannot cause Gradle to reuse a non-integration result.
+  inputs.property('postgresTestUrl', providers.environmentVariable('RAMALS_TEST_POSTGRES_URL').orElse(''))
+  inputs.property('postgresTestAdminUser', providers.environmentVariable('RAMALS_TEST_POSTGRES_ADMIN_USER').orElse(''))
+  inputs.property('postgresTestEnabled', providers.environmentVariable('RAMALS_TEST_POSTGRES_ALLOW_RESET').orElse(''))
+  inputs.property('postgresTestAdminPasswordConfigured',
+      providers.environmentVariable('RAMALS_TEST_POSTGRES_ADMIN_PASSWORD')
+          .map { it.isBlank() ? 'false' : 'true' }
+          .orElse('false'))
+}
+
+tasks.named('check') {
+  dependsOn integrationTest, architectureTest, governanceTest
+}
+
+tasks.named('test') {
+  finalizedBy tasks.named('jacocoTestReport')
 }
 
 jacoco {
