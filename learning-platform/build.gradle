@@ -146,6 +146,14 @@ governanceTest.configure {
       .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
+// These suites intentionally reset the same PostgreSQL database. With org.gradle.parallel=true,
+// an unconstrained check can let governance fixtures drop schemas while integration tests are
+// still using them. Keep the suites independent in execution, while retaining parallelism for
+// the non-PostgreSQL test categories.
+governanceTest.configure {
+  mustRunAfter(integrationTest)
+}
+
 integrationTest.configure {
   // PostgreSQL persistence suites are enabled by environment variables. Keep these inputs on the
   // integration task so changing test mode cannot cause Gradle to reuse a non-integration result.

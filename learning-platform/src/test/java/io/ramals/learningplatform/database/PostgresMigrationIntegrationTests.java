@@ -82,9 +82,9 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 17 with V017 (assessment content trust state). Asserting the count rather than merely that
+    // 18 with V018 (assessment candidate provenance). Asserting the count rather than merely that
     // the upgrade succeeds is what makes an accidentally unapplied migration visible.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(17);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(18);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 
