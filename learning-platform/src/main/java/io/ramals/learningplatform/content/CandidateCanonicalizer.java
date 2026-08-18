@@ -4,9 +4,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import tools.jackson.databind.json.JsonMapper;
 
 /** Canonicalizes only the content a future reviewer will approve. */
@@ -33,7 +36,46 @@ public final class CandidateCanonicalizer {
 
   /** Canonicalizes an already allow-listed approval payload. */
   public static byte[] canonicalBytes(Map<String, Object> approvalPayload) {
-    return MAPPER.writeValueAsString(new TreeMap<>(approvalPayload)).getBytes(StandardCharsets.UTF_8);
+    return MAPPER.writeValueAsString(normalize(approvalPayload)).getBytes(StandardCharsets.UTF_8);
+  }
+
+  /** Recursively sorts object keys while preserving array order and normalizing JSON numbers. */
+  private static Object normalize(Object value) {
+    if (value instanceof Map<?, ?> map) {
+      Map<String, Object> normalized = new TreeMap<>();
+      map.forEach((key, nested) -> {
+        if (!(key instanceof String stringKey)) {
+          throw new IllegalArgumentException("Canonical JSON object keys must be strings");
+        }
+        normalized.put(stringKey, normalize(nested));
+      });
+      return normalized;
+    }
+    if (value instanceof Collection<?> collection) {
+      List<Object> normalized = new ArrayList<>(collection.size());
+      collection.forEach(item -> normalized.add(normalize(item)));
+      return normalized;
+    }
+    if (value instanceof Number number) {
+      return normalizeNumber(number);
+    }
+    return value;
+  }
+
+  private static Number normalizeNumber(Number number) {
+    if (number instanceof BigInteger || number instanceof Byte || number instanceof Short
+        || number instanceof Integer || number instanceof Long) {
+      return new BigInteger(number.toString());
+    }
+    if (number instanceof Float || number instanceof Double) {
+      if (!Double.isFinite(number.doubleValue())) {
+        throw new IllegalArgumentException("Canonical JSON does not support non-finite numbers");
+      }
+    }
+    BigDecimal decimal = number instanceof BigDecimal
+        ? (BigDecimal) number : BigDecimal.valueOf(number.doubleValue());
+    decimal = decimal.stripTrailingZeros();
+    return decimal.scale() < 0 ? decimal.setScale(0) : decimal;
   }
 
   public static String sha256(Map<String, Object> approvalPayload) {

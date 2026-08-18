@@ -7,30 +7,50 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import javax.sql.DataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
 public class AdminActivityRepository {
 
   private final JdbcTemplate jdbcTemplate;
+  private final PlatformTransactionManager transactionManager;
 
-  public AdminActivityRepository(JdbcTemplate jdbcTemplate) {
+  @Autowired
+  public AdminActivityRepository(JdbcTemplate jdbcTemplate, PlatformTransactionManager transactionManager) {
     this.jdbcTemplate = jdbcTemplate;
+    this.transactionManager = transactionManager;
   }
 
-  /** Appends an audit record using the current JDBC transaction when one is present. */
+  /** Compatibility constructor for manually wired persistence tests and small integrations. */
+  public AdminActivityRepository(JdbcTemplate jdbcTemplate) {
+    this(jdbcTemplate, transactionManager(jdbcTemplate));
+  }
+
+  /**
+   * Appends an audit record in an independent transaction. Legacy callers rely on rejection and
+   * denial audit surviving a rollback in the operation that produced the audit event.
+   */
   public void append(
       String actorSubject, String action, String targetType, UUID targetId, String outcome,
       String detail, String interactionId, String traceId) {
-    appendRow(actorSubject, action, targetType, targetId, outcome, detail, interactionId, traceId);
+    TransactionTemplate independent = new TransactionTemplate(transactionManager);
+    independent.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    independent.executeWithoutResult(status ->
+        appendRow(actorSubject, action, targetType, targetId, outcome, detail, interactionId, traceId));
   }
 
   /**
    * Appends using the caller's current transaction. This named path is used when audit and the
-   * domain write must commit or roll back together; JdbcTemplate participates in Spring's bound
-   * transaction without changing the legacy rejection-audit semantics above.
+   * domain write must commit or roll back together. JdbcTemplate participates in the caller's
+   * bound transaction and does not open an independent transaction here.
    */
   public void appendWithinTransaction(
       String actorSubject, String action, String targetType, UUID targetId, String outcome,
@@ -48,6 +68,14 @@ public class AdminActivityRepository {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, UuidV7.generate(), actorSubject, action, targetType, targetId, outcome, detail,
         interactionId, traceId == null || traceId.isBlank() ? null : traceId);
+  }
+
+  private static PlatformTransactionManager transactionManager(JdbcTemplate jdbcTemplate) {
+    DataSource dataSource = jdbcTemplate.getDataSource();
+    if (dataSource == null) {
+      throw new IllegalArgumentException("JdbcTemplate must have a DataSource");
+    }
+    return new DataSourceTransactionManager(dataSource);
   }
 
   public List<AdminActivity> findByInteractionId(String interactionId) {
