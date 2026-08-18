@@ -48,7 +48,9 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Build and test backend
-        run: ./gradlew --no-daemon clean check
+        # Database-backed suites reset shared schemas and roles. Keep Gradle task workers
+        # serialized as well as the individual test forks.
+        run: ./gradlew --no-daemon --max-workers=1 clean check
       # JaCoCo currently reports the fast unit-test task; integration coverage is kept separate
       # because it requires the PostgreSQL-backed integrationTest task.
       - name: Summarise backend coverage
