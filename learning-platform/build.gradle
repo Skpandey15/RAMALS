@@ -36,6 +36,7 @@ dependencies {
   testImplementation 'org.springframework.boot:spring-boot-starter-test'
   testImplementation 'org.springframework.boot:spring-boot-webmvc-test'
   testImplementation 'org.springframework.security:spring-security-test'
+  testImplementation 'com.tngtech.archunit:archunit-junit5:1.4.1'
   testRuntimeOnly 'com.h2database:h2'
   testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
@@ -63,6 +64,7 @@ tasks.named('test') {
     excludeTestsMatching '**/*SecurityHeadersApiTests'
     excludeTestsMatching '**/*SecurityContractTests'
     excludeTestsMatching '**/*SubjectRateLimitApiTests'
+    excludeTestsMatching '*ArchitectureGuardrailTests'
   }
 }
 
@@ -98,7 +100,8 @@ def architectureTest = registerCategoryTest(
       '*SecurityContractTests',
       '*SecurityDenialAuditTests',
       '*SecurityHeadersApiTests',
-      '*SubjectRateLimitApiTests'
+      '*SubjectRateLimitApiTests',
+      '*ArchitectureGuardrailTests'
     ])
 
 // Governance tests validate contracts, migrations, release records, and repository policy. Keep
