@@ -86,10 +86,6 @@ def registerCategoryTest = { String name, String description, List<String> inclu
     // Serialize both Gradle workers and JUnit classes so their @BeforeAll reset hooks cannot
     // invalidate another class that is still executing.
     maxParallelForks = 1
-    // A fresh fork per class makes the serialization boundary explicit even when a runner or
-    // JUnit provider supplies parallel execution defaults. These fixtures deliberately mutate
-    // shared database schemas and roles, so no test JVM may outlive the class that owns its reset.
-    forkEvery = 1
     systemProperty 'junit.jupiter.execution.parallel.enabled', 'false'
     systemProperty 'junit.jupiter.execution.parallel.mode.default', 'same_thread'
     systemProperty 'junit.jupiter.execution.parallel.mode.classes.default', 'same_thread'
@@ -168,6 +164,11 @@ governanceTest.configure {
 // preceding integration suite cannot leave database ownership/privilege state that prevents the
 // governance bootstrap from running.
 integrationTest.configure {
+  mustRunAfter(governanceTest)
+  mustRunAfter(architectureTest)
+}
+
+architectureTest.configure {
   mustRunAfter(governanceTest)
 }
 
