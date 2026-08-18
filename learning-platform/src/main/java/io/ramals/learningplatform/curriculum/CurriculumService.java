@@ -1,5 +1,7 @@
 package io.ramals.learningplatform.curriculum;
 
+import java.util.Optional;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -18,5 +20,14 @@ public class CurriculumService {
         .orElseThrow(() -> new CurriculumNotFoundException(domainCode, versionCode));
     validator.validate(graph);
     return graph;
+  }
+
+  public Optional<PublishedSkillContext> publishedSkillContext(String skillCode) {
+    return skillCode == null || skillCode.isBlank()
+        ? Optional.empty() : repository.findPublishedSkillContext(skillCode);
+  }
+
+  public boolean hasPublishedCurriculum(UUID domainId) {
+    return repository.hasPublishedCurriculum(domainId);
   }
 }

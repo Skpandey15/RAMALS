@@ -6,6 +6,9 @@ import io.ramals.learningplatform.ai.contract.DomainContext;
 import io.ramals.learningplatform.ai.contract.DomainType;
 import io.ramals.learningplatform.ai.contract.GoalType;
 import io.ramals.learningplatform.ai.contract.LearningGoalContext;
+import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
+import io.ramals.learningplatform.curriculum.CurriculumRepository;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.learner.LearnerGoal;
 import java.math.BigDecimal;
 import java.sql.Connection;
@@ -108,7 +111,9 @@ class DomainContextPersistenceIntegrationTests {
 
   @BeforeEach
   void setUp() {
-    assembler = new DomainContextAssembler(new JdbcTemplate(runtimeDataSource()));
+    JdbcTemplate runtimeJdbc = new JdbcTemplate(runtimeDataSource());
+    assembler = new DomainContextAssembler(
+        new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
     migrationJdbc = new JdbcTemplate(migrationDataSource());
   }
 

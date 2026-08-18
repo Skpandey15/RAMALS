@@ -92,6 +92,29 @@ public class CurriculumRepository {
         skills.stream().map(MutableSkill::toNode).toList()));
   }
 
+  public Optional<PublishedSkillContext> findPublishedSkillContext(String skillCode) {
+    return jdbcTemplate.query("""
+        SELECT d.code AS domain_code, d.domain_type,
+               (SELECT cv.version_code
+                  FROM core.curriculum_version cv
+                 WHERE cv.domain_id = d.id AND cv.status = 'PUBLISHED'
+                 ORDER BY cv.published_at DESC LIMIT 1) AS version_code
+          FROM core.skill s
+          JOIN core.learning_domain d ON d.id = s.domain_id
+         WHERE s.stable_code = ?
+        """, (result, row) -> new PublishedSkillContext(
+            result.getString("domain_code"), result.getString("domain_type"),
+            result.getString("version_code")), skillCode).stream().findFirst();
+  }
+
+  public boolean hasPublishedCurriculum(UUID domainId) {
+    Integer count = jdbcTemplate.queryForObject("""
+        SELECT count(*) FROM core.curriculum_version
+         WHERE domain_id = ? AND status = 'PUBLISHED'
+        """, Integer.class, domainId);
+    return count != null && count > 0;
+  }
+
   private static List<String> strings(Array array) throws SQLException {
     if (array == null) {
       return List.of();
