@@ -20,8 +20,25 @@ public class AdminActivityRepository {
     this.jdbcTemplate = jdbcTemplate;
   }
 
-  /** Appends an audit record. Kept out of the caller's transaction so rejections are still logged. */
+  /** Appends an audit record using the current JDBC transaction when one is present. */
   public void append(
+      String actorSubject, String action, String targetType, UUID targetId, String outcome,
+      String detail, String interactionId, String traceId) {
+    appendRow(actorSubject, action, targetType, targetId, outcome, detail, interactionId, traceId);
+  }
+
+  /**
+   * Appends using the caller's current transaction. This named path is used when audit and the
+   * domain write must commit or roll back together; JdbcTemplate participates in Spring's bound
+   * transaction without changing the legacy rejection-audit semantics above.
+   */
+  public void appendWithinTransaction(
+      String actorSubject, String action, String targetType, UUID targetId, String outcome,
+      String detail, String interactionId, String traceId) {
+    appendRow(actorSubject, action, targetType, targetId, outcome, detail, interactionId, traceId);
+  }
+
+  private void appendRow(
       String actorSubject, String action, String targetType, UUID targetId, String outcome,
       String detail, String interactionId, String traceId) {
     jdbcTemplate.update("""

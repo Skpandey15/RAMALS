@@ -97,6 +97,32 @@ public class AiClientConfiguration {
     return new RamalsAiAdaptationClient(restClient, guard);
   }
 
+  @Bean
+  public AssessmentPort assessmentPort(
+      @Value("${ramals.ai.base-url:}") String baseUrl,
+      @Value("${ramals.ai.workload-token-url:}") String tokenUrl,
+      @Value("${ramals.ai.workload-client-id:}") String clientId,
+      @Value("${ramals.ai.workload-client-secret:}") String clientSecret,
+      @Value("${ramals.ai.workload-audience:ramals-ai}") String audience,
+      AiCallGuard guard) {
+    if (baseUrl == null || baseUrl.isBlank()
+        || tokenUrl == null || tokenUrl.isBlank()
+        || clientId == null || clientId.isBlank()
+        || clientSecret == null || clientSecret.isBlank()) {
+      return (request, deadlineMillis, requestedDifficulty) -> {
+        throw new AiUnavailableException("AI_NOT_CONFIGURED",
+            "Assessment commissioning is not enabled in this environment.");
+      };
+    }
+    SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+    requestFactory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
+    requestFactory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
+    RestClient aiClient = RestClient.builder().baseUrl(baseUrl).requestFactory(requestFactory).build();
+    RestClient tokenClient = RestClient.builder().baseUrl(tokenUrl).requestFactory(requestFactory).build();
+    return new RamalsAiAssessmentClient(
+        aiClient, guard, new WorkloadTokenProvider(tokenClient, clientId, clientSecret, audience));
+  }
+
   /**
    * The port used when no AI plane is configured.
    *

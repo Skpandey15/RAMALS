@@ -83,6 +83,11 @@ services:
       RAMALS_OIDC_ISSUER_URI: ${RAMALS_OIDC_ISSUER_URI:-http://keycloak:8080/realms/ramals}
       RAMALS_OIDC_AUDIENCE: ${RAMALS_OIDC_AUDIENCE:-ramals-api}
       RAMALS_WEB_ORIGIN: ${RAMALS_WEB_ORIGIN:-http://localhost:5173}
+      RAMALS_AI_BASE_URL: ${RAMALS_AI_BASE_URL:-}
+      RAMALS_AI_WORKLOAD_TOKEN_URL: ${RAMALS_AI_WORKLOAD_TOKEN_URL:-http://keycloak:8080/realms/ramals/protocol/openid-connect/token}
+      RAMALS_AI_WORKLOAD_CLIENT_ID: ${RAMALS_AI_WORKLOAD_CLIENT_ID:-ramals-core-workload}
+      RAMALS_AI_WORKLOAD_CLIENT_SECRET: ${RAMALS_AI_WORKLOAD_CLIENT_SECRET:-}
+      RAMALS_AI_WORKLOAD_AUDIENCE: ${RAMALS_AI_WORKLOAD_AUDIENCE:-ramals-ai}
     depends_on:
       postgres: {condition: service_healthy}
       keycloak: {condition: service_healthy}
