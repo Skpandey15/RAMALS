@@ -120,6 +120,12 @@ def governanceTest = registerCategoryTest(
     ])
 
 governanceTest.configure {
+  // SecurityContractTests protects the security architecture and is intentionally owned by
+  // architectureTest, even though its name also ends in ContractTests.
+  filter {
+    excludeTestsMatching '*SecurityContractTests'
+  }
+
   inputs.file(rootProject.file('.env.example'))
       .withPropertyName('envExample')
       .withPathSensitivity(PathSensitivity.RELATIVE)
