@@ -62,8 +62,8 @@ class AgentState:
     cost_spent_usd: Decimal = Decimal("0.000000")
 
     # -- counters, checked against ceilings -------------------------------------------------------
-    step_count: int = 0
-    repair_count: int = 0
+    node_execution_count: int = 0
+    repair_cycle_count: int = 0
     model_call_count: int = 0
 
     # -- accumulated work -------------------------------------------------------------------------
@@ -79,20 +79,24 @@ class AgentState:
     # -- bounded advancement ----------------------------------------------------------------------
 
     def enter_node(self, node: str) -> None:
-        """Records a node execution and enforces the step ceiling.
+        """Records a node execution and enforces the node-execution ceiling.
 
         Called on entry rather than exit, so a node that hangs or throws has still been counted.
         Counting on success would let a failing node loop forever without ever incrementing.
         """
-        if self.step_count >= self.ceilings.max_steps:
-            raise CeilingExceeded("graph step", self.ceilings.max_steps, self.step_count + 1)
-        self.step_count += 1
+        if self.node_execution_count >= self.ceilings.max_node_executions:
+            raise CeilingExceeded(
+                "node execution", self.ceilings.max_node_executions, self.node_execution_count + 1
+            )
+        self.node_execution_count += 1
         self.trace.append(node)
 
     def record_repair(self) -> None:
-        if self.repair_count >= self.ceilings.max_repairs:
-            raise CeilingExceeded("repair loop", self.ceilings.max_repairs, self.repair_count + 1)
-        self.repair_count += 1
+        if self.repair_cycle_count >= self.ceilings.max_repair_cycles:
+            raise CeilingExceeded(
+                "repair cycle", self.ceilings.max_repair_cycles, self.repair_cycle_count + 1
+            )
+        self.repair_cycle_count += 1
 
     def record_model_call(self, cost_usd: Decimal) -> None:
         """Counts a model call and the money it cost.
@@ -118,5 +122,5 @@ class AgentState:
         self.deadline.raise_if_expired()
 
     @property
-    def steps_remaining(self) -> int:
-        return max(0, self.ceilings.max_steps - self.step_count)
+    def node_executions_remaining(self) -> int:
+        return max(0, self.ceilings.max_node_executions - self.node_execution_count)

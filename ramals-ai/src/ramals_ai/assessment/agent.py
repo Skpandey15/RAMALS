@@ -196,7 +196,7 @@ class AssessmentAgent:
             validation=Validation(
                 schemaValid=not state.validation_errors,
                 semanticValid=not state.validation_errors,
-                repairAttempts=state.repair_count,
+                repairAttempts=state.repair_cycle_count,
             ),
             usage=Usage(
                 inputTokens=None,

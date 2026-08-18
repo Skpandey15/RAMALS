@@ -77,7 +77,7 @@ Written so far under this practice: M1-ADR-004 (before T08), M1-ADR-008 (before 
 
 | Gap | Where it bites |
 | --- | --- |
-| Doc 02 §4's step and repair ceilings are mutually unsatisfiable (8 steps, 2 repairs, 12 needed) | Repair loops are unreachable at the documented ceiling. Implemented as written; resolving it is a governance decision. |
+| Doc 02 §4's step and repair ceilings were mutually unsatisfiable (8 steps, 2 repairs, 12 needed) | Resolved by S0-01: node executions are derived from the current graph (12), while repair cycles, model calls, and the caller-owned absolute deadline remain separate controls. |
 | Doc 07 quality thresholds unmeasurable on `ci-fake` | Tutor pedagogical and functional rubrics cannot be scored without a real route and a provider credential. |
 | Deployed backend digest predates the M1-T04 MDC fix | The shared environment cannot answer a support-code lookup until a release is cut. |
 | Agent HTTP routes are unregistered (`build_internal_router()` is empty; `/internal/v1/tutor/respond` returns 404) | T07-T10 landed agent logic without exposing it, while Spring's `RamalsAiTutorClient` posts to that path. Spring and Python have never run against each other. Tracked separately from T10; it needs an owning task, not a slice. |

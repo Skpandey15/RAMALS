@@ -172,8 +172,7 @@ def test_every_node_opens_its_own_span(recorded_spans: Callable[[], list[str]]) 
 
 
 def test_a_repair_loop_records_its_own_span(recorded_spans: Callable[[], list[str]]) -> None:
-    """Raised step ceiling: at Doc 02's documented 8 a repair cannot fit, so there would be no span
-    to record. See test_the_documented_step_and_repair_ceilings_conflict."""
+    """The topology-derived node ceiling leaves room for a repair span."""
     attempts = {"n": 0}
 
     def validator(_text: str) -> list[str]:
@@ -194,7 +193,7 @@ def test_a_repair_loop_records_its_own_span(recorded_spans: Callable[[], list[st
         proposal_id=str(uuid.uuid7()),
         minimized_learning_context={"skillCode": "KAFKA_TOPIC"},
     )
-    state.ceilings = replace(state.ceilings, max_steps=12)
+    state.ceilings = replace(state.ceilings, max_node_executions=12)
 
     run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
 
