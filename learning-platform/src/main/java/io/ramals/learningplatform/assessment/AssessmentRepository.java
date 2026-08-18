@@ -90,7 +90,11 @@ public class AssessmentRepository {
                iv.options_jsonb AS options, iv.answer_key_jsonb AS answer_key
         FROM core.assessment_item_version iv
         JOIN core.skill s ON s.id = iv.skill_id
-        WHERE iv.assessment_version_id = ?
+        -- M1-ADR-006: only verified content may take part in a scored context. Filtered here as
+        -- well as at presentation because this is the path that decides correctness and therefore
+        -- creates evidence -- an unverified item reaching only this query would produce evidence
+        -- for something no learner was ever shown.
+        WHERE iv.assessment_version_id = ? AND iv.trust_state = 'VERIFIED_CONTENT'
         """, scoringViewMapper(), assessmentVersionId);
   }
 
@@ -156,7 +160,8 @@ public class AssessmentRepository {
                iv.options_jsonb AS options, iv.display_order
         FROM core.assessment_item_version iv
         JOIN core.skill s ON s.id = iv.skill_id
-        WHERE iv.assessment_version_id = ?
+        -- M1-ADR-006: unverified or rejected content is never shown to a learner.
+        WHERE iv.assessment_version_id = ? AND iv.trust_state = 'VERIFIED_CONTENT'
         ORDER BY iv.display_order, iv.item_code
         """, itemMapper(), assessmentVersionId);
   }
