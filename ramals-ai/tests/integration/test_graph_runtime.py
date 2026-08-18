@@ -97,9 +97,8 @@ def test_a_valid_run_walks_the_standard_graph() -> None:
 def test_the_repair_loop_can_succeed_when_the_step_budget_allows_one() -> None:
     """The loop must be able to succeed, not merely to terminate.
 
-    Run with a raised step ceiling, because at Doc 02's documented 8 a repair cannot fit -- see
-    ``test_the_documented_step_and_repair_ceilings_conflict``. This proves the mechanism works; the
-    next test records that the governed ceiling makes it unreachable.
+    Run with the topology-derived node-execution ceiling. This proves the repair mechanism works
+    with the two documented repair cycles available.
     """
     attempts = {"n": 0}
 
@@ -109,39 +108,30 @@ def test_the_repair_loop_can_succeed_when_the_step_budget_allows_one() -> None:
 
     run, clock = build(validator=validator)
     state = state_for(run, clock)
-    state.ceilings = replace(state.ceilings, max_steps=12)
+    state.ceilings = replace(state.ceilings, max_node_executions=12)
 
     result = run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
 
     assert "bounded_repair" in result.trace
-    assert result.repair_count == 1
+    assert result.repair_cycle_count == 1
     assert result.validation_errors == []
     assert result.final_proposal is not None
 
 
-def test_the_documented_step_and_repair_ceilings_conflict() -> None:
-    """Doc 02 §4 sets 8 steps and 2 repairs. Under node-execution counting they exclude each other.
+def test_documented_node_and_repair_budgets_are_derived_from_graph() -> None:
+    """Doc 02 §4 budgets agree with the current graph topology."""
+    assert limits.STANDARD_GRAPH_NODE_EXECUTIONS == 6
+    assert limits.REPAIR_CYCLE_NODE_EXECUTIONS == 3
+    assert limits.MAX_REPAIR_CYCLES == 2
+    assert limits.MAX_NODE_EXECUTIONS == 6 + (3 * 2) == 12
+    assert limits.REPAIR_ROUTE_RESERVE == 4
 
-    The standard graph is six node executions with no repair; each repair adds three. One repair
-    needs 9 and two need 12, against a ceiling of 8. Both numbers are implemented as written rather
-    than one being widened to fit, so this test records the arithmetic and will fail the moment
-    either ceiling changes -- which is when the conflict should be revisited, not silently resolved.
-    """
-    base_path = 6
-    per_repair = 3
-
-    assert limits.MAX_GRAPH_STEPS == 8
-    assert limits.MAX_REPAIR_LOOPS == 2
-    assert base_path + per_repair > limits.MAX_GRAPH_STEPS, "one repair should not fit"
-    assert base_path + per_repair * limits.MAX_REPAIR_LOOPS == 12
-
-    # And the consequence, observed rather than asserted in the abstract: at the documented ceiling
-    # an invalid output finalizes as invalid instead of ever entering a repair.
     run, clock = build(validator=lambda _text: ["ALWAYS_MALFORMED"])
     result = run.run(state_for(run, clock), route=ModelRoute.CI_FAKE, messages=MESSAGES)
 
-    assert result.repair_count == 0
-    assert "bounded_repair" not in result.trace
+    assert result.repair_cycle_count == limits.MAX_REPAIR_CYCLES
+    assert result.node_execution_count == limits.MAX_NODE_EXECUTIONS
+    assert result.trace.count("bounded_repair") == limits.MAX_REPAIR_CYCLES
 
 
 def test_routing_is_a_pure_function_of_state() -> None:
@@ -157,43 +147,43 @@ def test_routing_is_a_pure_function_of_state() -> None:
     assert first == second == runtime.REPAIR
 
 
-# -- the 8-step and 2-repair ceilings --------------------------------------------------------------
+# -- node-execution and repair-cycle ceilings -----------------------------------------------------
 
 
-def test_the_step_ceiling_is_doc_02s_eight() -> None:
-    assert limits.MAX_GRAPH_STEPS == 8
+def test_the_node_execution_ceiling_is_derived_from_doc_02s_graph() -> None:
+    assert limits.MAX_NODE_EXECUTIONS == 12
 
 
-def test_the_repair_ceiling_is_doc_02s_two() -> None:
-    assert limits.MAX_REPAIR_LOOPS == 2
+def test_the_repair_cycle_ceiling_is_doc_02s_two() -> None:
+    assert limits.MAX_REPAIR_CYCLES == 2
 
 
 def test_a_permanently_invalid_output_stops_without_looping() -> None:
     """The decisive test: an output that never validates must still terminate."""
     run, clock = build(validator=lambda _text: ["ALWAYS_MALFORMED"])
     state = state_for(run, clock)
-    state.ceilings = replace(state.ceilings, max_steps=12)
+    state.ceilings = replace(state.ceilings, max_node_executions=12)
 
     result = run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
 
-    assert result.repair_count <= limits.MAX_REPAIR_LOOPS
-    assert result.step_count <= 12
+    assert result.repair_cycle_count <= limits.MAX_REPAIR_CYCLES
+    assert result.node_execution_count <= limits.MAX_NODE_EXECUTIONS
     # It finishes reporting the failure rather than raising: the caller gets a proposal marked
     # invalid, which is more useful than an exception carrying nothing.
-    assert result.trace.count("bounded_repair") <= limits.MAX_REPAIR_LOOPS
+    assert result.trace.count("bounded_repair") <= limits.MAX_REPAIR_CYCLES
     assert result.validation_errors, "an unrepairable output must still be reported as invalid"
 
 
 def test_the_step_ceiling_stops_a_run_that_would_exceed_it() -> None:
     run, clock = build()
     state = state_for(run, clock)
-    state.step_count = limits.MAX_GRAPH_STEPS
+    state.node_execution_count = limits.MAX_NODE_EXECUTIONS
 
     with pytest.raises(CeilingExceeded) as stop:
         run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
 
-    assert stop.value.control == "graph step"
-    assert stop.value.limit == 8
+    assert stop.value.control == "node execution"
+    assert stop.value.limit == limits.MAX_NODE_EXECUTIONS
 
 
 def test_a_node_is_counted_on_entry_not_on_success() -> None:
@@ -201,7 +191,7 @@ def test_a_node_is_counted_on_entry_not_on_success() -> None:
     run, clock = build()
     state = state_for(run, clock)
     state.enter_node("probe")
-    assert state.step_count == 1
+    assert state.node_execution_count == 1
 
 
 def test_the_repair_ceiling_refuses_a_third_attempt() -> None:
@@ -213,7 +203,7 @@ def test_the_repair_ceiling_refuses_a_third_attempt() -> None:
     with pytest.raises(CeilingExceeded) as stop:
         state.record_repair()
 
-    assert stop.value.control == "repair loop"
+    assert stop.value.control == "repair cycle"
 
 
 # -- model-call ceilings ---------------------------------------------------------------------------
@@ -281,7 +271,13 @@ def test_no_independent_cost_constant_exists_in_the_graph_package() -> None:
     assert not any("COST" in name or "USD" in name for name in numeric_constants), (
         f"the graph must read the route's Doc 04 cost ceiling, not declare one: {numeric_constants}"
     )
-    assert numeric_constants == {"MAX_GRAPH_STEPS", "MAX_REPAIR_LOOPS"}
+    assert numeric_constants == {
+        "MAX_NODE_EXECUTIONS",
+        "MAX_REPAIR_CYCLES",
+        "REPAIR_CYCLE_NODE_EXECUTIONS",
+        "REPAIR_ROUTE_RESERVE",
+        "STANDARD_GRAPH_NODE_EXECUTIONS",
+    }
 
 
 def test_cumulative_cost_stops_the_run_even_when_each_call_was_affordable() -> None:
@@ -323,12 +319,12 @@ def test_a_ceiling_stop_preserves_the_counters() -> None:
     """A stop that discarded its counters would answer 'it stopped' but not 'how far did it get'."""
     run, clock = build()
     state = state_for(run, clock)
-    state.step_count = limits.MAX_GRAPH_STEPS
+    state.node_execution_count = limits.MAX_NODE_EXECUTIONS
 
     with pytest.raises(CeilingExceeded):
         run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
 
-    assert state.step_count == limits.MAX_GRAPH_STEPS
+    assert state.node_execution_count == limits.MAX_NODE_EXECUTIONS
     assert state.model_call_count == 0
 
 

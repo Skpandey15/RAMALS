@@ -8,9 +8,9 @@ The graph is the one in the design document, unchanged:
 
 The interesting part is not the shape, it is that the loop terminates. ``validate_output`` can send
 control back through ``bounded_repair``, and without bounds that is an agent that retries a model
-until the money runs out. Three independent things stop it: the repair ceiling, the step ceiling,
-and the caller's deadline. Any one of them is sufficient, which is deliberate — the failure being
-guarded against is a bound that turns out not to have been enforced.
+until the money runs out. Three independent things stop it: the repair-cycle ceiling, the
+node-execution ceiling, and the caller's absolute deadline. Any one of them is sufficient, which is
+deliberate — the failure being guarded against is a bound that turns out not to have been enforced.
 
 Cost is bounded by the route's Doc 04 ceiling, read from the gateway's registry. Doc 02 §4 is
 explicit that it declares no cost constant of its own, so neither does this module.
@@ -31,7 +31,7 @@ from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import Message
 from ramals_ai.graph import nodes
-from ramals_ai.graph.limits import CeilingExceeded, Ceilings
+from ramals_ai.graph.limits import REPAIR_ROUTE_RESERVE, CeilingExceeded, Ceilings
 from ramals_ai.graph.state import AgentState
 from ramals_ai.graph.tools import ToolRegistry, empty_registry
 
@@ -51,9 +51,6 @@ graph_ceiling_stops = _meter.create_counter(
 FINALIZE = "finalize"
 REPAIR = "bounded_repair"
 
-STEPS_PER_REPAIR_CYCLE = 4
-"""bounded_repair, model_or_tool, validate_output, finalize -- what one repair still costs."""
-
 
 def route_for_validation(state: AgentState) -> str:
     """The one branch in the graph: finish, or repair.
@@ -64,19 +61,17 @@ def route_for_validation(state: AgentState) -> str:
     """
     if not state.validation_errors:
         return FINALIZE
-    if state.repair_count >= state.ceilings.max_repairs:
+    if state.repair_cycle_count >= state.ceilings.max_repair_cycles:
         # Out of repairs. Finalizing with the errors recorded beats looping, and beats raising:
         # the caller gets a proposal marked invalid rather than an exception with nothing in it.
         return FINALIZE
-    if state.steps_remaining < STEPS_PER_REPAIR_CYCLE:
+    if state.node_executions_remaining < REPAIR_ROUTE_RESERVE:
         # A repair cycle costs four further node executions: bounded_repair, model_or_tool,
         # validate_output and finalize. Starting one that cannot complete would burn the remaining
         # steps and still finish invalid -- strictly worse than finalizing now.
         #
-        # At the Doc 02 §4 ceiling of 8 this branch is always taken, because the first
-        # validate_output lands on step 5 and leaves 3. See MAX_GRAPH_STEPS in limits.py: the
-        # documented step and repair ceilings cannot both be satisfied, and this code honours both
-        # rather than quietly widening one.
+        # The reserve is derived from the current graph topology and the node-execution ceiling in
+        # limits.py. It keeps the finalization node inside the budget when a repair is started.
         return FINALIZE
     return REPAIR
 
@@ -172,9 +167,9 @@ class GraphRun:
                     "operation": "graph.ceiling_stop",
                     "control": stop.control,
                     "limit": stop.limit,
-                    "stepCount": state.step_count,
+                    "stepCount": state.node_execution_count,
                     "modelCallCount": state.model_call_count,
-                    "repairCount": state.repair_count,
+                    "repairCount": state.repair_cycle_count,
                 },
             )
             raise
@@ -185,9 +180,9 @@ class GraphRun:
             extra={
                 "operation": "graph.complete",
                 "agentType": state.agent_type.value,
-                "stepCount": state.step_count,
+                "stepCount": state.node_execution_count,
                 "modelCallCount": state.model_call_count,
-                "repairCount": state.repair_count,
+                "repairCount": state.repair_cycle_count,
                 "estimatedCostUsd": f"{state.cost_spent_usd:.6f}",
                 "trace": ",".join(state.trace),
             },

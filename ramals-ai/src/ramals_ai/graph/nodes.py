@@ -166,7 +166,7 @@ def bounded_repair(state: AgentState) -> AgentState:
             "graph attempting a bounded repair",
             extra={
                 "operation": "graph.repair",
-                "repairCount": state.repair_count,
+                "repairCycleCount": state.repair_cycle_count,
                 "errors": list(state.validation_errors),
             },
         )
@@ -191,7 +191,7 @@ def finalize(state: AgentState) -> AgentState:
             extra={
                 "operation": "graph.finalize",
                 "valid": not state.validation_errors,
-                "repairCount": state.repair_count,
+                "repairCycleCount": state.repair_cycle_count,
             },
         )
     return state

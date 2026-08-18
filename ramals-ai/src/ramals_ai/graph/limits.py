@@ -1,6 +1,9 @@
-"""Execution ceilings for bounded graph runs (Doc 02 §4).
+"""Independent budgets for bounded graph runs (Doc 02 §4).
 
-Every ceiling here answers the same question: what stops a graph that has decided to keep going?
+The graph has four separate controls: node executions, repair cycles, model calls, and the
+caller-owned absolute deadline. The first three are counted here; the deadline is represented by
+``gateway.budget.Deadline`` and is deliberately not converted into a graph-local number.
+
 An agent loop with no ceiling is not a bug that shows up in testing — it is a bill, a hung request,
 and a learner staring at a spinner, all discovered in production at once.
 
@@ -17,24 +20,26 @@ from dataclasses import dataclass
 
 from ramals_ai.contracts.generated import AgentType
 
-MAX_GRAPH_STEPS = 8
-"""Doc 02 §4. Counts node executions, so a repair loop consumes steps like anything else.
+STANDARD_GRAPH_NODE_EXECUTIONS = 6
+"""Node executions in the current graph when no repair is needed."""
 
-**These two ceilings cannot both be satisfied.** The standard graph in Doc 02 §3 is six node
-executions with no repair (load_context, policy_precheck, plan, model_or_tool, validate_output,
-finalize). Each repair adds three more (bounded_repair, model_or_tool, validate_output), so one
-repair needs 9 and the two that §4 permits need 12. Against a ceiling of 8, the repair loop is
-unreachable.
+REPAIR_CYCLE_NODE_EXECUTIONS = 3
+"""Additional node executions for one repair: repair, model, and validation."""
 
-Both numbers are implemented exactly as documented rather than one being widened to fit. The
-consequence is visible and tested: ``route_for_validation`` refuses a repair it cannot complete, so
-an invalid output finalizes as invalid instead of looping. Resolving it is a governance decision --
-raise the step ceiling to at least 12, or define a step as something coarser than a node execution
--- and not one this module should make on its own.
+MAX_REPAIR_CYCLES = 2
+"""Doc 02 §4. A third attempt at repairing the same malformed output is not a strategy."""
+
+MAX_NODE_EXECUTIONS = (
+    STANDARD_GRAPH_NODE_EXECUTIONS + REPAIR_CYCLE_NODE_EXECUTIONS * MAX_REPAIR_CYCLES
+)
+"""Node-execution ceiling derived from the current graph and repair ceiling.
+
+The previous value of 8 was inconsistent with two permitted repairs. The current topology requires
+6 + (3 * 2) = 12 executions, which permits exactly those two repair cycles.
 """
 
-MAX_REPAIR_LOOPS = 2
-"""Doc 02 §4. A third attempt at repairing the same malformed output is not a strategy."""
+REPAIR_ROUTE_RESERVE = REPAIR_CYCLE_NODE_EXECUTIONS + 1
+"""Nodes needed after validation to repair and finalize: repair, model, validate, finalize."""
 
 _MODEL_CALL_CEILINGS: dict[AgentType, int] = {
     AgentType.TUTOR: 3,
@@ -59,8 +64,8 @@ class Ceilings:
     mid-run is a ceiling that can be raised mid-run.
     """
 
-    max_steps: int = MAX_GRAPH_STEPS
-    max_repairs: int = MAX_REPAIR_LOOPS
+    max_node_executions: int = MAX_NODE_EXECUTIONS
+    max_repair_cycles: int = MAX_REPAIR_CYCLES
     max_model_calls: int = 3
 
     @classmethod
