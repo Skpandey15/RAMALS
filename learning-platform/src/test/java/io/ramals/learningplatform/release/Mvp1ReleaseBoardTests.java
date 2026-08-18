@@ -29,7 +29,11 @@ class Mvp1ReleaseBoardTests {
 
   private static String board() throws IOException {
     assertThat(BOARD).as("the MVP-1 release board").exists();
-    return Files.readString(BOARD, StandardCharsets.UTF_8);
+    // Normalised because the parsing below is line-ending sensitive and this file is edited on
+    // Windows. A board saved with CRLF made the "Outstanding:" paragraph run to end of file, which
+    // surfaced as a confident and entirely wrong claim that an authored ADR was still outstanding.
+    // A governance gate that fails for a reason unrelated to governance teaches people to ignore it.
+    return Files.readString(BOARD, StandardCharsets.UTF_8).replace("\r\n", "\n");
   }
 
   @Test
