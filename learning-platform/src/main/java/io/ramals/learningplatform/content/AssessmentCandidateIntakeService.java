@@ -1,40 +1,30 @@
 package io.ramals.learningplatform.content;
 
-import io.ramals.learningplatform.admin.AdminActivityRepository;
 import io.ramals.learningplatform.ai.AssessmentPort;
 import io.ramals.learningplatform.ai.contract.AgentType;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
-import io.ramals.learningplatform.observability.CorrelationContext;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /** Receives, validates, and durably records one AI assessment candidate. */
 @Service
 public class AssessmentCandidateIntakeService {
 
-  private static final String MODEL_ID_UNAVAILABLE =
-      "current AI contract exposes modelRoute but not provider/model identity";
-
   private final AssessmentPort assessmentPort;
   private final ContentValidationPipeline validationPipeline;
-  private final AssessmentCandidateRevisionRepository repository;
-  private final AdminActivityRepository auditRepository;
+  private final AssessmentCandidatePersistenceService persistenceService;
 
   public AssessmentCandidateIntakeService(
       AssessmentPort assessmentPort,
       ContentValidationPipeline validationPipeline,
-      AssessmentCandidateRevisionRepository repository,
-      AdminActivityRepository auditRepository) {
+      AssessmentCandidatePersistenceService persistenceService) {
     this.assessmentPort = assessmentPort;
     this.validationPipeline = validationPipeline;
-    this.repository = repository;
-    this.auditRepository = auditRepository;
+    this.persistenceService = persistenceService;
   }
 
   /** AI call and persistence are intentionally separate transaction boundaries. */
@@ -57,53 +47,8 @@ public class AssessmentCandidateIntakeService {
     if (proposal.agentType() != AgentType.ASSESSMENT || proposal.trustLevel() != TrustLevel.UNVERIFIED) {
       throw new CandidateIntakeRejectedException("proposal is not an UNVERIFIED assessment candidate");
     }
-    return persist(
+    return persistenceService.persist(
         candidate, proposal, request, idempotencyActor, idempotencyKey, createdBy);
-  }
-
-  @Transactional
-  AssessmentCandidateRevision persist(
-      CandidateContent candidate,
-      AiProposalEnvelope proposal,
-      AiRequestEnvelope request,
-      String idempotencyActor,
-      String idempotencyKey,
-      String createdBy) {
-    AssessmentCandidateRevision existing = repository.findByIdempotency(idempotencyActor, idempotencyKey)
-        .orElse(null);
-    Map<String, Object> approvalPayload = approvalPayload(candidate, proposal.proposal());
-    String digest = CandidateCanonicalizer.sha256(approvalPayload);
-    if (existing != null) {
-      if (!existing.idempotencyFingerprint().equals(digest)) {
-        throw new CandidateIntakeConflictException("Idempotency-Key was reused for different candidate content.");
-      }
-      return existing;
-    }
-    try {
-      String interactionId = CorrelationContext.currentInteractionId();
-      if (interactionId.isBlank() && request != null && request.interactionId() != null) {
-        interactionId = request.interactionId();
-      }
-      AssessmentCandidateRevision saved = repository.insert(
-          candidate, proposal.proposalId(), proposal.contractVersion(), proposal.agentType().name(),
-          proposal.agentVersion(), proposal.modelRoute(), null, MODEL_ID_UNAVAILABLE,
-          proposal.promptVersion(), interactionId, createdBy, idempotencyActor, idempotencyKey,
-          digest, digest, approvalPayload);
-      auditRepository.appendWithinTransaction(
-          createdBy, "AI_CANDIDATE_INTAKE", "ASSESSMENT_CANDIDATE", saved.candidateId(), "SUCCESS",
-          "revision=" + saved.candidateRevision() + "; digest=" + saved.proposalDigest()
-              + "; trustState=UNVERIFIED; sourceProposalId=" + saved.sourceProposalId(),
-          interactionId, CorrelationContext.currentTraceId());
-      return saved;
-    } catch (DuplicateKeyException duplicate) {
-      AssessmentCandidateRevision raced = repository.findByIdempotency(idempotencyActor, idempotencyKey)
-          .orElseThrow(() -> duplicate);
-      if (!raced.idempotencyFingerprint().equals(digest)) {
-        throw new CandidateIntakeConflictException(
-            "Idempotency-Key was reused for different candidate content.");
-      }
-      return raced;
-    }
   }
 
   private CandidateContent candidateFrom(AiProposalEnvelope proposal, UUID assessmentVersionId) {
@@ -180,17 +125,6 @@ public class AssessmentCandidateIntakeService {
     }).toList();
   }
 
-  private static Map<String, Object> approvalPayload(
-      CandidateContent candidate, Map<String, Object> original) {
-    Map<String, Object> payload = new java.util.TreeMap<>();
-    payload.putAll(CandidateCanonicalizer.payload(candidate));
-    String rationale = nullableString(original, "rationale");
-    if (rationale == null || rationale.isBlank()) {
-      throw new CandidateIntakeRejectedException("candidate field is missing: rationale");
-    }
-    payload.put("rationale", rationale);
-    return payload;
-  }
 
   public static class CandidateIntakeRejectedException extends RuntimeException {
     public CandidateIntakeRejectedException(String message) { super(message); }

@@ -8,7 +8,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import io.ramals.learningplatform.admin.AdminActivityRepository;
 import io.ramals.learningplatform.ai.AssessmentPort;
 import io.ramals.learningplatform.ai.contract.AgentType;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
@@ -28,7 +27,8 @@ class AssessmentCandidateIntakeServiceTests {
     AssessmentPort ai = mock(AssessmentPort.class);
     ContentValidationPipeline pipeline = mock(ContentValidationPipeline.class);
     AssessmentCandidateRevisionRepository repository = mock(AssessmentCandidateRevisionRepository.class);
-    AdminActivityRepository audit = mock(AdminActivityRepository.class);
+    io.ramals.learningplatform.admin.AdminActivityRepository audit =
+        mock(io.ramals.learningplatform.admin.AdminActivityRepository.class);
     UUID version = UUID.randomUUID();
     String sourceProposalId = UUID.randomUUID().toString();
     AiProposalEnvelope proposal = proposal(sourceProposalId, TrustLevel.UNVERIFIED);
@@ -41,7 +41,7 @@ class AssessmentCandidateIntakeServiceTests {
         eq("author"), eq("key"), any(), any(), any())).thenReturn(saved);
 
     AssessmentCandidateRevision result = new AssessmentCandidateIntakeService(
-        ai, pipeline, repository, audit).intake(
+        ai, pipeline, new AssessmentCandidatePersistenceService(repository, audit)).intake(
             version, request(), "FOUNDATIONAL", ValidationContext.unavailable(),
             "author", "key", "author", 100L);
 
@@ -60,7 +60,9 @@ class AssessmentCandidateIntakeServiceTests {
     when(pipeline.validate(any(), any())).thenReturn(new ContentValidationPipeline.Outcome.NotRejected());
 
     assertThatThrownBy(() -> new AssessmentCandidateIntakeService(
-        ai, pipeline, mock(AssessmentCandidateRevisionRepository.class), mock(AdminActivityRepository.class))
+        ai, pipeline, new AssessmentCandidatePersistenceService(
+            mock(AssessmentCandidateRevisionRepository.class),
+            mock(io.ramals.learningplatform.admin.AdminActivityRepository.class)))
         .intake(UUID.randomUUID(), request(), "FOUNDATIONAL", ValidationContext.unavailable(),
             "author", "key", "author", 100L))
         .isInstanceOf(AssessmentCandidateIntakeService.CandidateIntakeRejectedException.class);

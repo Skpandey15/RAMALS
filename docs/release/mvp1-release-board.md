@@ -44,7 +44,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T08 Spring + UI Tutor integration | ✅ done | M1-ADR-004 ✅ |
 | M1-T09 Diagnostic Agent V1 | ✅ done | — |
 | M1-T10 Assessment Agent V1 | ✅ done | M1-ADR-006 ✅, M1-ADR-010 ✅ |
-| M1-T11 Adaptation Agent V1 | ⬜ next | — |
+| M1-T11 Adaptation Agent V1 | ✅ done | — |
 | M1-T12 LIMITED_DURABLE approval | ⬜ next | M1-ADR-007 ✅ |
 | M1-T13 ai_execution persistence | ⬜ | M1-ADR-005 |
 | M1-T14 Resilience, latency, cost | ⬜ | — |
@@ -52,6 +52,13 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T16 AI security challenge | ⬜ | — |
 | M1-T17 CI/CD and deployment packaging | ⬜ | — |
 | M1-T18 MVP-1 E2E validation and RC | ⬜ | **R1** 🔴 |
+
+### Completed readiness slices
+
+| Slice | Status | Evidence |
+| --- | --- | --- |
+| S0-07 Assessment Candidate Provenance Intake | ✅ done | Merged implementation and V018 provenance migration |
+| TD-S0-07-01 audit transaction-manager construction cleanup | ✅ done | Merged implementation; Spring-managed transaction manager is the only production path |
 
 ## Decisions written just in time
 
@@ -80,5 +87,4 @@ Written so far under this practice: M1-ADR-004 (before T08), M1-ADR-008 (before 
 | Doc 02 §4's step and repair ceilings were mutually unsatisfiable (8 steps, 2 repairs, 12 needed) | Resolved by S0-01: node executions are derived from the current graph (12), while repair cycles, model calls, and the caller-owned absolute deadline remain separate controls. |
 | Doc 07 quality thresholds unmeasurable on `ci-fake` | Tutor pedagogical and functional rubrics cannot be scored without a real route and a provider credential. |
 | Deployed backend digest predates the M1-T04 MDC fix | The shared environment cannot answer a support-code lookup until a release is cut. |
-| Agent HTTP routes are unregistered (`build_internal_router()` is empty; `/internal/v1/tutor/respond` returns 404) | T07-T10 landed agent logic without exposing it, while Spring's `RamalsAiTutorClient` posts to that path. Spring and Python have never run against each other. Tracked separately from T10; it needs an owning task, not a slice. |
 | Architecture guards are source-scanning rather than ArchUnit | `DomainNeutralityTests` and `EvaluationAuthorityBoundaryTests` read `.java` files as text, so they see imports and literals but not the type graph. Migration tracked as **S0-03**; not a blocker for the guards they currently enforce. |
