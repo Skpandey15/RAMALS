@@ -43,8 +43,8 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T07 Tutor Agent V1 | ✅ done | — |
 | M1-T08 Spring + UI Tutor integration | ✅ done | M1-ADR-004 ✅ |
 | M1-T09 Diagnostic Agent V1 | ✅ done | — |
-| M1-T10 Assessment Agent V1 | 🟡 slice 1 of 2 | M1-ADR-006 ✅, M1-ADR-010 ✅ |
-| M1-T11 Adaptation Agent V1 | ⬜ | — |
+| M1-T10 Assessment Agent V1 | ✅ done | M1-ADR-006 ✅, M1-ADR-010 ✅ |
+| M1-T11 Adaptation Agent V1 | ⬜ next | — |
 | M1-T12 LIMITED_DURABLE approval | ⬜ | M1-ADR-007 |
 | M1-T13 ai_execution persistence | ⬜ | M1-ADR-005 |
 | M1-T14 Resilience, latency, cost | ⬜ | — |
