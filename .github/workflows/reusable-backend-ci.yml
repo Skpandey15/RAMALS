@@ -9,7 +9,9 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Shared PostgreSQL integration suites are intentionally serialized to protect their reset
+    # and privilege fixtures. Allow the full deterministic verification run to finish.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:18.1-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
