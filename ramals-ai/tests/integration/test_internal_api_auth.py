@@ -31,9 +31,8 @@ class _AcceptingVerifier:
 def _app_with(verifier: object | None, environment: Environment = Environment.TEST) -> FastAPI:
     """Builds the real app and mounts one probe route on the guarded router.
 
-    Agent endpoints arrive in M1-T07; until then a probe is the only way to exercise the guard
-    through the actual application rather than by calling the dependency directly. It is defined in
-    the test, so it never becomes production surface.
+    The probe remains useful for testing the dependency in isolation. Agent boundary behavior is
+    covered by the dedicated internal API tests.
     """
     app = create_app(Settings(environment=environment))
     app.state.workload_verifier = verifier

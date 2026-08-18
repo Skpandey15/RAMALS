@@ -3,6 +3,7 @@
 Proposes the next probe. The deterministic gate in Spring decides whether it happens.
 """
 
+from ramals_ai.diagnostic.agent import DiagnosticAgent
 from ramals_ai.diagnostic.validation import validate
 
-__all__ = ["validate"]
+__all__ = ["DiagnosticAgent", "validate"]

@@ -6,9 +6,8 @@ openapi: 3.1.0
 # by the golden fixtures in contracts/golden/ (M1-ADR-002). Do not define a type on either side that
 # is not described here.
 #
-# Endpoints are declared now and implemented from M1-T07. A caller reaching one before then gets a
-# 404 from a service that never claimed the capability -- /internal/v1/capabilities reports the
-# agents this build actually serves.
+# Diagnostic, Tutor, and Assessment endpoints are activated by S0-06. Adaptation remains declared
+# for M1-T11 but unavailable; /internal/v1/capabilities reports the agents this build serves.
 
 info:
   title: RAMALS internal AI contract
