@@ -27,11 +27,15 @@ Reliable Adaptive Multi-Agent Learning System (RAMALS) is implemented as a deter
 ## Build and test
 
 ```powershell
-.\gradlew.bat test
+.\gradlew.bat check
 npm --prefix web-ui ci
 npm --prefix web-ui test
 npm --prefix web-ui run build
 ```
+
+Backend verification is split into `test` (unit), `integrationTest` (PostgreSQL/runtime-backed),
+`architectureTest` (security and platform boundaries), and `governanceTest` (contracts, migrations,
+release records, and repository policy). `check` runs all four tasks.
 
 No Python or AI service is needed to build or run MVP-0.
 
@@ -44,4 +48,3 @@ docker compose --env-file .env -f infrastructure/docker/compose.yml up --build -
 ```
 
 See `infrastructure/docker/README.md` for Keycloak bootstrap, health checks, persistence verification, and shutdown procedures.
-

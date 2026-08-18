@@ -46,8 +46,9 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Build and test backend
-        run: ./gradlew --no-daemon clean test
-      # JaCoCo runs as a finalizer of the test task; surface the headline numbers in the run log.
+        run: ./gradlew --no-daemon clean check
+      # JaCoCo currently reports the fast unit-test task; integration coverage is kept separate
+      # because it requires the PostgreSQL-backed integrationTest task.
       - name: Summarise backend coverage
         if: always()
         run: |
