@@ -44,6 +44,15 @@ tasks.named('test') {
   useJUnitPlatform()
   finalizedBy tasks.named('jacocoTestReport')
 
+  // PostgreSQL persistence suites are enabled by environment variables. Include their test-mode
+  // inputs in Gradle's up-to-date checks; otherwise a plain unit-test run can be cached and reused
+  // after PostgreSQL integration tests are enabled, producing an incomplete JaCoCo report.
+  inputs.property('postgresTestUrl', providers.environmentVariable('RAMALS_TEST_POSTGRES_URL').orElse(''))
+  inputs.property('postgresTestAdminUser', providers.environmentVariable('RAMALS_TEST_POSTGRES_ADMIN_USER').orElse(''))
+  inputs.property('postgresTestEnabled', providers.environmentVariable('RAMALS_TEST_POSTGRES_ALLOW_RESET').orElse(''))
+  inputs.property('postgresTestAdminPasswordConfigured',
+      providers.environmentVariable('RAMALS_TEST_POSTGRES_ADMIN_PASSWORD').map { it.isBlank() ? 'false' : 'true' }.orElse('false'))
+
   // Several suites assert on files outside this module: the Keycloak realm, the release record and
   // ADRs, the AI contract and its golden fixtures, and .env.example. Gradle cannot see those, so
   // without declaring them it treats the task as up to date when only one of them changes -- and
