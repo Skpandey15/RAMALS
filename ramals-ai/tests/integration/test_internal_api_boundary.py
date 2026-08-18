@@ -95,6 +95,7 @@ def app() -> FastAPI:
             TrustLevel.UNVERIFIED,
             evaluate_trust_level=TrustLevel.FORMATIVE_ONLY,
         ),
+        "adaptation": _Agent(AgentType.ADAPTATION, TrustLevel.NON_AUTHORITATIVE),
     }
     return app
 
@@ -129,6 +130,7 @@ def request_body() -> dict[str, object]:
         ("/internal/v1/tutor/respond", "TUTOR", "NON_AUTHORITATIVE"),
         ("/internal/v1/assessment/propose", "ASSESSMENT", "UNVERIFIED"),
         ("/internal/v1/assessment/evaluate", "ASSESSMENT", "FORMATIVE_ONLY"),
+        ("/internal/v1/adaptation/propose", "ADAPTATION", "NON_AUTHORITATIVE"),
     ],
 )
 def test_activated_endpoints_return_contract_proposals(
@@ -138,20 +140,23 @@ def test_activated_endpoints_return_contract_proposals(
     agent_type: str,
     trust_level: str,
 ) -> None:
+    request_payload = dict(request_body)
+    if path == "/internal/v1/assessment/propose":
+        request_payload["requestedCapability"] = "FOUNDATIONAL"
     response = client.post(
         path,
-        json=request_body,
+        json=request_payload,
         headers={
             "Authorization": "Bearer good-token",
-            "X-Interaction-ID": request_body["interactionId"],
+            "X-Interaction-ID": request_payload["interactionId"],
         },
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["agentType"] == agent_type
-    assert body["trustLevel"] == trust_level
-    assert response.headers["X-Interaction-ID"] == request_body["interactionId"]
+    response_body = response.json()
+    assert response_body["agentType"] == agent_type
+    assert response_body["trustLevel"] == trust_level
+    assert response.headers["X-Interaction-ID"] == request_payload["interactionId"]
     assert response.headers["X-Request-ID"]
     assert response.headers["X-Trace-ID"]
 
@@ -164,15 +169,16 @@ def test_internal_routes_require_workload_auth(
     assert response.json()["detail"]["code"] == "WORKLOAD_AUTHENTICATION_REQUIRED"
 
 
-def test_adaptation_remains_unavailable(
+def test_assessment_rejects_missing_deterministic_difficulty(
     client: TestClient, request_body: dict[str, object]
 ) -> None:
     response = client.post(
-        "/internal/v1/adaptation/propose",
+        "/internal/v1/assessment/propose",
         json=request_body,
         headers={"Authorization": "Bearer good-token"},
     )
-    assert response.status_code == 404
+    assert response.status_code == 422
+    assert response.json()["code"] == "INVALID_POLICY_INPUT"
 
 
 def test_boundary_passes_one_absolute_deadline_to_the_agent(

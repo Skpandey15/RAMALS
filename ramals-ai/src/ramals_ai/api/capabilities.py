@@ -41,7 +41,12 @@ def build_capabilities_router(settings: Settings) -> APIRouter:
             environment=settings.environment.value,
             aiEnabled=settings.ai_enabled,
             modelRoute=settings.model_route.value,
-            agents=[AgentType.DIAGNOSTIC, AgentType.TUTOR, AgentType.ASSESSMENT],
+            agents=[
+                AgentType.DIAGNOSTIC,
+                AgentType.TUTOR,
+                AgentType.ASSESSMENT,
+                AgentType.ADAPTATION,
+            ],
             # Stated on the wire so no caller can mistake this service for a decision-maker.
             authority="NON_AUTHORITATIVE",
         )

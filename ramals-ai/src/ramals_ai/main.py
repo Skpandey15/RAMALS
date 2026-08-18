@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from ramals_ai import __version__
+from ramals_ai.adaptation.agent import AdaptationAgent
 from ramals_ai.api.capabilities import build_capabilities_router
 from ramals_ai.api.correlation import CorrelationMiddleware
 from ramals_ai.api.health import ServiceState, build_health_router
@@ -99,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "diagnostic": DiagnosticAgent(gateway),
         "tutor": TutorAgent(gateway),
         "assessment": AssessmentAgent(gateway),
+        "adaptation": AdaptationAgent(gateway),
     }
     return app
 
