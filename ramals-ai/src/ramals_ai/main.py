@@ -18,7 +18,9 @@ from ramals_ai.api.capabilities import build_capabilities_router
 from ramals_ai.api.correlation import CorrelationMiddleware
 from ramals_ai.api.health import ServiceState, build_health_router
 from ramals_ai.api.internal import build_internal_router
+from ramals_ai.assessment.agent import AssessmentAgent
 from ramals_ai.config.settings import ModelRoute, Settings, get_settings
+from ramals_ai.diagnostic.agent import DiagnosticAgent
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import ProviderAdapter
 from ramals_ai.gateway.providers.fake import FakeProvider
@@ -26,6 +28,7 @@ from ramals_ai.gateway.providers.litellm_adapter import LiteLLMProvider
 from ramals_ai.security.workload_identity import build_verifier
 from ramals_ai.telemetry.logging import configure_logging
 from ramals_ai.telemetry.tracing import configure_tracing
+from ramals_ai.tutor.agent import TutorAgent
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +86,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(CorrelationMiddleware)
     app.include_router(build_health_router(state))
     app.include_router(build_capabilities_router(resolved))
-    # Agent endpoints join this router in M1-T07 and inherit its authentication, so a new endpoint
-    # is protected by default rather than only when someone remembers to protect it.
+    # Agent endpoints inherit this router's authentication, so a new endpoint is protected by
+    # default rather than only when someone remembers to protect it.
     app.include_router(build_internal_router())
     app.state.service_state = state
     app.state.settings = resolved
     app.state.workload_verifier = build_verifier(resolved)
-    # The handoff point for M1-T06/T07: agents take the gateway from here rather than constructing
-    # one, so every model call in the service shares one set of budgets.
+    # Agents take the gateway from here rather than constructing one, so every model call in the
+    # service shares one set of budgets.
     app.state.gateway = gateway
+    app.state.agents = {
+        "diagnostic": DiagnosticAgent(gateway),
+        "tutor": TutorAgent(gateway),
+        "assessment": AssessmentAgent(gateway),
+    }
     return app
 
 

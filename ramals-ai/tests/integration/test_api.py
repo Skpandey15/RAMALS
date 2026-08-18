@@ -69,9 +69,12 @@ def test_capabilities_declares_no_authority(client: TestClient) -> None:
     assert client.get("/internal/v1/capabilities").json()["authority"] == "NON_AUTHORITATIVE"
 
 
-def test_capabilities_advertises_no_agents_yet(client: TestClient) -> None:
-    """Agents arrive in M1-T07; claiming one now would be a lie a caller could act on."""
-    assert client.get("/internal/v1/capabilities").json()["agents"] == []
+def test_capabilities_advertises_activated_agents(client: TestClient) -> None:
+    assert client.get("/internal/v1/capabilities").json()["agents"] == [
+        "DIAGNOSTIC",
+        "TUTOR",
+        "ASSESSMENT",
+    ]
 
 
 def test_capabilities_never_leaks_the_provider_credential() -> None:
@@ -87,7 +90,5 @@ def test_capabilities_never_leaks_the_provider_credential() -> None:
         assert "super-secret" not in started.get("/internal/v1/capabilities").text
 
 
-def test_agent_endpoints_are_not_served_yet(client: TestClient) -> None:
-    """Declared in the contract, implemented from M1-T07. Until then the service does not pretend
-    to offer them, and /internal/v1/capabilities reports an empty agent list to match."""
-    assert client.get("/internal/v1/tutor/respond").status_code == 404
+def test_adaptation_endpoint_is_not_served_in_s0_06(client: TestClient) -> None:
+    assert client.post("/internal/v1/adaptation/propose", json={}).status_code == 404

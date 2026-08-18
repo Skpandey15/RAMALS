@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from ramals_ai import __version__
 from ramals_ai.config.settings import Settings
+from ramals_ai.contracts.generated import AgentType
 
 CONTRACT_VERSION = "1.0"
 
@@ -40,8 +41,7 @@ def build_capabilities_router(settings: Settings) -> APIRouter:
             environment=settings.environment.value,
             aiEnabled=settings.ai_enabled,
             modelRoute=settings.model_route.value,
-            # Agents arrive from M1-T07. An empty list is the honest answer, not a placeholder.
-            agents=[],
+            agents=[AgentType.DIAGNOSTIC, AgentType.TUTOR, AgentType.ASSESSMENT],
             # Stated on the wire so no caller can mistake this service for a decision-maker.
             authority="NON_AUTHORITATIVE",
         )

@@ -16,8 +16,9 @@ The service foundation only — no agents, no model calls, no orchestration.
 | `GET /health/ready` | Safe to route traffic. `503 OUT_OF_SERVICE` until startup completes |
 | `GET /capabilities` | Build, environment, enabled route, and `authority: NON_AUTHORITATIVE` |
 
-Agents arrive from M1-T07; `/capabilities` reports an empty agent list until then, because claiming
-one would be a lie a caller could act on.
+S0-06 activates the authenticated Diagnostic, Tutor, and Assessment proposal routes. Adaptation
+remains unavailable until M1-T11. `/capabilities` reports only the routes actually served, and all
+responses are non-authoritative proposals that Spring must validate before any authoritative write.
 
 ## Boundaries this service is built inside
 
