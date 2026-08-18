@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.DomainContext;
 import io.ramals.learningplatform.ai.contract.DomainType;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import java.time.Duration;
 import java.time.Instant;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.RestClient;
+import static org.mockito.Mockito.mock;
 
 /**
  * The M1-T08 acceptance criteria, both of which are negative properties.
@@ -31,7 +33,7 @@ class TutorDegradationTests {
 
   /** An assembler that answers without a database, so these tests need no PostgreSQL. */
   private static DomainContextAssembler assembler() {
-    return new DomainContextAssembler(null) {
+    return new DomainContextAssembler(mock(CurriculumService.class)) {
       @Override
       public Optional<DomainContext> forSkill(String skillCode) {
         return SKILL.equals(skillCode)

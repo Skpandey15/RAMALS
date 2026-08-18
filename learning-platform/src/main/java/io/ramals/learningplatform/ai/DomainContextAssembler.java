@@ -4,8 +4,8 @@ import io.ramals.learningplatform.ai.contract.DomainContext;
 import io.ramals.learningplatform.ai.contract.DomainType;
 import io.ramals.learningplatform.ai.contract.GoalType;
 import io.ramals.learningplatform.ai.contract.LearningGoalContext;
-import io.ramals.learningplatform.learner.LearnerGoal;
 import io.ramals.learningplatform.curriculum.CurriculumService;
+import io.ramals.learningplatform.learner.LearnerGoal;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -44,7 +44,6 @@ public class DomainContextAssembler {
    *     a domain that does not exist.
    */
   public Optional<DomainContext> forSkill(String skillCode) {
-    if (curriculumService == null) return Optional.empty();
     return curriculumService.publishedSkillContext(skillCode)
         .map(context -> new DomainContext(context.domainCode(),
             DomainType.valueOf(context.domainType()), context.curriculumVersion()));
