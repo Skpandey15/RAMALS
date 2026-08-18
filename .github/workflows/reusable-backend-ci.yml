@@ -9,7 +9,9 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Shared PostgreSQL integration suites are intentionally serialized to protect their reset
+    # and privilege fixtures. Allow the full deterministic verification run to finish.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:18.1-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
@@ -46,7 +48,9 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Build and test backend
-        run: ./gradlew --no-daemon clean check
+        # Database-backed suites reset shared schemas and roles. Keep Gradle task workers
+        # serialized as well as the individual test forks.
+        run: ./gradlew --no-daemon --max-workers=1 clean check
       # JaCoCo currently reports the fast unit-test task; integration coverage is kept separate
       # because it requires the PostgreSQL-backed integrationTest task.
       - name: Summarise backend coverage
