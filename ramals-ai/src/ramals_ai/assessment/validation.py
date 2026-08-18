@@ -158,6 +158,13 @@ def _item_policy_errors(parsed: dict[str, Any], context: dict[str, Any]) -> list
         # skill the item does not measure.
         errors.append("POLICY_SKILL_NOT_REQUESTED")
 
+    requested_difficulty = context.get("requestedDifficulty")
+    if isinstance(requested_difficulty, str) and parsed["difficulty"] != requested_difficulty:
+        # Spring chose the band. An item returned at a different one is evidence at a level nobody
+        # asked to measure, and it looks entirely ordinary in a review queue -- the difficulty field
+        # is self-reported and there is nothing else to compare it against.
+        errors.append("POLICY_DIFFICULTY_NOT_REQUESTED")
+
     available = context.get("availableObjectives")
     objective = parsed.get("objectiveCode")
     if (

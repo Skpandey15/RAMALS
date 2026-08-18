@@ -89,16 +89,27 @@ class AssessmentAgent:
         envelope: AIRequestEnvelope,
         *,
         deadline: Deadline,
+        requested_difficulty: str,
         objectives: tuple[str, ...] = (),
     ) -> AIProposalEnvelope:
-        """Writes one candidate item. The result is UNVERIFIED and reaches no learner unpromoted."""
+        """Writes one candidate item. The result is UNVERIFIED and reaches no learner unpromoted.
+
+        ``requested_difficulty`` is the band Spring decided to commission, derived there from the
+        mastery state Spring owns. The agent receives that decision and not the learner-specific
+        status it came from — see :mod:`ramals_ai.assessment.minimizer` for why the distinction
+        matters to an artefact that outlives the request.
+
+        A caller with no band should not be commissioning an item, so this is required rather than
+        defaulted.
+        """
         context: dict[str, Any] = dict(minimize(envelope))
+        context["requestedDifficulty"] = requested_difficulty
         if objectives:
             # Curriculum facts Spring supplies, not anything derived from a learner, which is why
             # they are added after minimization rather than allowlisted through it.
             context["availableObjectives"] = list(objectives)
 
-        messages = assessment_prompt.build_item_messages(context, objectives)
+        messages = assessment_prompt.build_item_messages(context, requested_difficulty, objectives)
         state = self._run(envelope, deadline, messages, lambda raw: validate_item(raw, context))
         return self._to_proposal(
             state,

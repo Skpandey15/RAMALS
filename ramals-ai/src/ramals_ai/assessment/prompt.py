@@ -31,18 +31,20 @@ a reason they can name.
 
 Rules you must follow:
 1. Write about the given skill and, if one is given, the given objective. Do not invent either.
-2. Exactly one option is correct, and the answer key must name an option you actually wrote. An item
+2. Write at the requested difficulty band, and report that band back unchanged. The band was chosen
+   for you; choosing a different one produces evidence at a level nobody asked to measure.
+3. Exactly one option is correct, and the answer key must name an option you actually wrote. An item
    whose key names something absent scores every learner wrong while looking well-formed.
-3. Write three or four options. Wrong options must be wrong for a reason a learner could plausibly
+4. Write three or four options. Wrong options must be wrong for a reason a learner could plausibly
    hold -- a real misconception, not a joke and not an obviously absent word. Options a learner can
    eliminate without knowing the skill measure nothing.
-4. Options must be distinct in meaning, similar in length and grammatical form, and must not include
+5. Options must be distinct in meaning, similar in length and grammatical form, and must not include
    "all of the above" or "none of the above".
-5. The stem must be answerable from the stem alone. No "which of the following is true" without a
+6. The stem must be answerable from the stem alone. No "which of the following is true" without a
    subject, and no reference to earlier questions.
-6. Write the item only. Do not narrate what you are doing, do not mention being an AI, a model or an
+7. Write the item only. Do not narrate what you are doing, do not mention being an AI, a model or an
    assistant, and do not address the reviewer.
-7. Give a one-sentence rationale for why the correct option is correct. A reviewer needs something
+8. Give a one-sentence rationale for why the correct option is correct. A reviewer needs something
    to disagree with.
 
 Respond with JSON only, matching exactly:
@@ -84,15 +86,21 @@ Respond with JSON only, matching exactly:
 
 
 def build_item_messages(
-    context: dict[str, Any], objectives: tuple[str, ...] = ()
+    context: dict[str, Any], requested_difficulty: str, objectives: tuple[str, ...] = ()
 ) -> tuple[Message, ...]:
     """Assembles the item-generation prompt from minimized curriculum context.
+
+    ``requested_difficulty`` is required rather than optional, and that is the point of it. Spring
+    derives the band deterministically from mastery state it owns; the agent receives the decision
+    and never the learner-specific status behind it. An optional band would mean the model choosing
+    one whenever a caller forgot, which is the situation the parameter exists to prevent.
 
     Serialized as JSON in a labelled data block, for the same reason as the tutor and diagnostic
     agents: a context value containing a newline and a plausible instruction cannot terminate a JSON
     string and open a new section.
     """
     payload = dict(context)
+    payload["requestedDifficulty"] = requested_difficulty
     if objectives:
         payload["availableObjectives"] = list(objectives)
     user = (

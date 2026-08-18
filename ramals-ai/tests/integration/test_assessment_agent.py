@@ -135,7 +135,12 @@ def test_generated_content_is_always_unverified() -> None:
     """M1-ADR-006. Stated on the wire on every proposal, whatever the content -- a candidate that
     arrived looking finished is still a candidate."""
     agent, _provider, deadline = agent_for(GOOD_ITEM)
-    proposal = agent.propose(envelope(), deadline=deadline, objectives=("TOPIC_DEFINE",))
+    proposal = agent.propose(
+        envelope(),
+        deadline=deadline,
+        requested_difficulty="FOUNDATIONAL",
+        objectives=("TOPIC_DEFINE",),
+    )
 
     assert proposal.trustLevel is TrustLevel.UNVERIFIED
     assert proposal.agentType is AgentType.ASSESSMENT
@@ -157,7 +162,12 @@ def test_a_broken_item_is_still_unverified_not_rejected_on_the_wire() -> None:
     M1-ADR-006 places on the other side of the boundary.
     """
     agent, _provider, deadline = agent_for(BROKEN_ITEM)
-    proposal = agent.propose(envelope(), deadline=deadline, objectives=("TOPIC_DEFINE",))
+    proposal = agent.propose(
+        envelope(),
+        deadline=deadline,
+        requested_difficulty="FOUNDATIONAL",
+        objectives=("TOPIC_DEFINE",),
+    )
 
     assert proposal.trustLevel is TrustLevel.UNVERIFIED
     # The refusal is reported as reason codes on an UNVERIFIED proposal, not as a trust state.
@@ -182,7 +192,12 @@ def test_a_candidate_carries_the_versions_that_wrote_it() -> None:
     """An item outlives the request that produced it. Months later the question is whether a whole
     batch needs re-checking after a prompt change, and the item has to answer it on its own."""
     agent, _provider, deadline = agent_for(GOOD_ITEM, route=ModelRoute.ASSESSMENT_DEFAULT)
-    proposal = agent.propose(envelope(), deadline=deadline, objectives=("TOPIC_DEFINE",))
+    proposal = agent.propose(
+        envelope(),
+        deadline=deadline,
+        requested_difficulty="FOUNDATIONAL",
+        objectives=("TOPIC_DEFINE",),
+    )
 
     provenance: dict[str, Any] = proposal.proposal["provenance"]
     assert provenance["agentType"] == "ASSESSMENT"
@@ -196,7 +211,7 @@ def test_provenance_survives_an_unusable_generation() -> None:
     """The case where provenance matters most: something went wrong and somebody has to work out
     which prompt version was responsible."""
     agent, _provider, deadline = agent_for("not json at all", route=ModelRoute.ASSESSMENT_DEFAULT)
-    proposal = agent.propose(envelope(), deadline=deadline)
+    proposal = agent.propose(envelope(), deadline=deadline, requested_difficulty="FOUNDATIONAL")
 
     assert proposal.proposal["provenance"]["promptVersion"] == ASSESSMENT_PROMPT_VERSION
     assert proposal.proposal["provenance"]["trustLevel"] == "UNVERIFIED"
@@ -206,7 +221,7 @@ def test_the_reported_prompt_version_follows_the_route_not_the_agent() -> None:
     """M1-ADR-008 makes the route's prompt pointer what a rollback moves, so the proposal reports
     the route's version rather than a constant compiled into the agent."""
     agent, _provider, deadline = agent_for(GOOD_ITEM, route=ModelRoute.CI_FAKE)
-    proposal = agent.propose(envelope(), deadline=deadline)
+    proposal = agent.propose(envelope(), deadline=deadline, requested_difficulty="FOUNDATIONAL")
 
     assert proposal.promptVersion != ASSESSMENT_PROMPT_VERSION
 
@@ -225,7 +240,7 @@ def test_an_unusable_item_becomes_an_explicitly_empty_payload() -> None:
     """Not raw model text. Spring's next act is to store what it receives, and text that looks like
     an item and is not one is the thing a reviewer would have to catch by reading."""
     agent, _provider, deadline = agent_for("Here, have a lovely question about Kafka!")
-    proposal = agent.propose(envelope(), deadline=deadline)
+    proposal = agent.propose(envelope(), deadline=deadline, requested_difficulty="FOUNDATIONAL")
 
     assert proposal.proposal["stem"] == ""
     assert proposal.proposal["options"] == []
@@ -238,7 +253,12 @@ def test_an_unusable_item_reports_why() -> None:
     """An empty payload with no reason is indistinguishable from a working generation that had
     nothing to say."""
     agent, _provider, deadline = agent_for(BROKEN_ITEM)
-    proposal = agent.propose(envelope(), deadline=deadline, objectives=("TOPIC_DEFINE",))
+    proposal = agent.propose(
+        envelope(),
+        deadline=deadline,
+        requested_difficulty="FOUNDATIONAL",
+        objectives=("TOPIC_DEFINE",),
+    )
 
     codes = [
         code.root if hasattr(code, "root") else str(code) for code in proposal.reasonCodes or []
@@ -260,7 +280,12 @@ def test_an_unusable_evaluation_becomes_an_explicitly_empty_payload() -> None:
 
 def test_the_item_prompt_offers_the_objectives_it_was_given() -> None:
     agent, provider, deadline = agent_for(GOOD_ITEM)
-    agent.propose(envelope(), deadline=deadline, objectives=("TOPIC_DEFINE", "TOPIC_PARTITION"))
+    agent.propose(
+        envelope(),
+        deadline=deadline,
+        requested_difficulty="FOUNDATIONAL",
+        objectives=("TOPIC_DEFINE", "TOPIC_PARTITION"),
+    )
 
     rendered = "\n".join(message.content for message in provider.prompts[0])
     assert "TOPIC_PARTITION" in rendered
@@ -270,7 +295,7 @@ def test_propose_and_evaluate_do_not_share_a_prompt() -> None:
     """Different authority, different prompt. A single prompt with a mode flag is a flag that can be
     passed wrongly."""
     agent, provider, deadline = agent_for(GOOD_ITEM)
-    agent.propose(envelope(), deadline=deadline)
+    agent.propose(envelope(), deadline=deadline, requested_difficulty="FOUNDATIONAL")
     agent.evaluate(envelope(), deadline=deadline)
 
     first = provider.prompts[0][0].content

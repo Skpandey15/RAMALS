@@ -17,7 +17,7 @@ from ramals_ai.assessment.validation import validate_item
 
 CONTEXT: dict[str, Any] = {
     "skillCode": "KAFKA_TOPIC",
-    "masteryStatus": "NEEDS_PRACTICE",
+    "requestedDifficulty": "FOUNDATIONAL",
     "availableObjectives": ["TOPIC_DEFINE", "TOPIC_PARTITION"],
 }
 
@@ -160,6 +160,21 @@ def test_policy_defers_when_the_context_offered_no_objectives() -> None:
 
 def test_an_unsupported_difficulty_is_refused() -> None:
     assert "SCHEMA_BAD_DIFFICULTY" in validate_item(item(difficulty="EXPERT"), CONTEXT)
+
+
+def test_an_item_at_a_band_nobody_asked_for_is_refused() -> None:
+    """Spring chose the band deterministically. An item returned at a different one is evidence at a
+    level nobody asked to measure -- and it looks entirely ordinary in a review queue, because the
+    difficulty field is self-reported and there is nothing else to compare it against."""
+    errors = validate_item(item(difficulty="ADVANCED"), CONTEXT)
+
+    assert "POLICY_DIFFICULTY_NOT_REQUESTED" in errors
+
+
+def test_the_requested_band_is_accepted() -> None:
+    """The converse. A rule that refused every band would satisfy the test above and generate
+    nothing."""
+    assert validate_item(item(difficulty="FOUNDATIONAL"), CONTEXT) == []
 
 
 def test_a_missing_rationale_is_refused() -> None:

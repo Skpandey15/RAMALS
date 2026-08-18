@@ -57,7 +57,10 @@ def envelope(**overrides: object) -> AIRequestEnvelope:
 
 def item_prompt(request: AIRequestEnvelope) -> str:
     context = dict(minimize(request))
-    return "\n".join(message.content for message in build_item_messages(context, ("TOPIC_DEFINE",)))
+    return "\n".join(
+        message.content
+        for message in build_item_messages(context, "FOUNDATIONAL", ("TOPIC_DEFINE",))
+    )
 
 
 def evaluation_prompt(request: AIRequestEnvelope) -> str:
@@ -92,6 +95,37 @@ def test_the_assessment_allowlist_is_narrower_than_the_tutor_one() -> None:
     assert LEARNING_CONTEXT_ALLOWLIST < TUTOR_ALLOWLIST
     assert "masteryScore" not in LEARNING_CONTEXT_ALLOWLIST
     assert "evidenceConfidence" not in LEARNING_CONTEXT_ALLOWLIST
+
+
+def test_the_prompt_receives_the_decision_and_not_the_reason_for_it() -> None:
+    """``masteryStatus`` is learner-specific -- it lives on ``ledger.mastery_snapshot`` keyed by
+    learner and skill, and means *this learner is at this status*.
+
+    Spring derives the difficulty band from it and passes the band. The band carries the same
+    operational information with none of the provenance, so the resulting item is a curriculum
+    artefact rather than one shaped around a particular learner's history.
+    """
+    rendered = item_prompt(envelope())
+
+    assert "masteryStatus" not in LEARNING_CONTEXT_ALLOWLIST
+    assert "NEEDS_PRACTICE" not in rendered
+    assert "masteryStatus" not in rendered
+    # The decision does arrive, so the band is not simply missing.
+    assert "requestedDifficulty" in rendered
+    assert "FOUNDATIONAL" in rendered
+
+
+def test_nothing_learner_derived_survives_minimization() -> None:
+    """The whole learning context at once, rather than field by field.
+
+    Field-by-field assertions pass for a field that was never in the fixture. This one starts from
+    everything the contract can carry and asserts only the skill code comes through, so a future
+    field added to ``LearningContext`` is excluded by default rather than by being remembered.
+    """
+    minimized = dict(minimize(envelope()))
+    minimized.pop("domain", None)
+
+    assert minimized == {"skillCode": "KAFKA_TOPIC"}
 
 
 def test_the_curriculum_the_item_must_be_written_to_does_reach_the_prompt() -> None:
