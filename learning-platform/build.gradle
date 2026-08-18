@@ -43,6 +43,12 @@ dependencies {
 
 tasks.named('test') {
   useJUnitPlatform()
+  // The PostgreSQL-backed suites below deliberately reset shared schemas. Keep the default
+  // unit-test task deterministic as well when a CI invocation enables JUnit parallel execution.
+  maxParallelForks = 1
+  systemProperty 'junit.jupiter.execution.parallel.enabled', 'false'
+  systemProperty 'junit.jupiter.execution.parallel.mode.default', 'same_thread'
+  systemProperty 'junit.jupiter.execution.parallel.mode.classes.default', 'same_thread'
   // Keep the default task fast: integration, architecture, and governance suites run through
   // their own tasks below and are wired into check.
   filter {
@@ -76,6 +82,13 @@ def registerCategoryTest = { String name, String description, List<String> inclu
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
     useJUnitPlatform()
+    // Integration and governance fixtures use one shared PostgreSQL database and reset schemas.
+    // Serialize both Gradle workers and JUnit classes so their @BeforeAll reset hooks cannot
+    // invalidate another class that is still executing.
+    maxParallelForks = 1
+    systemProperty 'junit.jupiter.execution.parallel.enabled', 'false'
+    systemProperty 'junit.jupiter.execution.parallel.mode.default', 'same_thread'
+    systemProperty 'junit.jupiter.execution.parallel.mode.classes.default', 'same_thread'
     filter {
       includes.each { includeTestsMatching(it) }
     }
