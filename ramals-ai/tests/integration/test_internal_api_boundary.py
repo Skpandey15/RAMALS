@@ -10,12 +10,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from ramals_ai.config.settings import Environment, Settings
 from ramals_ai.contracts.generated import (
     AgentType,
     AIProposalEnvelope,
+    AIRequestEnvelope,
     ContractVersion,
     TrustLevel,
     Validation,
@@ -45,12 +47,11 @@ class _Agent:
         self._evaluate_trust_level = evaluate_trust_level
 
     def _proposal(
-        self, envelope: object, trust_level: TrustLevel | None = None
+        self, envelope: AIRequestEnvelope, trust_level: TrustLevel | None = None
     ) -> AIProposalEnvelope:
-        interaction_id = envelope.interactionId  # type: ignore[attr-defined]
         return AIProposalEnvelope(
             contractVersion=ContractVersion("1.0"),
-            proposalId=interaction_id,
+            proposalId=envelope.interactionId,
             agentType=self._agent_type,
             agentVersion="test-agent-v1",
             promptVersion="test-prompt-v1",
@@ -60,13 +61,13 @@ class _Agent:
             validation=Validation(schemaValid=True, semanticValid=True, repairAttempts=0),
         )
 
-    def propose(self, envelope: object, **_: object) -> AIProposalEnvelope:
+    def propose(self, envelope: AIRequestEnvelope, **_: object) -> AIProposalEnvelope:
         return self._proposal(envelope)
 
-    def respond(self, envelope: object, **_: object) -> AIProposalEnvelope:
+    def respond(self, envelope: AIRequestEnvelope, **_: object) -> AIProposalEnvelope:
         return self._proposal(envelope)
 
-    def evaluate(self, envelope: object, **_: object) -> AIProposalEnvelope:
+    def evaluate(self, envelope: AIRequestEnvelope, **_: object) -> AIProposalEnvelope:
         return self._proposal(envelope, self._evaluate_trust_level)
 
 
@@ -75,13 +76,15 @@ class _FailingAgent:
         self.failure = failure
         self.deadline: Deadline | None = None
 
-    def respond(self, _envelope: object, *, deadline: Deadline, **_: object) -> AIProposalEnvelope:
+    def respond(
+        self, _envelope: AIRequestEnvelope, *, deadline: Deadline, **_: object
+    ) -> AIProposalEnvelope:
         self.deadline = deadline
         raise self.failure
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def app() -> FastAPI:
     app = create_app(Settings(environment=Environment.TEST))
     app.state.workload_verifier = _Verifier()
     app.state.agents = {
@@ -93,6 +96,11 @@ def client() -> Iterator[TestClient]:
             evaluate_trust_level=TrustLevel.FORMATIVE_ONLY,
         ),
     }
+    return app
+
+
+@pytest.fixture
+def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as started:
         yield started
 
@@ -168,10 +176,10 @@ def test_adaptation_remains_unavailable(
 
 
 def test_boundary_passes_one_absolute_deadline_to_the_agent(
-    client: TestClient, request_body: dict[str, object]
+    app: FastAPI, client: TestClient, request_body: dict[str, object]
 ) -> None:
     agent = _FailingAgent(GatewayError(GatewayErrorCode.PROVIDER_UNAVAILABLE, "test"))
-    client.app.state.agents["tutor"] = agent
+    app.state.agents["tutor"] = agent
 
     response = client.post(
         "/internal/v1/tutor/respond",
@@ -186,9 +194,9 @@ def test_boundary_passes_one_absolute_deadline_to_the_agent(
 
 
 def test_deadline_failure_is_a_gateway_timeout(
-    client: TestClient, request_body: dict[str, object]
+    app: FastAPI, client: TestClient, request_body: dict[str, object]
 ) -> None:
-    client.app.state.agents["tutor"] = _FailingAgent(
+    app.state.agents["tutor"] = _FailingAgent(
         GatewayError(GatewayErrorCode.DEADLINE_EXCEEDED, "test")
     )
 
