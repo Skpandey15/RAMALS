@@ -7,8 +7,6 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
-import javax.sql.DataSource;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,11 +25,6 @@ public class AdminActivityRepository {
   public AdminActivityRepository(JdbcTemplate jdbcTemplate, PlatformTransactionManager transactionManager) {
     this.jdbcTemplate = jdbcTemplate;
     this.transactionManager = transactionManager;
-  }
-
-  /** Compatibility constructor for manually wired persistence tests and small integrations. */
-  public AdminActivityRepository(JdbcTemplate jdbcTemplate) {
-    this(jdbcTemplate, transactionManager(jdbcTemplate));
   }
 
   /**
@@ -68,14 +61,6 @@ public class AdminActivityRepository {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, UuidV7.generate(), actorSubject, action, targetType, targetId, outcome, detail,
         interactionId, traceId == null || traceId.isBlank() ? null : traceId);
-  }
-
-  private static PlatformTransactionManager transactionManager(JdbcTemplate jdbcTemplate) {
-    DataSource dataSource = jdbcTemplate.getDataSource();
-    if (dataSource == null) {
-      throw new IllegalArgumentException("JdbcTemplate must have a DataSource");
-    }
-    return new DataSourceTransactionManager(dataSource);
   }
 
   public List<AdminActivity> findByInteractionId(String interactionId) {

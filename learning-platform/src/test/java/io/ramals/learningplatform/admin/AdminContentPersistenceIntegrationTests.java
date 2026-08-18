@@ -102,7 +102,8 @@ class AdminContentPersistenceIntegrationTests {
       runtimeJdbc = new JdbcTemplate(dataSource);
       migrationJdbc = new JdbcTemplate(
           new DriverManagerDataSource(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD));
-      auditRepository = new AdminActivityRepository(runtimeJdbc);
+      auditRepository = new AdminActivityRepository(runtimeJdbc,
+          new JdbcTransactionManager(dataSource));
       service = new ContentAdminService(new ContentAdminRepository(runtimeJdbc), auditRepository);
     }
   }
@@ -215,6 +216,26 @@ class AdminContentPersistenceIntegrationTests {
     })).isInstanceOf(IllegalStateException.class);
 
     assertThat(auditRepository.findByInteractionId(interactionId)).isEmpty();
+  }
+
+  @Test
+  @Order(7)
+  void transactionalAuditCommitsWithCaller() {
+    wire();
+    String interactionId = "01920000-0000-7000-0000-000000000105";
+    TransactionTemplate transaction = new TransactionTemplate(
+        new JdbcTransactionManager(runtimeJdbc.getDataSource()));
+
+    transaction.executeWithoutResult(status -> auditRepository.appendWithinTransaction(
+        ACTOR, "TRANSACTIONAL_PROBE", "CURRICULUM_VERSION", KAFKA_V1, "SUCCESS",
+        "transaction commit probe", interactionId, TRACE_ID));
+
+    assertThat(auditRepository.findByInteractionId(interactionId))
+        .singleElement()
+        .satisfies(activity -> {
+          assertThat(activity.action()).isEqualTo("TRANSACTIONAL_PROBE");
+          assertThat(activity.outcome()).isEqualTo("SUCCESS");
+        });
   }
 
   private void withCorrelation(String interactionId, Runnable action) {
