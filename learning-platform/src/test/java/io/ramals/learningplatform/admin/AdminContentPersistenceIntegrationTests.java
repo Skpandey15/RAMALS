@@ -20,6 +20,8 @@ import org.slf4j.MDC;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Exercises controlled content administration against real PostgreSQL: the seeded published version
@@ -176,6 +178,43 @@ class AdminContentPersistenceIntegrationTests {
         "DELETE FROM audit.admin_activity WHERE id = ?", auditId))
         .isInstanceOfSatisfying(DataAccessException.class,
             exception -> assertThat(sqlState(exception)).isEqualTo("55000"));
+  }
+
+  @Test
+  @Order(5)
+  void legacyAuditSurvivesCallerRollback() {
+    wire();
+    String interactionId = "01920000-0000-7000-0000-000000000103";
+    TransactionTemplate transaction = new TransactionTemplate(
+        new JdbcTransactionManager(runtimeJdbc.getDataSource()));
+
+    assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
+      auditRepository.append(ACTOR, "LEGACY_REJECTION", "CURRICULUM_VERSION", KAFKA_V1,
+          "REJECTED", "legacy rollback probe", interactionId, TRACE_ID);
+      throw new IllegalStateException("rollback probe");
+    })).isInstanceOf(IllegalStateException.class);
+
+    assertThat(auditRepository.findByInteractionId(interactionId))
+        .singleElement()
+        .satisfies(activity -> assertThat(activity.action()).isEqualTo("LEGACY_REJECTION"));
+  }
+
+  @Test
+  @Order(6)
+  void transactionalAuditRollsBackWithCaller() {
+    wire();
+    String interactionId = "01920000-0000-7000-0000-000000000104";
+    TransactionTemplate transaction = new TransactionTemplate(
+        new JdbcTransactionManager(runtimeJdbc.getDataSource()));
+
+    assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
+      auditRepository.appendWithinTransaction(ACTOR, "TRANSACTIONAL_PROBE",
+          "CURRICULUM_VERSION", KAFKA_V1, "SUCCESS", "transaction rollback probe",
+          interactionId, TRACE_ID);
+      throw new IllegalStateException("rollback probe");
+    })).isInstanceOf(IllegalStateException.class);
+
+    assertThat(auditRepository.findByInteractionId(interactionId)).isEmpty();
   }
 
   private void withCorrelation(String interactionId, Runnable action) {
