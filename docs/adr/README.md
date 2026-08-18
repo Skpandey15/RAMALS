@@ -28,11 +28,10 @@ be authored before the implementation task each one gates.
 | [M1-ADR-003](M1-ADR-003-workload-identity.md) | Spring authenticates to ramals-ai with Keycloak client credentials and a distinct `ramals-ai` audience |
 | [M1-ADR-004](M1-ADR-004-tutor-response-is-bounded-non-streaming.md) | Tutor V1 returns one complete validated response and does not stream: unsupported learner-state claims are only detectable on a finished response, and streamed text cannot be un-read |
 | [M1-ADR-006](M1-ADR-006-generated-assessment-trust-promotion.md) | Generated assessment content is UNVERIFIED on creation and only a human promotes it; automated validation may reject but never approve |
+| [M1-ADR-007](M1-ADR-007-limited-durable-human-approval-workflow.md) | Spring/PostgreSQL limited-durable human approval with immutable proposal revisions, atomic revalidation, and no AI authority |
 | [M1-ADR-008](M1-ADR-008-model-routing-fallback-and-rollback.md) | Routes are versioned configuration; hard budgets are enforced before dispatch; failure never escalates to a costlier route; rollback moves pointers and never rewrites recorded proposal metadata |
 | [M1-ADR-010](M1-ADR-010-assessment-evaluation-is-formative-only.md) | AI assessment evaluation is FORMATIVE_ONLY and can never create scored evidence |
 
-Not yet authored: M1-ADR-005 (ai_execution persistence), 007 (LIMITED_DURABLE approval), 009
-(evaluation thresholds). Each is written just before the task it gates rather than as a batch, so
-the decision has the information its implementation produced. M1-T02, M1-T03, M1-T05, M1-T08 and
-M1-T10 are now unblocked.
-
+Not yet authored: M1-ADR-005 (ai_execution persistence), 009 (evaluation thresholds). Each is written
+just before the task it gates rather than as a batch, so the decision has the information its
+implementation produced. M1-T02, M1-T03, M1-T05, M1-T08, M1-T10, and M1-T12 are now unblocked.
