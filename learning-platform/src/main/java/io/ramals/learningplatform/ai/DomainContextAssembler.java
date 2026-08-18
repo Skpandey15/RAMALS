@@ -4,10 +4,10 @@ import io.ramals.learningplatform.ai.contract.DomainContext;
 import io.ramals.learningplatform.ai.contract.DomainType;
 import io.ramals.learningplatform.ai.contract.GoalType;
 import io.ramals.learningplatform.ai.contract.LearningGoalContext;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.learner.LearnerGoal;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,10 +26,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class DomainContextAssembler {
 
-  private final JdbcTemplate jdbcTemplate;
+  private final CurriculumService curriculumService;
 
-  public DomainContextAssembler(JdbcTemplate jdbcTemplate) {
-    this.jdbcTemplate = jdbcTemplate;
+  public DomainContextAssembler(CurriculumService curriculumService) {
+    this.curriculumService = curriculumService;
   }
 
   /**
@@ -44,28 +44,9 @@ public class DomainContextAssembler {
    *     a domain that does not exist.
    */
   public Optional<DomainContext> forSkill(String skillCode) {
-    if (skillCode == null || skillCode.isBlank()) {
-      return Optional.empty();
-    }
-    return jdbcTemplate.query("""
-        SELECT d.code AS domain_code,
-               d.domain_type,
-               (SELECT cv.version_code
-                  FROM core.curriculum_version cv
-                 WHERE cv.domain_id = d.id AND cv.status = 'PUBLISHED'
-                 ORDER BY cv.published_at DESC
-                 LIMIT 1) AS version_code
-          FROM core.skill s
-          JOIN core.learning_domain d ON d.id = s.domain_id
-         WHERE s.stable_code = ?
-        """,
-        (result, row) -> new DomainContext(
-            result.getString("domain_code"),
-            DomainType.valueOf(result.getString("domain_type")),
-            result.getString("version_code")),
-        skillCode)
-        .stream()
-        .findFirst();
+    return curriculumService.publishedSkillContext(skillCode)
+        .map(context -> new DomainContext(context.domainCode(),
+            DomainType.valueOf(context.domainType()), context.curriculumVersion()));
   }
 
   /**
@@ -92,10 +73,6 @@ public class DomainContextAssembler {
    * it from a null.
    */
   public boolean hasPublishedCurriculum(UUID domainId) {
-    Integer count = jdbcTemplate.queryForObject("""
-        SELECT count(*) FROM core.curriculum_version
-         WHERE domain_id = ? AND status = 'PUBLISHED'
-        """, Integer.class, domainId);
-    return count != null && count > 0;
+    return curriculumService.hasPublishedCurriculum(domainId);
   }
 }
