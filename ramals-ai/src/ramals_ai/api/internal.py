@@ -31,6 +31,7 @@ from ramals_ai.security.workload_identity import (
     WorkloadTokenVerifier,
 )
 from ramals_ai.telemetry import correlation, tracing
+from ramals_ai.telemetry.logging import business_event
 from ramals_ai.tutor.agent import TutorAgent
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,17 @@ class InvalidPolicyInputError(ValueError):
 
 
 def _problem(code_status: int, code: str, detail: str) -> JSONResponse:
+    business_event(
+        logger,
+        level=logging.WARNING,
+        operation="http.request.rejected",
+        message="AI request rejected",
+        fields={
+            "errorCode": code,
+            "statusCode": code_status,
+            "outcome": "REJECTED",
+        },
+    )
     return JSONResponse(
         status_code=code_status,
         media_type="application/problem+json",

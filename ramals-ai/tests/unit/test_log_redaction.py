@@ -13,12 +13,13 @@ import logging
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ramals_ai.config.settings import Environment, ModelRoute, Settings
 from ramals_ai.main import create_app
 from ramals_ai.telemetry.correlation import bind, reset
-from ramals_ai.telemetry.logging import JsonFormatter
+from ramals_ai.telemetry.logging import JsonFormatter, business_event
 
 
 class _CapturedLogStream:
@@ -115,3 +116,41 @@ def test_provider_credential_never_reaches_a_log_line() -> None:
     )
     rendered = _format(_record("configuration resolved", settings=repr(settings)))
     assert "super-secret-provider-key" not in json.dumps(rendered)
+
+
+def test_business_event_has_common_schema_and_redacts_sensitive_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    interaction_id = str(uuid.uuid7())
+    request_id = str(uuid.uuid4())
+    tokens = bind(interaction_id, request_id)
+    try:
+        with caplog.at_level(logging.INFO, logger="ramals_ai.test"):
+            business_event(
+                logging.getLogger("ramals_ai.test"),
+                level=logging.INFO,
+                operation="agent.proposal.generated",
+                message="proposal generated",
+                fields={
+                    "entityType": "AgentProposal",
+                    "outcome": "SUCCESS",
+                    "prompt": "do not log this",
+                    "promptVersion": "tutor-v1",
+                    "accessToken": "do not log this either",
+                },
+            )
+        event = next(
+            record for record in caplog.records if record.getMessage() == "proposal generated"
+        )
+        rendered = _format(event)
+    finally:
+        reset(tokens)
+
+    assert rendered["operation"] == "agent.proposal.generated"
+    assert rendered["entityType"] == "AgentProposal"
+    assert rendered["outcome"] == "SUCCESS"
+    assert rendered["prompt"] == "[REDACTED]"
+    assert rendered["accessToken"] == "[REDACTED]"
+    assert rendered["promptVersion"] == "tutor-v1"
+    assert rendered["interactionId"] == interaction_id
+    assert rendered["requestId"] == request_id

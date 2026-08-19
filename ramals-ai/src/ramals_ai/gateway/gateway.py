@@ -34,6 +34,7 @@ from ramals_ai.gateway.providers.base import (
     ProviderResponse,
 )
 from ramals_ai.gateway.routes import RouteConfig, RouteRegistry, default_registry
+from ramals_ai.telemetry.logging import business_event
 
 logger = logging.getLogger(__name__)
 
@@ -301,10 +302,12 @@ class LLMGateway:
 
     def _record_success(self, result: GatewayResult) -> None:
         gateway_calls.add(1, {"route": result.route.value, "outcome": "success"})
-        logger.info(
-            "model call completed",
-            extra={
-                "operation": "gateway.complete",
+        business_event(
+            logger,
+            level=logging.INFO,
+            operation="gateway.complete",
+            message="model call completed",
+            fields={
                 "route": result.route.value,
                 "requestedRoute": result.requested_route.value,
                 "promptVersion": result.prompt_version,
@@ -315,12 +318,25 @@ class LLMGateway:
                 "latencyMs": result.latency_ms,
                 "attempts": result.attempts,
                 "fellBack": result.fell_back,
+                "outcome": "SUCCESS",
             },
         )
 
     def _record_failure(self, config: RouteConfig, failure: GatewayError) -> None:
         gateway_calls.add(1, {"route": config.route.value, "outcome": "failure"})
         gateway_failures.add(1, {"route": config.route.value, "code": failure.code.value})
+        business_event(
+            logger,
+            level=logging.WARNING,
+            operation="gateway.failed",
+            message="governed model call failed",
+            fields={
+                "route": config.route.value,
+                "errorCode": failure.code.value,
+                "outcome": "FAILURE",
+                "retryable": failure.retryable,
+            },
+        )
 
 
 def build_gateway(settings_route: ModelRoute, adapter: ProviderAdapter) -> LLMGateway:

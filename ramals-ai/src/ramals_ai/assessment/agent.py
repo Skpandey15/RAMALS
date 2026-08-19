@@ -45,6 +45,7 @@ from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import Message
 from ramals_ai.graph.runtime import GraphRun
 from ramals_ai.graph.state import AgentState
+from ramals_ai.telemetry.logging import business_event
 
 logger = logging.getLogger(__name__)
 
@@ -170,13 +171,16 @@ class AssessmentAgent:
             "trustLevel": trust_level.value,
         }
 
-        logger.info(
-            "assessment proposal produced",
-            extra={
-                "operation": operation,
+        business_event(
+            logger,
+            level=logging.INFO,
+            operation=operation,
+            message="assessment proposal produced",
+            fields={
                 "trustLevel": trust_level.value,
                 "promptVersion": state.prompt_version,
                 "validationErrors": len(state.validation_errors),
+                "outcome": "SUCCESS",
             },
         )
 
