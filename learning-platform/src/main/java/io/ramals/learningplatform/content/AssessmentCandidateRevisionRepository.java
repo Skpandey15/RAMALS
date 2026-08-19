@@ -38,6 +38,17 @@ public class AssessmentCandidateRevisionRepository {
         MAPPER, candidateId, revision).stream().findFirst();
   }
 
+  /**
+   * Locks a candidate revision while an approval request is being created. This serializes
+   * concurrent CREATE commands for the same immutable candidate before the request command is
+   * recorded, so a losing transaction can only resolve after the winner has committed both rows.
+   */
+  public Optional<AssessmentCandidateRevision> findByIdForUpdate(UUID candidateId, int revision) {
+    return jdbcTemplate.query(
+        SELECT + " WHERE candidate_id = ? AND candidate_revision = ? FOR UPDATE",
+        MAPPER, candidateId, revision).stream().findFirst();
+  }
+
   public AssessmentCandidateRevision insert(
       CandidateContent candidate,
       String sourceProposalId,

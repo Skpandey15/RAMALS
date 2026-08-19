@@ -49,7 +49,7 @@ public class ApprovalRequestService {
       assertFingerprint(actor, "CREATE", previous.get().id(), key, fingerprint);
       return previous.get();
     }
-    AssessmentCandidateRevision candidate = candidates.findById(candidateId, revision)
+    AssessmentCandidateRevision candidate = candidates.findByIdForUpdate(candidateId, revision)
         .orElseThrow(() -> error("CANDIDATE_NOT_FOUND", "candidate revision does not exist"));
     if (!"UNVERIFIED".equals(candidate.trustState())) {
       throw error("CANDIDATE_NOT_ELIGIBLE", "candidate is not awaiting approval");
