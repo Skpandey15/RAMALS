@@ -1,10 +1,13 @@
 package io.ramals.learningplatform.evidence;
 
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class EvidenceService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(EvidenceService.class);
 
   private final EvidenceRepository repository;
 
@@ -47,6 +52,9 @@ public class EvidenceService {
           observation.observedScore(), observation.normalizedScore(),
           observation.itemsAnswered(), observation.itemsCorrect(), provenance));
     }
+    BusinessEventLogger.info(LOGGER, "evidence.recorded", "Diagnostic evidence recorded",
+        Map.of("entityType", "EVIDENCE", "entityId", attemptId,
+            "evidenceCount", recorded.size(), "outcome", "SUCCESS"));
     return recorded;
   }
 
@@ -66,9 +74,13 @@ public class EvidenceService {
         .orElseThrow(() -> new IllegalArgumentException(
             "Cannot adjust unknown evidence: " + originalEvidenceId));
     String lineageKey = "ADJUSTMENT:" + originalEvidenceId + ":" + reasonKey;
-    return repository.appendAdjustmentEvidence(
+    Evidence adjustment = repository.appendAdjustmentEvidence(
         original.learnerId(), original.skillId(), originalEvidenceId, lineageKey,
         observedScore, normalizedScore, provenance);
+    BusinessEventLogger.info(LOGGER, "evidence.recorded", "Evidence adjustment recorded",
+        Map.of("entityType", "EVIDENCE", "entityId", adjustment.id(),
+            "supersedesEvidenceId", originalEvidenceId, "outcome", "SUCCESS"));
+    return adjustment;
   }
 
   private String requireInteractionId(String interactionId) {

@@ -2,12 +2,16 @@ package io.ramals.learningplatform.content;
 
 import io.ramals.learningplatform.admin.AdminActivityRepository;
 import io.ramals.learningplatform.observability.CorrelationContext;
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
@@ -16,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** M1-T12 durable, retry-safe approval state machine. */
 @Service
 public class ApprovalRequestService {
+  private static final Logger LOGGER = LoggerFactory.getLogger(ApprovalRequestService.class);
   private static final String POLICY_VERSION = "m1-t12-policy-v1";
   private static final String ENGINE_VERSION = "spring-content-promotion-v1";
   private static final Duration APPROVAL_TTL = Duration.ofHours(24);
@@ -69,6 +74,8 @@ public class ApprovalRequestService {
     audit.appendWithinTransaction(actor, "CREATE_APPROVAL_REQUEST", "ASSESSMENT_CANDIDATE",
         request.id(), "SUCCESS", "candidate=" + candidateId + "; revision=" + revision,
         CorrelationContext.currentInteractionId(), CorrelationContext.currentTraceId());
+    event("content.approval.requested", "Approval request created", request.id(),
+        null, ApprovalState.APPROVAL_REQUIRED, "SUCCESS", null);
     return request;
   }
 
@@ -82,6 +89,8 @@ public class ApprovalRequestService {
       approvals.transition(id, ApprovalState.APPROVAL_REQUIRED, ApprovalState.EXPIRED, "system",
           "approval request expired", null);
       auditWithin("system", id, "EXPIRED", "approval request expired");
+      event("content.approval.expired", "Approval request expired", id,
+          ApprovalState.APPROVAL_REQUIRED, ApprovalState.EXPIRED, "REJECTED", "APPROVAL_EXPIRED");
       return approvals.find(id).orElseThrow();
     }
     return request;
@@ -131,12 +140,16 @@ public class ApprovalRequestService {
           "approval request expired", null);
       approvals.insertCommand(actor, operation, id, key, fingerprint, ApprovalState.EXPIRED, null);
       auditWithin(actor, id, "EXPIRED", "approval request expired");
+      event("content.approval.expired", "Approval request expired", id,
+          ApprovalState.APPROVAL_REQUIRED, ApprovalState.EXPIRED, "REJECTED", "APPROVAL_EXPIRED");
       return approvals.find(id).orElseThrow();
     }
     if ("REJECT".equals(operation)) {
       approvals.transition(id, ApprovalState.APPROVAL_REQUIRED, ApprovalState.REJECTED, actor, reason, null);
       approvals.insertCommand(actor, operation, id, key, fingerprint, ApprovalState.REJECTED, null);
       auditWithin(actor, id, "REJECTED", reason);
+      event("content.rejected", "Approval request rejected", id,
+          ApprovalState.APPROVAL_REQUIRED, ApprovalState.REJECTED, "REJECTED", "CONTENT_REJECTED");
       return approvals.find(id).orElseThrow();
     }
     if ("CANCEL".equals(operation)) {
@@ -146,6 +159,8 @@ public class ApprovalRequestService {
       approvals.transition(id, ApprovalState.APPROVAL_REQUIRED, ApprovalState.CANCELLED, actor, reason, null);
       approvals.insertCommand(actor, operation, id, key, fingerprint, ApprovalState.CANCELLED, null);
       auditWithin(actor, id, "CANCELLED", reason);
+      event("content.approval.cancelled", "Approval request cancelled", id,
+          ApprovalState.APPROVAL_REQUIRED, ApprovalState.CANCELLED, "SUCCESS", null);
       return approvals.find(id).orElseThrow();
     }
 
@@ -156,6 +171,8 @@ public class ApprovalRequestService {
           "final deterministic revalidation failed", null);
       approvals.insertCommand(actor, operation, id, key, fingerprint, ApprovalState.SUPERSEDED, null);
       auditWithin(actor, id, "SUPERSEDED", "final deterministic revalidation failed");
+      event("content.superseded", "Approval request superseded after revalidation", id,
+          ApprovalState.APPROVAL_REQUIRED, ApprovalState.SUPERSEDED, "REJECTED", "DETERMINISTIC_REVALIDATION_FAILED");
       return approvals.find(id).orElseThrow();
     }
     UUID itemId = approvals.promoteCandidate(candidate, actor);
@@ -163,7 +180,26 @@ public class ApprovalRequestService {
         "human approval and final deterministic revalidation", itemId);
     approvals.insertCommand(actor, operation, id, key, fingerprint, ApprovalState.APPROVED, itemId);
     auditWithin(actor, id, "APPROVED", "authoritative item=" + itemId);
+    event("content.approved", "Content approval completed", id,
+        ApprovalState.APPROVAL_REQUIRED, ApprovalState.APPROVED, "SUCCESS", null);
     return approvals.find(id).orElseThrow();
+  }
+
+  private void event(String operation, String message, UUID requestId,
+      ApprovalState stateFrom, ApprovalState stateTo, String outcome, String errorCode) {
+    Map<String, Object> fields = new java.util.HashMap<>();
+    fields.put("entityType", "ASSESSMENT_APPROVAL_REQUEST");
+    fields.put("entityId", requestId);
+    if (stateFrom != null) fields.put("stateFrom", stateFrom);
+    if (stateTo != null) fields.put("stateTo", stateTo);
+    fields.put("policyVersion", POLICY_VERSION);
+    fields.put("outcome", outcome);
+    if (errorCode != null) fields.put("errorCode", errorCode);
+    if ("SUCCESS".equals(outcome)) {
+      BusinessEventLogger.info(LOGGER, operation, message, fields);
+    } else {
+      BusinessEventLogger.warn(LOGGER, operation, message, fields);
+    }
   }
 
   private void auditWithin(String actor, UUID id, String outcome, String detail) {

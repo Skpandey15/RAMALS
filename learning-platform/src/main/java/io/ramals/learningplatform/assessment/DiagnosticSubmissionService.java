@@ -1,5 +1,6 @@
 package io.ramals.learningplatform.assessment;
 
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceService;
@@ -16,6 +17,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
@@ -30,6 +34,8 @@ import tools.jackson.databind.ObjectMapper;
  */
 @Service
 public class DiagnosticSubmissionService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(DiagnosticSubmissionService.class);
 
   private final AssessmentRepository repository;
   private final LearnerService learnerService;
@@ -106,6 +112,13 @@ public class DiagnosticSubmissionService {
     String interactionId = CorrelationContext.currentInteractionId();
     List<Evidence> evidence = recordEvidence(completed, result, interactionId);
     recomputeMastery(completed, evidence, interactionId);
+    BusinessEventLogger.info(LOGGER, "assessment.submitted", "Diagnostic assessment submitted",
+        Map.of("entityType", "ASSESSMENT_ATTEMPT", "entityId", attempt.id(),
+            "stateFrom", "IN_PROGRESS", "stateTo", "COMPLETED",
+            "evidenceCount", evidence.size(), "outcome", "SUCCESS"));
+    BusinessEventLogger.info(LOGGER, "assessment.scored", "Diagnostic assessment scored",
+        Map.of("entityType", "ASSESSMENT_ATTEMPT", "entityId", attempt.id(),
+            "skillCount", result.skillScores().size(), "outcome", "SUCCESS"));
     return result;
   }
 

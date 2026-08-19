@@ -1,9 +1,12 @@
 package io.ramals.learningplatform.admin;
 
 import io.ramals.learningplatform.observability.CorrelationContext;
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.dao.DataAccessException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -15,6 +18,8 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ContentAdminService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(ContentAdminService.class);
 
   private static final String TARGET_TYPE = "CURRICULUM_VERSION";
 
@@ -54,20 +59,33 @@ public class ContentAdminService {
         .orElseThrow(() -> new ContentVersionNotFoundException(rawId));
     if (!requiredStatus.equals(current.status())) {
       audit(actorSubject, action, id, "REJECTED", "status was " + current.status());
+      BusinessEventLogger.warn(LOGGER, "content.lifecycle.rejected", "Content lifecycle transition rejected",
+          java.util.Map.of("entityType", TARGET_TYPE, "entityId", id,
+              "stateFrom", current.status(), "outcome", "REJECTED", "errorCode", "INVALID_CONTENT_TRANSITION"));
       throw new InvalidContentTransitionException(action, current.status());
     }
     try {
       if (!transition.run()) {
         audit(actorSubject, action, id, "REJECTED", "status changed concurrently");
+        BusinessEventLogger.warn(LOGGER, "content.lifecycle.rejected", "Content lifecycle transition rejected",
+            java.util.Map.of("entityType", TARGET_TYPE, "entityId", id,
+                "outcome", "REJECTED", "errorCode", "CONTENT_CONCURRENCY_CONFLICT"));
         throw new InvalidContentTransitionException(action, current.status());
       }
     } catch (ContentPublicationException rejected) {
       audit(actorSubject, action, id, "REJECTED", "content integrity check failed");
+      BusinessEventLogger.warn(LOGGER, "content.rejected", "Content publication rejected",
+          java.util.Map.of("entityType", TARGET_TYPE, "entityId", id,
+              "outcome", "REJECTED", "errorCode", "CONTENT_NOT_PUBLISHABLE"));
       throw rejected;
     }
     audit(actorSubject, action, id, "SUCCESS", null);
-    return contentRepository.findCurriculumVersion(id)
+    CurriculumVersionSummary result = contentRepository.findCurriculumVersion(id)
         .orElseThrow(() -> new ContentVersionNotFoundException(rawId));
+    BusinessEventLogger.info(LOGGER, "content.lifecycle.changed", "Content lifecycle transition completed",
+        java.util.Map.of("entityType", TARGET_TYPE, "entityId", id,
+            "stateFrom", requiredStatus, "stateTo", result.status(), "outcome", "SUCCESS"));
+    return result;
   }
 
   private void audit(String actorSubject, String action, UUID targetId, String outcome, String detail) {

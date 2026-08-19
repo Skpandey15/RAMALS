@@ -2,9 +2,13 @@ package io.ramals.learningplatform.assessment;
 
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class DiagnosticService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(DiagnosticService.class);
 
   private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 255;
 
@@ -46,6 +52,9 @@ public class DiagnosticService {
     }
     try {
       AssessmentAttempt created = repository.insertAttempt(learner.id(), versionId, key);
+      BusinessEventLogger.info(LOGGER, "assessment.started", "Diagnostic assessment started",
+          Map.of("entityType", "ASSESSMENT_ATTEMPT", "entityId", created.id(),
+              "learnerId", learner.id(), "outcome", "SUCCESS"));
       return new AttemptCreation(created, diagnostic, true);
     } catch (DuplicateKeyException concurrentCreate) {
       AssessmentAttempt resolved = repository.findByIdempotency(learner.id(), versionId, key)
