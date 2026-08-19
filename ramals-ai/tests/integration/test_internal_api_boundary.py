@@ -240,4 +240,4 @@ def test_unexpected_agent_failure_is_structured_error_with_stack_trace(
         if record.getMessage() == "Unexpected AI request failure"
     )
     assert event.exc_info is not None
-    assert event.errorCode == "UNEXPECTED_ERROR"
+    assert event.__dict__["errorCode"] == "UNEXPECTED_ERROR"
