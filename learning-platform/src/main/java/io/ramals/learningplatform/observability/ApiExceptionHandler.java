@@ -52,6 +52,7 @@ public class ApiExceptionHandler {
     LOGGER.atError()
         .setCause(exception)
         .addKeyValue("errorCode", "DATABASE_OPERATION_FAILED")
+        .addKeyValue("exceptionType", exception.getClass().getName())
         .addKeyValue("operation", "database.operation")
         .log("Database operation failed");
     return problem(
@@ -305,6 +306,7 @@ public class ApiExceptionHandler {
     LOGGER.atError()
         .setCause(exception)
         .addKeyValue("errorCode", "UNEXPECTED_ERROR")
+        .addKeyValue("exceptionType", exception.getClass().getName())
         .addKeyValue("operation", "http.request")
         .log("Unexpected request failure");
     return problem(
@@ -321,6 +323,16 @@ public class ApiExceptionHandler {
       String code,
       String detail,
       HttpServletRequest request) {
+    if (!"DATABASE_OPERATION_FAILED".equals(code) && !"ACCESS_DENIED".equals(code)
+        && !"UNEXPECTED_ERROR".equals(code)) {
+      // Domain/input rejections are expected outcomes. Emit one structured warning at the
+      // authoritative HTTP boundary; individual controllers/services do not log the same error.
+      BusinessEventLogger.warn(LOGGER, "http.request.rejected", "HTTP request rejected",
+          java.util.Map.of(
+              "errorCode", code,
+              "statusCode", status.value(),
+              "outcome", "REJECTED"));
+    }
     // One counter for every handled failure, tagged by stable error code and status, so support and
     // dashboards can find forced failures at the security, service, and database layers by class.
     meterRegistry.counter("ramals.api.errors", "code", code, "status", String.valueOf(status.value()))

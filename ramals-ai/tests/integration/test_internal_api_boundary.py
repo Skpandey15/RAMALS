@@ -7,6 +7,7 @@ without making the result depend on model output.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 
 import pytest
@@ -214,3 +215,29 @@ def test_deadline_failure_is_a_gateway_timeout(
 
     assert response.status_code == 504
     assert response.json()["code"] == "DEADLINE_EXCEEDED"
+
+
+def test_unexpected_agent_failure_is_structured_error_with_stack_trace(
+    app: FastAPI,
+    client: TestClient,
+    request_body: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app.state.agents["tutor"] = _FailingAgent(RuntimeError("provider detail must not be returned"))
+
+    with caplog.at_level(logging.ERROR, logger="ramals_ai.api.internal"):
+        response = client.post(
+            "/internal/v1/tutor/respond",
+            json=request_body,
+            headers={"Authorization": "Bearer good-token"},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "UNEXPECTED_ERROR"
+    event = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "Unexpected AI request failure"
+    )
+    assert event.exc_info is not None
+    assert event.__dict__["errorCode"] == "UNEXPECTED_ERROR"

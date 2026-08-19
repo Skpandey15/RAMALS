@@ -5,14 +5,19 @@ import io.ramals.learningplatform.ai.contract.AgentType;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /** Receives, validates, and durably records one AI assessment candidate. */
 @Service
 public class AssessmentCandidateIntakeService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(AssessmentCandidateIntakeService.class);
 
   private final AssessmentPort assessmentPort;
   private final ContentValidationPipeline validationPipeline;
@@ -47,8 +52,14 @@ public class AssessmentCandidateIntakeService {
     if (proposal.agentType() != AgentType.ASSESSMENT || proposal.trustLevel() != TrustLevel.UNVERIFIED) {
       throw new CandidateIntakeRejectedException("proposal is not an UNVERIFIED assessment candidate");
     }
-    return persistenceService.persist(
+    AssessmentCandidateRevision persisted = persistenceService.persist(
         candidate, proposal, request, idempotencyActor, idempotencyKey, createdBy);
+    BusinessEventLogger.info(LOGGER, "content.candidate.generated",
+        "Assessment candidate generated and persisted",
+        Map.of("entityType", "ASSESSMENT_CANDIDATE_REVISION", "entityId", persisted.candidateId(),
+            "candidateRevision", persisted.candidateRevision(), "assessmentVersionId", assessmentVersionId,
+            "outcome", "SUCCESS"));
+    return persisted;
   }
 
   private CandidateContent candidateFrom(AiProposalEnvelope proposal, UUID assessmentVersionId) {

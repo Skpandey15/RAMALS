@@ -1,7 +1,11 @@
 package io.ramals.learningplatform.learner;
 
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,6 +15,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class LearnerService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(LearnerService.class);
 
   private final LearnerRepository repository;
 
@@ -40,7 +46,11 @@ public class LearnerService {
     Learner learner = repository.provisionForSubject(subject);
     UUID targetDomainId = repository.findActiveDomainId(request.targetDomainCode())
         .orElseThrow(() -> new UnknownLearningDomainException(request.targetDomainCode()));
-    return repository.upsertGoal(
+    LearnerGoal goal = repository.upsertGoal(
         learner.id(), targetDomainId, request.targetProficiency(), request.targetDate());
+    BusinessEventLogger.info(LOGGER, "learner.goal.set", "Learner goal set",
+        Map.of("entityType", "LEARNER_GOAL", "entityId", learner.id(),
+            "targetDomain", request.targetDomainCode(), "outcome", "SUCCESS"));
+    return goal;
   }
 }

@@ -31,6 +31,7 @@ from ramals_ai.security.workload_identity import (
     WorkloadTokenVerifier,
 )
 from ramals_ai.telemetry import correlation, tracing
+from ramals_ai.telemetry.logging import business_event
 from ramals_ai.tutor.agent import TutorAgent
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,26 @@ def _run(
             "INVALID_POLICY_INPUT",
             str(failure),
         )
+    except Exception as failure:  # noqa: BLE001 - authoritative API exception boundary
+        business_event(
+            logger,
+            level=logging.ERROR,
+            operation="http.request.failed",
+            message="Unexpected AI request failure",
+            fields={
+                "errorCode": "UNEXPECTED_ERROR",
+                "statusCode": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "outcome": "FAILURE",
+                "exceptionType": type(failure).__name__,
+            },
+            exception=failure,
+        )
+        return _problem(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "UNEXPECTED_ERROR",
+            "The AI execution service could not complete the request.",
+            emit_event=False,
+        )
 
 
 def _requested_difficulty(envelope: AIRequestEnvelope) -> str:
@@ -197,7 +218,19 @@ class InvalidPolicyInputError(ValueError):
     """A required deterministic policy input was absent or outside the contract policy."""
 
 
-def _problem(code_status: int, code: str, detail: str) -> JSONResponse:
+def _problem(code_status: int, code: str, detail: str, *, emit_event: bool = True) -> JSONResponse:
+    if emit_event:
+        business_event(
+            logger,
+            level=logging.WARNING,
+            operation="http.request.rejected",
+            message="AI request rejected",
+            fields={
+                "errorCode": code,
+                "statusCode": code_status,
+                "outcome": "REJECTED",
+            },
+        )
     return JSONResponse(
         status_code=code_status,
         media_type="application/problem+json",

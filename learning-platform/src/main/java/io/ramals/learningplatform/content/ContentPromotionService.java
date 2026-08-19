@@ -3,6 +3,8 @@ package io.ramals.learningplatform.content;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.ramals.learningplatform.admin.AdminActivityRepository;
 import io.ramals.learningplatform.observability.CorrelationContext;
+import io.ramals.learningplatform.observability.BusinessEventLogger;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -109,11 +111,10 @@ public class ContentPromotionService {
         CorrelationContext.currentTraceId());
 
     meterRegistry.counter(PROMOTION_METRIC, "outcome", "promoted").increment();
-    LOGGER.atInfo()
-        .addKeyValue("operation", "content.promote")
-        .addKeyValue("itemVersionId", itemVersionId)
-        .addKeyValue("reviewer", reviewerSubject)
-        .log("assessment content promoted to VERIFIED_CONTENT");
+    BusinessEventLogger.info(LOGGER, "content.approved", "Assessment content promoted to VERIFIED_CONTENT",
+        Map.of("entityType", "ASSESSMENT_ITEM_VERSION", "entityId", itemVersionId,
+            "stateFrom", TrustState.UNVERIFIED, "stateTo", TrustState.VERIFIED_CONTENT,
+            "outcome", "SUCCESS"));
   }
 
   /** Records a pipeline rejection against the content. */
@@ -123,6 +124,9 @@ public class ContentPromotionService {
     meterRegistry
         .counter(PROMOTION_METRIC, "outcome", "rejected", "stage", stage.name())
         .increment();
+    BusinessEventLogger.info(LOGGER, "content.rejected", "Assessment content rejected",
+        Map.of("entityType", "ASSESSMENT_ITEM_VERSION", "entityId", itemVersionId,
+            "validationStage", stage, "outcome", "REJECTED"));
   }
 
   private void recordRefusal(UUID itemVersionId, String reviewerSubject, String detail) {
@@ -138,5 +142,8 @@ public class ContentPromotionService {
         CorrelationContext.currentInteractionId(),
         CorrelationContext.currentTraceId());
     meterRegistry.counter(PROMOTION_METRIC, "outcome", "refused").increment();
+    BusinessEventLogger.warn(LOGGER, "content.approval.denied", "Assessment content promotion refused",
+        Map.of("entityType", "ASSESSMENT_ITEM_VERSION", "entityId", itemVersionId,
+            "outcome", "REJECTED", "errorCode", "CONTENT_PROMOTION_REFUSED"));
   }
 }

@@ -4,8 +4,12 @@ import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerService;
 import io.ramals.learningplatform.observability.CorrelationContext;
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +23,8 @@ import tools.jackson.databind.JsonNode;
  */
 @Service
 public class LearningSessionService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(LearningSessionService.class);
 
   private final LearningSessionRepository repository;
   private final LearningSessionPolicy policy;
@@ -53,6 +59,9 @@ public class LearningSessionService {
       LearningSession session = repository.insertSession(learnerId, curriculumVersionId, interactionId);
       repository.insertTransition(session.id(), null, LearningSessionStatus.ACTIVE, "START",
           session.version(), interactionId, CorrelationContext.currentTraceId());
+      BusinessEventLogger.info(LOGGER, "learning.session.started", "Learning session started",
+          Map.of("entityType", "LEARNING_SESSION", "entityId", session.id(),
+              "stateTo", LearningSessionStatus.ACTIVE, "outcome", "SUCCESS"));
       return new SessionStartResult(session, true);
     } catch (DuplicateKeyException concurrentStart) {
       LearningSession session = repository.findOpenSession(learnerId, curriculumVersionId)
@@ -87,8 +96,12 @@ public class LearningSessionService {
     }
     repository.insertTransition(sessionId, session.status(), target, request.command().name(),
         newVersion, interactionId, CorrelationContext.currentTraceId());
-    return repository.findByIdAndLearner(sessionId, learner.id())
+    LearningSession transitioned = repository.findByIdAndLearner(sessionId, learner.id())
         .orElseThrow(() -> new LearningSessionNotFoundException(rawSessionId));
+    BusinessEventLogger.info(LOGGER, "learning.session.completed", "Learning session transition completed",
+        Map.of("entityType", "LEARNING_SESSION", "entityId", sessionId,
+            "stateFrom", session.status(), "stateTo", target, "outcome", "SUCCESS"));
+    return transitioned;
   }
 
   @Transactional(readOnly = true)

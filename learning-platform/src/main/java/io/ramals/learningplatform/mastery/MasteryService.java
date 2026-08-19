@@ -2,6 +2,7 @@ package io.ramals.learningplatform.mastery;
 
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
+import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -9,6 +10,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +25,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class MasteryService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(MasteryService.class);
 
   private static final Set<String> OBSERVATION_TYPES =
       Set.of("DIAGNOSTIC", "QUIZ", "PRACTICE", "SCENARIO");
@@ -71,6 +77,10 @@ public class MasteryService {
         WeightedMasteryCalculator.ALGORITHM_VERSION, EvidenceConfidenceCalculator.ALGORITHM_VERSION,
         interactionId));
     masteryRepository.advanceAggregateVersion(learnerId, skillId, curriculumVersionId, nextVersion);
+    BusinessEventLogger.info(LOGGER, "mastery.snapshot.calculated", "Mastery snapshot calculated",
+        Map.of("entityType", "MASTERY_SNAPSHOT", "entityId", snapshot.id(),
+            "learnerId", learnerId, "skillId", skillId, "stateTo", status,
+            "aggregateVersion", nextVersion, "outcome", "SUCCESS"));
     return snapshot;
   }
 
