@@ -111,3 +111,9 @@ COMMENT ON TABLE core.assessment_approval_request IS
   'M1-T12 durable human approval state; reviewed candidate provenance is immutable.';
 COMMENT ON TABLE core.assessment_approval_command IS
   'M1-T12 retry-safe consequential command results, scoped to actor, operation and request.';
+
+-- V002 grants cover tables present at baseline only; every later Spring-owned table must
+-- explicitly grant the runtime role its required DML privileges.
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON TABLE core.assessment_approval_request, core.assessment_approval_command
+  TO ramals_core_runtime;

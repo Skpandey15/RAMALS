@@ -16,6 +16,8 @@ class ApprovalRequestMigrationContractTests {
         .contains("SUPERSEDED")
         .contains("reject_approval_provenance_mutation")
         .contains("uq_approval_create_idempotency")
-        .contains("authoritative_item_version_id UUID REFERENCES core.assessment_item_version(id)");
+        .contains("authoritative_item_version_id UUID REFERENCES core.assessment_item_version(id)")
+        .contains("GRANT SELECT, INSERT, UPDATE, DELETE")
+        .contains("TO ramals_core_runtime");
   }
 }

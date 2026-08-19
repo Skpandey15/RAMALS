@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -98,7 +99,7 @@ class ApprovalRequestPostgresIntegrationTests {
            proposal_digest, trust_state, contract_version, agent_type, agent_version, model_route,
            model_id_unavailable_reason, prompt_version, interaction_id, created_by,
            idempotency_actor, idempotency_key, idempotency_fingerprint)
-        VALUES (?, 1, ?, ?, 'AI_T12_CONCURRENT', 'KAFKA_TOPIC', 'TOPIC_DEFINE', 'SINGLE_CHOICE',
+        VALUES (?, 1, ?, ?, 'AI_T12_CONCURRENT', 'KAFKA_TOPIC', NULL, 'SINGLE_CHOICE',
            'FOUNDATIONAL', ?::jsonb, ?, 'UNVERIFIED', '1.0', 'ASSESSMENT', 'v1', 'default',
            'test model identity unavailable', 'prompt-v1', 'interaction-t12', 'generator', 'generator', ?, ?)
         """, candidateId, "proposal-" + candidateId, draftVersion,
@@ -119,18 +120,23 @@ class ApprovalRequestPostgresIntegrationTests {
         String key = "create-shared";
         creates.add(pool.submit(() -> {
           createStart.await(10, TimeUnit.SECONDS);
+          MDC.put("interactionId", "integration-create-" + key);
           try {
             ApprovalRequest request = transaction.execute(status ->
                 service.create(candidateId, 1, "creator", key));
             return Outcome.success(request.state());
           } catch (RuntimeException failure) {
             return Outcome.failure(failure);
+          } finally {
+            MDC.remove("interactionId");
           }
         }));
       }
       createStart.countDown();
       List<Outcome> createResults = creates.stream().map(this::get).toList();
-      assertThat(createResults).allMatch(result -> result.error() == null);
+      assertThat(createResults).allSatisfy(result -> assertThat(result.error())
+          .withFailMessage("concurrent CREATE failed: %s", result.error())
+          .isNull());
       assertThat(runtimeJdbc.queryForObject("SELECT count(*) FROM core.assessment_approval_request",
           Integer.class)).isEqualTo(1);
       assertThat(runtimeJdbc.queryForObject("SELECT count(*) FROM core.assessment_approval_command WHERE operation = 'CREATE'",
@@ -143,12 +149,15 @@ class ApprovalRequestPostgresIntegrationTests {
         String key = "approve-" + i;
         approvals.add(pool.submit(() -> {
           approveStart.await(10, TimeUnit.SECONDS);
+          MDC.put("interactionId", "integration-approve-" + key);
           try {
             ApprovalRequest request = transaction.execute(status ->
                 service.approve(requestId, "reviewer-" + key, key));
             return Outcome.success(request.state());
           } catch (RuntimeException failure) {
             return Outcome.failure(failure);
+          } finally {
+            MDC.remove("interactionId");
           }
         }));
       }

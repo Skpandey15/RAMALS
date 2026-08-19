@@ -3,6 +3,7 @@ package io.ramals.learningplatform.content;
 import io.ramals.learningplatform.observability.UuidV7;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Optional;
@@ -66,7 +67,8 @@ public class ApprovalRequestRepository {
         """, id, candidate.candidateId(), candidate.candidateRevision(), candidate.candidatePayloadJson(),
         candidate.proposalDigest(), candidate.sourceProposalId(), candidate.contractVersion(),
         candidate.agentType(), candidate.agentVersion(), candidate.modelRoute(), candidate.modelId(),
-        candidate.promptVersion(), policyVersion, engineVersion, candidate.interactionId(), actor, expiresAt);
+        candidate.promptVersion(), policyVersion, engineVersion, candidate.interactionId(), actor,
+        Timestamp.from(expiresAt));
     ApprovalRequest request = findByCandidate(candidate.candidateId(), candidate.candidateRevision())
         .orElseThrow(() -> new IllegalStateException("Approval request insert did not persist."));
     return new InsertResult(request, request.id().equals(id));
@@ -127,13 +129,23 @@ public class ApprovalRequestRepository {
           JOIN core.skill s ON s.id = sv.skill_id
          WHERE av.id = ? AND av.status = 'DRAFT' AND cv.status IN ('PUBLISHED', 'RETIRED')
            AND s.stable_code = ?
-           AND (? IS NULL OR EXISTS (
+           AND (CAST(? AS VARCHAR) IS NULL OR EXISTS (
              SELECT 1 FROM core.learning_objective o
-              WHERE o.skill_version_id = sv.id AND o.objective_code = ?))
-           AND (sv.required_difficulty_bands IS NULL OR ? = ANY(sv.required_difficulty_bands))
+              WHERE o.skill_version_id = sv.id AND o.objective_code = CAST(? AS VARCHAR)))
+            AND (sv.required_difficulty_bands IS NULL OR ? = ANY(sv.required_difficulty_bands))
         """, Integer.class, c.assessmentVersionId(), c.skillCode(), c.objectiveCode(),
-        c.objectiveCode(), c.difficulty());
+        c.objectiveCode(), curriculumDifficultyBand(c.difficulty()));
     return count != null && count > 0 && "UNVERIFIED".equals(c.trustState());
+  }
+
+  private static String curriculumDifficultyBand(String difficulty) {
+    return switch (difficulty) {
+      case "FOUNDATIONAL" -> "EASY";
+      case "INTERMEDIATE" -> "MEDIUM";
+      case "ADVANCED" -> "HARD";
+      default -> throw new ApprovalRequestException("CANDIDATE_NOT_ELIGIBLE",
+          "candidate difficulty is not supported");
+    };
   }
 
   /** Creates the authoritative item while the caller's approval transaction is open. */
@@ -154,7 +166,8 @@ public class ApprovalRequestRepository {
             FROM core.skill s
            WHERE s.stable_code = ?
           """, itemId, c.assessmentVersionId(), c.itemCode(), c.itemType(),
-          payloadOptions(c), payloadAnswerKey(c), c.difficulty(), nextOrder, reviewer, c.skillCode());
+          payloadStem(c), payloadOptions(c), payloadAnswerKey(c), c.difficulty(), nextOrder, reviewer,
+          c.skillCode());
       if (inserted != 1) {
         throw new ApprovalRequestException("PROMOTION_CONFLICT",
             "authoritative promotion did not insert exactly one assessment item");
@@ -173,6 +186,19 @@ public class ApprovalRequestRepository {
       return mapper.writeValueAsString(options);
     } catch (RuntimeException ex) {
       throw new ApprovalRequestException("CANDIDATE_PAYLOAD_INVALID", "candidate options cannot be reconstructed");
+    }
+  }
+
+  private String payloadStem(AssessmentCandidateRevision c) {
+    try {
+      var payload = mapper.readValue(c.candidatePayloadJson(), java.util.Map.class);
+      Object stem = payload.get("stem");
+      if (!(stem instanceof String value) || value.isBlank()) {
+        throw new IllegalArgumentException("stem is missing");
+      }
+      return value;
+    } catch (RuntimeException ex) {
+      throw new ApprovalRequestException("CANDIDATE_PAYLOAD_INVALID", "candidate stem cannot be reconstructed");
     }
   }
 
