@@ -82,6 +82,14 @@ public class ContentPromotionService {
       throw new PromotionRefusedException("rejected content cannot be promoted");
     }
 
+    if (current == TrustState.UNVERIFIED) {
+      // M1-T12 owns the only path that can turn an AI candidate into authoritative content. The
+      // legacy item-level method has no immutable proposal revision, expiry, revalidation context,
+      // or approval request to bind, so allowing it would be a direct approval bypass.
+      recordRefusal(itemVersionId, reviewerSubject, "durable approval request is required");
+      throw new PromotionRefusedException("durable approval request is required");
+    }
+
     if (current == TrustState.VERIFIED_CONTENT) {
       // Already approved. Idempotent rather than an error, but not re-recorded: a second audit entry
       // would suggest a second review happened.

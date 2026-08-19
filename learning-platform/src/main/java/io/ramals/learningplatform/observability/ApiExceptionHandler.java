@@ -16,6 +16,7 @@ import io.ramals.learningplatform.learner.UnknownLearningDomainException;
 import io.ramals.learningplatform.learning.InvalidSessionTransitionException;
 import io.ramals.learningplatform.learning.LearningSessionNotFoundException;
 import io.ramals.learningplatform.learning.SessionConflictException;
+import io.ramals.learningplatform.content.ApprovalRequestException;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -244,6 +245,21 @@ public class ApiExceptionHandler {
         "CONTENT_NOT_PUBLISHABLE",
         "The curriculum version does not satisfy the content-integrity rules for publication.",
         request);
+  }
+
+  @ExceptionHandler(ApprovalRequestException.class)
+  ResponseEntity<ApiProblem> handleApprovalRequest(
+      ApprovalRequestException exception, HttpServletRequest request) {
+    HttpStatus status = switch (exception.code()) {
+      case "APPROVAL_NOT_FOUND", "CANDIDATE_NOT_FOUND" -> HttpStatus.NOT_FOUND;
+      case "IDEMPOTENCY_KEY_REQUIRED", "REVIEW_REASON_REQUIRED" -> HttpStatus.BAD_REQUEST;
+      case "CANDIDATE_NOT_ELIGIBLE", "APPROVAL_ALREADY_EXISTS", "APPROVAL_STATE_CONFLICT",
+          "IDEMPOTENCY_CONFLICT", "PROMOTION_CONFLICT" -> HttpStatus.CONFLICT;
+      case "CANCEL_NOT_AUTHORIZED" -> HttpStatus.FORBIDDEN;
+      default -> HttpStatus.UNPROCESSABLE_ENTITY;
+    };
+    return problem(status, "Approval request rejected", exception.code(),
+        "The approval command could not be completed.", request);
   }
 
   @ExceptionHandler(IllegalArgumentException.class)

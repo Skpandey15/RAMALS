@@ -73,40 +73,41 @@ class ContentPromotionServiceTests {
 
   @Test
   @WithMockUser(roles = "CONTENT_AUTHOR")
-  @DisplayName("a content author may promote")
-  void contentAuthorsMayPromote() {
+  @DisplayName("a content author cannot bypass durable approval")
+  void contentAuthorsCannotBypassDurableApproval() {
     // The converse. A rule that denied everyone would satisfy both tests above and ship no content.
     when(repository.trustStateOf(ITEM)).thenReturn(Optional.of(TrustState.UNVERIFIED));
 
-    service.promote(ITEM, "reviewer-1");
-
-    verify(repository).promote(ITEM, "reviewer-1");
+    assertThatThrownBy(() -> service.promote(ITEM, "reviewer-1"))
+        .hasMessageContaining("durable approval request is required");
+    verify(repository, never()).promote(any(), any());
   }
 
   @Test
   @WithMockUser(roles = "ADMIN")
-  @DisplayName("an administrator may promote")
-  void administratorsMayPromote() {
+  @DisplayName("an administrator cannot bypass durable approval")
+  void administratorsCannotBypassDurableApproval() {
     when(repository.trustStateOf(ITEM)).thenReturn(Optional.of(TrustState.UNVERIFIED));
 
-    service.promote(ITEM, "admin-1");
-
-    verify(repository).promote(ITEM, "admin-1");
+    assertThatThrownBy(() -> service.promote(ITEM, "admin-1"))
+        .hasMessageContaining("durable approval request is required");
+    verify(repository, never()).promote(any(), any());
   }
 
   // -- what is written down -----------------------------------------------------------------------
 
   @Test
   @WithMockUser(roles = "CONTENT_AUTHOR")
-  @DisplayName("a promotion is audited against the reviewer who made it")
-  void promotionIsAudited() {
+  @DisplayName("a direct promotion bypass is audited as refused")
+  void directPromotionBypassIsAudited() {
     when(repository.trustStateOf(ITEM)).thenReturn(Optional.of(TrustState.UNVERIFIED));
 
-    service.promote(ITEM, "reviewer-1");
+    assertThatThrownBy(() -> service.promote(ITEM, "reviewer-1"))
+        .hasMessageContaining("durable approval request is required");
 
     verify(auditRepository).append(
         eq("reviewer-1"), eq("PROMOTE_CONTENT"), eq("ASSESSMENT_ITEM_VERSION"), eq(ITEM),
-        eq("SUCCESS"), any(), any(), any());
+        eq("REJECTED"), any(), any(), any());
   }
 
   @Test
