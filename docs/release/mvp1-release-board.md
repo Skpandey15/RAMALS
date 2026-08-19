@@ -45,7 +45,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T09 Diagnostic Agent V1 | ✅ done | — |
 | M1-T10 Assessment Agent V1 | ✅ done | M1-ADR-006 ✅, M1-ADR-010 ✅ |
 | M1-T11 Adaptation Agent V1 | ✅ done | — |
-| M1-T12 LIMITED_DURABLE approval | ⬜ next | M1-ADR-007 ✅ |
+| M1-T12 LIMITED_DURABLE approval | ✅ done | M1-ADR-007 ✅ |
 | M1-T13 ai_execution persistence | ⬜ | M1-ADR-005 |
 | M1-T14 Resilience, latency, cost | ⬜ | — |
 | M1-T15 AI evaluation release gates | ⬜ | M1-ADR-009 |
@@ -59,6 +59,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | --- | --- | --- |
 | S0-07 Assessment Candidate Provenance Intake | ✅ done | Merged implementation and V018 provenance migration |
 | TD-S0-07-01 audit transaction-manager construction cleanup | ✅ done | Merged implementation; Spring-managed transaction manager is the only production path |
+| M1-T12 limited-durable approval workflow | ✅ done | V019 durable approval state/command idempotency; MFA-gated API; atomic revalidation and promotion; rollback and authorization tests |
 
 ## Decisions written just in time
 
