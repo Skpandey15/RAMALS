@@ -41,7 +41,8 @@ def safe_log_value(key: str, value: object) -> object:
         or "apikey" in normalized
         or normalized == "token"
         or normalized.endswith("token")
-        or normalized in {
+        or normalized
+        in {
             "prompt",
             "raw_prompt",
             "answer",
