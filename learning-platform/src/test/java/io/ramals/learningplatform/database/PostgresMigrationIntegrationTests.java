@@ -82,9 +82,9 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 19 with V019 (limited-durable approval workflow). Asserting the count rather than merely that
+    // 20 with V020 (approval audit outcomes). Asserting the count rather than merely that
     // the upgrade succeeds is what makes an accidentally unapplied migration visible.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(19);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(20);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 
