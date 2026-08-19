@@ -52,7 +52,7 @@ public class ApprovalRequestRepository {
         actor, operation, requestId, key).stream().findFirst();
   }
 
-  public ApprovalRequest insertRequest(AssessmentCandidateRevision candidate, String policyVersion,
+  public InsertResult insertRequest(AssessmentCandidateRevision candidate, String policyVersion,
       String engineVersion, String actor, Instant expiresAt) {
     UUID id = UuidV7.generate();
     jdbc.update("""
@@ -62,11 +62,14 @@ public class ApprovalRequestRepository {
            model_route, model_id, prompt_version, policy_version, engine_version, interaction_id,
            created_by, expires_at)
         VALUES (?, ?, ?, 'ASSESSMENT_CANDIDATE', ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (candidate_id, candidate_revision) DO NOTHING
         """, id, candidate.candidateId(), candidate.candidateRevision(), candidate.candidatePayloadJson(),
         candidate.proposalDigest(), candidate.sourceProposalId(), candidate.contractVersion(),
         candidate.agentType(), candidate.agentVersion(), candidate.modelRoute(), candidate.modelId(),
         candidate.promptVersion(), policyVersion, engineVersion, candidate.interactionId(), actor, expiresAt);
-    return find(id).orElseThrow(() -> new IllegalStateException("Approval request insert did not persist."));
+    ApprovalRequest request = findByCandidate(candidate.candidateId(), candidate.candidateRevision())
+        .orElseThrow(() -> new IllegalStateException("Approval request insert did not persist."));
+    return new InsertResult(request, request.id().equals(id));
   }
 
   public void insertCommand(String actor, String operation, UUID requestId, String key,
@@ -143,7 +146,7 @@ public class ApprovalRequestRepository {
          WHERE assessment_version_id = ?
         """, Integer.class, c.assessmentVersionId());
     try {
-      jdbc.update("""
+      int inserted = jdbc.update("""
           INSERT INTO core.assessment_item_version
             (id, assessment_version_id, skill_id, item_code, item_type, stem, options_jsonb,
              answer_key_jsonb, difficulty, display_order, trust_state, verified_by, verified_at)
@@ -152,6 +155,10 @@ public class ApprovalRequestRepository {
            WHERE s.stable_code = ?
           """, itemId, c.assessmentVersionId(), c.itemCode(), c.itemType(),
           payloadOptions(c), payloadAnswerKey(c), c.difficulty(), nextOrder, reviewer, c.skillCode());
+      if (inserted != 1) {
+        throw new ApprovalRequestException("PROMOTION_CONFLICT",
+            "authoritative promotion did not insert exactly one assessment item");
+      }
     } catch (DuplicateKeyException duplicate) {
       throw new ApprovalRequestException("PROMOTION_CONFLICT", "candidate item code or order already exists");
     }
@@ -179,6 +186,8 @@ public class ApprovalRequestRepository {
   }
 
   public record CommandResult(ApprovalState state, UUID itemId, String fingerprint) {}
+
+  public record InsertResult(ApprovalRequest request, boolean created) {}
 
   private static final String SELECT = """
       SELECT id, candidate_id, candidate_revision, state, candidate_payload_jsonb::text AS candidate_payload_json,

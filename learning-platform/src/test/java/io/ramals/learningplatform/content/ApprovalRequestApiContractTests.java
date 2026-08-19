@@ -62,6 +62,18 @@ class ApprovalRequestApiContractTests {
         .andExpect(jsonPath("$.state").value("APPROVED"));
   }
 
+  @Test
+  void contentAuthorMayApproveWithoutMfa() throws Exception {
+    when(service.approve(eq(REQUEST), eq("author"), eq("approve-3"))).thenReturn(response());
+
+    mockMvc.perform(post("/api/v1/approval-requests/" + REQUEST + "/approve")
+        .header("Idempotency-Key", "approve-3")
+        .with(jwt().jwt(token -> token.subject("author"))
+            .authorities(new SimpleGrantedAuthority("ROLE_CONTENT_AUTHOR"))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.state").value("APPROVED"));
+  }
+
   private static ApprovalRequest response() {
     return new ApprovalRequest(REQUEST, UUID.randomUUID(), 1, ApprovalState.APPROVED, "{}",
         "a".repeat(64), "proposal", "1.0", "ASSESSMENT", "v1", "default", null, "prompt",

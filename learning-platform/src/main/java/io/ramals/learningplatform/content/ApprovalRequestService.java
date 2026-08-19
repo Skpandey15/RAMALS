@@ -54,11 +54,17 @@ public class ApprovalRequestService {
     if (!"UNVERIFIED".equals(candidate.trustState())) {
       throw error("CANDIDATE_NOT_ELIGIBLE", "candidate is not awaiting approval");
     }
-    if (approvals.findByCandidate(candidateId, revision).isPresent()) {
+    ApprovalRequestRepository.InsertResult insertion = approvals.insertRequest(candidate, POLICY_VERSION, ENGINE_VERSION, actor,
+        Instant.now(clock).plus(APPROVAL_TTL));
+    if (!insertion.created()) {
+      var concurrent = approvals.findByCreateCommand(actor, key);
+      if (concurrent.isPresent()) {
+        assertFingerprint(actor, "CREATE", concurrent.get().id(), key, fingerprint);
+        return concurrent.get();
+      }
       throw error("APPROVAL_ALREADY_EXISTS", "candidate already has an approval request");
     }
-    ApprovalRequest request = approvals.insertRequest(candidate, POLICY_VERSION, ENGINE_VERSION, actor,
-        Instant.now(clock).plus(APPROVAL_TTL));
+    ApprovalRequest request = insertion.request();
     approvals.insertCommand(actor, "CREATE", request.id(), key, fingerprint, request.state(), null);
     audit.appendWithinTransaction(actor, "CREATE_APPROVAL_REQUEST", "ASSESSMENT_CANDIDATE",
         request.id(), "SUCCESS", "candidate=" + candidateId + "; revision=" + revision,

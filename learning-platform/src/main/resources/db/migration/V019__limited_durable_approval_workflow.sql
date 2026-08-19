@@ -26,7 +26,7 @@ CREATE TABLE core.assessment_approval_request (
   reviewer_subject VARCHAR(255),
   reviewed_at TIMESTAMPTZ,
   review_reason VARCHAR(1024),
-  authoritative_item_version_id UUID,
+  authoritative_item_version_id UUID REFERENCES core.assessment_item_version(id) ON DELETE RESTRICT,
   CONSTRAINT fk_approval_candidate FOREIGN KEY (candidate_id, candidate_revision)
     REFERENCES core.assessment_candidate_revision(candidate_id, candidate_revision)
     ON DELETE RESTRICT,

@@ -17,6 +17,18 @@ Security authority: `RAMALS_MVP0_Zero_Trust_Security_Architecture_v1.1.docx`.
 - `ADMIN` endpoints require `ROLE_ADMIN` plus an MFA authentication signal: `amr` containing `otp` or `mfa`, or numeric `acr` of at least 2.
 - The database probe is operational-only and requires `SERVICE`, or `ADMIN` with MFA.
 
+### M1-T12 approval policy
+
+- Approval-request create, approve, reject, and cancel commands require `ROLE_CONTENT_AUTHOR`, or
+  `ROLE_ADMIN` with the MFA signal above.
+- `CONTENT_AUTHOR` is the designated content-review role and does not require MFA for M1-T12.
+- `ADMIN` is a stronger operational role and is always MFA-gated for M1-T12 commands; a role claim
+  without `amr=otp|mfa` or `acr >= 2` receives `403`.
+- The reviewer subject is taken from the verified Spring principal. No request-body field can choose
+  or override the reviewer identity.
+- `ApprovalRequestApiContractTests` verifies learner denial, `CONTENT_AUTHOR` approval without MFA,
+  `ADMIN` denial without MFA, and `ADMIN` approval with `amr=otp`.
+
 ## ADMIN provisioning rule
 
 Before granting the RAMALS `ADMIN` realm role, an identity administrator must assign Keycloak's `CONFIGURE_TOTP` required action and verify successful OTP enrollment. Do not use the bootstrap Keycloak administrator for application work. The API independently denies every ADMIN operation when the issued token lacks the MFA signal, so a mistaken role assignment does not bypass MFA.
