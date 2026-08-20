@@ -223,7 +223,8 @@ class AssessmentCandidateTransactionBoundaryTests {
         ContentValidationPipeline validationPipeline,
         AssessmentCandidatePersistenceService persistenceService) {
       return new AssessmentCandidateIntakeService(
-          assessmentPort, validationPipeline, persistenceService);
+          assessmentPort, validationPipeline, persistenceService,
+          new io.ramals.learningplatform.execution.NoOpAiExecutionRecorder());
     }
   }
 

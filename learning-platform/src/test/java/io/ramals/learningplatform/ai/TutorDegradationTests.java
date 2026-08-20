@@ -203,7 +203,7 @@ class TutorDegradationTests {
   void theAdapterRefusesToRunInsideATransaction() {
     RamalsAiTutorClient client = new RamalsAiTutorClient(
         RestClient.create("http://localhost:1"),
-        new AiCallGuard(3, Duration.ofSeconds(30), 4, Instant::now));
+        new AiCallGuard(3, Duration.ofSeconds(30), 4, Instant::now), () -> "test-workload-token");
 
     TransactionSynchronizationManager.setActualTransactionActive(true);
     try {
@@ -257,7 +257,7 @@ class TutorDegradationTests {
     RamalsAiTutorClient client = new RamalsAiTutorClient(
         // Port 1 refuses immediately, so this exercises a real connection failure rather than a mock.
         RestClient.create("http://127.0.0.1:1"),
-        new AiCallGuard(3, Duration.ofSeconds(30), 4, Instant::now));
+        new AiCallGuard(3, Duration.ofSeconds(30), 4, Instant::now), () -> "test-workload-token");
 
     assertThatThrownBy(() -> client.requestTutorResponse(request(), 12_000))
         .isInstanceOf(AiUnavailableException.class)
@@ -272,7 +272,7 @@ class TutorDegradationTests {
   void anExhaustedDeadlineRefusesImmediately() {
     RamalsAiTutorClient client = new RamalsAiTutorClient(
         RestClient.create("http://127.0.0.1:1"),
-        new AiCallGuard(3, Duration.ofSeconds(30), 4, Instant::now));
+        new AiCallGuard(3, Duration.ofSeconds(30), 4, Instant::now), () -> "test-workload-token");
 
     assertThatThrownBy(() -> client.requestTutorResponse(request(), 0))
         .isInstanceOf(AiUnavailableException.class)

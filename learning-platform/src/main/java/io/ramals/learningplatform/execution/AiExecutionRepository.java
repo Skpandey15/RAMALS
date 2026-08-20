@@ -14,6 +14,8 @@ import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -23,6 +25,9 @@ import tools.jackson.databind.ObjectMapper;
 /** JDBC persistence for append-only AI execution provenance. */
 @Repository
 public class AiExecutionRepository {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(AiExecutionRepository.class);
+
   private final JdbcTemplate jdbc;
   private final ObjectMapper mapper;
 
@@ -142,6 +147,13 @@ public class AiExecutionRepository {
     try {
       return new BigDecimal(usage.estimatedCostUsd());
     } catch (NumberFormatException invalid) {
+      // Still null, because there is no honest number to store — but no longer silent. A cost the
+      // platform could not parse and a call that genuinely cost nothing are the same row otherwise,
+      // and the difference is the one that matters when a spend report looks too good.
+      LOGGER.atWarn()
+          .addKeyValue("operation", "ai.execution.cost_unparseable")
+          .addKeyValue("reportedCost", usage.estimatedCostUsd())
+          .log("provider reported a cost that could not be parsed; recorded as unknown");
       return null;
     }
   }

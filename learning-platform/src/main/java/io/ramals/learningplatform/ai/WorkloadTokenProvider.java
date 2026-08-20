@@ -5,7 +5,7 @@ import java.util.Map;
 import org.springframework.web.client.RestClient;
 
 /** Small client-credentials token cache for Spring's authenticated calls to ramals-ai. */
-public final class WorkloadTokenProvider {
+public final class WorkloadTokenProvider implements WorkloadToken {
 
   private final RestClient tokenClient;
   private final String clientId;
@@ -22,6 +22,7 @@ public final class WorkloadTokenProvider {
     this.audience = audience;
   }
 
+  @Override
   public synchronized String accessToken() {
     if (token != null && Instant.now().isBefore(expiresAt)) {
       return token;

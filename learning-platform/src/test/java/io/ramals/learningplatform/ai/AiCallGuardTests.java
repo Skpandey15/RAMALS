@@ -32,8 +32,18 @@ class AiCallGuardTests {
     now.set(now.get().plus(duration));
   }
 
+  /**
+   * The failure a real client hands the guard.
+   *
+   * <p>This used to be an {@code IllegalStateException}, which no client produces. Every client
+   * catches {@code RestClientException} and rethrows an {@link AiUnavailableException} before it
+   * leaves the guarded lambda, and the guard's failure accounting skipped that type — so the breaker
+   * could never open and the tests still passed. Simulating the real shape is what makes these tests
+   * about the breaker rather than about a scenario that does not occur.
+   */
   private static RuntimeException transportFailure() {
-    return new IllegalStateException("connection refused");
+    return new AiUnavailableException(
+        "AI_TRANSPORT_FAILURE", "The tutoring service could not be reached.");
   }
 
   // -- circuit breaker -----------------------------------------------------------------------------
@@ -57,7 +67,7 @@ class AiCallGuardTests {
     for (int attempt = 0; attempt < 2; attempt++) {
       assertThatThrownBy(() -> guard.call(() -> {
         throw transportFailure();
-      })).isInstanceOf(IllegalStateException.class);
+      })).isInstanceOf(AiUnavailableException.class);
     }
 
     assertThat(guard.state()).isEqualTo(AiCallGuard.State.OPEN);
@@ -69,7 +79,7 @@ class AiCallGuardTests {
     AiCallGuard guard = guard(1, 4);
     assertThatThrownBy(() -> guard.call(() -> {
       throw transportFailure();
-    })).isInstanceOf(IllegalStateException.class);
+    })).isInstanceOf(AiUnavailableException.class);
 
     AtomicInteger attempts = new AtomicInteger();
     assertThatThrownBy(() -> guard.call(attempts::incrementAndGet))
@@ -88,7 +98,7 @@ class AiCallGuardTests {
     AiCallGuard guard = guard(1, 4);
     assertThatThrownBy(() -> guard.call(() -> {
       throw transportFailure();
-    })).isInstanceOf(IllegalStateException.class);
+    })).isInstanceOf(AiUnavailableException.class);
     assertThat(guard.state()).isEqualTo(AiCallGuard.State.OPEN);
 
     advance(Duration.ofSeconds(31));
@@ -105,7 +115,7 @@ class AiCallGuardTests {
     for (int attempt = 0; attempt < 3; attempt++) {
       assertThatThrownBy(() -> guard.call(() -> {
         throw transportFailure();
-      })).isInstanceOf(IllegalStateException.class);
+      })).isInstanceOf(AiUnavailableException.class);
     }
     advance(Duration.ofSeconds(31));
     assertThat(guard.state()).isEqualTo(AiCallGuard.State.HALF_OPEN);
@@ -114,7 +124,7 @@ class AiCallGuardTests {
     // to answer one question, and it answered it.
     assertThatThrownBy(() -> guard.call(() -> {
       throw transportFailure();
-    })).isInstanceOf(IllegalStateException.class);
+    })).isInstanceOf(AiUnavailableException.class);
 
     assertThat(guard.state()).isEqualTo(AiCallGuard.State.OPEN);
   }
@@ -126,11 +136,11 @@ class AiCallGuardTests {
 
     assertThatThrownBy(() -> guard.call(() -> {
       throw transportFailure();
-    })).isInstanceOf(IllegalStateException.class);
+    })).isInstanceOf(AiUnavailableException.class);
     guard.call(() -> "ok");
     assertThatThrownBy(() -> guard.call(() -> {
       throw transportFailure();
-    })).isInstanceOf(IllegalStateException.class);
+    })).isInstanceOf(AiUnavailableException.class);
 
     // Two failures separated by a success is not a broken dependency; opening here would make the
     // breaker fire on ordinary noise.
@@ -176,7 +186,7 @@ class AiCallGuardTests {
 
     assertThatThrownBy(() -> guard.call(() -> {
       throw transportFailure();
-    })).isInstanceOf(IllegalStateException.class);
+    })).isInstanceOf(AiUnavailableException.class);
 
     // A leaked permit would turn one transport error into a permanently unavailable tutor, which
     // looks exactly like a dependency outage and is not one.

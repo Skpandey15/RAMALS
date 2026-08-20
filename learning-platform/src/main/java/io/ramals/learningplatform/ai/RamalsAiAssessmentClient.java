@@ -13,13 +13,14 @@ public class RamalsAiAssessmentClient implements AssessmentPort {
 
   private final RestClient restClient;
   private final AiCallGuard guard;
-  private final WorkloadTokenProvider tokenProvider;
+  private final WorkloadToken tokenProvider;
 
   public RamalsAiAssessmentClient(
-      RestClient restClient, AiCallGuard guard, WorkloadTokenProvider tokenProvider) {
+      RestClient restClient, AiCallGuard guard, WorkloadToken tokenProvider) {
     this.restClient = restClient;
     this.guard = guard;
-    this.tokenProvider = tokenProvider;
+    this.tokenProvider = java.util.Objects.requireNonNull(
+        tokenProvider, "an assessment client must be able to authenticate as the workload");
   }
 
   @Override

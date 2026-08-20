@@ -13,6 +13,7 @@ import io.ramals.learningplatform.ai.contract.AgentType;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
+import io.ramals.learningplatform.execution.NoOpAiExecutionRecorder;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +42,8 @@ class AssessmentCandidateIntakeServiceTests {
         eq("author"), eq("key"), any(), any(), any())).thenReturn(saved);
 
     AssessmentCandidateRevision result = new AssessmentCandidateIntakeService(
-        ai, pipeline, new AssessmentCandidatePersistenceService(repository, audit)).intake(
+        ai, pipeline, new AssessmentCandidatePersistenceService(repository, audit),
+        new NoOpAiExecutionRecorder()).intake(
             version, request(), "FOUNDATIONAL", ValidationContext.unavailable(),
             "author", "key", "author", 100L);
 
@@ -62,7 +64,8 @@ class AssessmentCandidateIntakeServiceTests {
     assertThatThrownBy(() -> new AssessmentCandidateIntakeService(
         ai, pipeline, new AssessmentCandidatePersistenceService(
             mock(AssessmentCandidateRevisionRepository.class),
-            mock(io.ramals.learningplatform.admin.AdminActivityRepository.class)))
+            mock(io.ramals.learningplatform.admin.AdminActivityRepository.class)),
+        new NoOpAiExecutionRecorder())
         .intake(UUID.randomUUID(), request(), "FOUNDATIONAL", ValidationContext.unavailable(),
             "author", "key", "author", 100L))
         .isInstanceOf(AssessmentCandidateIntakeService.CandidateIntakeRejectedException.class);

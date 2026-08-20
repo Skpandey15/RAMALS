@@ -17,10 +17,14 @@ public class RamalsAiAdaptationClient implements AdaptationPort {
 
   private final RestClient restClient;
   private final AiCallGuard guard;
+  private final WorkloadToken tokenProvider;
 
-  public RamalsAiAdaptationClient(RestClient restClient, AiCallGuard guard) {
+  public RamalsAiAdaptationClient(
+      RestClient restClient, AiCallGuard guard, WorkloadToken tokenProvider) {
     this.restClient = restClient;
     this.guard = guard;
+    this.tokenProvider = java.util.Objects.requireNonNull(
+        tokenProvider, "an adaptation client must be able to authenticate as the workload");
   }
 
   @Override
@@ -39,6 +43,8 @@ public class RamalsAiAdaptationClient implements AdaptationPort {
             AiProposalEnvelope proposal = restClient
                 .post()
                 .uri("/internal/v1/adaptation/propose")
+                // Workload identity per M1-ADR-003, never the learner's token.
+                .header("Authorization", "Bearer " + tokenProvider.accessToken())
                 .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
                 .body(request)
                 .retrieve()
