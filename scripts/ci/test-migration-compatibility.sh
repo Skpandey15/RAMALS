@@ -110,6 +110,154 @@ ALTER TABLE core.thing ADD COLUMN other VARCHAR(8);
 ALTER TABLE core.thing DROP COLUMN note;')"
 check "a declaration does not licence the whole file" "1" "${status}"
 
+# -- every rule, in both formattings ---------------------------------------------------------------
+#
+# The suite used to assert each rule with the whole statement on one physical line, and the checker
+# evaluated one physical line at a time -- so the tests agreed with the implementation's blind spot
+# rather than testing the rule. Ordinary SQL formatting walked straight through eight of nine rules.
+#
+# Each rule is now proved three ways: the breaking form is refused, the safe expand is allowed, and
+# the same breaking statement wrapped across lines is still refused. The third assertion is the one
+# that would have caught it.
+
+matrix() { # matrix <label> <breaking-one-line> <breaking-multiline> <safe-expand>
+  local label="$1" breaking="$2" wrapped="$3" safe="$4"
+  check "${label}: breaking form is refused"            "1" "$(run_on "${breaking}")"
+  check "${label}: safe expand is allowed"              "0" "$(run_on "${safe}")"
+  check "${label}: still refused when wrapped in lines" "1" "$(run_on "${wrapped}")"
+}
+
+matrix "ADD COLUMN NOT NULL" \
+  'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64) NOT NULL;' \
+  'ALTER TABLE core.foo
+  ADD COLUMN value VARCHAR(64)
+  NOT NULL;' \
+  'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64);'
+
+matrix "ALTER COLUMN SET NOT NULL" \
+  'ALTER TABLE core.foo ALTER COLUMN value SET NOT NULL;' \
+  'ALTER TABLE core.foo
+  ALTER COLUMN value
+  SET NOT NULL;' \
+  'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64);'
+
+matrix "ALTER COLUMN TYPE" \
+  'ALTER TABLE core.foo ALTER COLUMN value TYPE VARCHAR(8);' \
+  'ALTER TABLE core.foo
+  ALTER COLUMN value
+  TYPE VARCHAR(8);' \
+  'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64);'
+
+matrix "ADD CONSTRAINT CHECK" \
+  'ALTER TABLE core.foo ADD CONSTRAINT ck_foo CHECK (value IS NOT NULL);' \
+  'ALTER TABLE core.foo
+  ADD CONSTRAINT ck_foo
+  CHECK (value IS NOT NULL);' \
+  'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64);'
+
+matrix "ADD CONSTRAINT UNIQUE" \
+  'ALTER TABLE core.foo ADD CONSTRAINT uq_foo UNIQUE (value);' \
+  'ALTER TABLE core.foo
+  ADD CONSTRAINT uq_foo
+  UNIQUE (value);' \
+  'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64);'
+
+matrix "ADD CONSTRAINT FOREIGN KEY" \
+  'ALTER TABLE core.foo ADD CONSTRAINT fk_foo FOREIGN KEY (bar_id) REFERENCES core.bar(id);' \
+  'ALTER TABLE core.foo
+  ADD CONSTRAINT fk_foo
+  FOREIGN KEY (bar_id)
+  REFERENCES core.bar(id);' \
+  'ALTER TABLE core.foo ADD COLUMN bar_id UUID;'
+
+matrix "DROP COLUMN" \
+  'ALTER TABLE core.foo DROP COLUMN value;' \
+  'ALTER TABLE core.foo
+  DROP
+  COLUMN value;' \
+  'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64);'
+
+matrix "RENAME COLUMN" \
+  'ALTER TABLE core.foo RENAME COLUMN value TO remark;' \
+  'ALTER TABLE core.foo
+  RENAME
+  COLUMN value TO remark;' \
+  'ALTER TABLE core.foo ADD COLUMN remark VARCHAR(64);'
+
+matrix "REVOKE from a role" \
+  'REVOKE UPDATE ON TABLE core.foo FROM ramals_core_runtime;' \
+  'REVOKE UPDATE
+  ON TABLE core.foo
+  FROM ramals_core_runtime;' \
+  'GRANT SELECT ON TABLE core.foo TO ramals_core_runtime;'
+
+# -- rules added by this hardening slice ------------------------------------------------------------
+#
+# Each one can make image N-1 fail against schema N, and each is exempt when the thing it constrains
+# was created by the same migration -- no previously released image writes to a table that did not
+# exist, or to a column it has never heard of.
+
+matrix "CREATE UNIQUE INDEX on an existing table" \
+  'CREATE UNIQUE INDEX uq_foo ON core.foo(value);' \
+  'CREATE UNIQUE INDEX uq_foo
+  ON core.foo(value);' \
+  'CREATE INDEX ix_foo ON core.foo(value);'
+
+matrix "ADD PRIMARY KEY" \
+  'ALTER TABLE core.foo ADD CONSTRAINT pk_foo PRIMARY KEY (id);' \
+  'ALTER TABLE core.foo
+  ADD CONSTRAINT pk_foo
+  PRIMARY KEY (id);' \
+  'ALTER TABLE core.foo ADD COLUMN id UUID;'
+
+matrix "ADD CONSTRAINT EXCLUDE" \
+  'ALTER TABLE core.foo ADD CONSTRAINT ex_foo EXCLUDE USING gist (value WITH =);' \
+  'ALTER TABLE core.foo
+  ADD CONSTRAINT ex_foo
+  EXCLUDE USING gist (value WITH =);' \
+  'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64);'
+
+matrix "DROP DEFAULT on a pre-existing column" \
+  'ALTER TABLE core.foo ALTER COLUMN value DROP DEFAULT;' \
+  'ALTER TABLE core.foo
+  ALTER COLUMN value
+  DROP DEFAULT;' \
+  'ALTER TABLE core.foo ALTER COLUMN value SET DEFAULT 1;'
+
+# A unique index over a table this migration creates constrains nothing any deployed image writes.
+status="$(run_on 'CREATE TABLE core.fresh (id UUID PRIMARY KEY, value VARCHAR(64));
+CREATE UNIQUE INDEX uq_fresh ON core.fresh(value);')"
+check "a unique index on a table created here is allowed" "0" "${status}"
+
+# The V017 idiom: add a column with a default to classify existing rows, then drop the default so
+# everything written afterwards is explicit. The column did not exist for image N-1 to rely on.
+status="$(run_on 'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64) DEFAULT '"'"'x'"'"';
+ALTER TABLE core.foo ALTER COLUMN value DROP DEFAULT;')"
+check "dropping the default of a column added here is allowed" "0" "${status}"
+
+# -- statement scope must not become file scope -----------------------------------------------------
+#
+# One clause's DEFAULT must not excuse another clause's NOT NULL. Matching the whole statement in one
+# piece would let it: the "no DEFAULT" lookahead would find the second clause's default and clear the
+# first clause's violation.
+status="$(run_on 'ALTER TABLE core.foo
+  ADD COLUMN needs_default VARCHAR(64) NOT NULL,
+  ADD COLUMN has_default VARCHAR(64) DEFAULT '"'"'x'"'"';')"
+check "one clause's default does not excuse another's NOT NULL" "1" "${status}"
+
+# The mirror of the bypass: line-scoped matching also cried wolf. REVOKE ... FROM PUBLIC is
+# hardening, and wrapping it must not turn it into a rollback break.
+status="$(run_on 'REVOKE ALL ON SCHEMA core
+  FROM PUBLIC;')"
+check "a wrapped REVOKE FROM PUBLIC is still allowed" "0" "${status}"
+
+# A declaration attaches to its statement, not to the line the rule happened to match on. With
+# statements spanning lines, the declaration sits above the statement and must still be found.
+status="$(run_on '-- expand-contract: CONTRACT of V018, nothing deployable reads note any more
+ALTER TABLE core.thing
+  DROP COLUMN note;')"
+check "a declaration above a multiline statement is honoured" "0" "${status}"
+
 # -- the checker must not pass by finding nothing ---------------------------------------------------
 
 rm -rf "${WORK}/empty"

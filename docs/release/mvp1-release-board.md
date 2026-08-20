@@ -69,6 +69,23 @@ same prompt. A smoke gate over that would have certified a rollback that had not
 | 1 | The AI plane joins the release pipeline: built, scanned, attested, digest-pinned in the manifest, gated independently, and rollback-capable | ✅ merged |
 | 2 | Prompt identity resolves to the artifact that builds it; rollback is a configuration pin validated at startup and verified against the running service (M1-ADR-011) | ✅ merged |
 | 3 | Flyway expand/contract enforced in CI, and the additive `prompt_template_id` / `agent_run_id` columns on `core.ai_execution` | ✅ merged |
+| 3a | Hardening: the expand/contract guard judges complete statements rather than physical lines | 🟡 in review |
+
+**Slice 3's guard needed hardening, and T17 is not claimed fully hardened until 3a is green.**
+The guard shipped in slice 3 matched each rule against one physical line, so ordinary SQL formatting
+walked through eight of its nine rules -- `ALTER TABLE core.foo` on one line and `DROP COLUMN value`
+on the next was accepted, while the identical statement on a single line was refused. It cried wolf
+the same way: a `REVOKE ... FROM PUBLIC` split across two lines lost its exemption.
+
+This was not hypothetical here. Judging statements instead of lines immediately surfaced twelve
+`ADD CONSTRAINT ... CHECK` findings across V009, V016, V017 and V022 that the line-scoped matcher
+had never been able to see. All four migrations are applied and immutable, so they are recorded as
+accepted with their reasons rather than corrected -- and V022's was a genuine rollback hazard when
+it shipped, unlike the other three, which constrain columns they add themselves.
+
+3a also adds the four rules the same review found missing: `CREATE UNIQUE INDEX` on a pre-existing
+table, `ADD PRIMARY KEY`, `ADD CONSTRAINT ... EXCLUDE USING`, and `DROP DEFAULT`. None of them flags
+any existing migration.
 
 **Delivered separately:** P6 agent observability (`agentRunId`/`toolCallId`/`proposalId`) is
 tracked against the Observability HLD-LLD rather than against T17, because it is correlation work
