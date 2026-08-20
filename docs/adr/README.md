@@ -12,6 +12,20 @@ Consequential implementation decisions must be recorded as ADRs with context, de
 
 ## MVP-1
 
+### Where the source package lives
+
+Every M1 ADR cites "MVP-1 Canonical Package v1.3 Doc NN §X" as its authority. **That package is not
+in this repository.** It is a set of ten `.docx` files held outside the working tree, and a fresh
+clone therefore cannot check any MVP-1 decision against its source.
+
+This is an asymmetry worth naming rather than tolerating quietly: MVP-0's nine source documents are
+frozen in `docs/` with a manifest and SHA-256 checksums, so an MVP-0 decision can be audited from the
+clone alone. MVP-1's cannot.
+
+It is recorded here rather than fixed here because bringing the package in is a decision about what
+belongs in the repository, not a documentation edit — the files are large, binary, and versioned
+outside this project. Until that is settled, a reviewer who needs a cited section has to ask for it.
+
 Decisions adopted from the MVP-1 Canonical Package. **Which task each decision gates is recorded in
 [the MVP-1 release board](../release/mvp1-release-board.md), which owns that mapping.** This index
 says what each decision is; it deliberately does not restate what it blocks.
@@ -33,6 +47,10 @@ be authored before the implementation task each one gates.
 | [M1-ADR-008](M1-ADR-008-model-routing-fallback-and-rollback.md) | Routes are versioned configuration; hard budgets are enforced before dispatch; failure never escalates to a costlier route; rollback moves pointers and never rewrites recorded proposal metadata |
 | [M1-ADR-010](M1-ADR-010-assessment-evaluation-is-formative-only.md) | AI assessment evaluation is FORMATIVE_ONLY and can never create scored evidence |
 
-Not yet authored: M1-ADR-009 (evaluation thresholds). Each is written just before the task it gates
-rather than as a batch, so the decision has the information its implementation produced. M1-T02,
-M1-T03, M1-T05, M1-T08, M1-T10, M1-T12, and M1-T13 are now unblocked.
+Not yet authored: **M1-ADR-009** (evaluation thresholds and release-gate governance), required
+before M1-T15. Each decision is written just before the task it gates rather than as a batch, so it
+has the information its implementation produced.
+
+Which tasks are unblocked, and which are done, is deliberately not restated here — that is the
+[release board](../release/mvp1-release-board.md)'s, and a mapping kept in two places is a mapping
+that will disagree with itself.

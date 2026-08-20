@@ -46,7 +46,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T10 Assessment Agent V1 | ✅ done | M1-ADR-006 ✅, M1-ADR-010 ✅ |
 | M1-T11 Adaptation Agent V1 | ✅ done | — |
 | M1-T12 LIMITED_DURABLE approval | ✅ done | M1-ADR-007 ✅ |
-| M1-T13 ai_execution persistence | 🟡 in progress | M1-ADR-005 ✅ |
+| M1-T13 ai_execution persistence | ✅ done | M1-ADR-005 ✅ |
 | M1-T14 Resilience, latency, cost | ✅ done | — |
 | M1-T15 AI evaluation release gates | ⬜ | M1-ADR-009 |
 | M1-T16 AI security challenge | ⬜ | — |
@@ -90,3 +90,5 @@ Written so far under this practice: M1-ADR-004 (before T08), M1-ADR-008 (before 
 | Doc 07 quality thresholds unmeasurable on `ci-fake` | Tutor pedagogical and functional rubrics cannot be scored without a real route and a provider credential. |
 | Deployed backend digest predates the M1-T04 MDC fix | The shared environment cannot answer a support-code lookup until a release is cut. |
 | Architecture guards are source-scanning rather than ArchUnit | `DomainNeutralityTests` and `EvaluationAuthorityBoundaryTests` read `.java` files as text, so they see imports and literals but not the type graph. Migration tracked as **S0-03**; not a blocker for the guards they currently enforce. |
+| The MVP-1 Canonical Package is cited by every M1 ADR but is not in the repository | A fresh clone cannot audit an MVP-1 decision against its source, unlike MVP-0 whose nine documents are frozen in `docs/` with checksums. Bringing it in is a decision about repository scope, not a docs edit. |
+| Database implementation records stopped at M0-T06 | Migrations kept arriving through MVP-1. The schema is documented in the migrations and ADRs, so nothing is undocumented — but `docs/database/` no longer indexes it. Resume the practice or retire it deliberately. |

@@ -26,6 +26,12 @@ Integrity of the frozen set is recorded in `checksums.txt` (SHA-256). Re-verify 
 
 ---
 
+## Present in this folder but outside the freeze
+
+| Document | Why it is here, and why it is not frozen |
+|----------|------------------------------------------|
+| Production Grade Coding & Performance Standards (React/Java/Python) v1.0 | An engineering standards document, not part of the MVP-0 architecture baseline that AR-0 reviews. It sits alongside the nine because that is where it is useful, and it is deliberately absent from `checksums.txt`: the freeze covers the documents under review, and widening it to whatever happens to share the directory would make the hash set mean less, not more. Whether it belongs in the frozen set is a governance decision, not a filing one. |
+
 ## Excluded from the freeze (with rationale)
 
 | Document | Location | Why excluded |

@@ -23,7 +23,7 @@ Inbound request context places `interactionId`, `requestId`, `traceId`, `spanId`
 
 OTLP export is disabled until an approved collector is introduced. Instrumentation and in-process trace context remain active. Enabling export later must use environment-managed endpoints and credentials, never source-controlled secrets.
 
-The temporary `/api/v1/system/database-probe` endpoint exists to prove the UI-to-API-to-JDBC correlation path. M0-T04 must restrict it to an appropriate authenticated operational role or replace it with the finalized secured readiness contract.
+`/api/v1/system/database-probe` proves the UI-to-API-to-JDBC correlation path. M0-T04 restricted it as required: it is reachable only by the `SERVICE` role or by an administrator holding MFA. Retiring it in favour of the finalized readiness contract remains optional, not outstanding.
 
 ## Investigation
 

@@ -40,9 +40,9 @@ Against the six entry criteria recorded in the [release candidate](mvp0-release-
 | 3 | Live-token authorization verified | ✅ Met | 26/26 against a real Keycloak token, including the MFA-gated admin path |
 | 4 | R1–R3 closed or explicitly accepted | ⚠️ Partial | R2 and R3 closed; **R1 open** |
 | 5 | Deterministic control frozen | ✅ Met | `EngineVersionFreezeTests` pins all seven engines by behaviour hash and fails if a new engine is unfrozen |
-| 6 | Boundary respected | ⚠️ Partial | B1 done: `ramals_ai_runtime` exists and is denied everything, proven by `42501`. B2–B4 remain |
+| 6 | Boundary respected | ✅ Met | B1–B4 all done: `ramals_ai_runtime` denied everything (`42501`); workload identity issued (M1-T03); trace/interaction continuation proven (M1-T04); agent output constrained by deterministic gates throughout M1-T07…T14 |
 
-Five of six now met or substantially met. **R1 is the only item blocked on anything external.**
+Five of six met; the sixth is R1. **R1 is the only item blocked on anything external.**
 
 ## 2. Gate A — finish MVP-0 before writing MVP-1 code
 
@@ -133,14 +133,19 @@ tables, and that no schema USAGE is held. It re-grants LOGIN and CONNECT to demo
 denials positively — asserting only "the connection fails" would pass for uninteresting reasons, such
 as a wrong password.
 
-### B2. Workload identity, not a borrowed learner token
+### B2. Workload identity, not a borrowed learner token — ✅ **done**
+
+Delivered by M1-T03 under [M1-ADR-003](../adr/M1-ADR-003-workload-identity.md); evidence in
+[workload-identity drill](evidence/workload-identity-drill.md).
 
 The AI service authenticates as itself — client credentials, its own audience — never by replaying a
 learner's token. A learner token reaching the AI service and continuing outward is privilege
 laundering: the platform can no longer distinguish "the learner asked for this" from "a model
 decided to do this".
 
-### B3. Trace context continuation
+### B3. Trace context continuation — ✅ **done**
+
+Delivered by M1-T04; evidence in [interactionId drill](evidence/interaction-id-drill.md).
 
 [Master Plan](../RAMALS_MVP0_Implementation_Master_Plan_v1.0.docx) §5 (Mandatory Propagation
 Contract) already specifies it: the Python side **continues** the incoming W3C trace context and
@@ -148,31 +153,33 @@ propagates `X-Interaction-ID` rather than starting an unrelated trace. MVP-0 wir
 model precisely so this would not need redesign. A test that an interactionId survives a round trip
 through the AI boundary belongs in the first MVP-1 change set, not the last.
 
-### B4. Agent output is a proposal, not a write
+### B4. Agent output is a proposal, not a write — ✅ **done**
+
+Held across every agent task. `EvaluationAuthorityBoundaryTests` pins that `ledger.evidence` has a
+single writer and that no AI component can reach an authoritative repository, engine or service.
 
 Authoritative mastery and progression stay in the deterministic engine. Agent output enters through a
 policy gate that can reject it, and whatever is accepted is recorded with its own provenance so a
 decision can still be reconstructed. If an agent can write `ledger.mastery_snapshot`, the control is
 gone and MVP-0's guarantees stop holding.
 
-## 4. Suggested MVP-1 sequencing
+## 4. Suggested MVP-1 sequencing — superseded
 
-Proposal, not an approved plan. The deferred scope in
+This section originally proposed its own six-task sequence and labelled it `M1-T01` … `M1-T06`.
+Those identifiers now mean something else: the MVP-1 Canonical Package numbers the real tasks
+`M1-T00` … `M1-T18`, and under that numbering `M1-T03` is workload identity, `M1-T04` is correlation
+and OTel, and `M1-T05` is the LLM gateway — none of which is what the table said.
+
+The proposal is removed rather than renumbered. It was written before the canonical package was
+adopted and its content is now covered by the real plan; keeping a second live meaning for
+`M1-T04` inside `docs/release/`, where the evidence drills use the canonical one, was the actual
+hazard. The shape of the argument it made survives in the package's own ordering.
+
+**The authoritative sequence and its status is the
+[MVP-1 release board](mvp1-release-board.md).** The deferred scope named in
 [Master Plan](../RAMALS_MVP0_Implementation_Master_Plan_v1.0.docx) §2 (MVP-0 Scope Freeze) — LLM
 calls, LangGraph, RAG / pgvector, Temporal, Redis, Kafka event backbone, labs, Kubernetes,
-multi-tenancy, BKT/IRT/CAT — is larger than one increment and should be scoped deliberately.
-
-| Task | Outcome | Depends on |
-| --- | --- | --- |
-| M1-T01 | `ramals-ai` service skeleton, workload identity, health, structured logs | Gate B1, B2 |
-| M1-T02 | Boundary enforcement suite: DB privilege denial, no learner-token replay | M1-T01 |
-| M1-T03 | Trace/interaction continuation across the boundary, proven end to end | M1-T01 |
-| M1-T04 | First LLM call behind a cost and deadline budget, fully recorded | M1-T03 |
-| M1-T05 | Policy gate: agent proposals reviewed against deterministic state | Gate B4 |
-| M1-T06 | A/B harness comparing agentic output against the frozen MVP-0 control | Gate A1, A2 |
-
-M1-T06 is the reason for all of it, and it is the task that silently becomes impossible if A1 and A2
-are skipped.
+multi-tenancy, BKT/IRT/CAT — remains larger than one increment and is scoped there.
 
 ## 5. Definition of ready for MVP-1
 
@@ -182,8 +189,7 @@ Start MVP-1 when:
 - [x] Engine version identifiers frozen and guarded in CI
 - [x] Rollback drill executed against the released digests
 - [x] `ramals_ai_runtime` exists with a privilege test proving it cannot reach `core`/`ledger`
-- [ ] AI workload identity issued, distinct from any learner token
-- [ ] Trace/interaction continuation contract has a failing-then-passing test
+- [x] AI workload identity issued, distinct from any learner token
+- [x] Trace/interaction continuation contract has a failing-then-passing test
 
-Everything except the first is a day or two of work inside this repository. The first needs a
-machine.
+Everything except the first is done. The first still needs a machine, and R1 remains open.
