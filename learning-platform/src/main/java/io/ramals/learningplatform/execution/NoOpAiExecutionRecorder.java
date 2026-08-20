@@ -7,6 +7,11 @@ import java.time.Instant;
 /** Test adapter for callers whose unit tests intentionally exclude infrastructure persistence. */
 public final class NoOpAiExecutionRecorder implements AiExecutionRecorder {
   @Override
+  public AiExecutionCommission commission(AiRequestEnvelope request, String agentType) {
+    return AiExecutionCommission.claimed();
+  }
+
+  @Override
   public AiExecution recordSuccess(AiRequestEnvelope request, AiProposalEnvelope proposal,
       Instant startedAt, Instant completedAt) {
     return null;

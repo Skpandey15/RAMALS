@@ -6,6 +6,8 @@ import java.time.Instant;
 
 /** Application port for durable AI execution accounting. */
 public interface AiExecutionRecorder {
+  AiExecutionCommission commission(AiRequestEnvelope request, String agentType);
+
   AiExecution recordSuccess(AiRequestEnvelope request, AiProposalEnvelope proposal,
       Instant startedAt, Instant completedAt);
 

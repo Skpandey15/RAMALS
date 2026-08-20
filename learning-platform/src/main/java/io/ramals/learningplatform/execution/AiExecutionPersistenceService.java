@@ -27,6 +27,24 @@ public class AiExecutionPersistenceService implements AiExecutionRecorder {
   }
 
   @Override
+  public AiExecutionCommission commission(AiRequestEnvelope request, String agentType) {
+    try {
+      AiExecutionCommission commission = independent(() -> repository.commission(request, agentType));
+      BusinessEventLogger.info(LOGGER, "ai.execution.commissioned", "AI execution commission evaluated",
+          Map.of("requestId", request.requestId(), "interactionId", request.interactionId(),
+              "agentType", agentType, "state", commission.state(),
+              "dispatchAllowed", commission.dispatchAllowed()));
+      return commission;
+    } catch (RuntimeException failure) {
+      BusinessEventLogger.error(LOGGER, "ai.execution.commission_failed",
+          "AI execution could not be commissioned", failure,
+          Map.of("requestId", request.requestId(), "interactionId", request.interactionId(),
+              "agentType", agentType));
+      throw failure;
+    }
+  }
+
+  @Override
   public AiExecution recordSuccess(AiRequestEnvelope request, AiProposalEnvelope proposal,
       Instant startedAt, Instant completedAt) {
     try {
