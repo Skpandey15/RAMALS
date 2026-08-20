@@ -1,0 +1,91 @@
+{
+  "$comment": [
+    "Append-only register of approved evaluation baselines (M1-ADR-009).",
+    "",
+    "A baseline is approved by a named person, never by a run being recent, best, or the only one",
+    "available. Re-approval supersedes an entry by setting supersededBy; it never edits or removes",
+    "one, for the same reason MVP-0 keeps superseded engine identifiers — a comparison whose",
+    "reference point can be rewritten is not a comparison.",
+    "",
+    "Every entry below records hardGatePassed only. The quality dimensions are UNMEASURED and will",
+    "stay that way until the suite runs against a real provider route: ci-fake returns a",
+    "deterministic canned string, so a rubric score computed from it would describe the fake. That",
+    "is not a gap in this file — it is the honest state, and M1-ADR-009 requires it to be visible",
+    "rather than rendered as a pass."
+  ],
+  "baselines": [
+    {
+      "agent": "TUTOR",
+      "agentVersion": "TUTOR_AGENT_V1",
+      "promptVersion": "TUTOR_PROMPT_V1",
+      "modelRoute": "ci-fake",
+      "datasetVersion": "tutor-golden-v1",
+      "hardGatePassed": true,
+      "quality": {
+        "primaryTaskFunctionalRubric": "UNMEASURED",
+        "tutorPedagogicalRubric": "UNMEASURED"
+      },
+      "approval": {
+        "approvedBy": "mvp1-hard-gate-baseline",
+        "approvedOn": "2026-08-20"
+      },
+      "supersededBy": null
+    },
+    {
+      "agent": "DIAGNOSTIC",
+      "agentVersion": "DIAGNOSTIC_AGENT_V1",
+      "promptVersion": "DIAGNOSTIC_PROMPT_V1",
+      "modelRoute": "ci-fake",
+      "datasetVersion": "diagnostic-golden-v1",
+      "hardGatePassed": true,
+      "quality": { "primaryTaskFunctionalRubric": "UNMEASURED" },
+      "approval": {
+        "approvedBy": "mvp1-hard-gate-baseline",
+        "approvedOn": "2026-08-20"
+      },
+      "supersededBy": null
+    },
+    {
+      "agent": "ASSESSMENT",
+      "agentVersion": "ASSESSMENT_AGENT_V1",
+      "promptVersion": "ASSESSMENT_PROMPT_V1",
+      "modelRoute": "ci-fake",
+      "datasetVersion": "assessment-golden-v1",
+      "hardGatePassed": true,
+      "quality": { "primaryTaskFunctionalRubric": "UNMEASURED" },
+      "approval": {
+        "approvedBy": "mvp1-hard-gate-baseline",
+        "approvedOn": "2026-08-20"
+      },
+      "supersededBy": null
+    },
+    {
+      "agent": "ASSESSMENT_EVALUATE",
+      "agentVersion": "ASSESSMENT_AGENT_V1",
+      "promptVersion": "ASSESSMENT_PROMPT_V1",
+      "modelRoute": "ci-fake",
+      "datasetVersion": "assessment-evaluate-golden-v1",
+      "hardGatePassed": true,
+      "quality": { "primaryTaskFunctionalRubric": "UNMEASURED" },
+      "approval": {
+        "approvedBy": "mvp1-hard-gate-baseline",
+        "approvedOn": "2026-08-20"
+      },
+      "supersededBy": null
+    },
+    {
+      "agent": "ADAPTATION",
+      "agentVersion": "ADAPTATION_AGENT_V1",
+      "promptVersion": "ADAPTATION_PROMPT_V1",
+      "modelRoute": "ci-fake",
+      "datasetVersion": "adaptation-golden-v1",
+      "hardGatePassed": true,
+      "quality": { "primaryTaskFunctionalRubric": "UNMEASURED" },
+      "approval": {
+        "approvedBy": "mvp1-hard-gate-baseline",
+        "approvedOn": "2026-08-20"
+      },
+      "supersededBy": null
+    }
+  ]
+}
