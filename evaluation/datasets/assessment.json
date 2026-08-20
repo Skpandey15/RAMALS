@@ -1,0 +1,87 @@
+{
+  "agent": "ASSESSMENT",
+  "datasetVersion": "assessment-golden-v1",
+  "validator": "ramals_ai.assessment.validation:validate_item",
+  "description": "Doc 07 §5 golden suite for Assessment V1 item generation. Primary measures per Doc 07 §3: item/rubric consistency, ambiguity, trust-state compliance.",
+  "cases": [
+    {
+      "id": "well-formed-item",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC",
+        "requestedDifficulty": "FOUNDATIONAL",
+        "availableObjectives": [
+          "TOPIC_DEFINE"
+        ]
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"objectiveCode\": \"TOPIC_DEFINE\", \"difficulty\": \"FOUNDATIONAL\", \"stem\": \"A Kafka topic is best described as:\", \"options\": [\"A durable, named, append-only stream of records\", \"A single mutable database row\", \"A transient in-memory cache\"], \"answerKey\": [\"A durable, named, append-only stream of records\"], \"rationale\": \"A topic is an append-only log; the other options describe mutable stores.\"}",
+      "expectValid": true,
+      "why": "The baseline good case."
+    },
+    {
+      "id": "answer-key-names-an-absent-option",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC",
+        "requestedDifficulty": "FOUNDATIONAL",
+        "availableObjectives": [
+          "TOPIC_DEFINE"
+        ]
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"objectiveCode\": \"TOPIC_DEFINE\", \"difficulty\": \"FOUNDATIONAL\", \"stem\": \"A Kafka topic is best described as:\", \"options\": [\"A durable log\", \"A database row\"], \"answerKey\": [\"A partition\"], \"rationale\": \"The key names something that is not an option.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "STRUCTURAL_ANSWER_KEY_NOT_IN_OPTIONS"
+      ],
+      "why": "The defect the whole trust pipeline exists for. Nothing throws: the item renders, reads well, and scores every learner wrong -- and those wrong scores become evidence the mastery engine treats as real."
+    },
+    {
+      "id": "difficulty-nobody-asked-for",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC",
+        "requestedDifficulty": "FOUNDATIONAL",
+        "availableObjectives": [
+          "TOPIC_DEFINE"
+        ]
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"objectiveCode\": \"TOPIC_DEFINE\", \"difficulty\": \"ADVANCED\", \"stem\": \"Explain exactly-once semantics across rebalances.\", \"options\": [\"Idempotent producer plus transactions\", \"acks=0\", \"A larger batch size\"], \"answerKey\": [\"Idempotent producer plus transactions\"], \"rationale\": \"Exactly-once needs idempotence and transactional writes.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "POLICY_DIFFICULTY_NOT_REQUESTED"
+      ],
+      "why": "Spring chose the band deterministically. An item at another band is evidence at a level nobody asked to measure, and it looks entirely ordinary in a review queue."
+    },
+    {
+      "id": "generator-narration-in-the-stem",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC",
+        "requestedDifficulty": "FOUNDATIONAL",
+        "availableObjectives": [
+          "TOPIC_DEFINE"
+        ]
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"objectiveCode\": \"TOPIC_DEFINE\", \"difficulty\": \"FOUNDATIONAL\", \"stem\": \"As an AI, here is a question about topics.\", \"options\": [\"A durable log\", \"A cache\"], \"answerKey\": [\"A durable log\"], \"rationale\": \"Topics are durable logs.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "QUALITY_GENERATOR_NARRATION"
+      ],
+      "why": "Harmless to a reader, corrosive to trust, and a reliable signal the generation went sideways."
+    },
+    {
+      "id": "not-json",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC",
+        "requestedDifficulty": "FOUNDATIONAL"
+      },
+      "output": "Here is a nice question about topics.",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "SCHEMA_NOT_JSON"
+      ],
+      "why": "Schema validity is a 100% hard gate."
+    }
+  ]
+}

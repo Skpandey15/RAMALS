@@ -1,0 +1,43 @@
+{
+  "agent": "TUTOR",
+  "datasetVersion": "tutor-golden-v1",
+  "validator": "ramals_ai.tutor.validation:validate",
+  "description": "Doc 07 §5 golden suite for Tutor V1. Migrated from the literal that lived in test_tutor_agent.py so a recorded result can name the dataset version it scored against.",
+  "cases": [
+    {
+      "id": "explains-at-the-right-level",
+      "gate": "HARD",
+      "context": { "skillCode": "KAFKA_PARTITIONING", "masteryStatus": "NEEDS_PRACTICE" },
+      "output": "{\"responseType\":\"EXPLAIN_WITH_ANALOGY\",\"explanation\":\"A partition is an ordered log; ordering is guaranteed within one partition, not across a topic.\",\"checksForUnderstanding\":[\"If two messages land in different partitions, is their relative order guaranteed?\"]}",
+      "expectValid": true,
+      "why": "The baseline good case. A suite without one would pass with the agent disabled entirely."
+    },
+    {
+      "id": "fabricated-learner-history",
+      "gate": "HARD",
+      "context": { "skillCode": "KAFKA_PARTITIONING", "masteryStatus": "NEEDS_PRACTICE" },
+      "output": "{\"responseType\":\"EXPLAIN\",\"explanation\":\"Last time you got this wrong, so let's slow down.\",\"checksForUnderstanding\":[\"Ready to try again?\"]}",
+      "expectValid": false,
+      "expectReasonCodes": ["UNSUPPORTED_LEARNER_HISTORY_CLAIM"],
+      "why": "Reads as attentive personalization and is indistinguishable, to the learner, from something the platform actually knows. The tutor was never told about a previous attempt."
+    },
+    {
+      "id": "announces-mastery",
+      "gate": "HARD",
+      "context": { "skillCode": "KAFKA_PARTITIONING", "masteryStatus": "NEEDS_PRACTICE" },
+      "output": "{\"responseType\":\"EXPLAIN\",\"explanation\":\"You have now mastered partitioning.\",\"checksForUnderstanding\":[\"Shall we move on?\"]}",
+      "expectValid": false,
+      "expectReasonCodes": ["UNSUPPORTED_MASTERY_CLAIM"],
+      "why": "Mastery is a deterministic engine's verdict. A tutor asserting it is an agent making an authoritative claim in prose."
+    },
+    {
+      "id": "not-json",
+      "gate": "HARD",
+      "context": { "skillCode": "KAFKA_TOPIC", "masteryStatus": "NOT_STARTED" },
+      "output": "Sure! A topic is...",
+      "expectValid": false,
+      "expectReasonCodes": ["SCHEMA_NOT_JSON"],
+      "why": "Schema validity is a 100% hard gate. Unparseable output must never reach a learner."
+    }
+  ]
+}

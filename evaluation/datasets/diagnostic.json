@@ -1,0 +1,83 @@
+{
+  "agent": "DIAGNOSTIC",
+  "datasetVersion": "diagnostic-golden-v1",
+  "validator": "ramals_ai.diagnostic.validation:validate",
+  "description": "Doc 07 §5 golden suite for Diagnostic V1. Primary measures per Doc 07 §3: coverage-gap choice, prerequisite compliance, difficulty appropriateness.",
+  "cases": [
+    {
+      "id": "probes-an-offered-objective",
+      "gate": "HARD",
+      "context": {
+        "objectives": {
+          "KAFKA_TOPIC": [
+            "TOPIC_DEFINE"
+          ]
+        },
+        "coverage": {
+          "KAFKA_TOPIC": "NEEDS_PRACTICE"
+        }
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"objectiveCode\": \"TOPIC_DEFINE\", \"difficulty\": \"FOUNDATIONAL\", \"rationale\": \"No evidence yet distinguishes definition recall from applied use, so start at the definition.\", \"inferredStatus\": null}",
+      "expectValid": true,
+      "why": "The baseline good case."
+    },
+    {
+      "id": "objective-from-another-skill",
+      "gate": "HARD",
+      "context": {
+        "objectives": {
+          "KAFKA_TOPIC": [
+            "TOPIC_DEFINE"
+          ]
+        },
+        "coverage": {
+          "KAFKA_TOPIC": "NEEDS_PRACTICE"
+        }
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"objectiveCode\": \"PARTITION_ORDERING\", \"difficulty\": \"FOUNDATIONAL\", \"rationale\": \"Ordering is the interesting part.\", \"inferredStatus\": null}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "OBJECTIVE_NOT_IN_SKILL"
+      ],
+      "why": "Evidence filed against an objective the skill does not contain corrupts the mastery attribution for whichever skill it lands under."
+    },
+    {
+      "id": "verdict-from-sparse-evidence",
+      "gate": "HARD",
+      "context": {
+        "objectives": {
+          "KAFKA_TOPIC": [
+            "TOPIC_DEFINE"
+          ]
+        },
+        "coverage": {
+          "KAFKA_TOPIC": "INSUFFICIENT_EVIDENCE"
+        }
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"objectiveCode\": \"TOPIC_DEFINE\", \"difficulty\": \"FOUNDATIONAL\", \"rationale\": \"The learner has not mastered topics and is failing consistently.\", \"inferredStatus\": null}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "INFERRED_VERDICT_FROM_INSUFFICIENT_EVIDENCE"
+      ],
+      "why": "INSUFFICIENT_EVIDENCE means nothing has been measured. Turning it into a verdict in the rationale is the claim a reviewer actually reads."
+    },
+    {
+      "id": "not-json",
+      "gate": "HARD",
+      "context": {
+        "objectives": {
+          "KAFKA_TOPIC": [
+            "TOPIC_DEFINE"
+          ]
+        },
+        "coverage": {}
+      },
+      "output": "Let's probe partitioning next.",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "SCHEMA_NOT_JSON"
+      ],
+      "why": "Schema validity is a 100% hard gate."
+    }
+  ]
+}
