@@ -110,6 +110,12 @@ backend does not call the AI service until M1-T05; what is under test here is th
 contract both sides implement, which is what T05 will depend on. The `→ model` leg of the plan's
 "one trace spans Spring→Python→fake model" criterion is deferred to T05 with the model call.
 
+> **Correction, recorded later.** The forward-looking part of that paragraph was wrong: Spring first
+> called the AI service in **M1-T08**, not M1-T05, which built the Python-side gateway. The observed
+> results above are unaffected — they record what the drill did, not what came next. Left in place
+> with this note rather than edited, because an evidence document that is quietly rewritten stops
+> being evidence.
+
 ## Reproducing
 
 Both services must be running and reachable from wherever the drill executes:
