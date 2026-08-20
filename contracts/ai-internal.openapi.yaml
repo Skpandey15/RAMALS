@@ -453,6 +453,10 @@ components:
 
     Usage:
       type: object
+      description: >-
+        Usage accumulated from the governed model calls in one AI proposal. latencyMs is the sum
+        of model-call durations, including bounded repair calls and gateway retry/fallback handling;
+        it is not full HTTP request or learner-interaction end-to-end latency.
       additionalProperties: false
       properties:
         inputTokens: { type: integer, minimum: 0 }

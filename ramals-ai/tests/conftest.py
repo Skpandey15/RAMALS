@@ -14,7 +14,11 @@ from collections.abc import Callable, Iterator
 import pytest
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+from opentelemetry.sdk.metrics.export import (
+    HistogramDataPoint,
+    InMemoryMetricReader,
+    NumberDataPoint,
+)
 
 _reader = InMemoryMetricReader()
 metrics.set_meter_provider(MeterProvider(metric_readers=[_reader]))
@@ -36,6 +40,22 @@ def _total(name: str) -> int:
     return total
 
 
+def _histogram_total(name: str, attributes: dict[str, str]) -> tuple[int, float]:
+    data = _reader.get_metrics_data()
+    count = 0
+    total = 0.0
+    for resource_metric in data.resource_metrics if data else []:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                if metric.name != name:
+                    continue
+                for point in metric.data.data_points:
+                    if isinstance(point, HistogramDataPoint) and point.attributes == attributes:
+                        count += int(point.count)
+                        total += float(point.sum or 0.0)
+    return count, total
+
+
 @pytest.fixture
 def counter_delta() -> Iterator[Callable[[str], int]]:
     """Returns a function giving the increase in a counter since the test began.
@@ -52,6 +72,27 @@ def counter_delta() -> Iterator[Callable[[str], int]]:
 
     def snapshot(name: str) -> None:
         baseline[name] = _total(name)
+
+    delta.snapshot = snapshot  # type: ignore[attr-defined]
+    yield delta
+
+
+@pytest.fixture
+def histogram_delta() -> Iterator[Callable[[str, dict[str, str]], tuple[int, float]]]:
+    """Returns histogram count and sum deltas for one bounded label set."""
+    baseline: dict[tuple[str, tuple[tuple[str, str], ...]], tuple[int, float]] = {}
+
+    def delta(name: str, attributes: dict[str, str]) -> tuple[int, float]:
+        key = (name, tuple(sorted(attributes.items())))
+        if key not in baseline:
+            raise AssertionError(f"call snapshot('{name}', attributes) before measuring its delta")
+        current = _histogram_total(name, attributes)
+        previous = baseline[key]
+        return current[0] - previous[0], current[1] - previous[1]
+
+    def snapshot(name: str, attributes: dict[str, str]) -> None:
+        key = (name, tuple(sorted(attributes.items())))
+        baseline[key] = _histogram_total(name, attributes)
 
     delta.snapshot = snapshot  # type: ignore[attr-defined]
     yield delta

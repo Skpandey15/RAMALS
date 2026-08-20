@@ -7,7 +7,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -66,9 +65,7 @@ public class AiClientConfiguration {
     // Doc 01 INTERACTIVE_AI budgets, applied at the transport. Without a read timeout a stalled AI
     // plane holds a request thread indefinitely, which is the failure the bulkhead bounds but should
     // not have to.
-    SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-    requestFactory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
-    requestFactory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
+    DeadlineAwareClientHttpRequestFactory requestFactory = configuredRequestFactory();
 
     RestClient restClient = RestClient.builder()
         .baseUrl(baseUrl)
@@ -87,9 +84,7 @@ public class AiClientConfiguration {
       };
     }
 
-    SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-    requestFactory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
-    requestFactory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
+    DeadlineAwareClientHttpRequestFactory requestFactory = configuredRequestFactory();
     RestClient restClient = RestClient.builder()
         .baseUrl(baseUrl)
         .requestFactory(requestFactory)
@@ -114,13 +109,19 @@ public class AiClientConfiguration {
             "Assessment commissioning is not enabled in this environment.");
       };
     }
-    SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-    requestFactory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
-    requestFactory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
+    DeadlineAwareClientHttpRequestFactory requestFactory = configuredRequestFactory();
     RestClient aiClient = RestClient.builder().baseUrl(baseUrl).requestFactory(requestFactory).build();
     RestClient tokenClient = RestClient.builder().baseUrl(tokenUrl).requestFactory(requestFactory).build();
     return new RamalsAiAssessmentClient(
         aiClient, guard, new WorkloadTokenProvider(tokenClient, clientId, clientSecret, audience));
+  }
+
+  private static DeadlineAwareClientHttpRequestFactory configuredRequestFactory() {
+    DeadlineAwareClientHttpRequestFactory requestFactory =
+        new DeadlineAwareClientHttpRequestFactory();
+    requestFactory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
+    requestFactory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
+    return requestFactory;
   }
 
   /**

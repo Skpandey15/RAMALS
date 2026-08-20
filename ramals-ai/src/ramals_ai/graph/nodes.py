@@ -100,12 +100,19 @@ def model_or_tool(
     state.enter_node("model_or_tool")
     with _span("model_or_tool"):
         state.check_deadline()
+        # The provider must never be contacted for a call the graph has already disallowed. The
+        # post-dispatch check in record_model_call remains as a defensive invariant for callers that
+        # record directly, but this guard is the one that protects the external side effect.
+        state.ensure_model_call_permitted()
         try:
             result = gateway.complete(
                 route=route,
                 messages=messages,
                 deadline=state.deadline,
                 max_output_tokens=state.token_budget or None,
+                interaction_class=state.interaction_class,
+                request_cost_budget_usd=state.cost_budget_usd,
+                request_cost_spent_usd=state.cost_spent_usd,
             )
         except GatewayError as failure:
             # The gateway has already classified this. Recording it as a validation error rather
@@ -117,7 +124,13 @@ def model_or_tool(
                 return state
             raise
 
-        state.record_model_call(result.estimated_cost_usd)
+        state.record_model_call(
+            result.estimated_cost_usd,
+            input_tokens=result.input_tokens,
+            cached_input_tokens=result.cached_input_tokens,
+            output_tokens=result.output_tokens,
+            latency_ms=result.latency_ms,
+        )
         state.final_proposal = {
             "text": result.text,
             "modelRoute": result.route.value,

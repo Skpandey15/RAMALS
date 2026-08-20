@@ -32,26 +32,36 @@ public class RamalsAiAssessmentClient implements AssessmentPort {
       throw new AiUnavailableException("AI_DEADLINE_EXCEEDED", "No time remained for assessment.");
     }
 
-    return guard.call(() -> {
-      try {
-        AiRequestEnvelope commissionedRequest = new AiRequestEnvelope(
-            request.contractVersion(), request.interactionId(), request.requestId(), request.learner(),
-            request.learningContext(), request.domainContext(), request.learningGoalContext(),
-            request.constraints(), requestedDifficulty);
-        AiProposalEnvelope proposal = restClient.post()
-            .uri("/internal/v1/assessment/propose")
-            .header("Authorization", "Bearer " + tokenProvider.accessToken())
-            .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
-            .body(commissionedRequest)
-            .retrieve()
-            .body(AiProposalEnvelope.class);
-        if (proposal == null) {
-          throw new AiUnavailableException("AI_EMPTY_RESPONSE", "The assessment service returned no proposal.");
-        }
-        return proposal;
-      } catch (RestClientException failure) {
-        throw new AiUnavailableException("AI_TRANSPORT_FAILURE", "The assessment service could not be reached.");
-      }
-    });
+    return DeadlineAwareClientHttpRequestFactory.execute(deadlineMillis, () ->
+        guard.call(() -> {
+          try {
+            AiRequestEnvelope commissionedRequest = new AiRequestEnvelope(
+                request.contractVersion(), request.interactionId(), request.requestId(), request.learner(),
+                request.learningContext(), request.domainContext(), request.learningGoalContext(),
+                request.constraints(), requestedDifficulty);
+            // Token acquisition is deliberately inside the same scope as the AI request. A slow
+            // identity provider must not renew the assessment budget before model dispatch.
+            AiProposalEnvelope proposal = restClient.post()
+                .uri("/internal/v1/assessment/propose")
+                .header("Authorization", "Bearer " + tokenProvider.accessToken())
+                .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
+                .body(commissionedRequest)
+                .retrieve()
+                .body(AiProposalEnvelope.class);
+            DeadlineAwareClientHttpRequestFactory.requireRemaining();
+            if (proposal == null) {
+              throw new AiUnavailableException(
+                  "AI_EMPTY_RESPONSE", "The assessment service returned no proposal.");
+            }
+            return proposal;
+          } catch (RestClientException failure) {
+            if (DeadlineAwareClientHttpRequestFactory.isExpired()) {
+              throw new AiUnavailableException(
+                  "AI_DEADLINE_EXCEEDED", "No time remained for assessment.");
+            }
+            throw new AiUnavailableException(
+                "AI_TRANSPORT_FAILURE", "The assessment service could not be reached.");
+          }
+        }));
   }
 }
