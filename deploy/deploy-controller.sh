@@ -57,10 +57,10 @@ print(value if not isinstance(value,(dict,list)) else json.dumps(value))
 " "${STATE_FILE}" "$1" "$2"
 }
 
-write_state() { # write_state <state> <commit> <known_good_commit> <held_json> <failures> <kg_backend> <kg_webui>
+write_state() { # write_state <state> <commit> <known_good_commit> <held_json> <failures> <kg_backend> <kg_webui> <kg_ai>
   "${PY}" -c "
 import json,sys
-state, commit, known_good, held, failures, kg_backend, kg_webui = sys.argv[1:8]
+state, commit, known_good, held, failures, kg_backend, kg_webui, kg_ai = sys.argv[1:9]
 json.dump({
   'state': state,
   'current_commit': commit,
@@ -70,10 +70,14 @@ json.dump({
   # must carry the known-good image references itself or it has nothing to return to.
   'known_good_backend_image': kg_backend,
   'known_good_webui_image': kg_webui,
+  # The AI plane rolls back with the others. A component that can be deployed but not returned to a
+  # known-good digest is worse than one that is not deployed at all: the first bad release strands
+  # it, and the only way back is by hand.
+  'known_good_ai_image': kg_ai,
   'held_versions': json.loads(held),
   'failure_count': int(failures),
-}, open(sys.argv[8],'w'), indent=2)
-" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "${STATE_FILE}"
+}, open(sys.argv[9],'w'), indent=2)
+" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "${STATE_FILE}"
 }
 
 is_held() {
@@ -91,9 +95,12 @@ raise SystemExit(0 if sys.argv[2] in held else 1)
 DESIRED_COMMIT="$(json_get "${MANIFEST}" release.commit)"
 BACKEND_DIGEST="$(json_get "${MANIFEST}" components.learning-platform.digest)"
 WEBUI_DIGEST="$(json_get "${MANIFEST}" components.web-ui.digest)"
+# Optional by design: a deterministic-only deployment runs no AI plane, and that is a supported
+# configuration rather than an incomplete manifest.
+AI_DIGEST="$(json_get "${MANIFEST}" components.ramals-ai.digest 2>/dev/null || echo '')"
 
 # The desired version must be explicit and immutable; a mutable tag is never deployable.
-for digest in "${BACKEND_DIGEST}" "${WEBUI_DIGEST}"; do
+for digest in "${BACKEND_DIGEST}" "${WEBUI_DIGEST}" ${AI_DIGEST:+"${AI_DIGEST}"}; do
   case "${digest}" in
     sha256:*) ;;
     *) log "ERROR: desired version must be an immutable sha256 digest, got '${digest}'"; exit 1 ;;
@@ -105,6 +112,7 @@ CURRENT_COMMIT="$(state_get current_commit none)"
 KNOWN_GOOD="$(state_get known_good_commit none)"
 KNOWN_GOOD_BACKEND="$(state_get known_good_backend_image none)"
 KNOWN_GOOD_WEBUI="$(state_get known_good_webui_image none)"
+KNOWN_GOOD_AI="$(state_get known_good_ai_image none)"
 HELD="$(state_get held_versions '[]')"
 FAILURES="$(state_get failure_count 0)"
 
@@ -115,7 +123,7 @@ if is_held "${DESIRED_COMMIT}"; then
   log "RELEASE_HELD: ${DESIRED_COMMIT} previously failed health gates and was rolled back."
   log "Refusing automatic redeploy. Correct or explicitly re-approve the manifest."
   write_state RELEASE_HELD "${CURRENT_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "${FAILURES}" \
-    "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}"
+    "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}" "${KNOWN_GOOD_AI}"
   exit 2
 fi
 
@@ -127,9 +135,12 @@ fi
 # --- deploy -------------------------------------------------------------------------------------
 export RAMALS_BACKEND_IMAGE="$(json_get "${MANIFEST}" components.learning-platform.image)@${BACKEND_DIGEST}"
 export RAMALS_WEBUI_IMAGE="$(json_get "${MANIFEST}" components.web-ui.image)@${WEBUI_DIGEST}"
+if [ -n "${AI_DIGEST}" ]; then
+  export RAMALS_AI_IMAGE="$(json_get "${MANIFEST}" components.ramals-ai.image)@${AI_DIGEST}"
+fi
 
 write_state DEPLOYING "${DESIRED_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "${FAILURES}" \
-  "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}"
+  "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}" "${KNOWN_GOOD_AI}"
 log "DEPLOYING ${DESIRED_COMMIT}"
 
 attempt=0
@@ -139,7 +150,7 @@ until ${PULL_CMD}; do
   if [ "${attempt}" -ge "${MAX_TRANSIENT_RETRIES}" ]; then
     log "Transient pull failures exhausted after ${attempt} attempts."
     write_state FAILED "${DESIRED_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "$((FAILURES + 1))" \
-      "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}"
+      "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}" "${KNOWN_GOOD_AI}"
     exit 1
   fi
   log "Transient pull failure; retry ${attempt}/${MAX_TRANSIENT_RETRIES} after backoff."
@@ -153,7 +164,7 @@ if ${HEALTH_CMD}; then
   log "HEALTHY ${DESIRED_COMMIT}"
   # Record the digests that passed, not just the commit — this is what a future rollback restores.
   write_state HEALTHY "${DESIRED_COMMIT}" "${DESIRED_COMMIT}" "${HELD}" 0 \
-    "${RAMALS_BACKEND_IMAGE}" "${RAMALS_WEBUI_IMAGE}"
+    "${RAMALS_BACKEND_IMAGE}" "${RAMALS_WEBUI_IMAGE}" "${RAMALS_AI_IMAGE:-none}"
   exit 0
 fi
 
@@ -199,6 +210,6 @@ else
   RUNNING_COMMIT="${DESIRED_COMMIT}"
 fi
 write_state RELEASE_HELD "${RUNNING_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "$((FAILURES + 1))" \
-  "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}"
+  "${KNOWN_GOOD_BACKEND}" "${KNOWN_GOOD_WEBUI}" "${KNOWN_GOOD_AI}"
 log "RELEASE_HELD: ${DESIRED_COMMIT} will not be redeployed automatically."
 exit 3
