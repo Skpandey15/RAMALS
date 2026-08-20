@@ -52,7 +52,7 @@ public class RamalsAiTutorClient implements TutorPort {
 
     if (deadlineMillis <= 0) {
       throw new AiUnavailableException("AI_DEADLINE_EXCEEDED",
-          "No time remained to consult the tutoring service.");
+          "No time remained to consult the tutoring service.", FailureOrigin.CALLER);
     }
 
     return DeadlineAwareClientHttpRequestFactory.execute(deadlineMillis, () ->
@@ -96,8 +96,7 @@ public class RamalsAiTutorClient implements TutorPort {
                 .addKeyValue("durationMs", (System.nanoTime() - startedAt) / 1_000_000)
                 .log("tutor call failed");
             if ("AI_DEADLINE_EXCEEDED".equals(errorCode)) {
-              throw new AiUnavailableException("AI_DEADLINE_EXCEEDED",
-                  "No time remained to consult the tutoring service.");
+              throw deadlineExceeded();
             }
             throw new AiUnavailableException("AI_TRANSPORT_FAILURE",
                 "The tutoring service could not be reached.");
@@ -128,4 +127,17 @@ public class RamalsAiTutorClient implements TutorPort {
   public static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(2);
 
   public static final Duration READ_TIMEOUT = Duration.ofSeconds(12);
+
+  /**
+   * A deadline failure attributed to whoever actually caused it.
+   *
+   * <p>Origin comes from whether a request was started, not from the error code: an expired budget
+   * before dispatch is ours, while a read timeout or a reply that arrived too late means the
+   * dependency was contacted and did not answer in time. Both carry {@code AI_DEADLINE_EXCEEDED}
+   * so the learner-facing behaviour and {@code TutorUnavailableReason} mapping are unchanged.
+   */
+  private static AiUnavailableException deadlineExceeded() {
+    return new AiUnavailableException("AI_DEADLINE_EXCEEDED", "No time remained to consult the tutoring service.",
+        DeadlineAwareClientHttpRequestFactory.currentFailureOrigin());
+  }
 }

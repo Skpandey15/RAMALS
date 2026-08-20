@@ -233,15 +233,17 @@ class AiCallGuardTests {
   @Test
   @DisplayName("a caller's expired deadline does not open the circuit")
   void aCallerDeadlineIsNotEvidenceAboutTheDependency() {
-    // AI_DEADLINE_EXCEEDED means this side ran out of budget, possibly before the request was sent.
-    // Counting it lets three impatient callers disable tutoring for every learner -- including ones
-    // with a full budget -- while the AI plane is answering normally.
+    // A caller-side failure, stated as one. The error code alone no longer decides this: the same
+    // AI_DEADLINE_EXCEEDED is raised when the dependency was contacted and did not answer in time,
+    // and that must still be able to open the circuit. See AiCallFailureOriginTests, which drives
+    // both through the real transport rather than constructing the exception by hand.
     AiCallGuard guard = guard(3, 4);
 
     for (int i = 0; i < 5; i++) {
       assertThatThrownBy(() -> guard.call(() -> {
         throw new AiUnavailableException(
-            "AI_DEADLINE_EXCEEDED", "No time remained to consult the tutoring service.");
+            "AI_DEADLINE_EXCEEDED", "No time remained to consult the tutoring service.",
+            FailureOrigin.CALLER);
       })).isInstanceOf(AiUnavailableException.class);
     }
 
@@ -260,7 +262,7 @@ class AiCallGuardTests {
       throw new AiUnavailableException("AI_TRANSPORT_FAILURE", "unreachable");
     });
     guardCallIgnoring(guard, () -> {
-      throw new AiUnavailableException("AI_DEADLINE_EXCEEDED", "out of time");
+      throw new AiUnavailableException("AI_DEADLINE_EXCEEDED", "out of time", FailureOrigin.CALLER);
     });
     guardCallIgnoring(guard, () -> {
       throw new AiUnavailableException("AI_TRANSPORT_FAILURE", "unreachable");

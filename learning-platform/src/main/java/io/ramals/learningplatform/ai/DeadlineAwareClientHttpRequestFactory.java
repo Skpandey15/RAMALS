@@ -24,11 +24,41 @@ final class DeadlineAwareClientHttpRequestFactory extends SimpleClientHttpReques
 
   private static final ThreadLocal<Long> DEADLINE_NANOS = new ThreadLocal<>();
 
+  /**
+   * Whether a request was actually started in the current scope.
+   *
+   * <p>This is the fact that separates "we ran out of time before asking" from "we asked and they
+   * did not answer". Both surface as {@code AI_DEADLINE_EXCEEDED}, and only the second is evidence
+   * about the dependency's health, so the distinction cannot be recovered from the error code and
+   * must be recorded when it happens.
+   */
+  private static final ThreadLocal<Boolean> DISPATCH_ATTEMPTED = new ThreadLocal<>();
+
   @Override
   public org.springframework.http.client.ClientHttpRequest createRequest(
       URI uri, HttpMethod httpMethod) throws IOException {
     requireRemaining();
-    return super.createRequest(uri, httpMethod);
+    org.springframework.http.client.ClientHttpRequest request =
+        super.createRequest(uri, httpMethod);
+    // Recorded here rather than after a successful response: from this point the dependency is
+    // being contacted, so a connect timeout, a read timeout or a late reply are all about it.
+    DISPATCH_ATTEMPTED.set(Boolean.TRUE);
+    return request;
+  }
+
+  /** Whether the current scope has started a request to the dependency. */
+  static boolean dispatchAttempted() {
+    return Boolean.TRUE.equals(DISPATCH_ATTEMPTED.get());
+  }
+
+  /**
+   * The origin to attribute a failure to, given whether the dependency has been contacted yet.
+   *
+   * <p>Derived from an observed fact rather than from the error code, which cannot tell the two
+   * apart.
+   */
+  static FailureOrigin currentFailureOrigin() {
+    return dispatchAttempted() ? FailureOrigin.DEPENDENCY : FailureOrigin.CALLER;
   }
 
   @Override
@@ -59,6 +89,8 @@ final class DeadlineAwareClientHttpRequestFactory extends SimpleClientHttpReques
     }
 
     Long previousDeadline = DEADLINE_NANOS.get();
+    Boolean previousDispatch = DISPATCH_ATTEMPTED.get();
+    DISPATCH_ATTEMPTED.remove();
     long requestedDeadline = deadlineNanosFromNow(deadlineMillis);
     long effectiveDeadline = previousDeadline == null
         ? requestedDeadline
@@ -74,6 +106,14 @@ final class DeadlineAwareClientHttpRequestFactory extends SimpleClientHttpReques
         DEADLINE_NANOS.remove();
       } else {
         DEADLINE_NANOS.set(previousDeadline);
+      }
+      // An inner scope's dispatch does not make an outer scope's failure a dependency failure:
+      // acquiring a workload token nests inside the AI call, and a token that was fetched says
+      // nothing about whether the AI plane was reached.
+      if (previousDispatch == null) {
+        DISPATCH_ATTEMPTED.remove();
+      } else {
+        DISPATCH_ATTEMPTED.set(previousDispatch);
       }
     }
   }
@@ -158,6 +198,7 @@ final class DeadlineAwareClientHttpRequestFactory extends SimpleClientHttpReques
 
   private static AiUnavailableException deadlineExceeded() {
     return new AiUnavailableException(
-        "AI_DEADLINE_EXCEEDED", "No time remained to consult the AI service.");
+        "AI_DEADLINE_EXCEEDED", "No time remained to consult the AI service.",
+        currentFailureOrigin());
   }
 }
