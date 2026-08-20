@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.util.function.Supplier;
 import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -224,6 +225,58 @@ class AiCallGuardTests {
     } finally {
       release.countDown();
       occupant.join(5_000);
+    }
+  }
+
+  // -- what counts as evidence about the dependency ---------------------------------------------
+
+  @Test
+  @DisplayName("a caller's expired deadline does not open the circuit")
+  void aCallerDeadlineIsNotEvidenceAboutTheDependency() {
+    // AI_DEADLINE_EXCEEDED means this side ran out of budget, possibly before the request was sent.
+    // Counting it lets three impatient callers disable tutoring for every learner -- including ones
+    // with a full budget -- while the AI plane is answering normally.
+    AiCallGuard guard = guard(3, 4);
+
+    for (int i = 0; i < 5; i++) {
+      assertThatThrownBy(() -> guard.call(() -> {
+        throw new AiUnavailableException(
+            "AI_DEADLINE_EXCEEDED", "No time remained to consult the tutoring service.");
+      })).isInstanceOf(AiUnavailableException.class);
+    }
+
+    assertThat(guard.state()).isEqualTo(AiCallGuard.State.CLOSED);
+  }
+
+  @Test
+  @DisplayName("an expired deadline does not mask a real failure that follows it")
+  void aDeadlineDoesNotResetTheFailureCount() {
+    // The converse risk of the test above: if ignoring a deadline also cleared the counter, a
+    // dependency failing intermittently between short-deadline calls would never reach the
+    // threshold and the breaker would stay shut on a genuinely sick service.
+    AiCallGuard guard = guard(3, 4);
+
+    guardCallIgnoring(guard, () -> {
+      throw new AiUnavailableException("AI_TRANSPORT_FAILURE", "unreachable");
+    });
+    guardCallIgnoring(guard, () -> {
+      throw new AiUnavailableException("AI_DEADLINE_EXCEEDED", "out of time");
+    });
+    guardCallIgnoring(guard, () -> {
+      throw new AiUnavailableException("AI_TRANSPORT_FAILURE", "unreachable");
+    });
+    guardCallIgnoring(guard, () -> {
+      throw new AiUnavailableException("AI_TRANSPORT_FAILURE", "unreachable");
+    });
+
+    assertThat(guard.state()).isEqualTo(AiCallGuard.State.OPEN);
+  }
+
+  private void guardCallIgnoring(AiCallGuard guard, Supplier<Object> action) {
+    try {
+      guard.call(action);
+    } catch (AiUnavailableException ignored) {
+      // the caller's degradation path; this test is about the breaker's bookkeeping
     }
   }
 }

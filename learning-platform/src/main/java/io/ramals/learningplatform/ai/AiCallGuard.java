@@ -2,6 +2,7 @@ package io.ramals.learningplatform.ai;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,6 +44,20 @@ import org.slf4j.LoggerFactory;
 public class AiCallGuard {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(AiCallGuard.class);
+
+  /**
+   * Failures caused on this side of the call, which say nothing about the AI plane's health.
+   *
+   * <p>{@code AI_DEADLINE_EXCEEDED} means the caller's budget ran out — possibly before the request
+   * was even sent. The AI plane may be answering perfectly well and simply not have been asked, or
+   * not have been given time to reply.
+   *
+   * <p>{@code AI_NOT_CONFIGURED} is raised by the unconfigured ports, which never reach this guard;
+   * it is listed so the set reads as the complete statement of "our fault, not theirs" rather than
+   * as a list of the cases someone remembered.
+   */
+  private static final Set<String> CALLER_SIDE_ERROR_CODES =
+      Set.of("AI_DEADLINE_EXCEEDED", "AI_NOT_CONFIGURED");
 
   /**
    * A refusal this guard produced, as opposed to a failure of the dependency behind it.
@@ -157,17 +172,35 @@ public class AiCallGuard {
     }
   }
 
-  private void recordFailure(RuntimeException failure) {
-    // A refusal this guard produced is not evidence about the dependency. Counting it would let a
-    // saturated bulkhead trip the breaker, turning a busy service into an unavailable one.
-    //
-    // Matched on the guard's own type rather than on AiUnavailableException, which is what this
-    // originally tested. Every client wraps a genuine transport failure — a refused connection, a
-    // read timeout, a 401 — in an AiUnavailableException before it leaves the lambda, so the wider
-    // check silently excluded exactly the failures the breaker exists to count, and the breaker
-    // could never open. A caller cannot construct a GuardRefusal, so the exclusion now covers what
-    // it is meant to cover and nothing else.
+  /**
+   * Whether a failure says anything about the health of the AI plane.
+   *
+   * <p>The breaker exists to stop asking a dependency that is not answering. Only failures that are
+   * evidence about that dependency may count, and this has been got wrong in both directions:
+   *
+   * <ul>
+   *   <li>Too permissive: excluding every {@link AiUnavailableException} also excluded the transport
+   *       failures clients wrap in it, so the breaker could never open at all.
+   *   <li>Too strict: counting every {@link AiUnavailableException} that is not a {@link
+   *       GuardRefusal} counts {@code AI_DEADLINE_EXCEEDED}, which happens when the <em>caller</em>
+   *       ran out of budget. Three impatient callers would then disable tutoring for everyone,
+   *       including learners with a full budget, while the AI plane was answering normally.
+   * </ul>
+   *
+   * <p>So the rule is stated as a rule rather than as a type check: a refusal this guard produced,
+   * and a deadline the caller set, are about us. Everything else — a refused connection, a read
+   * timeout, an authentication rejection, an unusable response — is about them.
+   */
+  private static boolean isEvidenceAboutTheDependency(RuntimeException failure) {
     if (failure instanceof GuardRefusal) {
+      return false;
+    }
+    return !(failure instanceof AiUnavailableException unavailable)
+        || !CALLER_SIDE_ERROR_CODES.contains(unavailable.code());
+  }
+
+  private void recordFailure(RuntimeException failure) {
+    if (!isEvidenceAboutTheDependency(failure)) {
       return;
     }
 
