@@ -6,9 +6,11 @@ decides.**
 Spring Boot remains the authoritative system of record for learner state, mastery, confidence,
 progression and evidence. Nothing here can change any of them.
 
-## What exists today (M1-T01)
+## What exists today (through M1-T12)
 
-The service foundation only — no agents, no model calls, no orchestration.
+The service includes bounded proposal agents, authenticated internal routes, workload identity,
+correlation and tracing, governed model routing, and limited-durable approval support in the
+platform core. AI output remains non-authoritative.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -58,7 +60,7 @@ misconfiguration, not something to ignore.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `RAMALS_AI_ENVIRONMENT` | `local` | `local`, `dev`, `test` |
-| `RAMALS_AI_AI_ENABLED` | `false` | Model execution off until M1-T05 |
+| `RAMALS_AI_AI_ENABLED` | `false` | Safe default; set `true` only with a governed live route and provider credential |
 | `RAMALS_AI_MODEL_ROUTE` | `ci-fake` | Route names are governed by Doc 04 |
 | `RAMALS_AI_PROVIDER_API_KEY` | *unset* | Required only for a live route; never logged |
 | `RAMALS_AI_REQUEST_TIMEOUT_SECONDS` | `12.0` | Within the Doc 01 INTERACTIVE_AI deadline |

@@ -6,11 +6,15 @@ import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
+import io.ramals.learningplatform.execution.AiExecutionRecorder;
+import io.ramals.learningplatform.execution.NoOpAiExecutionRecorder;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /** Receives, validates, and durably records one AI assessment candidate. */
@@ -22,14 +26,25 @@ public class AssessmentCandidateIntakeService {
   private final AssessmentPort assessmentPort;
   private final ContentValidationPipeline validationPipeline;
   private final AssessmentCandidatePersistenceService persistenceService;
+  private final AiExecutionRecorder executionRecorder;
 
   public AssessmentCandidateIntakeService(
       AssessmentPort assessmentPort,
       ContentValidationPipeline validationPipeline,
       AssessmentCandidatePersistenceService persistenceService) {
+    this(assessmentPort, validationPipeline, persistenceService, new NoOpAiExecutionRecorder());
+  }
+
+  @Autowired
+  public AssessmentCandidateIntakeService(
+      AssessmentPort assessmentPort,
+      ContentValidationPipeline validationPipeline,
+      AssessmentCandidatePersistenceService persistenceService,
+      AiExecutionRecorder executionRecorder) {
     this.assessmentPort = assessmentPort;
     this.validationPipeline = validationPipeline;
     this.persistenceService = persistenceService;
+    this.executionRecorder = executionRecorder;
   }
 
   /** AI call and persistence are intentionally separate transaction boundaries. */
@@ -42,8 +57,19 @@ public class AssessmentCandidateIntakeService {
       String idempotencyKey,
       String createdBy,
       long deadlineMillis) {
-    AiProposalEnvelope proposal = assessmentPort.requestAssessmentProposal(
-        request, deadlineMillis, requestedDifficulty);
+    Instant executionStarted = Instant.now();
+    AiProposalEnvelope proposal;
+    try {
+      proposal = assessmentPort.requestAssessmentProposal(request, deadlineMillis, requestedDifficulty);
+    } catch (RuntimeException failure) {
+      try {
+        executionRecorder.recordFailure(request, "ASSESSMENT", errorCode(failure), executionStarted, Instant.now());
+      } catch (RuntimeException persistenceFailure) {
+        failure.addSuppressed(persistenceFailure);
+      }
+      throw failure;
+    }
+    executionRecorder.recordSuccess(request, proposal, executionStarted, Instant.now());
     CandidateContent candidate = candidateFrom(proposal, assessmentVersionId);
     ContentValidationPipeline.Outcome outcome = validationPipeline.validate(candidate, validationContext);
     if (outcome.rejected()) {
@@ -60,6 +86,13 @@ public class AssessmentCandidateIntakeService {
             "candidateRevision", persisted.candidateRevision(), "assessmentVersionId", assessmentVersionId,
             "outcome", "SUCCESS"));
     return persisted;
+  }
+
+  private static String errorCode(RuntimeException failure) {
+    if (failure instanceof io.ramals.learningplatform.ai.AiUnavailableException unavailable) {
+      return unavailable.code();
+    }
+    return "AI_EXECUTION_FAILURE";
   }
 
   private CandidateContent candidateFrom(AiProposalEnvelope proposal, UUID assessmentVersionId) {
