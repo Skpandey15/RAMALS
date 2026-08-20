@@ -20,12 +20,20 @@ from ramals_ai.api.correlation import CorrelationMiddleware
 from ramals_ai.api.health import ServiceState, build_health_router
 from ramals_ai.api.internal import build_internal_router
 from ramals_ai.assessment.agent import AssessmentAgent
-from ramals_ai.config.settings import ModelRoute, Settings, get_settings
+from ramals_ai.config.settings import ConfigurationError, ModelRoute, Settings, get_settings
 from ramals_ai.diagnostic.agent import DiagnosticAgent
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import ProviderAdapter
 from ramals_ai.gateway.providers.fake import FakeProvider
 from ramals_ai.gateway.providers.litellm_adapter import LiteLLMProvider
+from ramals_ai.gateway.routes import (
+    RouteRegistry,
+    pins_from_config,
+    registry_from_pins,
+    unbuildable_pointers,
+)
+from ramals_ai.prompting.register import default_prompt_register
+from ramals_ai.prompting.templates import PromptRegister
 from ramals_ai.security.workload_identity import build_verifier
 from ramals_ai.telemetry.logging import configure_logging
 from ramals_ai.telemetry.tracing import configure_tracing
@@ -48,7 +56,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     configure_tracing(resolved)
     state = ServiceState()
-    gateway = LLMGateway(_adapter_for(resolved))
+    # One register for the process: the routes are validated against it at startup, and the agents
+    # build from the same object. Letting the agents assemble their own would mean the thing that
+    # was checked and the thing that runs are only equal by coincidence.
+    prompts = default_prompt_register()
+    gateway = LLMGateway(_adapter_for(resolved), registry=_route_registry(resolved, prompts))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -64,7 +76,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # Logged at startup so an operator verifying a rollback can read which route
                 # configuration this process is actually running, rather than inferring it.
                 "routeTableVersion": gateway.registry.version,
-                "promptVersion": gateway.registry.resolve(resolved.model_route).prompt_version,
+                # Every pointer, not just the default route's. An operator verifying a rollback
+                # needs to read which prompt revision is live, and a single version cannot say --
+                # this route may serve several templates.
+                "promptVersions": ",".join(
+                    f"{template.value}={version}"
+                    for template, version in sorted(
+                        gateway.registry.resolve(resolved.model_route).prompt_versions.items(),
+                        key=lambda item: item[0].value,
+                    )
+                ),
             },
         )
         state.mark_ready()
@@ -86,7 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # code, or the learner is told something went wrong with nothing to quote.
     app.add_middleware(CorrelationMiddleware)
     app.include_router(build_health_router(state))
-    app.include_router(build_capabilities_router(resolved))
+    app.include_router(build_capabilities_router(resolved, gateway.registry))
     # Agent endpoints inherit this router's authentication, so a new endpoint is protected by
     # default rather than only when someone remembers to protect it.
     app.include_router(build_internal_router())
@@ -96,11 +117,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Agents take the gateway from here rather than constructing one, so every model call in the
     # service shares one set of budgets.
     app.state.gateway = gateway
+    app.state.prompts = prompts
     app.state.agents = {
-        "diagnostic": DiagnosticAgent(gateway),
-        "tutor": TutorAgent(gateway),
-        "assessment": AssessmentAgent(gateway),
-        "adaptation": AdaptationAgent(gateway),
+        "diagnostic": DiagnosticAgent(gateway, prompts=prompts),
+        "tutor": TutorAgent(gateway, prompts=prompts),
+        "assessment": AssessmentAgent(gateway, prompts=prompts),
+        "adaptation": AdaptationAgent(gateway, prompts=prompts),
     }
     return app
 
@@ -123,3 +145,24 @@ Deliberately not a module-level instance: constructing the app at import time wo
 configuration during collection, so a configuration error would surface as an import failure with a
 confusing traceback instead of an explicit startup error.
 """
+
+
+def _route_registry(settings: Settings, prompts: PromptRegister) -> RouteRegistry:
+    """The route table this process will serve, with any rollback pins applied.
+
+    Resolved at startup and failing there, which is the same rule the rest of this module follows: a
+    service that starts while silently ignoring a rollback looks exactly like one that applied it,
+    and the difference only shows up in the outputs somebody was trying to stop producing.
+    """
+    prompt_pins, model_pins = pins_from_config(settings.prompt_pins, settings.model_pins)
+    registry = registry_from_pins(prompts, prompt_pins=prompt_pins, model_pins=model_pins)
+
+    unbuildable = unbuildable_pointers(registry, prompts)
+    if unbuildable:
+        # Checked even with no pins configured, because the route table names prompt versions as
+        # literal strings and cannot import the prompt modules to check itself.
+        raise ConfigurationError(
+            "route table points at prompt revisions this build cannot produce: "
+            + ", ".join(unbuildable)
+        )
+    return registry

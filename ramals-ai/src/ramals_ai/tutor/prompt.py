@@ -24,6 +24,7 @@ import json
 from typing import Any
 
 from ramals_ai.gateway.providers.base import Message
+from ramals_ai.prompting.templates import PromptArtifact, PromptTemplateId
 from ramals_ai.tutor.minimizer import MinimizedContext
 
 TUTOR_PROMPT_VERSION = "TUTOR_PROMPT_V1"
@@ -81,3 +82,19 @@ def build_messages(
         Message(role="system", content=_SYSTEM),
         Message(role="user", content=user),
     )
+
+
+# -- the register's view of this module ------------------------------------------------------------
+#
+# The tutor's only template. Explaining one skill to one learner is the whole capability;
+# a second instruction set would be a second template, not a new version of this one.
+#
+# Declared here, beside the prompt itself, so adding a revision means adding an artifact that can
+# actually be built. A version listed anywhere else would be a version nobody can produce.
+PROMPT_ARTIFACTS: tuple[PromptArtifact, ...] = (
+    PromptArtifact(
+        template_id=PromptTemplateId.TUTOR_EXPLAIN,
+        version=TUTOR_PROMPT_VERSION,
+        build=build_messages,
+    ),
+)

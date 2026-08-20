@@ -29,11 +29,11 @@ from ramals_ai.config.settings import ModelRoute
 from ramals_ai.contracts.generated import AgentType, InteractionClass
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.gateway import LLMGateway
-from ramals_ai.gateway.providers.base import Message
 from ramals_ai.graph import nodes
 from ramals_ai.graph.limits import REPAIR_ROUTE_RESERVE, CeilingExceeded, Ceilings
 from ramals_ai.graph.state import AgentState
 from ramals_ai.graph.tools import ToolRegistry, empty_registry
+from ramals_ai.prompting.templates import BuiltPrompt, PromptRegister, PromptTemplateId
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +85,29 @@ class GraphRun:
         *,
         registry: ToolRegistry | None = None,
         validator: Callable[[str], list[str]] | None = None,
+        prompts: PromptRegister | None = None,
     ) -> None:
         self._gateway = gateway
         self._registry = registry if registry is not None else empty_registry()
         self._validator = validator
+        self._prompts = prompts if prompts is not None else _shipped_prompts()
+
+    def build_prompt(
+        self,
+        *,
+        route: ModelRoute,
+        template_id: PromptTemplateId,
+        **arguments: Any,
+    ) -> BuiltPrompt:
+        """Builds the revision this route points at, and stamps what it built.
+
+        The caller names the *template*, never the version. That is the whole safety property: an
+        agent cannot ask for one revision and record another, because it never gets to say which
+        revision it wants -- the route pointer decides, and the register produces the messages and
+        the identity in one value.
+        """
+        config = self._gateway.registry.resolve(route)
+        return self._prompts.build(template_id, config.prompt_version_for(template_id), **arguments)
 
     def build_state(
         self,
@@ -99,6 +118,7 @@ class GraphRun:
         interaction_id: str,
         request_id: str,
         proposal_id: str,
+        prompt: BuiltPrompt,
         minimized_learning_context: dict[str, Any],
         policy_constraints: dict[str, Any] | None = None,
         agent_version: str = "V1",
@@ -110,6 +130,15 @@ class GraphRun:
         Doc 02 §4 rule made structural: there is no second number to drift.
         """
         config = self._gateway.registry.resolve(route)
+        pointed_at = config.prompt_version_for(prompt.template_id)
+        if prompt.version != pointed_at:
+            # Defence in depth. build_prompt already resolves the version from this same pointer, so
+            # reaching here means a caller assembled the prompt some other way -- exactly the path
+            # that would record an identity the output does not have.
+            raise ValueError(
+                f"{route} points {prompt.template_id} at {pointed_at}, "
+                f"but the prompt supplied was built from {prompt.version}"
+            )
         return AgentState(
             contract_version="1.0",
             interaction_id=interaction_id,
@@ -117,7 +146,7 @@ class GraphRun:
             proposal_id=proposal_id,
             agent_type=agent_type,
             agent_version=agent_version,
-            prompt_version=config.prompt_version,
+            prompt=prompt,
             minimized_learning_context=minimized_learning_context,
             policy_constraints=policy_constraints or {},
             deadline=deadline,
@@ -132,7 +161,6 @@ class GraphRun:
         state: AgentState,
         *,
         route: ModelRoute,
-        messages: tuple[Message, ...],
     ) -> AgentState:
         """Executes the graph to completion or to the first ceiling.
 
@@ -150,7 +178,6 @@ class GraphRun:
                     state,
                     gateway=self._gateway,
                     route=route,
-                    messages=messages,
                     registry=self._registry,
                 )
                 nodes.validate_output(state, validator=self._validator)
@@ -199,3 +226,15 @@ def cost_budget_of(gateway: LLMGateway, route: ModelRoute) -> Decimal:
     happens to match today.
     """
     return gateway.registry.resolve(route).hard_cost_ceiling_usd
+
+
+def _shipped_prompts() -> PromptRegister:
+    """The image's prompt register, imported at call time.
+
+    Deferred because the register imports every agent's prompt module, and those packages import
+    this one -- a module-level import here fails with a partially initialized ``GraphRun``. Verified
+    by trying it, not by inspection.
+    """
+    from ramals_ai.prompting.register import default_prompt_register
+
+    return default_prompt_register()

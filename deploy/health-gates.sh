@@ -52,14 +52,44 @@ probe "web ui" "${WEBUI_URL}/"
 # Absent configuration is a legitimate state, not a failure: a deterministic-only deployment has no
 # AI plane at all. AI_URL unset therefore skips rather than fails.
 if [ -n "${AI_URL:-}" ]; then
-  probe "ai plane liveness"  "${AI_URL}/health/live"  '"status"'
-  probe "ai plane readiness" "${AI_URL}/health/ready" '"status"'
+  # Matched on the value, not merely on the key being present. The plane returns 503 alongside
+  # OUT_OF_SERVICE today, so ``curl -f`` would already catch a genuinely unready one -- but a gate
+  # that passes on any body containing the word "status" is relying on that coupling holding
+  # forever, and the backend probes above do not rely on it either.
+  probe "ai plane liveness"  "${AI_URL}/health/live"  '"status":"UP"'
+  probe "ai plane readiness" "${AI_URL}/health/ready" '"status":"UP"'
 
   # The AI plane refuses an unauthenticated agent call. Proves the workload boundary is live in the
   # deployed image rather than only in tests.
   ai_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time "${TIMEOUT}"     -X POST "${AI_URL}/internal/v1/tutor/respond" || echo 000)"
   [ "${ai_status}" = "401" ] || fail "smoke: expected 401 from unauthenticated AI agent call, got ${ai_status}"
   pass "smoke: AI agent endpoint requires workload identity"
+
+  # The rollback smoke gate (M1-ADR-008: "a rollback is a deployment").
+  #
+  # A prompt or model rollback is a pointer change applied from configuration, so nothing about the
+  # deployment artifacts changes when one happens. That makes a rollback that silently failed to
+  # apply indistinguishable from one that worked -- from outside the process, and for exactly as
+  # long as it takes somebody to read the outputs they were trying to stop producing.
+  #
+  # So the running service is asked what it is serving, rather than the manifest being trusted to
+  # describe it. The manifest records an intention; this records a fact.
+  ai_caps="$(curl -s --max-time "${TIMEOUT}" "${AI_URL}/internal/v1/capabilities" || echo '')"
+  reported_table="$(printf '%s' "${ai_caps}" |
+    sed -n 's/.*"routeTableVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+
+  [ -n "${reported_table}" ] ||
+    fail "smoke: AI plane reported no routeTableVersion, so no rollback can be verified"
+  pass "smoke: AI plane reports its route table (${reported_table})"
+
+  # Asserted only when the deployment says what it expects. An unset expectation is a deployment
+  # that is not rolling anything back, and inventing a default here would either fail every
+  # ordinary release or pass every rollback.
+  if [ -n "${AI_EXPECTED_ROUTE_TABLE:-}" ]; then
+    [ "${reported_table}" = "${AI_EXPECTED_ROUTE_TABLE}" ] ||
+      fail "smoke: expected route table '${AI_EXPECTED_ROUTE_TABLE}', AI plane is serving '${reported_table}'"
+    pass "smoke: the rollback took effect in the running service"
+  fi
 else
   pass "ai plane not configured in this environment; skipped (deterministic core is unaffected)"
 fi

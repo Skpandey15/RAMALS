@@ -54,8 +54,29 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T14 Resilience, latency, cost | ✅ done | — |
 | M1-T15 AI evaluation release gates | ✅ done | M1-ADR-009 ✅ |
 | M1-T16 AI security challenge | ✅ done | — |
-| M1-T17 CI/CD and deployment packaging | 🟡 slice 1 of 2 | — |
+| M1-T17 CI/CD and deployment packaging | 🟡 slice 2 of 3 | M1-ADR-011 ✅ |
 | M1-T18 MVP-1 E2E validation and RC | ⬜ | **R1** 🔴 |
+
+### M1-T17 slices
+
+T17 was planned as two slices. It is three because slice 2 found that the thing slice 2 was meant to
+gate did not work: `RouteRegistry.rolled_back()` was reachable only from tests, and had it been
+reachable it would have moved the prompt version recorded on every proposal while dispatching the
+same prompt. A smoke gate over that would have certified a rollback that had not happened.
+
+| Slice | Scope | Status |
+| --- | --- | --- |
+| 1 | The AI plane joins the release pipeline: built, scanned, attested, digest-pinned in the manifest, gated independently, and rollback-capable | ✅ merged |
+| 2 | Prompt identity resolves to the artifact that builds it; rollback is a configuration pin validated at startup and verified against the running service (M1-ADR-011) | 🟡 in review |
+| 3 | Flyway expand/contract and backward-compatible rollout, including the additive `prompt_template_id` column on `core.ai_execution` | ⬜ |
+
+**Deferred from T17, deliberately:** P6 agent observability (`agentRunId`/`toolCallId`/`proposalId`)
+is authored separately rather than inside a CI/CD task, and is tracked against the Observability
+HLD-LLD rather than against this task.
+
+**Carried into slice 3:** `core.ai_execution` records `prompt_version` without a template id, so an
+assessment item and an assessment evaluation are still indistinguishable in the database even though
+the proposal now distinguishes them. The fix is an additive column, which is expand/contract work.
 
 ### Completed readiness slices
 

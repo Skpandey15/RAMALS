@@ -20,6 +20,8 @@ jobs:
         run: python3 scripts/ci/verify-workflow-security.py
       - name: Verify deployment release-hold state machine
         run: bash scripts/ci/test-deploy-controller.sh
+      - name: Verify post-deploy health gates
+        run: bash scripts/ci/test-health-gates.sh
       - name: Install checksum-verified Gitleaks
         env:
           GITLEAKS_VERSION: 8.30.1

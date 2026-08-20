@@ -35,6 +35,7 @@ from ramals_ai.gateway.providers.base import (
     ProviderResponse,
 )
 from ramals_ai.gateway.routes import RouteConfig, RouteRegistry, default_registry
+from ramals_ai.prompting.templates import BuiltPrompt, PromptTemplateId
 from ramals_ai.telemetry.logging import business_event
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,17 @@ class GatewayResult:
     requested_route: ModelRoute
     interaction_class: InteractionClass
     model: str
+
+    prompt_template_id: PromptTemplateId
+    """Which prompt produced the text. Recorded because a version alone does not identify one."""
+
     prompt_version: str
+    """The revision that produced it -- the one the gateway was handed, not the one a route says.
+
+    After a fallback the recorded route is the one that served the request; the same rule applies
+    here. What is recorded is what ran.
+    """
+
     route_table_version: str
 
     input_tokens: int
@@ -136,7 +147,7 @@ class LLMGateway:
         self,
         *,
         route: ModelRoute,
-        messages: tuple[Message, ...],
+        prompt: BuiltPrompt,
         deadline: budget.Deadline,
         max_output_tokens: int | None = None,
         interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI,
@@ -158,7 +169,7 @@ class LLMGateway:
             try:
                 response, attempts_used = self._attempt_route(
                     config,
-                    messages,
+                    prompt.messages,
                     deadline,
                     max_output_tokens,
                     request_cost_budget_usd,
@@ -199,7 +210,11 @@ class LLMGateway:
             requested_route=requested,
             interaction_class=interaction_class,
             model=config.model,
-            prompt_version=config.prompt_version,
+            # From the prompt that was dispatched, not from the route table. Reading it back off the
+            # configuration would record what the route currently points at, which is the same thing
+            # only for as long as nobody repoints it mid-flight.
+            prompt_template_id=prompt.template_id,
+            prompt_version=prompt.version,
             route_table_version=self._registry.version,
             input_tokens=response.input_tokens,
             cached_input_tokens=response.cached_input_tokens,
@@ -358,6 +373,7 @@ class LLMGateway:
             fields={
                 "route": result.route.value,
                 "requestedRoute": result.requested_route.value,
+                "promptTemplateId": result.prompt_template_id.value,
                 "promptVersion": result.prompt_version,
                 "routeTableVersion": result.route_table_version,
                 "inputTokens": result.input_tokens,

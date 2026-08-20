@@ -5,6 +5,7 @@
   "environment": "test",
   "aiEnabled": false,
   "modelRoute": "ci-fake",
+  "routeTableVersion": "ROUTE_TABLE_V1",
   "agents": [],
   "authority": "NON_AUTHORITATIVE"
 }

@@ -11,10 +11,12 @@ to load rather than allowing the invariant to hold "by review".
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from ramals_ai.config.settings import ModelRoute
+from ramals_ai.prompting.templates import PromptRegister, PromptTemplateId
 
 # Bump when any route's model, prompt, ceiling or target changes. Recorded with every call so a
 # result can be traced back to the configuration that produced it.
@@ -33,7 +35,15 @@ class RouteConfig:
     model change a configuration change with a review and a rollback path.
     """
 
-    prompt_version: str
+    prompt_versions: Mapping[PromptTemplateId, str]
+    """Which revision of each prompt this route serves. The pointer M1-ADR-008 rolls back.
+
+    A map rather than a single version, because a single version cannot describe either of the two
+    shapes that actually occur: ``ci-fake`` serves all four agents, and the assessment agent has two
+    prompts. One string covering several prompts names none of them, and the identity recorded
+    against an output would then not be evidence of what produced it.
+    """
+
     max_input_tokens: int
     max_output_tokens: int
 
@@ -46,6 +56,15 @@ class RouteConfig:
     input_cost_per_1k_usd: Decimal
     output_cost_per_1k_usd: Decimal
 
+    previously_approved_models: tuple[str, ...] = ()
+    """Models this route was approved for before the current one, oldest first.
+
+    Empty at V1, and that is the honest state: MVP-1 is the first release, so there is no earlier
+    approved model to return to. It exists now rather than later because a model pin has to be
+    checked against *something* -- an unchecked pin is a way to put an unreviewed model in front of
+    learners with an environment variable, which is the opposite of what a rollback lever is for.
+    """
+
     fallback_route: ModelRoute | None = None
     """An approved, semantically equivalent route (Doc 04 §4).
 
@@ -57,12 +76,32 @@ class RouteConfig:
     def is_deterministic_fake(self) -> bool:
         return self.route is ModelRoute.CI_FAKE
 
+    @property
+    def approved_models(self) -> tuple[str, ...]:
+        """Every model this route may be pointed at, current one included."""
+        return (*self.previously_approved_models, self.model)
+
+    def prompt_version_for(self, template_id: PromptTemplateId) -> str:
+        """The revision of one prompt this route serves.
+
+        Raises rather than returning a default: a route asked for a template it does not serve is a
+        wiring mistake, and answering it with some other route's version would put a false identity
+        on a real output.
+        """
+        try:
+            return self.prompt_versions[template_id]
+        except KeyError:
+            raise RouteTableError(
+                f"{self.route} serves no prompt for {template_id}; "
+                f"it serves {sorted(t.value for t in self.prompt_versions)}"
+            ) from None
+
 
 def _route(
     route: ModelRoute,
     *,
     model: str,
-    prompt_version: str,
+    prompt_versions: Mapping[PromptTemplateId, str],
     max_input_tokens: int,
     max_output_tokens: int,
     soft_target: str,
@@ -74,7 +113,7 @@ def _route(
     return RouteConfig(
         route=route,
         model=model,
-        prompt_version=prompt_version,
+        prompt_versions=dict(prompt_versions),
         max_input_tokens=max_input_tokens,
         max_output_tokens=max_output_tokens,
         soft_target_cost_usd=Decimal(soft_target),
@@ -91,7 +130,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
     _route(
         ModelRoute.TUTOR_DEFAULT,
         model="claude-sonnet-5",
-        prompt_version="TUTOR_PROMPT_V1",
+        prompt_versions={PromptTemplateId.TUTOR_EXPLAIN: "TUTOR_PROMPT_V1"},
         max_input_tokens=12000,
         max_output_tokens=1200,
         soft_target="0.020",
@@ -103,7 +142,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
     _route(
         ModelRoute.DIAGNOSTIC_DEFAULT,
         model="claude-sonnet-5",
-        prompt_version="DIAGNOSTIC_PROMPT_V1",
+        prompt_versions={PromptTemplateId.DIAGNOSTIC_ROOT_CAUSE: "DIAGNOSTIC_PROMPT_V1"},
         max_input_tokens=8000,
         max_output_tokens=700,
         soft_target="0.015",
@@ -115,7 +154,10 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
     _route(
         ModelRoute.ASSESSMENT_DEFAULT,
         model="claude-sonnet-5",
-        prompt_version="ASSESSMENT_PROMPT_V1",
+        prompt_versions={
+            PromptTemplateId.ASSESSMENT_ITEM: "ASSESSMENT_PROMPT_V1",
+            PromptTemplateId.ASSESSMENT_EVALUATE: "ASSESSMENT_PROMPT_V1",
+        },
         max_input_tokens=12000,
         max_output_tokens=1400,
         soft_target="0.030",
@@ -127,7 +169,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
     _route(
         ModelRoute.ADAPTATION_DEFAULT,
         model="claude-sonnet-5",
-        prompt_version="ADAPTATION_PROMPT_V1",
+        prompt_versions={PromptTemplateId.ADAPTATION_PLAN: "ADAPTATION_PROMPT_V1"},
         max_input_tokens=8000,
         max_output_tokens=700,
         soft_target="0.015",
@@ -141,7 +183,16 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
     _route(
         ModelRoute.CI_FAKE,
         model="ci-fake-deterministic-v1",
-        prompt_version="CI_FAKE_PROMPT_V1",
+        # Serving four agents, this route carries a pointer per template. It previously carried
+        # one string, CI_FAKE_PROMPT_V1, which named none of the five prompts it actually sends --
+        # so every CI run recorded a prompt identity no artifact could match.
+        prompt_versions={
+            PromptTemplateId.TUTOR_EXPLAIN: "TUTOR_PROMPT_V1",
+            PromptTemplateId.DIAGNOSTIC_ROOT_CAUSE: "DIAGNOSTIC_PROMPT_V1",
+            PromptTemplateId.ASSESSMENT_ITEM: "ASSESSMENT_PROMPT_V1",
+            PromptTemplateId.ASSESSMENT_EVALUATE: "ASSESSMENT_PROMPT_V1",
+            PromptTemplateId.ADAPTATION_PLAN: "ADAPTATION_PROMPT_V1",
+        },
         max_input_tokens=12000,
         max_output_tokens=1400,
         soft_target="0.000",
@@ -221,26 +272,155 @@ class RouteRegistry:
         self,
         route: ModelRoute,
         *,
+        register: PromptRegister,
         model: str | None = None,
-        prompt_version: str | None = None,
+        prompts: Mapping[PromptTemplateId, str] | None = None,
     ) -> RouteRegistry:
-        """Points a route at a previously approved model and/or prompt.
+        """Points a route at a previously approved model and/or prompt revisions.
 
-        The two roll back independently (M1-ADR-008): a prompt regression should not force a model
-        rollback, and coupling them would make the cheap remedy carry the expensive one's risk.
+        Model and prompts roll back independently (M1-ADR-008): a prompt regression should not force
+        a model rollback, and coupling them would make the cheap remedy carry the expensive one's
+        risk. Prompts roll back per template for the same reason -- an assessment item regression
+        should not withdraw the evaluation prompt.
+
+        ``register`` is required rather than optional, and this is the check that makes the whole
+        mechanism safe to expose to an operator. A prompt version is what gets *recorded* about an
+        output, so accepting a version this build cannot produce would let a rollback relabel every
+        subsequent proposal while changing nothing that ran. Refusing here means a rollback target
+        must be a prompt already reviewed and shipped in this image.
         """
-        if model is None and prompt_version is None:
-            raise ValueError("a rollback must change the model, the prompt version, or both")
+        if model is None and not prompts:
+            raise ValueError("a rollback must change the model, at least one prompt, or both")
         current = self.resolve(route)
-        return self.with_route(
+        if model is not None and model not in current.approved_models:
+            raise RouteTableError(
+                f"{route} was never approved for model '{model}'; "
+                f"approved models are {list(current.approved_models)}"
+            )
+
+        updated_prompts = dict(current.prompt_versions)
+        for template_id, version in (prompts or {}).items():
+            if template_id not in current.prompt_versions:
+                raise RouteTableError(
+                    f"{route} serves no prompt for {template_id}, so there is nothing to roll back"
+                )
+            # Resolving, not merely checking membership: the artifact is what will build the
+            # messages, so this proves the rollback target can actually be produced.
+            register.resolve(template_id, version)
+            updated_prompts[template_id] = version
+
+        rolled = self.with_route(
             replace(
                 current,
                 model=current.model if model is None else model,
-                prompt_version=(
-                    current.prompt_version if prompt_version is None else prompt_version
-                ),
+                prompt_versions=updated_prompts,
             )
         )
+        return RouteRegistry(version=rolled._pinned_version(), routes=rolled.routes)
+
+    def _pinned_version(self) -> str:
+        """The table version, extended with whatever differs from the shipped table.
+
+        Recorded with every call, so it has to say when the configuration is no longer the one the
+        image shipped. A rollback that left ``ROUTE_TABLE_V1`` on every record would make the two
+        halves of an incident -- before and after -- indistinguishable in the logs.
+        """
+        shipped = {config.route: config for config in _V1_ROUTES}
+        pins: list[str] = []
+        for route in sorted(self.routes, key=lambda r: r.value):
+            config = self.routes[route]
+            baseline = shipped.get(route)
+            if baseline is None:
+                continue
+            if config.model != baseline.model:
+                pins.append(f"{route.value}:model={config.model}")
+            for template_id in sorted(config.prompt_versions, key=lambda t: t.value):
+                version = config.prompt_versions[template_id]
+                if baseline.prompt_versions.get(template_id) != version:
+                    pins.append(f"{route.value}:{template_id.value}={version}")
+        return ROUTE_TABLE_VERSION if not pins else f"{ROUTE_TABLE_VERSION}+" + ",".join(pins)
+
+
+def pins_from_config(
+    prompt_pins: Mapping[str, Mapping[str, str]],
+    model_pins: Mapping[str, str],
+) -> tuple[dict[ModelRoute, dict[PromptTemplateId, str]], dict[ModelRoute, str]]:
+    """Turns configuration strings into route and template identities.
+
+    Names are resolved rather than trusted. An operator typing ``tutor_default`` or ``TUTOR_PROMPT``
+    has made a mistake that must stop the process: a pin silently dropped because its key did not
+    parse is a rollback that appears to have been applied and was not.
+    """
+
+    def route_of(name: str) -> ModelRoute:
+        try:
+            return ModelRoute(name)
+        except ValueError:
+            raise RouteTableError(
+                f"'{name}' is not a model route; routes are "
+                f"{sorted(route.value for route in ModelRoute)}"
+            ) from None
+
+    def template_of(name: str) -> PromptTemplateId:
+        try:
+            return PromptTemplateId(name)
+        except ValueError:
+            raise RouteTableError(
+                f"'{name}' is not a prompt template; templates are "
+                f"{sorted(template.value for template in PromptTemplateId)}"
+            ) from None
+
+    prompts = {
+        route_of(route): {template_of(template): version for template, version in pins.items()}
+        for route, pins in prompt_pins.items()
+    }
+    models = {route_of(route): model for route, model in model_pins.items()}
+    return prompts, models
+
+
+def registry_from_pins(
+    register: PromptRegister,
+    *,
+    prompt_pins: Mapping[ModelRoute, Mapping[PromptTemplateId, str]] | None = None,
+    model_pins: Mapping[ModelRoute, str] | None = None,
+) -> RouteRegistry:
+    """The shipped table with rollback pins applied, as resolved at startup.
+
+    This is what makes M1-ADR-008's "rollback is available without a service deployment" true rather
+    than aspirational. Without it the only way to withdraw a bad prompt is to edit the table, build
+    an image and run the release pipeline -- which is precisely the alternative the ADR rejected,
+    because it makes the fastest available remedy as slow and as risky as shipping.
+
+    Every pin is checked here, at startup, against what the image can actually produce. A bad pin
+    stops the process rather than degrading it: a service that starts while silently ignoring a
+    rollback is indistinguishable from one that applied it, and the difference only surfaces in the
+    outputs somebody was trying to stop producing.
+    """
+    registry = default_registry()
+    for route, model in (model_pins or {}).items():
+        registry = registry.rolled_back(route, register=register, model=model)
+    for route, prompts in (prompt_pins or {}).items():
+        if prompts:
+            registry = registry.rolled_back(route, register=register, prompts=prompts)
+    return registry
+
+
+def unbuildable_pointers(registry: RouteRegistry, register: PromptRegister) -> tuple[str, ...]:
+    """Route pointers naming a prompt revision this build cannot produce.
+
+    The route table names versions as literal strings -- it cannot import the agent prompt modules
+    without a cycle -- so the two can drift. This is the check that stops the drift being silent,
+    and it is applied at startup as well as in a test: a table naming a prompt that does not exist
+    would put an unbuildable identity on every proposal from that route.
+    """
+    return tuple(
+        f"{route.value}:{template_id.value}={version}"
+        for route, config in sorted(registry.routes.items(), key=lambda item: item[0].value)
+        for template_id, version in sorted(
+            config.prompt_versions.items(), key=lambda item: item[0].value
+        )
+        if not register.is_approved(template_id, version)
+    )
 
 
 def default_registry() -> RouteRegistry:

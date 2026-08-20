@@ -12,6 +12,13 @@ public record AiCapabilities(
     String environment,
     Boolean aiEnabled,
     String modelRoute,
+    /**
+     * The route configuration the AI plane is actually serving, pins included.
+     *
+     * <p>Nullable: a deployed plane that predates the field reports nothing, and a core that
+     * refused to read such a response would turn a additive contract change into an outage.
+     */
+    String routeTableVersion,
     List<AgentType> agents,
     String authority) {
 }

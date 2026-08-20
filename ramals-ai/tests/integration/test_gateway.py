@@ -29,12 +29,45 @@ from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.gateway.gateway import MAX_ATTEMPTS_PER_ROUTE, LLMGateway
 from ramals_ai.gateway.providers.base import Message, ProviderRequest, ProviderResponse
 from ramals_ai.gateway.providers.fake import FakeProvider
-from ramals_ai.gateway.routes import RouteRegistry, default_registry
+from ramals_ai.gateway.routes import (
+    ROUTE_TABLE_VERSION,
+    RouteRegistry,
+    RouteTableError,
+    default_registry,
+)
+from ramals_ai.prompting.register import default_prompt_register
+from ramals_ai.prompting.templates import (
+    BuiltPrompt,
+    PromptArtifact,
+    PromptRegister,
+    PromptTemplateId,
+    UnknownPromptVersionError,
+    register_of,
+)
 
 MESSAGES = (
     Message(role="system", content="You are a tutor."),
     Message(role="user", content="Explain Kafka partitioning."),
 )
+
+
+def prompt_of(messages: tuple[Message, ...]) -> BuiltPrompt:
+    """Fixture messages under a real prompt identity.
+
+    The gateway records what it was handed, so these tests hand it an identity rather than letting
+    it read one off the route table -- which is the behaviour under test in the rollback cases
+    below.
+    """
+    return BuiltPrompt(
+        template_id=PromptTemplateId.TUTOR_EXPLAIN,
+        version=default_registry()
+        .resolve(ModelRoute.CI_FAKE)
+        .prompt_version_for(PromptTemplateId.TUTOR_EXPLAIN),
+        messages=messages,
+    )
+
+
+PROMPT = prompt_of(MESSAGES)
 
 
 class ManualClock:
@@ -79,10 +112,10 @@ def test_ci_fake_is_deterministic_across_calls() -> None:
     gateway, clock = build()
 
     first = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 5000)
     )
     second = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 5000)
     )
 
     assert first.text == second.text
@@ -130,10 +163,10 @@ def test_ci_fake_output_varies_with_input() -> None:
     other = (Message(role="user", content="Explain consumer groups."),)
 
     first = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 5000)
     )
     second = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=other, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE, prompt=prompt_of(other), deadline=deadline_for(clock, 5000)
     )
 
     assert first.text != second.text
@@ -142,7 +175,7 @@ def test_ci_fake_output_varies_with_input() -> None:
 def test_ci_fake_costs_nothing_end_to_end() -> None:
     gateway, clock = build()
     result = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 5000)
     )
     assert result.estimated_cost_usd == Decimal("0.000000")
     assert result.cost_string == "0.000000"
@@ -156,12 +189,13 @@ def test_the_result_records_the_configuration_that_produced_it() -> None:
     config = default_registry().resolve(ModelRoute.CI_FAKE)
 
     result = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 5000)
     )
 
     assert result.route is ModelRoute.CI_FAKE
     assert result.model == config.model
-    assert result.prompt_version == config.prompt_version
+    assert result.prompt_version == config.prompt_version_for(PromptTemplateId.TUTOR_EXPLAIN)
+    assert result.prompt_template_id is PromptTemplateId.TUTOR_EXPLAIN
     assert result.route_table_version == default_registry().version
     assert result.attempts == 1
     assert not result.fell_back
@@ -170,7 +204,7 @@ def test_the_result_records_the_configuration_that_produced_it() -> None:
 def test_usage_is_reported() -> None:
     gateway, clock = build()
     result = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 5000)
     )
     assert result.input_tokens > 0
     assert result.output_tokens > 0
@@ -189,7 +223,7 @@ def test_latency_and_cost_are_tagged_by_class_and_effective_route(
 
     result = gateway.complete(
         route=ModelRoute.CI_FAKE,
-        messages=MESSAGES,
+        prompt=PROMPT,
         deadline=deadline_for(clock, 5000),
         interaction_class=InteractionClass.ASSESSMENT_PROPOSAL,
     )
@@ -232,7 +266,7 @@ def test_an_oversized_context_never_reaches_the_provider() -> None:
 
     with pytest.raises(GatewayError) as refusal:
         gateway.complete(
-            route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+            route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 5000)
         )
 
     assert refusal.value.code is GatewayErrorCode.TOKEN_CEILING_EXCEEDED
@@ -253,7 +287,7 @@ def test_a_cost_ceiling_refusal_never_reaches_the_provider() -> None:
     with pytest.raises(GatewayError) as refusal:
         gateway.complete(
             route=ModelRoute.TUTOR_DEFAULT,
-            messages=MESSAGES,
+            prompt=PROMPT,
             deadline=deadline_for(clock, 5000),
         )
 
@@ -269,7 +303,7 @@ def test_request_budget_with_room_allows_the_provider_call() -> None:
 
     result = gateway.complete(
         route=ModelRoute.TUTOR_DEFAULT,
-        messages=MESSAGES,
+        prompt=PROMPT,
         deadline=deadline_for(clock, 5000),
         max_output_tokens=1000,
         request_cost_budget_usd=projected,
@@ -289,7 +323,7 @@ def test_request_budget_refusal_happens_before_provider_dispatch() -> None:
     with pytest.raises(GatewayError) as refusal:
         gateway.complete(
             route=ModelRoute.TUTOR_DEFAULT,
-            messages=MESSAGES,
+            prompt=PROMPT,
             deadline=deadline_for(clock, 5000),
             max_output_tokens=1000,
             request_cost_budget_usd=projected,
@@ -308,7 +342,7 @@ def test_request_budget_exact_boundary_is_allowed() -> None:
 
     gateway.complete(
         route=ModelRoute.TUTOR_DEFAULT,
-        messages=MESSAGES,
+        prompt=PROMPT,
         deadline=deadline_for(clock, 5000),
         max_output_tokens=1000,
         request_cost_budget_usd=Decimal("0.020000"),
@@ -325,7 +359,7 @@ def test_zero_request_budget_preserves_existing_route_only_semantics() -> None:
 
     gateway.complete(
         route=ModelRoute.TUTOR_DEFAULT,
-        messages=MESSAGES,
+        prompt=PROMPT,
         deadline=deadline_for(clock, 5000),
         max_output_tokens=1000,
         request_cost_budget_usd=Decimal("0.000000"),
@@ -342,7 +376,7 @@ def test_an_already_expired_deadline_refuses_before_any_work() -> None:
     clock.advance_ms(1001)
 
     with pytest.raises(GatewayError) as refusal:
-        gateway.complete(route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline)
+        gateway.complete(route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline)
 
     assert refusal.value.code is GatewayErrorCode.DEADLINE_EXCEEDED
     assert adapter.calls == 0
@@ -373,7 +407,7 @@ def test_a_transient_failure_is_retried_once_and_succeeds() -> None:
     gateway, clock = build(adapter)
 
     result = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 10000)
+        route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 10000)
     )
 
     assert adapter.calls == 2
@@ -386,7 +420,7 @@ def test_retries_are_bounded() -> None:
 
     with pytest.raises(GatewayError):
         gateway.complete(
-            route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 60000)
+            route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 60000)
         )
 
     assert adapter.calls == MAX_ATTEMPTS_PER_ROUTE
@@ -399,7 +433,7 @@ def test_a_timeout_is_cancelled_rather_than_retried() -> None:
 
     with pytest.raises(GatewayError) as failure:
         gateway.complete(
-            route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 10000)
+            route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 10000)
         )
 
     assert failure.value.code is GatewayErrorCode.PROVIDER_TIMEOUT
@@ -420,7 +454,7 @@ def test_a_retry_is_not_attempted_when_the_deadline_cannot_accommodate_it() -> N
     deadline = deadline_for(clock, config.completion_target_p95_ms // 2)
 
     with pytest.raises(GatewayError):
-        gateway.complete(route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline)
+        gateway.complete(route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline)
 
     assert adapter.calls == 1
 
@@ -431,7 +465,7 @@ def test_an_auth_failure_is_not_retried() -> None:
 
     with pytest.raises(GatewayError) as failure:
         gateway.complete(
-            route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 60000)
+            route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 60000)
         )
 
     assert failure.value.code is GatewayErrorCode.PROVIDER_AUTH_ERROR
@@ -454,7 +488,7 @@ def test_no_fallback_is_taken_when_none_is_configured() -> None:
 
     with pytest.raises(GatewayError):
         gateway.complete(
-            route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 60000)
+            route=ModelRoute.CI_FAKE, prompt=PROMPT, deadline=deadline_for(clock, 60000)
         )
 
 
@@ -472,7 +506,7 @@ def test_an_approved_fallback_serves_the_request_and_is_recorded() -> None:
 
     result = gateway.complete(
         route=ModelRoute.ASSESSMENT_DEFAULT,
-        messages=MESSAGES,
+        prompt=PROMPT,
         deadline=deadline_for(clock, 60000),
     )
 
@@ -517,7 +551,7 @@ def test_fallback_cannot_bypass_the_remaining_request_budget() -> None:
     with pytest.raises(GatewayError) as refusal:
         gateway.complete(
             route=ModelRoute.ASSESSMENT_DEFAULT,
-            messages=MESSAGES,
+            prompt=PROMPT,
             deadline=deadline_for(clock, 60000),
             request_cost_budget_usd=primary_projected,
             request_cost_spent_usd=Decimal("0.000000"),
@@ -537,7 +571,7 @@ def test_a_budget_refusal_never_falls_back() -> None:
     with pytest.raises(GatewayError) as refusal:
         gateway.complete(
             route=ModelRoute.ASSESSMENT_DEFAULT,
-            messages=MESSAGES,
+            prompt=PROMPT,
             deadline=deadline_for(clock, 60000),
         )
 
@@ -553,7 +587,7 @@ def test_an_auth_failure_never_falls_back() -> None:
     with pytest.raises(GatewayError) as failure:
         gateway.complete(
             route=ModelRoute.ASSESSMENT_DEFAULT,
-            messages=MESSAGES,
+            prompt=PROMPT,
             deadline=deadline_for(clock, 60000),
         )
 
@@ -572,30 +606,108 @@ def test_a_fallback_is_refused_when_the_deadline_cannot_accommodate_it() -> None
     clock.advance_ms(100)  # now too little left for a complete fallback attempt
 
     with pytest.raises(GatewayError) as failure:
-        gateway.complete(route=ModelRoute.ASSESSMENT_DEFAULT, messages=MESSAGES, deadline=deadline)
+        gateway.complete(route=ModelRoute.ASSESSMENT_DEFAULT, prompt=PROMPT, deadline=deadline)
 
     assert failure.value.code is GatewayErrorCode.PROVIDER_TIMEOUT
 
 
 # -- rollback smoke (required test) ---------------------------------------------------------------
+#
+# MVP-1 is the first release, so the shipped register holds exactly one revision per template and
+# there is genuinely nothing to roll back to. These tests therefore build a register with a second
+# approved revision -- what the image will look like the first time a prompt is revised -- rather
+# than asserting against a version string nobody ever reviewed. A rollback target that exists only
+# in a test argument is the situation M1-ADR-008 is trying to prevent.
+
+_TUTOR = PromptTemplateId.TUTOR_EXPLAIN
+_V1 = "TUTOR_PROMPT_V1"
+_V2 = "TUTOR_PROMPT_V2"
+_V1_MESSAGES = (Message(role="system", content="The shipped tutor prompt."),)
+_V2_MESSAGES = (Message(role="system", content="A revised tutor prompt."),)
+
+
+def register_with_a_second_revision() -> PromptRegister:
+    """Two revisions of one template, both stubs.
+
+    The shipped register is not extended here: its V1 is the real tutor prompt and building it would
+    tie these gateway tests to the tutor's context shape. What is under test is that moving the
+    pointer moves both the identity and the messages, which stubs demonstrate exactly.
+    """
+    return register_of(
+        PromptArtifact(template_id=_TUTOR, version=_V1, build=lambda **_: _V1_MESSAGES),
+        PromptArtifact(template_id=_TUTOR, version=_V2, build=lambda **_: _V2_MESSAGES),
+    )
+
+
+def built_from(registry: RouteRegistry, register: PromptRegister) -> BuiltPrompt:
+    """Builds whatever the route currently points at -- the path a real agent takes."""
+    return register.build(_TUTOR, registry.resolve(ModelRoute.CI_FAKE).prompt_version_for(_TUTOR))
+
+
+def test_a_prompt_rollback_changes_the_messages_and_not_only_the_label() -> None:
+    """The property that makes a recorded prompt identity worth anything.
+
+    Before this was enforced, a rollback moved the version recorded on every subsequent proposal and
+    left the dispatched prompt byte-identical -- so the record said one prompt ran while another
+    had. The Master Plan lists hallucinated provenance as an adversarial case for exactly this
+    reason, and a rollback lever that produces it is worse than having no lever at all.
+    """
+    register = register_with_a_second_revision()
+    shipped = default_registry()
+    rolled = shipped.rolled_back(ModelRoute.CI_FAKE, register=register, prompts={_TUTOR: _V2})
+
+    before = built_from(shipped, register)
+    after = built_from(rolled, register)
+
+    assert before.version != after.version, "the recorded identity must move"
+    assert before.messages != after.messages, "and so must the prompt that is actually sent"
+    assert after.messages == _V2_MESSAGES
+
+
+def test_a_rollback_target_that_this_build_cannot_produce_is_refused() -> None:
+    """An unbuildable target would relabel every later proposal while changing nothing that ran."""
+    with pytest.raises(UnknownPromptVersionError, match="TUTOR_PROMPT_V0"):
+        default_registry().rolled_back(
+            ModelRoute.CI_FAKE,
+            register=default_prompt_register(),
+            prompts={_TUTOR: "TUTOR_PROMPT_V0"},
+        )
+
+
+def test_a_rollback_is_recorded_in_the_route_table_version() -> None:
+    """Before and after an incident have to be distinguishable in the logs."""
+    register = register_with_a_second_revision()
+    rolled = default_registry().rolled_back(
+        ModelRoute.CI_FAKE, register=register, prompts={_TUTOR: _V2}
+    )
+
+    assert default_registry().version == ROUTE_TABLE_VERSION
+    assert rolled.version != ROUTE_TABLE_VERSION
+    assert _V2 in rolled.version and ModelRoute.CI_FAKE.value in rolled.version
 
 
 def test_rolling_back_a_prompt_changes_what_the_next_call_records() -> None:
+    register = register_with_a_second_revision()
     gateway, clock = build()
     before = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE,
+        prompt=built_from(gateway.registry, register),
+        deadline=deadline_for(clock, 5000),
     )
 
-    rolled_back = gateway.registry.rolled_back(
-        ModelRoute.CI_FAKE, prompt_version="CI_FAKE_PROMPT_V0"
+    rolled = gateway.registry.rolled_back(
+        ModelRoute.CI_FAKE, register=register, prompts={_TUTOR: _V2}
     )
-    after_gateway, after_clock = build(registry=rolled_back)
+    after_gateway, after_clock = build(registry=rolled)
     after = after_gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(after_clock, 5000)
+        route=ModelRoute.CI_FAKE,
+        prompt=built_from(after_gateway.registry, register),
+        deadline=deadline_for(after_clock, 5000),
     )
 
-    assert before.prompt_version == "CI_FAKE_PROMPT_V1"
-    assert after.prompt_version == "CI_FAKE_PROMPT_V0"
+    assert before.prompt_version == _V1
+    assert after.prompt_version == _V2
+    assert before.prompt_template_id is after.prompt_template_id is _TUTOR
 
 
 def test_rollback_does_not_rewrite_already_recorded_metadata() -> None:
@@ -605,16 +717,17 @@ def test_rollback_does_not_rewrite_already_recorded_metadata() -> None:
     could change that, the only evidence of why an output looked the way it did would be destroyed
     at exactly the moment someone needs it.
     """
+    register = register_with_a_second_revision()
     gateway, clock = build()
     recorded = gateway.complete(
-        route=ModelRoute.CI_FAKE, messages=MESSAGES, deadline=deadline_for(clock, 5000)
+        route=ModelRoute.CI_FAKE,
+        prompt=built_from(gateway.registry, register),
+        deadline=deadline_for(clock, 5000),
     )
     original_prompt = recorded.prompt_version
     original_model = recorded.model
 
-    gateway.registry.rolled_back(
-        ModelRoute.CI_FAKE, prompt_version="CI_FAKE_PROMPT_V0", model="something-else"
-    )
+    gateway.registry.rolled_back(ModelRoute.CI_FAKE, register=register, prompts={_TUTOR: _V2})
 
     assert recorded.prompt_version == original_prompt
     assert recorded.model == original_model
@@ -622,23 +735,46 @@ def test_rollback_does_not_rewrite_already_recorded_metadata() -> None:
 
 def test_model_and_prompt_roll_back_independently() -> None:
     """Coupling them would make the cheap remedy carry the expensive one's risk."""
+    register = register_with_a_second_revision()
     registry = default_registry()
-    before = registry.resolve(ModelRoute.TUTOR_DEFAULT)
+    before = registry.resolve(ModelRoute.CI_FAKE)
 
-    prompt_only = registry.rolled_back(ModelRoute.TUTOR_DEFAULT, prompt_version="TUTOR_PROMPT_V0")
-    rolled = prompt_only.resolve(ModelRoute.TUTOR_DEFAULT)
+    prompt_only = registry.rolled_back(ModelRoute.CI_FAKE, register=register, prompts={_TUTOR: _V2})
+    rolled = prompt_only.resolve(ModelRoute.CI_FAKE)
 
-    assert rolled.prompt_version == "TUTOR_PROMPT_V0"
+    assert rolled.prompt_version_for(_TUTOR) == _V2
     assert rolled.model == before.model, "a prompt rollback must not move the model"
+    assert (
+        rolled.prompt_versions[PromptTemplateId.ADAPTATION_PLAN]
+        == before.prompt_versions[PromptTemplateId.ADAPTATION_PLAN]
+    ), "nor may it move another template the same route serves"
+
+
+def test_a_model_this_route_was_never_approved_for_is_refused() -> None:
+    """Otherwise a model pin is a way to put unreviewed inference in front of learners."""
+    with pytest.raises(RouteTableError, match="never approved"):
+        default_registry().rolled_back(
+            ModelRoute.CI_FAKE, register=default_prompt_register(), model="something-cheaper"
+        )
 
 
 def test_a_rollback_that_changes_nothing_is_rejected() -> None:
     """Silently succeeding would let an operator believe a remedy was applied when it was not."""
     with pytest.raises(ValueError, match="must change"):
-        default_registry().rolled_back(ModelRoute.TUTOR_DEFAULT)
+        default_registry().rolled_back(ModelRoute.TUTOR_DEFAULT, register=default_prompt_register())
+
+
+def test_a_route_cannot_roll_back_a_prompt_it_does_not_serve() -> None:
+    """The adaptation route serves no tutor prompt, so there is no pointer to move."""
+    register = register_with_a_second_revision()
+    with pytest.raises(RouteTableError, match="nothing to roll back"):
+        default_registry().rolled_back(
+            ModelRoute.ADAPTATION_DEFAULT, register=register, prompts={_TUTOR: _V2}
+        )
 
 
 def test_the_registry_a_rollback_came_from_is_unchanged() -> None:
+    register = register_with_a_second_revision()
     registry = default_registry()
-    registry.rolled_back(ModelRoute.TUTOR_DEFAULT, prompt_version="TUTOR_PROMPT_V0")
-    assert registry.resolve(ModelRoute.TUTOR_DEFAULT).prompt_version == "TUTOR_PROMPT_V1"
+    registry.rolled_back(ModelRoute.CI_FAKE, register=register, prompts={_TUTOR: _V2})
+    assert registry.resolve(ModelRoute.CI_FAKE).prompt_version_for(_TUTOR) == _V1

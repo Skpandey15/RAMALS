@@ -24,7 +24,6 @@ from opentelemetry.trace import Span
 
 from ramals_ai.gateway.errors import GatewayError
 from ramals_ai.gateway.gateway import LLMGateway
-from ramals_ai.gateway.providers.base import Message
 from ramals_ai.graph.state import AgentState
 from ramals_ai.graph.tools import ToolRegistry
 from ramals_ai.telemetry import tracing
@@ -87,7 +86,6 @@ def model_or_tool(
     *,
     gateway: LLMGateway,
     route: Any,
-    messages: tuple[Message, ...],
     registry: ToolRegistry,  # noqa: ARG001 - see below
 ) -> AgentState:
     """Calls the model through the governed gateway, or a tool the agent is authorized for.
@@ -107,7 +105,10 @@ def model_or_tool(
         try:
             result = gateway.complete(
                 route=route,
-                messages=messages,
+                # Taken from the state rather than passed in beside it. The state holds the built
+                # prompt and its identity as one value, so what is dispatched and what is recorded
+                # cannot come apart.
+                prompt=state.prompt,
                 deadline=state.deadline,
                 max_output_tokens=state.token_budget or None,
                 interaction_class=state.interaction_class,
@@ -135,6 +136,7 @@ def model_or_tool(
             "text": result.text,
             "modelRoute": result.route.value,
             "promptVersion": result.prompt_version,
+            "promptTemplateId": result.prompt_template_id.value,
         }
         logger.info(
             "graph made a model call",

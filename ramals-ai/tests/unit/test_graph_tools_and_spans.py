@@ -26,10 +26,22 @@ from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import Message
 from ramals_ai.gateway.providers.fake import FakeProvider
+from ramals_ai.gateway.routes import default_registry
 from ramals_ai.graph.runtime import GraphRun
 from ramals_ai.graph.tools import ReadOnlyTool, ToolDenied, ToolRegistry, empty_registry
+from ramals_ai.prompting.templates import BuiltPrompt, PromptTemplateId
 
 MESSAGES = (Message(role="user", content="Explain Kafka partitioning."),)
+
+# Fixture messages under the identity the route points at. ``build_state`` refuses a mismatch, so
+# the identity cannot simply be invented here.
+PROMPT = BuiltPrompt(
+    template_id=PromptTemplateId.TUTOR_EXPLAIN,
+    version=default_registry()
+    .resolve(ModelRoute.CI_FAKE)
+    .prompt_version_for(PromptTemplateId.TUTOR_EXPLAIN),
+    messages=MESSAGES,
+)
 
 
 # -- tool denial ---------------------------------------------------------------------------------
@@ -148,6 +160,7 @@ def test_every_node_opens_its_own_span(recorded_spans: Callable[[], list[str]]) 
     gateway = LLMGateway(FakeProvider(), clock=clock, sleep=lambda _s: None)
     run = GraphRun(gateway)
     state = run.build_state(
+        prompt=PROMPT,
         agent_type=AgentType.TUTOR,
         route=ModelRoute.CI_FAKE,
         deadline=Deadline.in_ms(60_000, clock=clock),
@@ -157,7 +170,7 @@ def test_every_node_opens_its_own_span(recorded_spans: Callable[[], list[str]]) 
         minimized_learning_context={"skillCode": "KAFKA_TOPIC"},
     )
 
-    run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+    run.run(state, route=ModelRoute.CI_FAKE)
 
     names = recorded_spans()
     for node in (
@@ -185,6 +198,7 @@ def test_a_repair_loop_records_its_own_span(recorded_spans: Callable[[], list[st
     gateway = LLMGateway(FakeProvider(), clock=clock, sleep=lambda _s: None)
     run = GraphRun(gateway, validator=validator)
     state = run.build_state(
+        prompt=PROMPT,
         agent_type=AgentType.TUTOR,
         route=ModelRoute.CI_FAKE,
         deadline=Deadline.in_ms(60_000, clock=clock),
@@ -195,6 +209,6 @@ def test_a_repair_loop_records_its_own_span(recorded_spans: Callable[[], list[st
     )
     state.ceilings = replace(state.ceilings, max_node_executions=12)
 
-    run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+    run.run(state, route=ModelRoute.CI_FAKE)
 
     assert "graph.bounded_repair" in recorded_spans()

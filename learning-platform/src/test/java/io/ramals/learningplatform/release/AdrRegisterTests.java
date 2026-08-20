@@ -34,7 +34,13 @@ class AdrRegisterTests {
   }
 
   private static String index() throws IOException {
-    return Files.readString(adrDirectory().resolve("README.md"), StandardCharsets.UTF_8);
+    // Newlines are normalized because the section parsers below split on a blank line. On a CRLF
+    // checkout an unnormalized read contains no bare blank line, so "the sentence listing what has
+    // not been written yet" silently becomes the entire remainder of the file -- and every ADR
+    // number appearing after it reads as unwritten. Mvp1ReleaseBoardTests normalizes for the same
+    // reason; this did not, and passed only for as long as nothing followed that sentence.
+    return Files.readString(adrDirectory().resolve("README.md"), StandardCharsets.UTF_8)
+        .replace("\r\n", "\n");
   }
 
   /** Every authored M1 ADR, by identifier, taken from the files rather than from any list. */

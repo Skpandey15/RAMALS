@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from decimal import Decimal
 
 from ramals_ai.config.settings import ModelRoute
@@ -27,6 +28,13 @@ from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import Message, ProviderRequest, ProviderResponse
 from ramals_ai.gateway.providers.fake import FakeProvider
+from ramals_ai.gateway.routes import RouteRegistry, default_registry
+from ramals_ai.prompting.templates import (
+    PromptArtifact,
+    PromptRegister,
+    PromptTemplateId,
+    register_of,
+)
 from ramals_ai.tutor.agent import TutorAgent
 from ramals_ai.tutor.prompt import TUTOR_AGENT_VERSION, TUTOR_PROMPT_VERSION
 
@@ -81,7 +89,11 @@ GOOD_OUTPUT = json.dumps(
 
 
 def agent_for(
-    payload: str, *, route: ModelRoute = ModelRoute.CI_FAKE
+    payload: str,
+    *,
+    route: ModelRoute = ModelRoute.CI_FAKE,
+    registry: RouteRegistry | None = None,
+    prompts: PromptRegister | None = None,
 ) -> tuple[TutorAgent, ScriptedProvider, Deadline]:
     clock_value = {"now": 1000.0}
 
@@ -89,9 +101,9 @@ def agent_for(
         return clock_value["now"]
 
     provider = ScriptedProvider(payload)
-    gateway = LLMGateway(provider, clock=clock, sleep=lambda _s: None)
+    gateway = LLMGateway(provider, registry=registry, clock=clock, sleep=lambda _s: None)
     return (
-        TutorAgent(gateway, route=route),
+        TutorAgent(gateway, route=route, prompts=prompts),
         provider,
         Deadline.in_ms(8_000, clock=clock),
     )
@@ -120,17 +132,54 @@ def test_a_proposal_carries_the_versions_that_produced_it() -> None:
 
 
 def test_the_reported_prompt_version_follows_the_route_not_the_agent() -> None:
-    """M1-ADR-008 makes the route's prompt pointer what rollback moves.
+    """M1-ADR-008 makes the route's prompt pointer what a rollback moves.
 
-    So the proposal reports the route's prompt version, not a constant compiled into the agent. If
-    it reported the agent's own constant, rolling a prompt back would change what the tutor sends
-    and not what the proposal claims -- and the recorded metadata would quietly stop being true.
+    The proposal must report the revision the route points at rather than a constant compiled into
+    the agent -- otherwise moving the pointer would change nothing a reader could see.
+
+    This used to be asserted by checking that a run on ``ci-fake`` reported ``CI_FAKE_PROMPT_V1``,
+    which passed while proving the opposite of what it claimed: that string named no prompt, the
+    tutor's own V1 messages were dispatched regardless, and the recorded identity therefore
+    described nothing that ran. The pointer is now demonstrated by moving it.
+    """
+    register = register_of(
+        PromptArtifact(
+            template_id=PromptTemplateId.TUTOR_EXPLAIN,
+            version="TUTOR_PROMPT_V2",
+            build=lambda **_: (Message(role="system", content="A revised tutor prompt."),),
+        )
+    )
+    registry = default_registry().with_route(
+        replace(
+            default_registry().resolve(ModelRoute.CI_FAKE),
+            prompt_versions={
+                **default_registry().resolve(ModelRoute.CI_FAKE).prompt_versions,
+                PromptTemplateId.TUTOR_EXPLAIN: "TUTOR_PROMPT_V2",
+            },
+        )
+    )
+    agent, provider, deadline = agent_for(
+        GOOD_OUTPUT, route=ModelRoute.CI_FAKE, registry=registry, prompts=register
+    )
+
+    proposal = agent.respond(envelope(), deadline=deadline)
+
+    assert proposal.promptVersion == "TUTOR_PROMPT_V2"
+    assert proposal.promptVersion != TUTOR_PROMPT_VERSION
+    # And the pointer moved the prompt, not only the label.
+    assert provider.prompts[0][0].content == "A revised tutor prompt."
+
+
+def test_a_run_on_a_shared_route_records_its_own_prompt() -> None:
+    """``ci-fake`` serves all four agents, so it carries a pointer per template.
+
+    A single prompt version on a shared route cannot name four different prompts. It previously
+    named none of them, and every CI evaluation recorded that name.
     """
     agent, _provider, deadline = agent_for(GOOD_OUTPUT, route=ModelRoute.CI_FAKE)
     proposal = agent.respond(envelope(), deadline=deadline)
 
-    assert proposal.promptVersion == "CI_FAKE_PROMPT_V1"
-    assert proposal.promptVersion != TUTOR_PROMPT_VERSION
+    assert proposal.promptVersion == TUTOR_PROMPT_VERSION
 
 
 def test_the_proposal_carries_no_mastery_evidence_or_progression_field() -> None:
