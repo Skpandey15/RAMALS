@@ -1,6 +1,6 @@
 # M1-ADR-011: Prompt identity is `promptTemplateId` + `promptVersion`, and a rollback moves it
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-20
 - **Task:** M1-T17 slice 2
 - **Amends:** [M1-ADR-008](M1-ADR-008-model-routing-fallback-and-rollback.md)
