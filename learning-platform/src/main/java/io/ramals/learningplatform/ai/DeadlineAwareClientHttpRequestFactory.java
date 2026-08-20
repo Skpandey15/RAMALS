@@ -25,14 +25,45 @@ final class DeadlineAwareClientHttpRequestFactory extends SimpleClientHttpReques
   private static final ThreadLocal<Long> DEADLINE_NANOS = new ThreadLocal<>();
 
   /**
-   * Whether a request was actually started in the current scope.
+   * Whether a request to <em>the AI plane</em> was started in the current scope.
    *
    * <p>This is the fact that separates "we ran out of time before asking" from "we asked and they
    * did not answer". Both surface as {@code AI_DEADLINE_EXCEEDED}, and only the second is evidence
-   * about the dependency's health, so the distinction cannot be recovered from the error code and
-   * must be recorded when it happens.
+   * about the AI plane's health, so the distinction cannot be recovered from the error code and must
+   * be recorded when it happens.
+   *
+   * <p>Specifically the AI plane, not "some request". Assessment acquires a workload token from the
+   * identity provider inside the same deadline scope — deliberately, so a slow identity provider
+   * cannot extend the model budget. A marker meaning "something was dispatched" would therefore be
+   * set by the token call, and a budget consumed entirely by the identity provider would be recorded
+   * as the AI plane failing to answer while the AI plane was never contacted. Three of those would
+   * open its circuit because Keycloak was slow.
    */
-  private static final ThreadLocal<Boolean> DISPATCH_ATTEMPTED = new ThreadLocal<>();
+  private static final ThreadLocal<Boolean> AI_PLANE_DISPATCHED = new ThreadLocal<>();
+
+  /** Whether requests from this factory count as contacting the AI plane. */
+  private final boolean marksAiPlaneDispatch;
+
+  private DeadlineAwareClientHttpRequestFactory(boolean marksAiPlaneDispatch) {
+    this.marksAiPlaneDispatch = marksAiPlaneDispatch;
+  }
+
+  /** A transport for calls to the AI plane. Requests it starts are attributed to the AI plane. */
+  static DeadlineAwareClientHttpRequestFactory forAiPlane() {
+    return new DeadlineAwareClientHttpRequestFactory(true);
+  }
+
+  /**
+   * A transport for a call made on the way to the AI plane, such as acquiring a workload token.
+   *
+   * <p>Shares the caller's deadline exactly as the AI transport does — that part is deliberate — but
+   * contacting this service is not evidence about the AI plane, so it never marks AI-plane dispatch.
+   * Whether the identity provider is itself healthy is a separate question with a separate answer;
+   * this only keeps it out of the AI plane's breaker.
+   */
+  static DeadlineAwareClientHttpRequestFactory forSupportingCall() {
+    return new DeadlineAwareClientHttpRequestFactory(false);
+  }
 
   @Override
   public org.springframework.http.client.ClientHttpRequest createRequest(
@@ -40,25 +71,28 @@ final class DeadlineAwareClientHttpRequestFactory extends SimpleClientHttpReques
     requireRemaining();
     org.springframework.http.client.ClientHttpRequest request =
         super.createRequest(uri, httpMethod);
-    // Recorded here rather than after a successful response: from this point the dependency is
-    // being contacted, so a connect timeout, a read timeout or a late reply are all about it.
-    DISPATCH_ATTEMPTED.set(Boolean.TRUE);
+    // Recorded here rather than after a successful response: from this point the AI plane is being
+    // contacted, so a connect timeout, a read timeout or a late reply are all about it.
+    if (marksAiPlaneDispatch) {
+      AI_PLANE_DISPATCHED.set(Boolean.TRUE);
+    }
     return request;
   }
 
-  /** Whether the current scope has started a request to the dependency. */
-  static boolean dispatchAttempted() {
-    return Boolean.TRUE.equals(DISPATCH_ATTEMPTED.get());
+  /** Whether the current scope has started a request to the AI plane. */
+  static boolean aiPlaneDispatchAttempted() {
+    return Boolean.TRUE.equals(AI_PLANE_DISPATCHED.get());
   }
 
   /**
-   * The origin to attribute a failure to, given whether the dependency has been contacted yet.
+   * The origin to attribute a failure to, for the breaker that protects the AI plane.
    *
-   * <p>Derived from an observed fact rather than from the error code, which cannot tell the two
-   * apart.
+   * <p>Derived from an observed fact rather than from the error code, which cannot tell the cases
+   * apart. {@code CALLER} here means "not evidence about the AI plane" — which covers a budget that
+   * expired before dispatch and a budget spent reaching the identity provider alike.
    */
   static FailureOrigin currentFailureOrigin() {
-    return dispatchAttempted() ? FailureOrigin.DEPENDENCY : FailureOrigin.CALLER;
+    return aiPlaneDispatchAttempted() ? FailureOrigin.DEPENDENCY : FailureOrigin.CALLER;
   }
 
   @Override
@@ -89,8 +123,8 @@ final class DeadlineAwareClientHttpRequestFactory extends SimpleClientHttpReques
     }
 
     Long previousDeadline = DEADLINE_NANOS.get();
-    Boolean previousDispatch = DISPATCH_ATTEMPTED.get();
-    DISPATCH_ATTEMPTED.remove();
+    Boolean previousDispatch = AI_PLANE_DISPATCHED.get();
+    AI_PLANE_DISPATCHED.remove();
     long requestedDeadline = deadlineNanosFromNow(deadlineMillis);
     long effectiveDeadline = previousDeadline == null
         ? requestedDeadline
@@ -107,13 +141,13 @@ final class DeadlineAwareClientHttpRequestFactory extends SimpleClientHttpReques
       } else {
         DEADLINE_NANOS.set(previousDeadline);
       }
-      // An inner scope's dispatch does not make an outer scope's failure a dependency failure:
-      // acquiring a workload token nests inside the AI call, and a token that was fetched says
-      // nothing about whether the AI plane was reached.
+      // An inner scope's dispatch does not leak outwards. Together with the AI-plane-only marker
+      // above, this keeps "was the AI plane reached" true to its name whether a supporting call is
+      // made inline or inside its own nested budget.
       if (previousDispatch == null) {
-        DISPATCH_ATTEMPTED.remove();
+        AI_PLANE_DISPATCHED.remove();
       } else {
-        DISPATCH_ATTEMPTED.set(previousDispatch);
+        AI_PLANE_DISPATCHED.set(previousDispatch);
       }
     }
   }

@@ -69,7 +69,7 @@ public class AiClientConfiguration {
       return Optional.empty();
     }
     RestClient tokenClient =
-        RestClient.builder().baseUrl(tokenUrl).requestFactory(configuredRequestFactory()).build();
+        RestClient.builder().baseUrl(tokenUrl).requestFactory(tokenRequestFactory()).build();
     return Optional.of(new WorkloadTokenProvider(tokenClient, clientId, clientSecret, audience));
   }
 
@@ -164,8 +164,22 @@ public class AiClientConfiguration {
   }
 
   private static DeadlineAwareClientHttpRequestFactory configuredRequestFactory() {
-    DeadlineAwareClientHttpRequestFactory requestFactory =
-        new DeadlineAwareClientHttpRequestFactory();
+    return configured(DeadlineAwareClientHttpRequestFactory.forAiPlane());
+  }
+
+  /**
+   * The transport for the workload-token call.
+   *
+   * <p>Same deadline discipline, different attribution. Reaching the identity provider is not
+   * evidence about the AI plane, so a budget spent entirely on a slow token endpoint must not open
+   * the AI plane's circuit.
+   */
+  private static DeadlineAwareClientHttpRequestFactory tokenRequestFactory() {
+    return configured(DeadlineAwareClientHttpRequestFactory.forSupportingCall());
+  }
+
+  private static DeadlineAwareClientHttpRequestFactory configured(
+      DeadlineAwareClientHttpRequestFactory requestFactory) {
     requestFactory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
     requestFactory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
     return requestFactory;

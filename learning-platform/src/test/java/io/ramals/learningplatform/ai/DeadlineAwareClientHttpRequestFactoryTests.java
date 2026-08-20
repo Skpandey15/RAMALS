@@ -159,7 +159,7 @@ class DeadlineAwareClientHttpRequestFactoryTests {
   }
 
   private static DeadlineAwareClientHttpRequestFactory configuredFactory() {
-    DeadlineAwareClientHttpRequestFactory factory = new DeadlineAwareClientHttpRequestFactory();
+    DeadlineAwareClientHttpRequestFactory factory = DeadlineAwareClientHttpRequestFactory.forAiPlane();
     factory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
     factory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
     return factory;

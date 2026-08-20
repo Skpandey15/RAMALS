@@ -52,7 +52,7 @@ class AiCallFailureOriginTests {
   }
 
   private static RamalsAiTutorClient tutorFor(String baseUrl, AiCallGuard guard) {
-    DeadlineAwareClientHttpRequestFactory factory = new DeadlineAwareClientHttpRequestFactory();
+    DeadlineAwareClientHttpRequestFactory factory = DeadlineAwareClientHttpRequestFactory.forAiPlane();
     factory.setConnectTimeout(2_000);
     factory.setReadTimeout(5_000);
     RestClient rest =
