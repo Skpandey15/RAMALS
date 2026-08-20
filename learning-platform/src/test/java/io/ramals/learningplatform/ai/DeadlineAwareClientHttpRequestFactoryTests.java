@@ -101,7 +101,7 @@ class DeadlineAwareClientHttpRequestFactoryTests {
           .requestFactory(factory)
           .build();
       RamalsAiTutorClient client = new RamalsAiTutorClient(
-          restClient, new AiCallGuard(3, Duration.ofSeconds(30), 4, java.time.Instant::now));
+          restClient, new AiCallGuard(3, Duration.ofSeconds(30), 4, java.time.Instant::now), () -> "test-workload-token");
 
       assertThatThrownBy(() -> client.requestTutorResponse(request(), 150))
           .isInstanceOf(AiUnavailableException.class)

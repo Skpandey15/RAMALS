@@ -8,14 +8,12 @@ import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import io.ramals.learningplatform.execution.AiExecutionRecorder;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
-import io.ramals.learningplatform.execution.NoOpAiExecutionRecorder;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /** Receives, validates, and durably records one AI assessment candidate. */
@@ -29,14 +27,10 @@ public class AssessmentCandidateIntakeService {
   private final AssessmentCandidatePersistenceService persistenceService;
   private final AiExecutionRecorder executionRecorder;
 
-  public AssessmentCandidateIntakeService(
-      AssessmentPort assessmentPort,
-      ContentValidationPipeline validationPipeline,
-      AssessmentCandidatePersistenceService persistenceService) {
-    this(assessmentPort, validationPipeline, persistenceService, new NoOpAiExecutionRecorder());
-  }
-
-  @Autowired
+  // There is deliberately no constructor that omits the recorder. One existed, defaulting to a
+  // no-op, and only @Autowired on the constructor below kept production wired to the real one --
+  // remove that annotation and the platform still starts, still serves, and silently stops
+  // recording the AI execution provenance M1-ADR-005 requires, with nothing failing.
   public AssessmentCandidateIntakeService(
       AssessmentPort assessmentPort,
       ContentValidationPipeline validationPipeline,

@@ -44,6 +44,23 @@ public class AiCallGuard {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(AiCallGuard.class);
 
+  /**
+   * A refusal this guard produced, as opposed to a failure of the dependency behind it.
+   *
+   * <p>Private constructor by design: only the guard can raise one, so "the guard refused" and "the
+   * AI plane failed" cannot be confused by a caller wrapping its own errors. The distinction decides
+   * whether the breaker counts a failure, and getting it wrong in the permissive direction disables
+   * the breaker without breaking a single test.
+   *
+   * <p>It remains an {@link AiUnavailableException} carrying the same error codes, so every existing
+   * caller and degradation path is unchanged.
+   */
+  public static final class GuardRefusal extends AiUnavailableException {
+    private GuardRefusal(String errorCode, String message) {
+      super(errorCode, message);
+    }
+  }
+
   /** Breaker states, in the order a failing dependency moves through them. */
   public enum State {
     /** Calls pass through. */
@@ -93,14 +110,14 @@ public class AiCallGuard {
   public <T> T call(Supplier<T> action) {
     State current = currentState();
     if (current == State.OPEN) {
-      throw new AiUnavailableException("AI_CIRCUIT_OPEN",
+      throw new GuardRefusal("AI_CIRCUIT_OPEN",
           "The tutoring service is unavailable; deterministic learning is unaffected.");
     }
 
     if (!concurrency.tryAcquire()) {
       // Refused immediately rather than queued. A learner waiting behind a saturated bulkhead is
       // waiting for something that is already overloaded, and the honest answer is now.
-      throw new AiUnavailableException("AI_BULKHEAD_FULL",
+      throw new GuardRefusal("AI_BULKHEAD_FULL",
           "The tutoring service is busy; deterministic learning is unaffected.");
     }
 
@@ -143,7 +160,14 @@ public class AiCallGuard {
   private void recordFailure(RuntimeException failure) {
     // A refusal this guard produced is not evidence about the dependency. Counting it would let a
     // saturated bulkhead trip the breaker, turning a busy service into an unavailable one.
-    if (failure instanceof AiUnavailableException) {
+    //
+    // Matched on the guard's own type rather than on AiUnavailableException, which is what this
+    // originally tested. Every client wraps a genuine transport failure — a refused connection, a
+    // read timeout, a 401 — in an AiUnavailableException before it leaves the lambda, so the wider
+    // check silently excluded exactly the failures the breaker exists to count, and the breaker
+    // could never open. A caller cannot construct a GuardRefusal, so the exclusion now covers what
+    // it is meant to cover and nothing else.
+    if (failure instanceof GuardRefusal) {
       return;
     }
 

@@ -33,10 +33,17 @@ public class RamalsAiTutorClient implements TutorPort {
 
   private final RestClient restClient;
   private final AiCallGuard guard;
+  private final WorkloadToken tokenProvider;
 
-  public RamalsAiTutorClient(RestClient restClient, AiCallGuard guard) {
+  public RamalsAiTutorClient(
+      RestClient restClient, AiCallGuard guard, WorkloadToken tokenProvider) {
     this.restClient = restClient;
     this.guard = guard;
+    // Required, not optional. The AI plane rejects an unauthenticated request, so a client built
+    // without a token provider is a client that can only ever produce 401s -- which degrade to
+    // "tutoring unavailable" and look exactly like the AI plane being down.
+    this.tokenProvider = java.util.Objects.requireNonNull(
+        tokenProvider, "a tutor client must be able to authenticate as the workload");
   }
 
   @Override
@@ -55,6 +62,9 @@ public class RamalsAiTutorClient implements TutorPort {
             AiProposalEnvelope proposal = restClient
                 .post()
                 .uri("/internal/v1/tutor/respond")
+                // Workload identity per M1-ADR-003. Never the learner's token: forwarding that
+                // would let the AI plane act as the learner.
+                .header("Authorization", "Bearer " + tokenProvider.accessToken())
                 // The AI plane rejects a request without a canonical interactionId, and rightly: a
                 // proposal nobody can correlate is a proposal nobody can investigate.
                 .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())

@@ -120,3 +120,47 @@ def test_workload_auth_cannot_be_disabled_outside_local() -> None:
     """Configuration, not code review, is what prevents an unauthenticated shared deployment."""
     with pytest.raises(ValueError, match="cannot be disabled"):
         Settings(environment=Environment.DEV, workload_auth_enabled=False)
+
+
+# -- the contract the Java clients must satisfy ---------------------------------------------------
+
+AGENT_ROUTES = (
+    "/internal/v1/tutor/respond",
+    "/internal/v1/diagnostic/propose",
+    "/internal/v1/assessment/propose",
+    "/internal/v1/assessment/evaluate",
+    "/internal/v1/adaptation/propose",
+)
+
+
+def test_every_agent_route_requires_workload_identity(client: TestClient) -> None:
+    """Enumerated against the real routes, not a synthetic probe.
+
+    The probe above proves the dependency works; it cannot prove the dependency is attached to the
+    endpoints that matter, because it mounts its own route. This walks the actual agent surface.
+
+    The platform shipped with two Java clients sending no Authorization header, so every tutor and
+    adaptation call was refused here with 401 -- which the callers translated into "the AI plane is
+    unreachable", and nothing went red. The Java half of this contract is
+    ``AiWorkloadAuthenticationContractTests``; together they pin both sides of the same rule.
+    """
+    for route in AGENT_ROUTES:
+        response = client.post(route, json={})
+        assert response.status_code == 401, route
+        assert response.json()["detail"]["code"] == "WORKLOAD_AUTHENTICATION_REQUIRED", route
+
+
+def test_the_agent_surface_under_test_is_the_whole_agent_surface(client: TestClient) -> None:
+    """Fails when an agent route is added without being covered above.
+
+    Otherwise the enumeration silently stops being exhaustive the day someone adds an endpoint,
+    which is exactly how the original gap survived.
+    """
+    schema = client.get("/openapi.json").json()
+    served = {
+        path
+        for path, operations in schema["paths"].items()
+        if path.startswith("/internal/v1/") and "post" in operations
+    }
+
+    assert served == set(AGENT_ROUTES)

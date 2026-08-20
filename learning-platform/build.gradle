@@ -49,6 +49,11 @@ tasks.named('test') {
   systemProperty 'junit.jupiter.execution.parallel.enabled', 'false'
   systemProperty 'junit.jupiter.execution.parallel.mode.default', 'same_thread'
   systemProperty 'junit.jupiter.execution.parallel.mode.classes.default', 'same_thread'
+  // Pinned, not inherited. The JDBC driver sends the JVM's default zone to PostgreSQL on connect,
+  // and PostgreSQL 18 rejects legacy aliases such as Asia/Calcutta -- so the whole database-backed
+  // suite fails at @BeforeAll for a developer in that zone while CI, which runs UTC, stays green.
+  // Pinning also keeps date and timestamp assertions independent of where they are run.
+  systemProperty 'user.timezone', 'UTC'
   // Keep the default task fast: integration, architecture, and governance suites run through
   // their own tasks below and are wired into check.
   filter {
@@ -89,6 +94,11 @@ def registerCategoryTest = { String name, String description, List<String> inclu
     systemProperty 'junit.jupiter.execution.parallel.enabled', 'false'
     systemProperty 'junit.jupiter.execution.parallel.mode.default', 'same_thread'
     systemProperty 'junit.jupiter.execution.parallel.mode.classes.default', 'same_thread'
+  // Pinned, not inherited. The JDBC driver sends the JVM's default zone to PostgreSQL on connect,
+  // and PostgreSQL 18 rejects legacy aliases such as Asia/Calcutta -- so the whole database-backed
+  // suite fails at @BeforeAll for a developer in that zone while CI, which runs UTC, stays green.
+  // Pinning also keeps date and timestamp assertions independent of where they are run.
+  systemProperty 'user.timezone', 'UTC'
     filter {
       includes.each { includeTestsMatching(it) }
     }
