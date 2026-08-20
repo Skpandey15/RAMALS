@@ -16,8 +16,8 @@ M1-T05 established.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry.trace import Span
@@ -26,7 +26,7 @@ from ramals_ai.gateway.errors import GatewayError
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.graph.state import AgentState
 from ramals_ai.graph.tools import ToolRegistry
-from ramals_ai.telemetry import tracing
+from ramals_ai.telemetry import correlation, tracing
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +34,24 @@ Validator = Callable[[str], list[str]]
 """Returns validation errors for a model output; an empty list means valid."""
 
 
-def _span(node: str) -> AbstractContextManager[Span]:
-    """One span per node (Doc 02 §7). Named uniformly so a waterfall reads as the graph."""
-    return tracing.tracer().start_as_current_span(f"graph.{node}")
+@contextmanager
+def _span(node: str) -> Iterator[Span]:
+    """One span per node (Doc 02 §7). Named uniformly so a waterfall reads as the graph.
+
+    Agent correlation is attached as span attributes as well as log fields, because the two are used
+    at different moments: a support pivot starts from an interactionId in the logs and ends in a
+    trace, and a waterfall that cannot say which run a span belonged to breaks the pivot at its last
+    step (Observability HLD §9, §13).
+    """
+    with tracing.tracer().start_as_current_span(f"graph.{node}") as span:
+        agent_run_id = correlation.current_agent_run_id()
+        if agent_run_id:
+            span.set_attribute("ramals.agent_run_id", agent_run_id)
+            span.set_attribute("ramals.proposal_id", correlation.current_proposal_id())
+        tool_call_id = correlation.current_tool_call_id()
+        if tool_call_id:
+            span.set_attribute("ramals.tool_call_id", tool_call_id)
+        yield span
 
 
 def load_context(state: AgentState) -> AgentState:

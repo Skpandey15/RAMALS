@@ -15,7 +15,13 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
-from ramals_ai.telemetry.correlation import current_interaction_id, current_request_id
+from ramals_ai.telemetry.correlation import (
+    current_agent_run_id,
+    current_interaction_id,
+    current_proposal_id,
+    current_request_id,
+    current_tool_call_id,
+)
 from ramals_ai.telemetry.tracing import current_span_id, current_trace_id
 
 # Attributes LogRecord always carries. Anything else a caller attaches via `extra` is domain context
@@ -124,6 +130,17 @@ class JsonFormatter(logging.Formatter):
         if trace_id:
             payload["traceId"] = trace_id
             payload["spanId"] = current_span_id()
+
+        # Agent correlation (Observability HLD §9). Emitted only inside a run or a tool call, so an
+        # ordinary request log line is not padded with empty agent fields -- and a line that does
+        # carry them was genuinely produced inside that run.
+        agent_run_id = current_agent_run_id()
+        if agent_run_id:
+            payload["agentRunId"] = agent_run_id
+            payload["proposalId"] = current_proposal_id()
+        tool_call_id = current_tool_call_id()
+        if tool_call_id:
+            payload["toolCallId"] = tool_call_id
 
         if record.exc_info:
             payload["exceptionType"] = record.exc_info[0].__name__ if record.exc_info[0] else None

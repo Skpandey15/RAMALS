@@ -146,6 +146,20 @@ class AIProposalEnvelope(BaseModel):
     ]
     agentType: AgentType
     agentVersion: Annotated[str, Field(max_length=64)]
+    agentRunId: Annotated[
+        str | None,
+        Field(
+            description="The orchestrated agent execution that produced this proposal (Observability HLD §9). Distinct from proposalId, requestId and interactionId: a retried request produces several runs, and one interaction may involve several agents. Carried on the wire so the deterministic core's log lines for a decision can name the run that proposed it -- otherwise the correlation chain ends at the plane boundary, which is where a support pivot most often needs to cross. Optional, so a plane that predates the field still validates.\n",
+            max_length=64,
+        ),
+    ] = None
+    promptTemplateId: Annotated[
+        str | None,
+        Field(
+            description="Which prompt produced this proposal (M1-ADR-011). Two of the assessment agent's prompts share a version, so promptVersion alone does not identify one.\n",
+            max_length=64,
+        ),
+    ] = None
     promptVersion: Annotated[str | None, Field(max_length=64)] = None
     modelRoute: Annotated[str, Field(max_length=64)]
     trustLevel: TrustLevel

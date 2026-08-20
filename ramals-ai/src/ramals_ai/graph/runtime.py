@@ -34,6 +34,7 @@ from ramals_ai.graph.limits import REPAIR_ROUTE_RESERVE, CeilingExceeded, Ceilin
 from ramals_ai.graph.state import AgentState
 from ramals_ai.graph.tools import ToolRegistry, empty_registry
 from ramals_ai.prompting.templates import BuiltPrompt, PromptRegister, PromptTemplateId
+from ramals_ai.telemetry import correlation
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,16 @@ class GraphRun:
         when the work does not fit. The state comes back with its counters intact, so the caller can
         see which bound was reached and how much was spent getting there.
         """
+        with correlation.agent_run(state.agent_run_id, state.proposal_id):
+            return self._run_bound(state, route=route)
+
+    def _run_bound(self, state: AgentState, *, route: ModelRoute) -> AgentState:
+        """The graph itself, with this run's identifiers already bound.
+
+        Split out so the binding wraps every exit -- the ceiling stop and the re-raise included. A
+        run whose failure log lines are the only uncorrelated ones in the system would be missing
+        exactly the lines somebody is looking for.
+        """
         try:
             nodes.load_context(state)
             nodes.policy_precheck(state)
@@ -194,6 +205,16 @@ class GraphRun:
                 "graph run stopped by a ceiling",
                 extra={
                     "operation": "graph.ceiling_stop",
+                    # outcome is FAILED rather than REJECTED: a ceiling stop is the platform
+                    # refusing to spend more, not a judgement about the proposal. Whether a
+                    # proposal is ACCEPTED or REJECTED is Spring's deterministic policy to decide
+                    # and to log, and the AI plane claiming either would be asserting an authority
+                    # it does not have.
+                    "outcome": "FAILED",
+                    "agentName": state.agent_type.value,
+                    "agentVersion": state.agent_version,
+                    "promptTemplateId": state.prompt_template_id.value,
+                    "promptVersion": state.prompt_version,
                     "control": stop.control,
                     "limit": stop.limit,
                     "stepCount": state.node_execution_count,
@@ -208,7 +229,14 @@ class GraphRun:
             "graph run completed",
             extra={
                 "operation": "graph.complete",
+                # DEGRADED when the run finished with the errors recorded rather than repaired:
+                # a proposal was produced, and it is not the one that was asked for.
+                "outcome": "DEGRADED" if state.validation_errors else "SUCCESS",
                 "agentType": state.agent_type.value,
+                "agentName": state.agent_type.value,
+                "agentVersion": state.agent_version,
+                "promptTemplateId": state.prompt_template_id.value,
+                "promptVersion": state.prompt_version,
                 "stepCount": state.node_execution_count,
                 "modelCallCount": state.model_call_count,
                 "repairCount": state.repair_cycle_count,

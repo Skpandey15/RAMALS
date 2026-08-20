@@ -230,7 +230,7 @@ class AssessmentCandidateTransactionBoundaryTests {
 
   private static AiProposalEnvelope proposal() {
     return new AiProposalEnvelope("1.0", "source-proposal", AgentType.ASSESSMENT, "v1",
-        "prompt-v1", "assessment-default", TrustLevel.UNVERIFIED, "0.5", List.of(), Map.of(
+        "run-1", "TEMPLATE-1", "prompt-v1", "assessment-default", TrustLevel.UNVERIFIED, "0.5", List.of(), Map.of(
             "skillCode", "KAFKA_TOPIC", "objectiveCode", "TOPIC_DEFINE", "difficulty", "FOUNDATIONAL",
             "stem", "What is a topic?", "options", List.of("A", "B"), "answerKey", List.of("A"),
             "rationale", "A topic is a named stream."), null, null);

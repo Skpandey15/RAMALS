@@ -488,6 +488,23 @@ components:
           description: Identity of this proposal. Referenced by DecisionRecord when it influences one.
         agentType: { $ref: '#/components/schemas/AgentType' }
         agentVersion: { type: string, maxLength: 64 }
+        agentRunId:
+          type: string
+          maxLength: 64
+          description: >
+            The orchestrated agent execution that produced this proposal (Observability HLD §9).
+            Distinct from proposalId, requestId and interactionId: a retried request produces
+            several runs, and one interaction may involve several agents. Carried on the wire so
+            the deterministic core's log lines for a decision can name the run that proposed it --
+            otherwise the correlation chain ends at the plane boundary, which is where a support
+            pivot most often needs to cross. Optional, so a plane that predates the field still
+            validates.
+        promptTemplateId:
+          type: string
+          maxLength: 64
+          description: >
+            Which prompt produced this proposal (M1-ADR-011). Two of the assessment agent's prompts
+            share a version, so promptVersion alone does not identify one.
         promptVersion: { type: string, maxLength: 64 }
         modelRoute: { type: string, maxLength: 64 }
         trustLevel: { $ref: '#/components/schemas/TrustLevel' }

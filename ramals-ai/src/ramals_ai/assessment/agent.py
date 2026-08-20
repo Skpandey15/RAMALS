@@ -223,6 +223,8 @@ class AssessmentAgent:
             proposalId=state.proposal_id,
             agentType=self.agent_type,
             agentVersion=state.agent_version,
+            agentRunId=state.agent_run_id,
+            promptTemplateId=state.prompt_template_id.value,
             promptVersion=state.prompt_version,
             modelRoute=model_route,
             # Stated on the wire, on every proposal, whatever the content. A candidate that arrived
