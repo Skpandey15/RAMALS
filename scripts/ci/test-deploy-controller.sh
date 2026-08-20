@@ -44,13 +44,28 @@ cat > "${WORK}/health.sh" <<'EOF'
 #!/usr/bin/env bash
 bad="$(cat "${WORK_DIR}/bad-digest" 2>/dev/null)"
 [ -n "${bad}" ] || exit 0
-case "${RAMALS_BACKEND_IMAGE:-}" in
+case "${RAMALS_BACKEND_IMAGE:-}${RAMALS_AI_IMAGE:-}" in
   *"${bad}"*) exit 1 ;;
 esac
 exit 0
 EOF
 chmod +x "${WORK}/up.sh" "${WORK}/health.sh"
 : > "${WORK}/bad-digest"
+
+ai_manifest() { # ai_manifest <commit> <digest-suffix> -- a three-component release (M1-T17)
+  cat > "${WORK}/desired.json" <<EOF
+{
+  "manifest_version": 1,
+  "environment": "test",
+  "release": { "commit": "$1", "version": "v0.0.0-test" },
+  "components": {
+    "learning-platform": { "image": "ghcr.io/test/lp", "digest": "sha256:$2" },
+    "web-ui": { "image": "ghcr.io/test/ui", "digest": "sha256:$2" },
+    "ramals-ai": { "image": "ghcr.io/test/ai", "digest": "sha256:$2" }
+  }
+}
+EOF
+}
 
 manifest() { # manifest <commit> <digest-suffix>
   cat > "${WORK}/desired.json" <<EOF
@@ -147,6 +162,52 @@ cat > "${WORK}/desired.json" <<'EOF'
 }
 EOF
 check "mutable tag rejected (exit 1)" "$(run)" "1"
+
+# --- the AI plane is a released component (M1-T17) -----------------------------------------------
+#
+# Deploying a component you cannot roll back is worse than not deploying it: the first bad release
+# strands it, and the only way back is by hand. So both halves are checked.
+
+rm -f "${WORK}/state.json"
+: > "${WORK}/bad-digest"
+ai_manifest ai-good "${aaaa}"
+check "three-component deploy exits 0" "$(run)" "0"
+check "three-component state is HEALTHY" "$(state_field state)" "HEALTHY"
+check "known-good AI digest recorded"   "$(state_field known_good_ai_image)" "ghcr.io/test/ai@sha256:${aaaa}"
+
+# A bad AI digest must roll the whole release back rather than strand the AI plane on a broken
+# image. The health stub judges the AI image too, so this can actually fail.
+echo "${bbbb}" > "${WORK}/bad-digest"
+ai_manifest ai-bad "${bbbb}"
+check "bad AI release rolls back (exit 3)" "$(run)" "3"
+check "held after bad AI release" "$(state_field state)" "RELEASE_HELD"
+check "AI known-good survives the rollback"   "$(state_field known_good_ai_image)" "ghcr.io/test/ai@sha256:${aaaa}"
+
+# A mutable AI tag is refused exactly as a mutable backend tag is. Found by perturbation: removing
+# the AI digest from the immutability loop passed every other check in this file, because nothing
+# had ever supplied one.
+rm -f "${WORK}/state.json"
+cat > "${WORK}/desired.json" <<EOF
+{
+  "manifest_version": 1,
+  "environment": "test",
+  "release": { "commit": "ai-mutable", "version": "v0.0.0-test" },
+  "components": {
+    "learning-platform": { "image": "ghcr.io/test/lp", "digest": "sha256:${aaaa}" },
+    "web-ui": { "image": "ghcr.io/test/ui", "digest": "sha256:${aaaa}" },
+    "ramals-ai": { "image": "ghcr.io/test/ai", "digest": "latest" }
+  }
+}
+EOF
+check "mutable AI tag rejected (exit 1)" "$(run)" "1"
+
+# A manifest without the AI plane stays valid: a deterministic-only deployment is a supported
+# configuration, not an incomplete manifest.
+rm -f "${WORK}/state.json"
+: > "${WORK}/bad-digest"
+manifest no-ai "${aaaa}"
+check "two-component manifest still deploys" "$(run)" "0"
+check "AI known-good is 'none' when unconfigured" "$(state_field known_good_ai_image)" "none"
 
 if [ "${failures}" -gt 0 ]; then
   printf '\n%d deployment state-machine check(s) failed\n' "${failures}"

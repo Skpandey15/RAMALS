@@ -78,17 +78,23 @@ jobs:
       attestations: write
     strategy:
       fail-fast: true
-      # Both Dockerfiles COPY from repository-root-relative paths (gradle wrapper / shared nginx
-      # config), so the build context is the repository root for both components.
+      # Every Dockerfile COPYs from repository-root-relative paths (gradle wrapper, shared nginx
+      # config, python project files), so the build context is the repository root throughout.
       matrix:
         include:
           - component: learning-platform
             dockerfile: learning-platform/Dockerfile
           - component: web-ui
             dockerfile: web-ui/Dockerfile
+          # M1-T17. The AI plane is a released component, not a development convenience: it is built
+          # once, digest-addressed, scanned and attested on the same path as the other two. An image
+          # that only ever exists on a developer's machine cannot be rolled back to.
+          - component: ramals-ai
+            dockerfile: ramals-ai/Dockerfile
     outputs:
       learning_platform_digest: ${{ steps.export.outputs.learning_platform_digest }}
       web_ui_digest: ${{ steps.export.outputs.web_ui_digest }}
+      ramals_ai_digest: ${{ steps.export.outputs.ramals_ai_digest }}
     steps:
       - name: Check out trusted ref
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -193,11 +199,15 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           echo "Published ${COMPONENT} at immutable digest ${DIGEST}"
-          if [[ "${COMPONENT}" == "learning-platform" ]]; then
-            echo "learning_platform_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          else
-            echo "web_ui_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          fi
+          # Named explicitly rather than if/else. With two components an else branch was harmless;
+          # with three it would have silently recorded the AI plane's digest as the web UI's, and
+          # the manifest would then deploy the wrong image under the right name.
+          case "${COMPONENT}" in
+            learning-platform) echo "learning_platform_digest=${DIGEST}" >> "$GITHUB_OUTPUT" ;;
+            web-ui)            echo "web_ui_digest=${DIGEST}" >> "$GITHUB_OUTPUT" ;;
+            ramals-ai)         echo "ramals_ai_digest=${DIGEST}" >> "$GITHUB_OUTPUT" ;;
+            *) echo "unknown component '${COMPONENT}' has no digest output" >&2; exit 1 ;;
+          esac
 
   # CI does not push to any environment. It records the candidate; a human approves the
   # desired-version manifest, and the dev host pulls it. This keeps deployment credential-less.
