@@ -48,7 +48,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T12 LIMITED_DURABLE approval | ✅ done | M1-ADR-007 ✅ |
 | M1-T13 ai_execution persistence | ✅ done | M1-ADR-005 ✅ |
 | M1-T14 Resilience, latency, cost | ✅ done | — |
-| M1-T15 AI evaluation release gates | ⬜ | M1-ADR-009 |
+| M1-T15 AI evaluation release gates | ⬜ next | M1-ADR-009 ✅ |
 | M1-T16 AI security challenge | ⬜ | — |
 | M1-T17 CI/CD and deployment packaging | ⬜ | — |
 | M1-T18 MVP-1 E2E validation and RC | ⬜ | **R1** 🔴 |
@@ -77,10 +77,11 @@ by whoever writes the first line of code that assumes an answer.
 `Mvp1ReleaseBoardTests` enforces the rule: a task cannot be marked started or done while the board
 lists a decision it requires as outstanding.
 
-Outstanding: **M1-ADR-009** (before T15).
+Outstanding: none. Every decision the package registers is authored and Accepted.
 
 Written so far under this practice: M1-ADR-004 (before T08), M1-ADR-008 (before T05), M1-ADR-006
-(before T10), and M1-ADR-007 (before T12).
+(before T10), M1-ADR-007 (before T12), M1-ADR-005 (before T13) and M1-ADR-009
+(before T15).
 
 ## Known gaps carried forward
 
