@@ -22,6 +22,10 @@ jobs:
         run: bash scripts/ci/test-deploy-controller.sh
       - name: Verify post-deploy health gates
         run: bash scripts/ci/test-health-gates.sh
+      - name: Verify migrations are safe to roll an image back against
+        run: python3 scripts/ci/check-migration-compatibility.py
+      - name: Verify the migration compatibility checker
+        run: bash scripts/ci/test-migration-compatibility.sh
       - name: Install checksum-verified Gitleaks
         env:
           GITLEAKS_VERSION: 8.30.1

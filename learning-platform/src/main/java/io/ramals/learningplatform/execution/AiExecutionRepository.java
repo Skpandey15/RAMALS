@@ -73,7 +73,8 @@ public class AiExecutionRepository {
     Usage usage = proposal.usage();
     String requestDigest = digest(request);
     String proposalDigest = digest(proposal);
-    AiExecution execution = insert(request, proposal.agentType().name(), proposal.agentVersion(), proposal.promptVersion(),
+    AiExecution execution = insert(request, proposal.agentType().name(), proposal.agentVersion(),
+        proposal.agentRunId(), proposal.promptTemplateId(), proposal.promptVersion(),
         proposal.modelRoute(), null, "SUCCEEDED", null, requestDigest, proposalDigest, usage,
         startedAt, completedAt);
     appendCompletion(request, execution);
@@ -83,8 +84,11 @@ public class AiExecutionRepository {
   public AiExecution insertFailure(AiRequestEnvelope request, String agentType, String errorCode,
       Instant startedAt, Instant completedAt) {
     String requestDigest = digest(request);
-    AiExecution execution = insert(request, agentType, null, null, null, null, "FAILED", errorCode, requestDigest,
-        null, null, startedAt, completedAt);
+    // No proposal came back, so there is no run and no prompt to name. Left null rather
+    // than filled with something plausible: a failure that claims a prompt produced it is
+    // worse than one that admits it got nothing.
+    AiExecution execution = insert(request, agentType, null, null, null, null, null, null,
+        "FAILED", errorCode, requestDigest, null, null, startedAt, completedAt);
     appendCompletion(request, execution);
     return execution;
   }
@@ -114,19 +118,22 @@ public class AiExecutionRepository {
   }
 
   private AiExecution insert(AiRequestEnvelope request, String agentType, String agentVersion,
-      String promptVersion, String modelRoute, String modelId, String status, String errorCode,
+      String agentRunId, String promptTemplateId, String promptVersion, String modelRoute,
+      String modelId, String status, String errorCode,
       String requestDigest, String proposalDigest, Usage usage, Instant startedAt, Instant completedAt) {
     UUID id = UuidV7.generate();
     try {
       jdbc.update("""
           INSERT INTO core.ai_execution
             (id, request_id, interaction_id, agent_type, contract_version, agent_version,
-             prompt_version, model_route, model_id, status, error_code, request_digest,
+             agent_run_id, prompt_template_id, prompt_version, model_route, model_id, status,
+             error_code, request_digest,
              proposal_digest, input_tokens, cached_input_tokens, output_tokens, estimated_cost_usd,
              latency_ms, started_at, completed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           """, id, request.requestId(), request.interactionId(), agentType, request.contractVersion(),
-          agentVersion, promptVersion, modelRoute, modelId, status, errorCode, requestDigest,
+          agentVersion, agentRunId, promptTemplateId, promptVersion, modelRoute, modelId, status,
+          errorCode, requestDigest,
           proposalDigest, usage == null ? null : usage.inputTokens(),
           usage == null ? null : usage.cachedInputTokens(), usage == null ? null : usage.outputTokens(),
           cost(usage), usage == null ? null : usage.latencyMs(), startedAt, completedAt);
@@ -169,6 +176,7 @@ public class AiExecutionRepository {
 
   private static final String SELECT = """
       SELECT id, request_id, interaction_id, agent_type, contract_version, agent_version,
+             agent_run_id, prompt_template_id,
              prompt_version, model_route, model_id, status, error_code, request_digest,
              proposal_digest, input_tokens, cached_input_tokens, output_tokens, estimated_cost_usd,
              latency_ms, started_at, completed_at
@@ -178,6 +186,7 @@ public class AiExecutionRepository {
   private static final RowMapper<AiExecution> MAPPER = (r, n) -> new AiExecution(
       r.getObject("id", UUID.class), r.getString("request_id"), r.getString("interaction_id"),
       r.getString("agent_type"), r.getString("contract_version"), r.getString("agent_version"),
+      r.getString("agent_run_id"), r.getString("prompt_template_id"),
       r.getString("prompt_version"), r.getString("model_route"), r.getString("model_id"),
       r.getString("status"), r.getString("error_code"), r.getString("request_digest"),
       r.getString("proposal_digest"), (Integer) r.getObject("input_tokens"),

@@ -52,7 +52,8 @@ class AiExecutionRepositoryTests {
 
   private static AiExecution execution(String status, String errorCode, String proposalDigest) {
     return new AiExecution(UUID.randomUUID(), "request-123", "interaction-123", "ASSESSMENT", "1.0",
-        "agent-v1", "prompt-v1", "ci-fake", null, status, errorCode, "a".repeat(64),
+        "agent-v1", "run-1", "ASSESSMENT_ITEM", "prompt-v1", "ci-fake", null, status,
+        errorCode, "a".repeat(64),
         proposalDigest, null, null, null, null, null, START, END);
   }
 }

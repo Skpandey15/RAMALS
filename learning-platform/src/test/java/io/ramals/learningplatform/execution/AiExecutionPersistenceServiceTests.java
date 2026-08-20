@@ -31,7 +31,8 @@ class AiExecutionPersistenceServiceTests {
     AiRequestEnvelope request = request();
     AiProposalEnvelope proposal = proposal();
     AiExecution expected = new AiExecution(UUID.randomUUID(), request.requestId(),
-        request.interactionId(), "ASSESSMENT", request.contractVersion(), "agent-v1", "prompt-v1",
+        request.interactionId(), "ASSESSMENT", request.contractVersion(), "agent-v1",
+        "run-1", "ASSESSMENT_ITEM", "prompt-v1",
         "ci-fake", null, "SUCCEEDED", null, "request-digest", "proposal-digest", null, null,
         null, null, null, START, END);
     when(repository.insertSuccess(request, proposal, START, END)).thenReturn(expected);
@@ -52,7 +53,8 @@ class AiExecutionPersistenceServiceTests {
     when(transactionManager.getTransaction(any())).thenReturn(status);
     AiRequestEnvelope request = request();
     AiExecution expected = new AiExecution(UUID.randomUUID(), request.requestId(),
-        request.interactionId(), "ASSESSMENT", request.contractVersion(), null, null, null, null,
+        request.interactionId(), "ASSESSMENT", request.contractVersion(), null, null, null,
+        null, null, null,
         "FAILED", "AI_TIMEOUT", "request-digest", null, null, null, null, null, null, START, END);
     when(repository.insertFailure(request, "ASSESSMENT", "AI_TIMEOUT", START, END))
         .thenReturn(expected);

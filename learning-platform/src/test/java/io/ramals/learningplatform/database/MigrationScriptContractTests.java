@@ -53,6 +53,41 @@ class MigrationScriptContractTests {
         .doesNotContain("raw_output");
   }
 
+  @Test
+  void agentCorrelationColumnsAreAnExpandThatARollbackSurvives() throws IOException {
+    // Statements only. The migration explains at length why NOT NULL would be wrong here, and an
+    // assertion read against the whole file would be satisfied by that explanation -- passing
+    // precisely when somebody documents the rule and then breaks it.
+    String migration = statements("/db/migration/V024__ai_execution_agent_correlation.sql");
+    String alter = migration.substring(
+        migration.indexOf("ALTER TABLE core.ai_execution"),
+        migration.indexOf(';', migration.indexOf("ALTER TABLE core.ai_execution")));
+
+    assertThat(alter)
+        .contains("ADD COLUMN prompt_template_id VARCHAR(64)")
+        .contains("ADD COLUMN agent_run_id VARCHAR(64)")
+        // The property the whole slice exists for. A rollback restores the previous image against
+        // this schema, and that image inserts without these columns: NOT NULL here would make every
+        // insert fail at the moment somebody is recovering from a bad release.
+        //
+        // Scoped to the ALTER rather than the file: the partial index below legitimately reads
+        // "WHERE agent_run_id IS NOT NULL", and an assertion over the whole migration would be
+        // failing on the index while claiming something about the columns.
+        .doesNotContain("NOT NULL")
+        // Nor a default. A default is backward compatible, so the generic migration check permits
+        // it -- but here it would be a placeholder, and these columns exist to identify something.
+        .doesNotContain("DEFAULT");
+
+    // No backfill either, for the same reason: a filled-in value would later be indistinguishable
+    // from one that was really recorded.
+    assertThat(migration).doesNotContain("UPDATE core.ai_execution");
+  }
+
+  /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
+  private String statements(String path) throws IOException {
+    return resource(path).replaceAll("(?m)--.*$", "");
+  }
+
   private String resource(String path) throws IOException {
     try (var input = getClass().getResourceAsStream(path)) {
       assertThat(input).as("migration resource %s", path).isNotNull();
