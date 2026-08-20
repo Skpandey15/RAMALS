@@ -25,6 +25,7 @@ from decimal import Decimal
 from opentelemetry import metrics
 
 from ramals_ai.config.settings import ModelRoute
+from ramals_ai.contracts.generated import InteractionClass
 from ramals_ai.gateway import budget
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.gateway.providers.base import (
@@ -56,6 +57,16 @@ gateway_fallbacks = _meter.create_counter(
     "ramals.ai.gateway.fallbacks",
     description="Calls served by an approved fallback route rather than the requested one",
 )
+gateway_latency = _meter.create_histogram(
+    "ramals.ai.latency",
+    unit="ms",
+    description="Completed model-call latency, by interaction class and effective route",
+)
+gateway_cost = _meter.create_histogram(
+    "ramals.ai.cost",
+    unit="USD",
+    description="Actual model-call cost, by interaction class and effective route",
+)
 
 MAX_ATTEMPTS_PER_ROUTE = 2
 """One retry, not a storm. Doc 04 says "bounded"; the deadline does the rest of the bounding."""
@@ -77,6 +88,7 @@ class GatewayResult:
     """The route that served the request. After a fallback this is *not* the requested route."""
 
     requested_route: ModelRoute
+    interaction_class: InteractionClass
     model: str
     prompt_version: str
     route_table_version: str
@@ -123,6 +135,7 @@ class LLMGateway:
         messages: tuple[Message, ...],
         deadline: budget.Deadline,
         max_output_tokens: int | None = None,
+        interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI,
     ) -> GatewayResult:
         """Runs one governed model call, retrying and falling back only where policy allows."""
         started = self._clock()
@@ -168,6 +181,7 @@ class LLMGateway:
             text=response.text,
             route=config.route,
             requested_route=requested,
+            interaction_class=interaction_class,
             model=config.model,
             prompt_version=config.prompt_version,
             route_table_version=self._registry.version,
@@ -302,6 +316,12 @@ class LLMGateway:
 
     def _record_success(self, result: GatewayResult) -> None:
         gateway_calls.add(1, {"route": result.route.value, "outcome": "success"})
+        attributes = {
+            "interaction_class": result.interaction_class.value,
+            "route": result.route.value,
+        }
+        gateway_latency.record(result.latency_ms, attributes)
+        gateway_cost.record(float(result.estimated_cost_usd), attributes)
         business_event(
             logger,
             level=logging.INFO,
@@ -353,4 +373,6 @@ __all__ = [
     "LLMGateway",
     "MAX_ATTEMPTS_PER_ROUTE",
     "build_gateway",
+    "gateway_cost",
+    "gateway_latency",
 ]

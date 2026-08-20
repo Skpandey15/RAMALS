@@ -26,7 +26,7 @@ from typing import Any
 from opentelemetry import metrics
 
 from ramals_ai.config.settings import ModelRoute
-from ramals_ai.contracts.generated import AgentType
+from ramals_ai.contracts.generated import AgentType, InteractionClass
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import Message
@@ -102,6 +102,7 @@ class GraphRun:
         minimized_learning_context: dict[str, Any],
         policy_constraints: dict[str, Any] | None = None,
         agent_version: str = "V1",
+        interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI,
     ) -> AgentState:
         """Resolves the ceilings and budgets for a run before it starts.
 
@@ -121,6 +122,7 @@ class GraphRun:
             policy_constraints=policy_constraints or {},
             deadline=deadline,
             ceilings=Ceilings.for_agent(agent_type),
+            interaction_class=interaction_class,
             token_budget=config.max_output_tokens,
             cost_budget_usd=config.hard_cost_ceiling_usd,
         )

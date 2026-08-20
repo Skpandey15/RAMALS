@@ -288,4 +288,8 @@ def test_cost_is_recorded_on_the_proposal() -> None:
     proposal = agent.respond(envelope(), deadline=deadline)
 
     assert proposal.usage is not None
+    assert proposal.usage.inputTokens == 100
+    assert proposal.usage.cachedInputTokens == 0
+    assert proposal.usage.outputTokens == 50
+    assert proposal.usage.latencyMs is not None and proposal.usage.latencyMs >= 0
     assert Decimal(proposal.usage.estimatedCostUsd or "0") >= 0

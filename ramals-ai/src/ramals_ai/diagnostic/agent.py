@@ -49,6 +49,7 @@ class DiagnosticAgent:
             proposal_id=envelope.requestId,
             minimized_learning_context=context,
             agent_version=self.agent_version,
+            interaction_class=envelope.constraints.interactionClass,
         )
         return self._to_proposal(run.run(state, route=self._route, messages=messages))
 
@@ -96,7 +97,13 @@ class DiagnosticAgent:
                 semanticValid=not state.validation_errors,
                 repairAttempts=state.repair_cycle_count,
             ),
-            usage=Usage(estimatedCostUsd=f"{state.cost_spent_usd:.6f}"),
+            usage=Usage(
+                inputTokens=state.input_tokens,
+                cachedInputTokens=state.cached_input_tokens,
+                outputTokens=state.output_tokens,
+                estimatedCostUsd=f"{state.cost_spent_usd:.6f}",
+                latencyMs=state.latency_ms,
+            ),
         )
 
     @staticmethod

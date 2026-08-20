@@ -33,27 +33,37 @@ public class RamalsAiAdaptationClient implements AdaptationPort {
       throw new AiUnavailableException("AI_DEADLINE_EXCEEDED", "No time remained for adaptation.");
     }
 
-    return guard.call(() -> {
-      try {
-        AiProposalEnvelope proposal = restClient
-            .post()
-            .uri("/internal/v1/adaptation/propose")
-            .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
-            .body(request)
-            .retrieve()
-            .body(AiProposalEnvelope.class);
-        if (proposal == null) {
-          throw new AiUnavailableException("AI_EMPTY_RESPONSE", "The adaptation service returned no proposal.");
-        }
-        return proposal;
-      } catch (RestClientException failure) {
-        LOGGER.atWarn()
-            .addKeyValue("operation", "ai.adaptation.call")
-            .addKeyValue("errorCode", "AI_TRANSPORT_FAILURE")
-            .addKeyValue("errorType", failure.getClass().getSimpleName())
-            .log("adaptation call failed; deterministic recommendation continues");
-        throw new AiUnavailableException("AI_TRANSPORT_FAILURE", "The adaptation service could not be reached.");
-      }
-    });
+    return DeadlineAwareClientHttpRequestFactory.execute(deadlineMillis, () ->
+        guard.call(() -> {
+          try {
+            AiProposalEnvelope proposal = restClient
+                .post()
+                .uri("/internal/v1/adaptation/propose")
+                .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
+                .body(request)
+                .retrieve()
+                .body(AiProposalEnvelope.class);
+            DeadlineAwareClientHttpRequestFactory.requireRemaining();
+            if (proposal == null) {
+              throw new AiUnavailableException(
+                  "AI_EMPTY_RESPONSE", "The adaptation service returned no proposal.");
+            }
+            return proposal;
+          } catch (RestClientException failure) {
+            String errorCode = DeadlineAwareClientHttpRequestFactory.isExpired()
+                ? "AI_DEADLINE_EXCEEDED" : "AI_TRANSPORT_FAILURE";
+            LOGGER.atWarn()
+                .addKeyValue("operation", "ai.adaptation.call")
+                .addKeyValue("errorCode", errorCode)
+                .addKeyValue("errorType", failure.getClass().getSimpleName())
+                .log("adaptation call failed; deterministic recommendation continues");
+            if ("AI_DEADLINE_EXCEEDED".equals(errorCode)) {
+              throw new AiUnavailableException(
+                  "AI_DEADLINE_EXCEEDED", "No time remained for adaptation.");
+            }
+            throw new AiUnavailableException(
+                "AI_TRANSPORT_FAILURE", "The adaptation service could not be reached.");
+          }
+        }));
   }
 }

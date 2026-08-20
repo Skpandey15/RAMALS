@@ -19,7 +19,7 @@ from decimal import Decimal
 import pytest
 
 from ramals_ai.config.settings import ModelRoute
-from ramals_ai.contracts.generated import AgentType
+from ramals_ai.contracts.generated import AgentType, InteractionClass
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.gateway.gateway import LLMGateway
@@ -236,12 +236,70 @@ def test_the_model_call_ceiling_stops_the_run() -> None:
     assert stop.value.limit == 3
 
 
+def test_the_model_call_ceiling_is_checked_before_provider_dispatch() -> None:
+    class CountingProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def complete(self, request: ProviderRequest) -> ProviderResponse:  # noqa: ARG002
+            self.calls += 1
+            return super().complete(request)
+
+    provider = CountingProvider()
+    run, clock = build(provider=provider)
+    state = state_for(run, clock, agent_type=AgentType.TUTOR)
+    state.model_call_count = state.ceilings.max_model_calls
+
+    with pytest.raises(CeilingExceeded) as stop:
+        run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+
+    assert stop.value.control == "model call"
+    assert provider.calls == 0, "the graph contacted the provider after its call ceiling was spent"
+
+
 def test_assessment_may_make_the_extra_call_a_tutor_may_not() -> None:
     run, clock = build()
     assessment = state_for(run, clock, agent_type=AgentType.ASSESSMENT)
     for _ in range(4):
         assessment.record_model_call(Decimal("0.000000"))
     assert assessment.model_call_count == 4
+
+
+def test_interaction_class_is_carried_in_graph_state() -> None:
+    run, clock = build()
+    state = run.build_state(
+        agent_type=AgentType.ASSESSMENT,
+        interaction_class=InteractionClass.ASSESSMENT_PROPOSAL,
+        route=ModelRoute.CI_FAKE,
+        deadline=Deadline.in_ms(10_000, clock=clock),
+        interaction_id=str(uuid.uuid7()),
+        request_id=str(uuid.uuid4()),
+        proposal_id=str(uuid.uuid7()),
+        minimized_learning_context={},
+    )
+
+    assert state.interaction_class is InteractionClass.ASSESSMENT_PROPOSAL
+
+
+def test_gateway_usage_is_accumulated_in_graph_state() -> None:
+    class UsageProvider(FakeProvider):
+        def complete(self, request: ProviderRequest) -> ProviderResponse:  # noqa: ARG002
+            return ProviderResponse(
+                text='{"ok": true}',
+                input_tokens=7,
+                cached_input_tokens=2,
+                output_tokens=3,
+            )
+
+    run, clock = build(provider=UsageProvider())
+    state = state_for(run, clock)
+    result = run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+
+    assert result.input_tokens == 7
+    assert result.cached_input_tokens == 2
+    assert result.output_tokens == 3
+    assert result.latency_ms >= 0
 
 
 # -- cost and deadline exhaustion ------------------------------------------------------------------

@@ -48,43 +48,51 @@ public class RamalsAiTutorClient implements TutorPort {
           "No time remained to consult the tutoring service.");
     }
 
-    return guard.call(() -> {
-      long startedAt = System.nanoTime();
-      try {
-        AiProposalEnvelope proposal = restClient
-            .post()
-            .uri("/internal/v1/tutor/respond")
-            // The AI plane rejects a request without a canonical interactionId, and rightly: a
-            // proposal nobody can correlate is a proposal nobody can investigate.
-            .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
-            .body(request)
-            .retrieve()
-            .body(AiProposalEnvelope.class);
+    return DeadlineAwareClientHttpRequestFactory.execute(deadlineMillis, () ->
+        guard.call(() -> {
+          long startedAt = System.nanoTime();
+          try {
+            AiProposalEnvelope proposal = restClient
+                .post()
+                .uri("/internal/v1/tutor/respond")
+                // The AI plane rejects a request without a canonical interactionId, and rightly: a
+                // proposal nobody can correlate is a proposal nobody can investigate.
+                .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
+                .body(request)
+                .retrieve()
+                .body(AiProposalEnvelope.class);
 
-        if (proposal == null) {
-          throw new AiUnavailableException("AI_EMPTY_RESPONSE",
-              "The tutoring service returned no proposal.");
-        }
-        LOGGER.atInfo()
-            .addKeyValue("operation", "ai.tutor.call")
-            .addKeyValue("durationMs", (System.nanoTime() - startedAt) / 1_000_000)
-            .addKeyValue("proposalId", proposal.proposalId())
-            .addKeyValue("modelRoute", proposal.modelRoute())
-            .log("tutor proposal received");
-        return proposal;
-      } catch (RestClientException transportFailure) {
-        // The message is deliberately not propagated to the learner: a transport error can carry a
-        // host name, a URL or a response body, none of which belong on a learner's screen.
-        LOGGER.atWarn()
-            .addKeyValue("operation", "ai.tutor.call")
-            .addKeyValue("errorCode", "AI_TRANSPORT_FAILURE")
-            .addKeyValue("errorType", transportFailure.getClass().getSimpleName())
-            .addKeyValue("durationMs", (System.nanoTime() - startedAt) / 1_000_000)
-            .log("tutor call failed");
-        throw new AiUnavailableException("AI_TRANSPORT_FAILURE",
-            "The tutoring service could not be reached.");
-      }
-    });
+            DeadlineAwareClientHttpRequestFactory.requireRemaining();
+            if (proposal == null) {
+              throw new AiUnavailableException("AI_EMPTY_RESPONSE",
+                  "The tutoring service returned no proposal.");
+            }
+            LOGGER.atInfo()
+                .addKeyValue("operation", "ai.tutor.call")
+                .addKeyValue("durationMs", (System.nanoTime() - startedAt) / 1_000_000)
+                .addKeyValue("proposalId", proposal.proposalId())
+                .addKeyValue("modelRoute", proposal.modelRoute())
+                .log("tutor proposal received");
+            return proposal;
+          } catch (RestClientException transportFailure) {
+            // The message is deliberately not propagated to the learner: a transport error can carry a
+            // host name, a URL or a response body, none of which belong on a learner's screen.
+            String errorCode = DeadlineAwareClientHttpRequestFactory.isExpired()
+                ? "AI_DEADLINE_EXCEEDED" : "AI_TRANSPORT_FAILURE";
+            LOGGER.atWarn()
+                .addKeyValue("operation", "ai.tutor.call")
+                .addKeyValue("errorCode", errorCode)
+                .addKeyValue("errorType", transportFailure.getClass().getSimpleName())
+                .addKeyValue("durationMs", (System.nanoTime() - startedAt) / 1_000_000)
+                .log("tutor call failed");
+            if ("AI_DEADLINE_EXCEEDED".equals(errorCode)) {
+              throw new AiUnavailableException("AI_DEADLINE_EXCEEDED",
+                  "No time remained to consult the tutoring service.");
+            }
+            throw new AiUnavailableException("AI_TRANSPORT_FAILURE",
+                "The tutoring service could not be reached.");
+          }
+        }));
   }
 
   /**

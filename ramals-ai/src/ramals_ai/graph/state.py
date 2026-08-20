@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
-from ramals_ai.contracts.generated import AgentType
+from ramals_ai.contracts.generated import AgentType, InteractionClass
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.graph.limits import CeilingExceeded, Ceilings
 
@@ -50,6 +50,7 @@ class AgentState:
     """Absolute, from the caller. Retries and repairs spend it; nothing here extends it."""
 
     ceilings: Ceilings
+    interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI
 
     # -- budgets ----------------------------------------------------------------------------------
     token_budget: int = 0
@@ -60,6 +61,10 @@ class AgentState:
     """
 
     cost_spent_usd: Decimal = Decimal("0.000000")
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms: int = 0
 
     # -- counters, checked against ceilings -------------------------------------------------------
     node_execution_count: int = 0
@@ -98,19 +103,36 @@ class AgentState:
             )
         self.repair_cycle_count += 1
 
-    def record_model_call(self, cost_usd: Decimal) -> None:
-        """Counts a model call and the money it cost.
-
-        The cost check is after the fact because the gateway already refused anything over the
-        route's per-call ceiling before dispatch. What this adds is the *cumulative* bound: three
-        individually affordable calls can still exceed what one request is allowed to spend.
-        """
+    def ensure_model_call_permitted(self) -> None:
+        """Checks the model-call ceiling before any provider dispatch can occur."""
         if self.model_call_count >= self.ceilings.max_model_calls:
             raise CeilingExceeded(
                 "model call", self.ceilings.max_model_calls, self.model_call_count + 1
             )
+
+    def record_model_call(
+        self,
+        cost_usd: Decimal,
+        *,
+        input_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        output_tokens: int = 0,
+        latency_ms: int = 0,
+    ) -> None:
+        """Counts a model call and the money it cost.
+
+        The gateway refuses anything over the route's per-call ceiling before dispatch. What this
+        adds is the cumulative bound: three individually affordable calls can still exceed what one
+        request is allowed to spend. Usage is accumulated here so the proposal reports the complete
+        bounded graph run, including repair calls.
+        """
+        self.ensure_model_call_permitted()
         self.model_call_count += 1
         self.cost_spent_usd += cost_usd
+        self.input_tokens += input_tokens
+        self.cached_input_tokens += cached_input_tokens
+        self.output_tokens += output_tokens
+        self.latency_ms += latency_ms
         if self.cost_budget_usd > 0 and self.cost_spent_usd > self.cost_budget_usd:
             raise CeilingExceeded(
                 "request cost",

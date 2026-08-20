@@ -15,11 +15,13 @@ import os
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 from decimal import Decimal
 
 import pytest
 
 from ramals_ai.config.settings import ModelRoute
+from ramals_ai.contracts.generated import InteractionClass
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.gateway.gateway import MAX_ATTEMPTS_PER_ROUTE, LLMGateway
@@ -171,6 +173,32 @@ def test_usage_is_reported() -> None:
     assert result.input_tokens > 0
     assert result.output_tokens > 0
     assert result.latency_ms >= 0
+
+
+def test_latency_and_cost_are_tagged_by_class_and_effective_route(
+    histogram_delta: Callable[[str, dict[str, str]], tuple[int, float]],
+) -> None:
+    gateway, clock = build()
+    labels = {"interaction_class": InteractionClass.ASSESSMENT_PROPOSAL.value, "route": "ci-fake"}
+    snapshot = histogram_delta.snapshot  # type: ignore[attr-defined]
+    delta = histogram_delta
+    snapshot("ramals.ai.latency", labels)
+    snapshot("ramals.ai.cost", labels)
+
+    result = gateway.complete(
+        route=ModelRoute.CI_FAKE,
+        messages=MESSAGES,
+        deadline=deadline_for(clock, 5000),
+        interaction_class=InteractionClass.ASSESSMENT_PROPOSAL,
+    )
+
+    latency_count, latency_sum = delta("ramals.ai.latency", labels)
+    cost_count, cost_sum = delta("ramals.ai.cost", labels)
+    assert result.interaction_class is InteractionClass.ASSESSMENT_PROPOSAL
+    assert latency_count == 1
+    assert latency_sum == result.latency_ms
+    assert cost_count == 1
+    assert cost_sum == float(result.estimated_cost_usd)
 
 
 # -- budgets refuse before dispatch ---------------------------------------------------------------
