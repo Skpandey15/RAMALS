@@ -138,15 +138,23 @@ def recorded_spans() -> Iterator[Callable[[], list[str]]]:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
-    original = trace.get_tracer_provider()
-    trace._TRACER_PROVIDER = provider  # noqa: SLF001 - no supported API for scoped replacement
+    # The raw module global, not get_tracer_provider(). With nothing configured the global is None
+    # and the accessor returns a ProxyTracerProvider that *delegates to* that global -- so restoring
+    # the accessor's answer installs a provider that delegates to itself, and the next span opened
+    # anywhere in the process recurses until the stack ends.
+    #
+    # This left the suite order-dependent rather than broken: pytest collects tests/integration
+    # before tests/unit, so the graph tests happened to run before this fixture ever leaked. Running
+    # the two files the other way round fails on main, which is how it was found.
+    original = trace._TRACER_PROVIDER  # noqa: SLF001 - no supported API for scoped replacement
+    trace._TRACER_PROVIDER = provider  # noqa: SLF001 - same
 
     def names() -> list[str]:
         return [span.name for span in exporter.get_finished_spans()]
 
     yield names
 
-    trace._TRACER_PROVIDER = original  # noqa: SLF001
+    trace._TRACER_PROVIDER = original  # noqa: SLF001 - restores None when nothing was set
 
 
 def test_every_node_opens_its_own_span(recorded_spans: Callable[[], list[str]]) -> None:

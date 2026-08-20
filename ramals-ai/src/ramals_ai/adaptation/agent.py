@@ -91,6 +91,8 @@ class AdaptationAgent:
             proposalId=state.proposal_id,
             agentType=self.agent_type,
             agentVersion=state.agent_version,
+            agentRunId=state.agent_run_id,
+            promptTemplateId=state.prompt_template_id.value,
             promptVersion=state.prompt_version,
             modelRoute=(state.final_proposal or {}).get("modelRoute", self._route.value),
             trustLevel=TrustLevel.NON_AUTHORITATIVE,

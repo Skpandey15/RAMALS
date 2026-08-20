@@ -3,15 +3,21 @@
   "proposalId": "01920000-0000-7000-8000-0000000000c1",
   "agentType": "TUTOR",
   "agentVersion": "TUTOR_AGENT_V1",
+  "agentRunId": "0199a0b1-2c3d-7e4f-8a90-1b2c3d4e5f60",
+  "promptTemplateId": "TUTOR_EXPLAIN",
   "promptVersion": "TUTOR_PROMPT_V1",
   "modelRoute": "tutor-default",
   "trustLevel": "NON_AUTHORITATIVE",
   "confidence": "0.8200",
-  "reasonCodes": ["LOW_CONFIDENCE_ON_PARTITION_COUNT"],
+  "reasonCodes": [
+    "LOW_CONFIDENCE_ON_PARTITION_COUNT"
+  ],
   "proposal": {
     "responseType": "EXPLAIN_WITH_ANALOGY",
     "explanation": "A partition is an ordered append-only log.",
-    "checksForUnderstanding": ["What happens to ordering across two partitions?"]
+    "checksForUnderstanding": [
+      "What happens to ordering across two partitions?"
+    ]
   },
   "validation": {
     "schemaValid": true,

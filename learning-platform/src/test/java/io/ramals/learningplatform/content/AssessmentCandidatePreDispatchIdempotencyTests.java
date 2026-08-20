@@ -170,7 +170,8 @@ class AssessmentCandidatePreDispatchIdempotencyTests {
 
   @SuppressWarnings("unused")
   private static AiProposalEnvelope proposal() {
-    return new AiProposalEnvelope("1.0", "proposal", AgentType.ASSESSMENT, "v1", "prompt-v1",
+    return new AiProposalEnvelope("1.0", "proposal", AgentType.ASSESSMENT, "v1", "run-1",
+        "TEMPLATE-1", "prompt-v1",
         "assessment-default", TrustLevel.UNVERIFIED, "0.5", List.of(), Map.of(), null, null);
   }
 }

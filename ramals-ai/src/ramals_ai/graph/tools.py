@@ -25,6 +25,7 @@ from typing import Any
 from opentelemetry import metrics
 
 from ramals_ai.contracts.generated import AgentType
+from ramals_ai.telemetry import correlation
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,9 @@ class ToolRegistry:
                 extra={
                     "operation": "graph.tool.denied",
                     "agentType": agent_type.value,
+                    "agentName": agent_type.value,
                     "tool": tool,
+                    "outcome": "REJECTED",
                     "errorCode": "TOOL_NOT_AUTHORIZED",
                 },
             )
@@ -111,13 +114,20 @@ class ToolRegistry:
         return resolved
 
     def invoke(self, agent_type: AgentType, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Authorizes, then runs, then labels the result as untrusted."""
-        resolved = self.authorize(agent_type, tool)
-        tool_invocations.add(1, {"agent": agent_type.value, "tool": tool})
-        output = resolved.run(arguments)
-        # The wrapper is not decoration. Downstream code sees a record of what a tool returned,
-        # which is harder to mistake for a fact the platform has established.
-        return {"tool": tool, "trusted": False, "output": output}
+        """Authorizes, then runs, then labels the result as untrusted.
+
+        The whole invocation -- authorization included -- runs under one ``toolCallId``
+        (Observability HLD §9). Minted before the authorization check rather than after it, because
+        the denial is the case that most needs an identifier: it is a security event, and one that
+        cannot be tied to the attempt that caused it is a count rather than a record.
+        """
+        with correlation.tool_call(correlation.new_tool_call_id()):
+            resolved = self.authorize(agent_type, tool)
+            tool_invocations.add(1, {"agent": agent_type.value, "tool": tool})
+            output = resolved.run(arguments)
+            # The wrapper is not decoration. Downstream code sees a record of what a tool returned,
+            # which is harder to mistake for a fact the platform has established.
+            return {"tool": tool, "trusted": False, "output": output}
 
 
 def empty_registry() -> ToolRegistry:

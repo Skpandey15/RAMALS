@@ -21,6 +21,7 @@ from ramals_ai.contracts.generated import AgentType, InteractionClass
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.graph.limits import CeilingExceeded, Ceilings
 from ramals_ai.prompting.templates import BuiltPrompt, PromptTemplateId
+from ramals_ai.telemetry.correlation import new_agent_run_id
 
 
 @dataclass
@@ -59,6 +60,19 @@ class AgentState:
 
     ceilings: Ceilings
     interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI
+
+    agent_run_id: str = field(default_factory=new_agent_run_id)
+    """One orchestrated execution of the graph (Observability HLD §9).
+
+    Not the same as any identifier already here. ``requestId`` is one transport attempt and
+    ``interactionId`` is one learner action; a run is neither -- an interaction can involve several
+    agents, and a retried request produces several runs. Without it, "which run made this model
+    call" is unanswerable from the logs of a busy process.
+
+    Defaulted rather than required so a state constructed directly still carries one. An absent
+    identifier reads as missing, which is recoverable; a shared or reused one reads as evidence that
+    two things were the same execution, which is not.
+    """
 
     # -- budgets ----------------------------------------------------------------------------------
     token_budget: int = 0

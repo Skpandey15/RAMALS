@@ -71,7 +71,7 @@ class AiExecutionPersistenceServiceTests {
 
   private static AiProposalEnvelope proposal() {
     return new AiProposalEnvelope("1.0", "proposal-123", AgentType.ASSESSMENT, "agent-v1",
-        "prompt-v1", "ci-fake", TrustLevel.UNVERIFIED, "0.5", java.util.List.of(),
+        "run-1", "TEMPLATE-1", "prompt-v1", "ci-fake", TrustLevel.UNVERIFIED, "0.5", java.util.List.of(),
         Map.of("itemCode", "ITEM-1"), new Validation(true, true, 0), null);
   }
 }

@@ -54,7 +54,8 @@ class AdaptationServiceTests {
 
   private static AiProposalEnvelope proposal(String action) {
     return new AiProposalEnvelope(
-        "1.0", "proposal-1", AgentType.ADAPTATION, "adaptation-agent-v1", "prompt-v1",
+        "1.0", "proposal-1", AgentType.ADAPTATION, "adaptation-agent-v1", "run-1",
+        "TEMPLATE-1", "prompt-v1",
         "adaptation-default", TrustLevel.NON_AUTHORITATIVE, null, null,
         Map.of("skillCode", "SKILL-1", "recommendedAction", action, "rationale", "reason"), null, null);
   }

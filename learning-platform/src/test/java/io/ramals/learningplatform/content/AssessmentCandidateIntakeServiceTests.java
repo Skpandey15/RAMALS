@@ -72,7 +72,8 @@ class AssessmentCandidateIntakeServiceTests {
   }
 
   private static AiProposalEnvelope proposal(String id, TrustLevel trust) {
-    return new AiProposalEnvelope("1.0", id, AgentType.ASSESSMENT, "v1", "prompt-v1",
+    return new AiProposalEnvelope("1.0", id, AgentType.ASSESSMENT, "v1", "run-1",
+        "TEMPLATE-1", "prompt-v1",
         "assessment-default", trust, "0.5", List.of(), Map.of(
             "skillCode", "KAFKA_TOPIC", "objectiveCode", "TOPIC_DEFINE", "difficulty", "FOUNDATIONAL",
             "stem", "What is a topic?", "options", List.of("A", "B", "C"),

@@ -287,6 +287,8 @@ class TutorDegradationTests {
         "01920000-0000-7000-8000-0000000000c1",
         io.ramals.learningplatform.ai.contract.AgentType.TUTOR,
         "TUTOR_AGENT_V1",
+        "01920000-0000-7000-8000-0000000000a1",
+        "TUTOR_EXPLAIN",
         "TUTOR_PROMPT_V1",
         "tutor-default",
         io.ramals.learningplatform.ai.contract.TrustLevel.NON_AUTHORITATIVE,

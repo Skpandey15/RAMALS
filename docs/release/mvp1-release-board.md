@@ -70,13 +70,31 @@ same prompt. A smoke gate over that would have certified a rollback that had not
 | 2 | Prompt identity resolves to the artifact that builds it; rollback is a configuration pin validated at startup and verified against the running service (M1-ADR-011) | 🟡 in review |
 | 3 | Flyway expand/contract and backward-compatible rollout, including the additive `prompt_template_id` column on `core.ai_execution` | ⬜ |
 
-**Deferred from T17, deliberately:** P6 agent observability (`agentRunId`/`toolCallId`/`proposalId`)
-is authored separately rather than inside a CI/CD task, and is tracked against the Observability
-HLD-LLD rather than against this task.
+**Delivered separately:** P6 agent observability (`agentRunId`/`toolCallId`/`proposalId`) is
+tracked against the Observability HLD-LLD rather than against T17, because it is correlation work
+rather than CI/CD packaging. See the observability phases below.
 
-**Carried into slice 3:** `core.ai_execution` records `prompt_version` without a template id, so an
-assessment item and an assessment evaluation are still indistinguishable in the database even though
-the proposal now distinguishes them. The fix is an additive column, which is expand/contract work.
+**Carried into slice 3.** `core.ai_execution` records neither the prompt template nor the agent run,
+so two things the proposal now distinguishes are still indistinguishable in the database:
+
+| Missing column | What cannot be answered without it |
+| --- | --- |
+| `prompt_template_id` | whether an execution generated an assessment item or evaluated a response — both record `ASSESSMENT_PROMPT_V1` |
+| `agent_run_id` | which orchestrated run produced a durable execution record, so the log-to-provenance pivot stops at the database |
+
+Both are additive columns, which is expand/contract work.
+
+### Observability phases (Business Logging / Exception / Observability HLD-LLD v1.0 §15)
+
+| Phase | Scope | Status |
+| --- | --- | --- |
+| P6 — Agents | `agentRunId`/`toolCallId`/`proposalId` correlation through the graph, tool calls, logs, spans and the proposal contract | 🟡 in review |
+
+P6's exit criterion is that agent workflows are traceable end to end. The chain now runs
+interactionId → agentRunId → proposalId → toolCallId in every log line a run emits, and the
+proposal carries `agentRunId` across the plane boundary so the deterministic core's records can name
+the run that proposed a decision. What it does not yet reach is the durable execution row — see the
+slice 3 columns above.
 
 ### Completed readiness slices
 
