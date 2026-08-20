@@ -20,9 +20,6 @@ from __future__ import annotations
 import json
 import uuid
 from decimal import Decimal
-from typing import Any
-
-import pytest
 
 from ramals_ai.config.settings import ModelRoute
 from ramals_ai.contracts.generated import AgentType, AIRequestEnvelope, TrustLevel
@@ -31,9 +28,7 @@ from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import Message, ProviderRequest, ProviderResponse
 from ramals_ai.gateway.providers.fake import FakeProvider
 from ramals_ai.tutor.agent import TutorAgent
-from ramals_ai.tutor.minimizer import MinimizedContext
 from ramals_ai.tutor.prompt import TUTOR_AGENT_VERSION, TUTOR_PROMPT_VERSION
-from ramals_ai.tutor.validation import validate
 
 
 class ScriptedProvider(FakeProvider):
@@ -182,86 +177,25 @@ def test_the_domain_reaches_the_prompt_so_the_tutor_need_not_assume_one() -> Non
     assert "TECHNOLOGY" in sent
 
 
-# -- golden evaluation harness (Doc 07 §2, §5) ---------------------------------------------------
-
-
-GOLDEN_CASES: list[dict[str, Any]] = [
-    {
-        "id": "needs-practice-partitioning",
-        "context": {"skillCode": "KAFKA_PARTITIONING", "masteryStatus": "NEEDS_PRACTICE"},
-        "output": GOOD_OUTPUT,
-        "expect_valid": True,
-    },
-    {
-        "id": "fabricated-history",
-        "context": {"skillCode": "KAFKA_PARTITIONING", "masteryStatus": "NEEDS_PRACTICE"},
-        "output": json.dumps(
-            {
-                "responseType": "EXPLAIN",
-                "explanation": "Last time you got this wrong, so let's slow down.",
-                "checksForUnderstanding": ["Ready to try again?"],
-            }
-        ),
-        "expect_valid": False,
-    },
-    {
-        "id": "announced-mastery",
-        "context": {"skillCode": "KAFKA_PARTITIONING", "masteryStatus": "NEEDS_PRACTICE"},
-        "output": json.dumps(
-            {
-                "responseType": "EXPLAIN",
-                "explanation": "You have now mastered partitioning.",
-                "checksForUnderstanding": ["Shall we move on?"],
-            }
-        ),
-        "expect_valid": False,
-    },
-    {
-        "id": "not-json",
-        "context": {"skillCode": "KAFKA_TOPIC", "masteryStatus": "NOT_STARTED"},
-        "output": "Sure! A topic is...",
-        "expect_valid": False,
-    },
-]
-
-
-@pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda case: str(case["id"]))
-def test_golden_tutor_evaluation(case: dict[str, Any]) -> None:
-    """Known-good and known-bad fixtures (Doc 07 §5).
-
-    A suite of only good cases would pass with validation disabled entirely, so half of these are
-    known-bad and must be rejected.
-    """
-    context = MinimizedContext(case["context"])
-    errors = validate(str(case["output"]), context)
-
-    assert (errors == []) is case["expect_valid"], f"{case['id']}: {errors}"
-
-
-def test_the_golden_suite_contains_known_bad_cases() -> None:
-    """A dataset that only contains passes measures nothing."""
-    assert any(case["expect_valid"] is False for case in GOLDEN_CASES)
-    assert any(case["expect_valid"] is True for case in GOLDEN_CASES)
-
-
-def test_schema_validity_is_a_hard_gate_at_one_hundred_percent() -> None:
-    """Doc 07 §2. Every case expected valid must be schema-valid, with no tolerance."""
-    valid_cases = [case for case in GOLDEN_CASES if case["expect_valid"]]
-    passed = [
-        case
-        for case in valid_cases
-        if validate(str(case["output"]), MinimizedContext(case["context"])) == []
-    ]
-    assert len(passed) == len(valid_cases)
+# -- golden evaluation harness ---------------------------------------------------------------------
+#
+# The tutor golden cases used to live here as a Python literal. They now live in
+# evaluation/datasets/tutor.json and are exercised by tests/integration/test_evaluation_gates.py,
+# for the two reasons M1-ADR-009 depends on: a recorded result must be able to name the dataset
+# version it scored against, and a dataset change must be reviewable independently of a model
+# change. Neither is possible while the data is a literal inside a test file.
+#
+# What stays here is the statement that quality thresholds are not claimed on this route, because it
+# is a fact about *this* agent test rather than about the dataset.
 
 
 def test_quality_thresholds_are_not_claimed_on_the_fake_route() -> None:
     """Doc 07 sets 0.90 functional and 0.85 pedagogical rubrics. Neither is measurable here.
 
-    ``ci-fake`` returns a deterministic canned string with no pedagogical content, so a rubric
-    score computed from it would describe the fake rather than the tutor. The harness and dataset
-    exist and run; the quality gate cannot be claimed until the suite runs against a real route,
-    which needs a provider credential and therefore cannot run in CI.
+    ``ci-fake`` returns a deterministic canned string with no pedagogical content, so a rubric score
+    computed from it would describe the fake rather than the tutor. The harness and datasets exist
+    and run; the quality gate cannot be claimed until the suite runs against a real route, which
+    needs a provider credential and therefore cannot run in CI.
 
     Recorded as an executable statement rather than a comment, so the limitation travels with the
     code instead of living in a pull request nobody re-reads.

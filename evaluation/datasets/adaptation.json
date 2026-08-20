@@ -1,0 +1,57 @@
+{
+  "agent": "ADAPTATION",
+  "datasetVersion": "adaptation-golden-v1",
+  "validator": "ramals_ai.adaptation.validation:validate",
+  "description": "Doc 07 §5 golden suite for Adaptation V1. Primary measures per Doc 07 §3: deterministic-policy compatibility and useful disagreement rationale.",
+  "cases": [
+    {
+      "id": "proposes-a-known-action",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"recommendedAction\": \"PRACTICE\", \"rationale\": \"Two correct answers at foundational level, none applied; practice before advancing.\"}",
+      "expectValid": true,
+      "why": "The baseline good case."
+    },
+    {
+      "id": "recommends-for-another-skill",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_STREAMS\", \"recommendedAction\": \"ADVANCE\", \"rationale\": \"Streams looks like the natural next step.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "POLICY_SKILL_NOT_REQUESTED"
+      ],
+      "why": "A recommendation about a skill nobody asked about would be compared against the deterministic decision for a different skill."
+    },
+    {
+      "id": "invents-an-action",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"recommendedAction\": \"SKIP_AHEAD\", \"rationale\": \"They seem fine.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "SCHEMA_BAD_RECOMMENDED_ACTION"
+      ],
+      "why": "The action vocabulary is closed because the deterministic gate compares against it. An unknown action cannot be compared, only guessed at."
+    },
+    {
+      "id": "not-json",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "I think they should practise.",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "SCHEMA_NOT_JSON"
+      ],
+      "why": "Schema validity is a 100% hard gate."
+    }
+  ]
+}

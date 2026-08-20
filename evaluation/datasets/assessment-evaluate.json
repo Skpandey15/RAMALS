@@ -1,0 +1,57 @@
+{
+  "agent": "ASSESSMENT_EVALUATE",
+  "datasetVersion": "assessment-evaluate-golden-v1",
+  "validator": "ramals_ai.assessment.evaluation:validate_evaluation",
+  "description": "Doc 07 §5 golden suite for the FORMATIVE_ONLY evaluate endpoint (M1-ADR-010). The hard case is that nothing shaped like a score leaves the service.",
+  "cases": [
+    {
+      "id": "formative-material",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Explains why ordering is per-partition and not per-topic.\", \"partial\": \"Describes a topic as a stream but treats partitions as replicas.\", \"weak\": \"Treats a topic as a queue that is consumed and emptied.\"}, \"misconceptions\": [\"A topic is a queue that drains as consumers read it.\"], \"suggestedProbe\": \"Ask what happens to a record after every consumer has read it.\"}",
+      "expectValid": true,
+      "why": "The baseline good case. A validator that refused everything would satisfy every negative case and make the endpoint useless rather than safe."
+    },
+    {
+      "id": "carries-a-score",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"score\": 0.82, \"indicators\": {\"strong\": \"a\", \"partial\": \"b\", \"weak\": \"c\"}, \"misconceptions\": [], \"suggestedProbe\": \"Ask about ordering.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_SCORING_FIELD_PRESENT"
+      ],
+      "why": "M1-ADR-010. Cannot become a mark today -- and is exactly the field a future well-meaning change would notice, plumb through, and render beside a real one."
+    },
+    {
+      "id": "claims-to-observe-a-learner",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"a\", \"partial\": \"b\", \"weak\": \"c\"}, \"misconceptions\": [], \"suggestedProbe\": \"The learner answered this incorrectly, so ask again.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_CLAIMS_ABOUT_A_LEARNER"
+      ],
+      "why": "The prompt is never given a learner's answers, so any such sentence is invented -- and an invented observation is indistinguishable, to a reader, from a real one."
+    },
+    {
+      "id": "claims-something-was-recorded",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"a\", \"partial\": \"b\", \"weak\": \"c\"}, \"misconceptions\": [], \"suggestedProbe\": \"This assessment has been recorded against the skill.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_CLAIMS_PERSISTENCE"
+      ],
+      "why": "Nothing here is stored as evidence. Saying so tells a reviewer the platform holds a record it does not hold."
+    }
+  ]
+}
