@@ -13,7 +13,8 @@ Reliable Adaptive Multi-Agent Learning System (RAMALS) is implemented as a deter
 
 - `learning-platform/`: Java 25 and Spring Boot 4.1 authoritative core.
 - `web-ui/`: React, TypeScript, and Vite learner interface.
-- `ramals-ai/`: documentation-only MVP-1 placeholder; it is not an MVP-0 runtime dependency.
+- `ramals-ai/`: implemented MVP-1 Python/FastAPI AI execution plane. It remains proposal-only and
+  has no direct database access; MVP-0 can still be built and run without starting this service.
 - `knowledge/kafka/`: first-domain knowledge assets.
 - `infrastructure/docker/`: local platform definitions, added in M0-T02.
 - `docs/`: frozen architecture baseline plus repository-facing architecture records.

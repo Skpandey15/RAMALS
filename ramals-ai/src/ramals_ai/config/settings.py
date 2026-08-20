@@ -22,7 +22,7 @@ class Environment(StrEnum):
 
 
 class ModelRoute(StrEnum):
-    """Model routes governed by Doc 04. Only `CI_FAKE` is available until M1-T05."""
+    """Model routes governed by the MVP-1 routing policy."""
 
     CI_FAKE = "ci-fake"
     TUTOR_DEFAULT = "tutor-default"
@@ -50,9 +50,8 @@ class Settings(BaseSettings):
     service_version: str = "0.1.0"
     log_level: str = "INFO"
 
-    # AI execution is off until M1-T05 wires a real gateway. With it off the service starts, serves
-    # health and capabilities, and needs no provider credential — which is what lets CI and a fresh
-    # developer checkout run without secrets.
+    # AI execution remains off by default. With it off the service starts, serves health and
+    # capabilities, and needs no provider credential, allowing CI and fresh checkouts to run safely.
     ai_enabled: bool = False
     model_route: ModelRoute = ModelRoute.CI_FAKE
     provider_api_key: str | None = Field(default=None, repr=False)
