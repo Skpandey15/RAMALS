@@ -69,9 +69,9 @@ same prompt. A smoke gate over that would have certified a rollback that had not
 | 1 | The AI plane joins the release pipeline: built, scanned, attested, digest-pinned in the manifest, gated independently, and rollback-capable | ✅ merged |
 | 2 | Prompt identity resolves to the artifact that builds it; rollback is a configuration pin validated at startup and verified against the running service (M1-ADR-011) | ✅ merged |
 | 3 | Flyway expand/contract enforced in CI, and the additive `prompt_template_id` / `agent_run_id` columns on `core.ai_execution` | ✅ merged |
-| 3a | Hardening: the expand/contract guard judges complete statements rather than physical lines | 🟡 in review |
+| 3a | Hardening: the expand/contract guard judges complete statements rather than physical lines | ✅ merged |
 
-**Slice 3's guard needed hardening, and T17 is not claimed fully hardened until 3a is green.**
+**Slice 3's guard needed hardening, and 3a supplied it.**
 The guard shipped in slice 3 matched each rule against one physical line, so ordinary SQL formatting
 walked through eight of its nine rules -- `ALTER TABLE core.foo` on one line and `DROP COLUMN value`
 on the next was accepted, while the identical statement on a single line was refused. It cried wolf
