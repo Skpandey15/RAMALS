@@ -140,6 +140,7 @@ def governanceTest = registerCategoryTest(
       '*DeploymentLoggingTests',
       '*EngineVersionFreezeTests',
       '*Mvp0ReleaseRecordConformanceTests',
+      '*Mvp1BaselineRecordTests',
       '*Mvp1ReleaseBoardTests',
       '*MvpZeroValidationTests',
       '*ReleasePipelineTests'
