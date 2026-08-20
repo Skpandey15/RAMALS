@@ -18,6 +18,7 @@ import json
 from typing import Any
 
 from ramals_ai.gateway.providers.base import Message
+from ramals_ai.prompting.templates import PromptArtifact, PromptTemplateId
 
 ASSESSMENT_PROMPT_VERSION = "ASSESSMENT_PROMPT_V1"
 ASSESSMENT_AGENT_VERSION = "ASSESSMENT_AGENT_V1"
@@ -123,3 +124,27 @@ def build_evaluation_messages(context: dict[str, Any]) -> tuple[Message, ...]:
         Message(role="system", content=_EVALUATE_SYSTEM),
         Message(role="user", content=user),
     )
+
+
+# -- the register's view of this module ------------------------------------------------------------
+#
+# Two templates, one agent. Generating an item and evaluating a learner's response are different
+# instructions with different failure modes: an item-generation regression produces bad questions,
+# an evaluation regression produces bad feedback about a real learner's answer. They are separately
+# identified so a recorded identity says which one ran, and separately versioned so one can be
+# rolled back without disturbing the other.
+#
+# This is the case an agent-scoped prompt identifier cannot express, and the reason the identity is
+# (template, version) rather than (agent, version).
+PROMPT_ARTIFACTS: tuple[PromptArtifact, ...] = (
+    PromptArtifact(
+        template_id=PromptTemplateId.ASSESSMENT_ITEM,
+        version=ASSESSMENT_PROMPT_VERSION,
+        build=build_item_messages,
+    ),
+    PromptArtifact(
+        template_id=PromptTemplateId.ASSESSMENT_EVALUATE,
+        version=ASSESSMENT_PROMPT_VERSION,
+        build=build_evaluation_messages,
+    ),
+)

@@ -217,13 +217,26 @@ def test_provenance_survives_an_unusable_generation() -> None:
     assert proposal.proposal["provenance"]["trustLevel"] == "UNVERIFIED"
 
 
-def test_the_reported_prompt_version_follows_the_route_not_the_agent() -> None:
-    """M1-ADR-008 makes the route's prompt pointer what a rollback moves, so the proposal reports
-    the route's version rather than a constant compiled into the agent."""
-    agent, _provider, deadline = agent_for(GOOD_ITEM, route=ModelRoute.CI_FAKE)
-    proposal = agent.propose(envelope(), deadline=deadline, requested_difficulty="FOUNDATIONAL")
+def test_generating_an_item_and_evaluating_a_response_are_different_prompts() -> None:
+    """One agent, two templates, and a recorded identity that has to say which one ran.
 
-    assert proposal.promptVersion != ASSESSMENT_PROMPT_VERSION
+    Both share ``ASSESSMENT_PROMPT_V1``, so the version alone cannot distinguish them -- which is
+    why the identity is (template, version). Generating a bad item and giving bad feedback on a real
+    learner's answer are different failures, and ``evaluation/baselines.json`` already treats them
+    as different agents; without the template id, both would report the same provenance.
+    """
+    item_agent, _p1, d1 = agent_for(GOOD_ITEM, route=ModelRoute.CI_FAKE)
+    item = item_agent.propose(envelope(), deadline=d1, requested_difficulty="FOUNDATIONAL")
+
+    evaluate_agent, _p2, d2 = agent_for(GOOD_EVALUATION, route=ModelRoute.CI_FAKE)
+    evaluation = evaluate_agent.evaluate(envelope(), deadline=d2)
+
+    assert item.promptVersion == ASSESSMENT_PROMPT_VERSION
+    assert evaluation.promptVersion == ASSESSMENT_PROMPT_VERSION
+    assert (
+        item.proposal["provenance"]["promptTemplateId"]
+        != evaluation.proposal["provenance"]["promptTemplateId"]
+    ), "a shared version makes the template id the only thing that tells them apart"
 
 
 def test_evaluation_provenance_records_formative_only() -> None:

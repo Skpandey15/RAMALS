@@ -47,10 +47,18 @@ be authored before the implementation task each one gates.
 | [M1-ADR-008](M1-ADR-008-model-routing-fallback-and-rollback.md) | Routes are versioned configuration; hard budgets are enforced before dispatch; failure never escalates to a costlier route; rollback moves pointers and never rewrites recorded proposal metadata |
 | [M1-ADR-009](M1-ADR-009-ai-evaluation-release-gates.md) | Doc 07 owns the evaluation thresholds; hard gates block every pull request while quality gates block a release candidate, a baseline is approved by a named person, a quality regression needs a named owner with scope and expiry, a hard-gate regression cannot be accepted, and dataset changes never land with model changes |
 | [M1-ADR-010](M1-ADR-010-assessment-evaluation-is-formative-only.md) | AI assessment evaluation is FORMATIVE_ONLY and can never create scored evidence |
+| [M1-ADR-011](M1-ADR-011-prompt-identity-and-rollback.md) | A prompt is identified by `promptTemplateId` + `promptVersion`, the identity resolves to the artifact that builds it, and a rollback is a configuration pin validated at startup and verified against the running service |
 
 Not yet authored: none. All eleven decisions the package registers are authored and Accepted. Each
 was written just before the task it gates rather than as a batch, so it had the information its
 implementation produced.
+
+**M1-ADR-011 does not come from the package.** It originates here, from M1-T17, and amends
+M1-ADR-008 rather than adopting a decision made elsewhere. Its sources are the Business Logging /
+Exception / Observability HLD-LLD v1.0 and the Updated Implementation Master Plan v2.0 — the
+19 August 2026 architecture pack, which is also held outside the working tree and so carries the
+same auditability asymmetry named above. It is numbered in the same sequence because a reader
+looking for MVP-1 decisions should find it there, not because the package registers it.
 
 Which tasks are unblocked, and which are done, is deliberately not restated here — that is the
 [release board](../release/mvp1-release-board.md)'s, and a mapping kept in two places is a mapping

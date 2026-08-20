@@ -42,9 +42,9 @@ from ramals_ai.contracts.generated import (
 )
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.gateway import LLMGateway
-from ramals_ai.gateway.providers.base import Message
 from ramals_ai.graph.runtime import GraphRun
 from ramals_ai.graph.state import AgentState
+from ramals_ai.prompting.templates import PromptRegister, PromptTemplateId
 from ramals_ai.telemetry.logging import business_event
 
 logger = logging.getLogger(__name__)
@@ -80,10 +80,21 @@ class AssessmentAgent:
     agent_version = assessment_prompt.ASSESSMENT_AGENT_VERSION
 
     def __init__(
-        self, gateway: LLMGateway, *, route: ModelRoute = ModelRoute.ASSESSMENT_DEFAULT
+        self,
+        gateway: LLMGateway,
+        *,
+        route: ModelRoute = ModelRoute.ASSESSMENT_DEFAULT,
+        prompts: PromptRegister | None = None,
     ) -> None:
+        """Builds the agent.
+
+        ``prompts`` is injectable so the process serves the register it validated at startup rather
+        than assembling a second one here. They are the same object today; the parameter is what
+        keeps them the same object after someone adds a revision.
+        """
         self._gateway = gateway
         self._route = route
+        self._prompts = prompts
 
     def propose(
         self,
@@ -110,8 +121,17 @@ class AssessmentAgent:
             # they are added after minimization rather than allowlisted through it.
             context["availableObjectives"] = list(objectives)
 
-        messages = assessment_prompt.build_item_messages(context, requested_difficulty, objectives)
-        state = self._run(envelope, deadline, messages, lambda raw: validate_item(raw, context))
+        state = self._run(
+            envelope,
+            deadline,
+            PromptTemplateId.ASSESSMENT_ITEM,
+            {
+                "context": context,
+                "requested_difficulty": requested_difficulty,
+                "objectives": objectives,
+            },
+            lambda raw: validate_item(raw, context),
+        )
         return self._to_proposal(
             state,
             trust_level=PROPOSED_CONTENT_TRUST_LEVEL,
@@ -122,9 +142,15 @@ class AssessmentAgent:
     def evaluate(self, envelope: AIRequestEnvelope, *, deadline: Deadline) -> AIProposalEnvelope:
         """Produces formative material. Never a score, a mark or a mastery decision."""
         context: dict[str, Any] = dict(minimize(envelope))
-        messages = assessment_prompt.build_evaluation_messages(context)
         state = self._run(
-            envelope, deadline, messages, lambda raw: validate_evaluation(raw, context)
+            envelope,
+            deadline,
+            # A different template, not a different version of the same one. Generating an item and
+            # evaluating a response fail in different ways, so a recorded identity has to say which
+            # of the two produced the output.
+            PromptTemplateId.ASSESSMENT_EVALUATE,
+            {"context": context},
+            lambda raw: validate_evaluation(raw, context),
         )
         return self._to_proposal(
             state,
@@ -137,10 +163,12 @@ class AssessmentAgent:
         self,
         envelope: AIRequestEnvelope,
         deadline: Deadline,
-        messages: tuple[Message, ...],
+        template_id: PromptTemplateId,
+        prompt_arguments: dict[str, Any],
         validator: Any,
     ) -> AgentState:
-        run = GraphRun(self._gateway, validator=validator)
+        run = GraphRun(self._gateway, prompts=self._prompts, validator=validator)
+        prompt = run.build_prompt(route=self._route, template_id=template_id, **prompt_arguments)
         state = run.build_state(
             agent_type=self.agent_type,
             route=self._route,
@@ -148,11 +176,12 @@ class AssessmentAgent:
             interaction_id=envelope.interactionId,
             request_id=envelope.requestId,
             proposal_id=envelope.requestId,
+            prompt=prompt,
             minimized_learning_context={},
             agent_version=self.agent_version,
             interaction_class=envelope.constraints.interactionClass,
         )
-        return run.run(state, route=self._route, messages=messages)
+        return run.run(state, route=self._route)
 
     def _to_proposal(
         self,
@@ -167,6 +196,10 @@ class AssessmentAgent:
         payload["provenance"] = {
             "agentType": self.agent_type.value,
             "agentVersion": state.agent_version,
+            # Both of this agent's templates share a version, so the version alone cannot say which
+            # prompt produced the item -- generating one and evaluating a response are different
+            # instructions with different failure modes.
+            "promptTemplateId": state.prompt_template_id.value,
             "promptVersion": state.prompt_version,
             "modelRoute": model_route,
             "trustLevel": trust_level.value,

@@ -20,6 +20,7 @@ from typing import Any
 from ramals_ai.contracts.generated import AgentType, InteractionClass
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.graph.limits import CeilingExceeded, Ceilings
+from ramals_ai.prompting.templates import BuiltPrompt, PromptTemplateId
 
 
 @dataclass
@@ -38,7 +39,14 @@ class AgentState:
 
     agent_type: AgentType
     agent_version: str
-    prompt_version: str
+
+    prompt: BuiltPrompt
+    """The prompt that was built for this run, with the identity of the artifact that built it.
+
+    Held as one value rather than as a version string beside the messages, so the identity recorded
+    on the proposal is necessarily the identity of what was sent. A separate string is a claim; this
+    is the thing itself.
+    """
 
     # -- the request ------------------------------------------------------------------------------
     minimized_learning_context: dict[str, Any]
@@ -81,6 +89,20 @@ class AgentState:
 
     trace: list[str] = field(default_factory=list)
     """Node names in execution order. The cheapest possible answer to "what did this run do"."""
+
+    @property
+    def prompt_version(self) -> str:
+        """The revision that produced the messages for this run."""
+        return self.prompt.version
+
+    @property
+    def prompt_template_id(self) -> PromptTemplateId:
+        """Which prompt ran. Recorded alongside the version, because the version alone does not say.
+
+        Two of the assessment agent's prompts share a version; without the template id a recorded
+        ``ASSESSMENT_PROMPT_V1`` cannot distinguish generating an item from evaluating a response.
+        """
+        return self.prompt.template_id
 
     # -- bounded advancement ----------------------------------------------------------------------
 

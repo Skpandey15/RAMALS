@@ -58,6 +58,18 @@ class Settings(BaseSettings):
 
     request_timeout_seconds: float = Field(default=12.0, gt=0, le=60)
 
+    # --- rollback pins (M1-ADR-008) -------------------------------------------------------------
+    # Withdrawing a bad prompt or model is the fastest remedy available for a quality regression, so
+    # it must not cost a service deployment. These pins repoint a route at a revision this image
+    # already ships; they cannot introduce one. Both are JSON, and both are validated at startup
+    # against what the build can actually produce -- a pin naming something unbuildable stops the
+    # process rather than being ignored.
+    #
+    #   RAMALS_AI_PROMPT_PINS='{"tutor-default": {"TUTOR_EXPLAIN": "TUTOR_PROMPT_V1"}}'
+    #   RAMALS_AI_MODEL_PINS='{"tutor-default": "claude-sonnet-5"}'
+    prompt_pins: dict[str, dict[str, str]] = Field(default_factory=dict)
+    model_pins: dict[str, str] = Field(default_factory=dict)
+
     # --- workload identity (M1-ADR-003) ---------------------------------------------------------
     # Spring authenticates as itself with a Keycloak client-credentials token carrying the
     # `ramals-ai` audience. A learner token carries `ramals-api` and is rejected here.

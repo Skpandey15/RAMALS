@@ -26,12 +26,34 @@ from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import Message, ProviderRequest, ProviderResponse
 from ramals_ai.gateway.providers.fake import FakeProvider
+from ramals_ai.gateway.routes import default_registry
 from ramals_ai.graph import limits, runtime
 from ramals_ai.graph.limits import CeilingExceeded
 from ramals_ai.graph.runtime import GraphRun
 from ramals_ai.graph.state import AgentState
+from ramals_ai.prompting.templates import BuiltPrompt, PromptTemplateId
 
 MESSAGES = (Message(role="user", content="Explain Kafka partitioning."),)
+
+# The graph tests drive the runtime with fixture messages rather than a real prompt, so they build
+# the identity explicitly. It still has to be the identity the route points at -- ``build_state``
+# refuses a mismatch, which is the guard that stops an agent recording one revision and sending
+# another, and a test allowed to sidestep it would stop covering that.
+_TEMPLATE_FOR = {
+    AgentType.TUTOR: PromptTemplateId.TUTOR_EXPLAIN,
+    AgentType.DIAGNOSTIC: PromptTemplateId.DIAGNOSTIC_ROOT_CAUSE,
+    AgentType.ASSESSMENT: PromptTemplateId.ASSESSMENT_ITEM,
+    AgentType.ADAPTATION: PromptTemplateId.ADAPTATION_PLAN,
+}
+
+
+def prompt_for(agent_type: AgentType, route: ModelRoute) -> BuiltPrompt:
+    template_id = _TEMPLATE_FOR[agent_type]
+    return BuiltPrompt(
+        template_id=template_id,
+        version=default_registry().resolve(route).prompt_version_for(template_id),
+        messages=MESSAGES,
+    )
 
 
 class ManualClock:
@@ -68,6 +90,7 @@ def state_for(
     return run.build_state(
         agent_type=agent_type,
         route=route,
+        prompt=prompt_for(agent_type, route),
         deadline=Deadline.in_ms(deadline_ms, clock=clock),
         interaction_id=str(uuid.uuid7()),
         request_id=str(uuid.uuid4()),
@@ -82,7 +105,7 @@ def state_for(
 def test_a_valid_run_walks_the_standard_graph() -> None:
     """Doc 02 §3, in order, with no repair when the output is fine."""
     run, clock = build()
-    result = run.run(state_for(run, clock), route=ModelRoute.CI_FAKE, messages=MESSAGES)
+    result = run.run(state_for(run, clock), route=ModelRoute.CI_FAKE)
 
     assert result.trace == [
         "load_context",
@@ -112,7 +135,7 @@ def test_the_repair_loop_can_succeed_when_the_step_budget_allows_one() -> None:
     state = state_for(run, clock)
     state.ceilings = replace(state.ceilings, max_node_executions=12)
 
-    result = run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+    result = run.run(state, route=ModelRoute.CI_FAKE)
 
     assert "bounded_repair" in result.trace
     assert result.repair_cycle_count == 1
@@ -129,7 +152,7 @@ def test_documented_node_and_repair_budgets_are_derived_from_graph() -> None:
     assert limits.REPAIR_ROUTE_RESERVE == 4
 
     run, clock = build(validator=lambda _text: ["ALWAYS_MALFORMED"])
-    result = run.run(state_for(run, clock), route=ModelRoute.CI_FAKE, messages=MESSAGES)
+    result = run.run(state_for(run, clock), route=ModelRoute.CI_FAKE)
 
     assert result.repair_cycle_count == limits.MAX_REPAIR_CYCLES
     assert result.node_execution_count == limits.MAX_NODE_EXECUTIONS
@@ -166,7 +189,7 @@ def test_a_permanently_invalid_output_stops_without_looping() -> None:
     state = state_for(run, clock)
     state.ceilings = replace(state.ceilings, max_node_executions=12)
 
-    result = run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+    result = run.run(state, route=ModelRoute.CI_FAKE)
 
     assert result.repair_cycle_count <= limits.MAX_REPAIR_CYCLES
     assert result.node_execution_count <= limits.MAX_NODE_EXECUTIONS
@@ -182,7 +205,7 @@ def test_the_step_ceiling_stops_a_run_that_would_exceed_it() -> None:
     state.node_execution_count = limits.MAX_NODE_EXECUTIONS
 
     with pytest.raises(CeilingExceeded) as stop:
-        run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+        run.run(state, route=ModelRoute.CI_FAKE)
 
     assert stop.value.control == "node execution"
     assert stop.value.limit == limits.MAX_NODE_EXECUTIONS
@@ -254,7 +277,7 @@ def test_the_model_call_ceiling_is_checked_before_provider_dispatch() -> None:
     state.model_call_count = state.ceilings.max_model_calls
 
     with pytest.raises(CeilingExceeded) as stop:
-        run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+        run.run(state, route=ModelRoute.CI_FAKE)
 
     assert stop.value.control == "model call"
     assert provider.calls == 0, "the graph contacted the provider after its call ceiling was spent"
@@ -274,6 +297,7 @@ def test_interaction_class_is_carried_in_graph_state() -> None:
         agent_type=AgentType.ASSESSMENT,
         interaction_class=InteractionClass.ASSESSMENT_PROPOSAL,
         route=ModelRoute.CI_FAKE,
+        prompt=prompt_for(AgentType.ASSESSMENT, ModelRoute.CI_FAKE),
         deadline=Deadline.in_ms(10_000, clock=clock),
         interaction_id=str(uuid.uuid7()),
         request_id=str(uuid.uuid4()),
@@ -296,7 +320,7 @@ def test_gateway_usage_is_accumulated_in_graph_state() -> None:
 
     run, clock = build(provider=UsageProvider())
     state = state_for(run, clock)
-    result = run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+    result = run.run(state, route=ModelRoute.CI_FAKE)
 
     assert result.input_tokens == 7
     assert result.cached_input_tokens == 2
@@ -383,7 +407,7 @@ def test_repair_call_is_refused_before_dispatch_when_prior_spend_leaves_no_room(
     state.cost_budget_usd = Decimal("0.022000")
 
     with pytest.raises(GatewayError) as refusal:
-        run.run(state, route=ModelRoute.TUTOR_DEFAULT, messages=MESSAGES)
+        run.run(state, route=ModelRoute.TUTOR_DEFAULT)
 
     assert refusal.value.code is GatewayErrorCode.COST_CEILING_EXCEEDED
     assert provider.calls == 1
@@ -413,7 +437,7 @@ def test_successful_dispatch_records_actual_cost_and_model_latency() -> None:
     run, clock = build(provider=provider)
     state = state_for(run, clock, route=ModelRoute.TUTOR_DEFAULT)
 
-    result = run.run(state, route=ModelRoute.TUTOR_DEFAULT, messages=MESSAGES)
+    result = run.run(state, route=ModelRoute.TUTOR_DEFAULT)
     config = run._gateway.registry.resolve(ModelRoute.TUTOR_DEFAULT)  # noqa: SLF001
     expected_cost = budget.actual_cost_usd(config, input_tokens=10, output_tokens=20)
 
@@ -441,7 +465,7 @@ def test_an_expired_deadline_stops_the_run_before_any_model_call() -> None:
     clock.advance_ms(1_500)
 
     with pytest.raises(GatewayError) as stop:
-        run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+        run.run(state, route=ModelRoute.CI_FAKE)
 
     assert stop.value.code is GatewayErrorCode.DEADLINE_EXCEEDED
     assert provider.calls == 0, "the deadline must stop the run before it spends anything"
@@ -454,7 +478,7 @@ def test_a_ceiling_stop_preserves_the_counters() -> None:
     state.node_execution_count = limits.MAX_NODE_EXECUTIONS
 
     with pytest.raises(CeilingExceeded):
-        run.run(state, route=ModelRoute.CI_FAKE, messages=MESSAGES)
+        run.run(state, route=ModelRoute.CI_FAKE)
 
     assert state.node_execution_count == limits.MAX_NODE_EXECUTIONS
     assert state.model_call_count == 0
@@ -490,7 +514,7 @@ def test_graph_state_declares_no_authoritative_field() -> None:
 
 def test_the_final_proposal_is_only_ever_a_proposal() -> None:
     run, clock = build()
-    result = run.run(state_for(run, clock), route=ModelRoute.CI_FAKE, messages=MESSAGES)
+    result = run.run(state_for(run, clock), route=ModelRoute.CI_FAKE)
 
     assert result.final_proposal is not None
     assert "masteryScore" not in result.final_proposal

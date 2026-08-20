@@ -15,6 +15,7 @@ import json
 from typing import Any
 
 from ramals_ai.gateway.providers.base import Message
+from ramals_ai.prompting.templates import PromptArtifact, PromptTemplateId
 
 DIAGNOSTIC_PROMPT_VERSION = "DIAGNOSTIC_PROMPT_V1"
 DIAGNOSTIC_AGENT_VERSION = "DIAGNOSTIC_AGENT_V1"
@@ -61,3 +62,19 @@ def build_messages(context: dict[str, Any]) -> tuple[Message, ...]:
         Message(role="system", content=_SYSTEM),
         Message(role="user", content=user),
     )
+
+
+# -- the register's view of this module ------------------------------------------------------------
+#
+# Root-cause hypothesis generation. Versioned separately from the tutor because a diagnostic
+# regression and a pedagogy regression have nothing to do with each other.
+#
+# Declared here, beside the prompt itself, so adding a revision means adding an artifact that can
+# actually be built. A version listed anywhere else would be a version nobody can produce.
+PROMPT_ARTIFACTS: tuple[PromptArtifact, ...] = (
+    PromptArtifact(
+        template_id=PromptTemplateId.DIAGNOSTIC_ROOT_CAUSE,
+        version=DIAGNOSTIC_PROMPT_VERSION,
+        build=build_messages,
+    ),
+)

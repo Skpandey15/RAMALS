@@ -521,6 +521,15 @@ components:
         environment: { type: string, maxLength: 32 }
         aiEnabled: { type: boolean }
         modelRoute: { type: string, maxLength: 64 }
+        routeTableVersion:
+          type: string
+          maxLength: 256
+          description: >
+            The route configuration this process is actually serving. Equal to the shipped table
+            version when nothing is pinned, and extended with the pins when a prompt or model has
+            been rolled back (M1-ADR-008, M1-ADR-011). Reported so a rollback that did not take
+            effect is distinguishable from one that did: without it, the two look identical from
+            outside the process. Optional, so a deployment that predates the field still validates.
         agents:
           type: array
           maxItems: 8

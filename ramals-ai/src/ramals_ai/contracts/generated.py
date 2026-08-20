@@ -176,6 +176,13 @@ class Capabilities(BaseModel):
     environment: Annotated[str, Field(max_length=32)]
     aiEnabled: bool
     modelRoute: Annotated[str, Field(max_length=64)]
+    routeTableVersion: Annotated[
+        str | None,
+        Field(
+            description='The route configuration this process is actually serving. Equal to the shipped table version when nothing is pinned, and extended with the pins when a prompt or model has been rolled back (M1-ADR-008, M1-ADR-011). Reported so a rollback that did not take effect is distinguishable from one that did: without it, the two look identical from outside the process. Optional, so a deployment that predates the field still validates.\n',
+            max_length=256,
+        ),
+    ] = None
     agents: Annotated[list[AgentType], Field(max_length=8)]
     authority: Annotated[
         Literal['NON_AUTHORITATIVE'],

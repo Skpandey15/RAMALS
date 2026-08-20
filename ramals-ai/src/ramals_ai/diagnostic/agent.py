@@ -22,6 +22,7 @@ from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.graph.runtime import GraphRun
 from ramals_ai.graph.state import AgentState
+from ramals_ai.prompting.templates import PromptRegister, PromptTemplateId
 
 
 class DiagnosticAgent:
@@ -31,15 +32,34 @@ class DiagnosticAgent:
     agent_version = diagnostic_prompt.DIAGNOSTIC_AGENT_VERSION
 
     def __init__(
-        self, gateway: LLMGateway, *, route: ModelRoute = ModelRoute.DIAGNOSTIC_DEFAULT
+        self,
+        gateway: LLMGateway,
+        *,
+        route: ModelRoute = ModelRoute.DIAGNOSTIC_DEFAULT,
+        prompts: PromptRegister | None = None,
     ) -> None:
+        """Builds the agent.
+
+        ``prompts`` is injectable so the process serves the register it validated at startup rather
+        than assembling a second one here. They are the same object today; the parameter is what
+        keeps them the same object after someone adds a revision.
+        """
         self._gateway = gateway
         self._route = route
+        self._prompts = prompts
 
     def propose(self, envelope: AIRequestEnvelope, *, deadline: Deadline) -> AIProposalEnvelope:
         context = self._context(envelope)
-        messages = diagnostic_prompt.build_messages(context)
-        run = GraphRun(self._gateway, validator=lambda raw: validate(raw, context))
+        run = GraphRun(
+            self._gateway,
+            prompts=self._prompts,
+            validator=lambda raw: validate(raw, context),
+        )
+        prompt = run.build_prompt(
+            route=self._route,
+            template_id=PromptTemplateId.DIAGNOSTIC_ROOT_CAUSE,
+            context=context,
+        )
         state = run.build_state(
             agent_type=self.agent_type,
             route=self._route,
@@ -47,11 +67,12 @@ class DiagnosticAgent:
             interaction_id=envelope.interactionId,
             request_id=envelope.requestId,
             proposal_id=envelope.requestId,
+            prompt=prompt,
             minimized_learning_context=context,
             agent_version=self.agent_version,
             interaction_class=envelope.constraints.interactionClass,
         )
-        return self._to_proposal(run.run(state, route=self._route, messages=messages))
+        return self._to_proposal(run.run(state, route=self._route))
 
     @staticmethod
     def _context(envelope: AIRequestEnvelope) -> dict[str, Any]:
