@@ -2,7 +2,6 @@ package io.ramals.learningplatform.ai;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,39 +60,36 @@ public class AiClientConfiguration {
    * entirely off. Sharing the check means "configured for AI" cannot mean different things to
    * different ports.
    */
-  private Optional<WorkloadTokenProvider> workloadIdentity(
-      String tokenUrl, String clientId, String clientSecret, String audience) {
+  @Bean
+  public WorkloadToken workloadToken(
+      @Value("${ramals.ai.workload-token-url:}") String tokenUrl,
+      @Value("${ramals.ai.workload-client-id:}") String clientId,
+      @Value("${ramals.ai.workload-client-secret:}") String clientSecret,
+      @Value("${ramals.ai.workload-audience:ramals-ai}") String audience) {
     if (tokenUrl == null || tokenUrl.isBlank()
         || clientId == null || clientId.isBlank()
         || clientSecret == null || clientSecret.isBlank()) {
-      return Optional.empty();
+      return WorkloadToken.unavailable("No AI workload identity is configured in this environment.");
     }
     RestClient tokenClient =
         RestClient.builder().baseUrl(tokenUrl).requestFactory(tokenRequestFactory()).build();
-    return Optional.of(new WorkloadTokenProvider(tokenClient, clientId, clientSecret, audience));
+    return new WorkloadTokenProvider(tokenClient, clientId, clientSecret, audience);
   }
 
-  private static boolean configured(String baseUrl, Optional<WorkloadTokenProvider> identity) {
-    return baseUrl != null && !baseUrl.isBlank() && identity.isPresent();
+  private static boolean configured(String baseUrl, WorkloadToken identity) {
+    return baseUrl != null && !baseUrl.isBlank() && identity.available();
   }
 
   @Bean
   public TutorPort tutorPort(
       @Value("${ramals.ai.base-url:}") String baseUrl,
-      @Value("${ramals.ai.workload-token-url:}") String tokenUrl,
-      @Value("${ramals.ai.workload-client-id:}") String clientId,
-      @Value("${ramals.ai.workload-client-secret:}") String clientSecret,
-      @Value("${ramals.ai.workload-audience:ramals-ai}") String audience,
-      AiCallGuard guard) {
-
-    Optional<WorkloadTokenProvider> identity =
-        workloadIdentity(tokenUrl, clientId, clientSecret, audience);
+      WorkloadToken identity, AiCallGuard guard) {
     if (!configured(baseUrl, identity)) {
       LOGGER.atInfo()
           .addKeyValue("operation", "ai.client.configure")
           .addKeyValue("aiConfigured", false)
           .addKeyValue("baseUrlConfigured", baseUrl != null && !baseUrl.isBlank())
-          .addKeyValue("workloadIdentityConfigured", identity.isPresent())
+          .addKeyValue("workloadIdentityConfigured", identity.available())
           .log("AI tutoring is not fully configured; tutoring is unavailable and learning is "
               + "unaffected");
       return new UnconfiguredTutorPort();
@@ -114,19 +110,13 @@ public class AiClientConfiguration {
         .requestFactory(requestFactory)
         .build();
 
-    return new RamalsAiTutorClient(restClient, guard, identity.get());
+    return new RamalsAiTutorClient(restClient, guard, identity);
   }
 
   @Bean
   public AdaptationPort adaptationPort(
       @Value("${ramals.ai.base-url:}") String baseUrl,
-      @Value("${ramals.ai.workload-token-url:}") String tokenUrl,
-      @Value("${ramals.ai.workload-client-id:}") String clientId,
-      @Value("${ramals.ai.workload-client-secret:}") String clientSecret,
-      @Value("${ramals.ai.workload-audience:ramals-ai}") String audience,
-      AiCallGuard guard) {
-    Optional<WorkloadTokenProvider> identity =
-        workloadIdentity(tokenUrl, clientId, clientSecret, audience);
+      WorkloadToken identity, AiCallGuard guard) {
     if (!configured(baseUrl, identity)) {
       return (request, deadlineMillis) -> {
         throw new AiUnavailableException("AI_NOT_CONFIGURED",
@@ -139,19 +129,13 @@ public class AiClientConfiguration {
         .baseUrl(baseUrl)
         .requestFactory(requestFactory)
         .build();
-    return new RamalsAiAdaptationClient(restClient, guard, identity.get());
+    return new RamalsAiAdaptationClient(restClient, guard, identity);
   }
 
   @Bean
   public AssessmentPort assessmentPort(
       @Value("${ramals.ai.base-url:}") String baseUrl,
-      @Value("${ramals.ai.workload-token-url:}") String tokenUrl,
-      @Value("${ramals.ai.workload-client-id:}") String clientId,
-      @Value("${ramals.ai.workload-client-secret:}") String clientSecret,
-      @Value("${ramals.ai.workload-audience:ramals-ai}") String audience,
-      AiCallGuard guard) {
-    Optional<WorkloadTokenProvider> identity =
-        workloadIdentity(tokenUrl, clientId, clientSecret, audience);
+      WorkloadToken identity, AiCallGuard guard) {
     if (!configured(baseUrl, identity)) {
       return (request, deadlineMillis, requestedDifficulty) -> {
         throw new AiUnavailableException("AI_NOT_CONFIGURED",
@@ -160,7 +144,7 @@ public class AiClientConfiguration {
     }
     DeadlineAwareClientHttpRequestFactory requestFactory = configuredRequestFactory();
     RestClient aiClient = RestClient.builder().baseUrl(baseUrl).requestFactory(requestFactory).build();
-    return new RamalsAiAssessmentClient(aiClient, guard, identity.get());
+    return new RamalsAiAssessmentClient(aiClient, guard, identity);
   }
 
   private static DeadlineAwareClientHttpRequestFactory configuredRequestFactory() {

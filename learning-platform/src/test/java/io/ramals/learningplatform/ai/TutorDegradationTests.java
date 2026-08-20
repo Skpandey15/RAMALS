@@ -159,7 +159,8 @@ class TutorDegradationTests {
     assertThat(java.util.Arrays.stream(TutorUnavailableReason.values())
         .filter(reason -> !reason.expected())
         .map(TutorUnavailableReason::name))
-        .containsExactlyInAnyOrder("CIRCUIT_OPEN", "BUSY", "TRANSPORT_FAILURE", "DEADLINE_EXCEEDED");
+        .containsExactlyInAnyOrder("CIRCUIT_OPEN", "BUSY", "TRANSPORT_FAILURE", "IDENTITY_FAILURE",
+            "DEADLINE_EXCEEDED");
   }
 
   @Test
