@@ -117,7 +117,25 @@ step "  workflow trust boundary" "${PY}" scripts/ci/verify-workflow-security.py
 
 if [ "${run_backend}" = true ]; then
   echo "Backend gate"
-  step "  gradle build" ./gradlew :learning-platform:build -q --console=plain
+  # The PostgreSQL-backed suites disable themselves when their environment is absent, so without
+  # this the build passes having silently skipped every database test -- and prints "All local gates
+  # passed" for a run that never touched a database. Asked for explicitly, they must actually run.
+  #
+  # The recipe is in docs/validation/mvp0-validation-report.md.
+  missing=""
+  for required in RAMALS_TEST_POSTGRES_URL RAMALS_TEST_POSTGRES_ADMIN_USER \
+                  RAMALS_TEST_POSTGRES_ADMIN_PASSWORD RAMALS_TEST_POSTGRES_ALLOW_RESET; do
+    eval "value=\${${required}:-}"
+    [ -n "${value}" ] || missing="${missing} ${required}"
+  done
+  if [ -n "${missing}" ]; then
+    printf '%-34s FAILED\n' "  postgres environment"
+    printf '    --backend was requested but these are unset:%s\n' "${missing}"
+    printf '    the integration and migration suites would be skipped and report a pass\n'
+    failures=$((failures + 1))
+  else
+    step "  gradle build" ./gradlew :learning-platform:build -q --console=plain
+  fi
 fi
 
 # The frontend gate runs whenever web-ui has a node_modules to run it with. It is not behind a flag

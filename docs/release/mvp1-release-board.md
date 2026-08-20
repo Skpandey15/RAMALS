@@ -54,7 +54,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T14 Resilience, latency, cost | ✅ done | — |
 | M1-T15 AI evaluation release gates | ✅ done | M1-ADR-009 ✅ |
 | M1-T16 AI security challenge | ✅ done | — |
-| M1-T17 CI/CD and deployment packaging | 🟡 slice 2 of 3 | M1-ADR-011 ✅ |
+| M1-T17 CI/CD and deployment packaging | 🟡 slice 3 of 3 | M1-ADR-011 ✅ |
 | M1-T18 MVP-1 E2E validation and RC | ⬜ | **R1** 🔴 |
 
 ### M1-T17 slices
@@ -67,34 +67,40 @@ same prompt. A smoke gate over that would have certified a rollback that had not
 | Slice | Scope | Status |
 | --- | --- | --- |
 | 1 | The AI plane joins the release pipeline: built, scanned, attested, digest-pinned in the manifest, gated independently, and rollback-capable | ✅ merged |
-| 2 | Prompt identity resolves to the artifact that builds it; rollback is a configuration pin validated at startup and verified against the running service (M1-ADR-011) | 🟡 in review |
-| 3 | Flyway expand/contract and backward-compatible rollout, including the additive `prompt_template_id` column on `core.ai_execution` | ⬜ |
+| 2 | Prompt identity resolves to the artifact that builds it; rollback is a configuration pin validated at startup and verified against the running service (M1-ADR-011) | ✅ merged |
+| 3 | Flyway expand/contract enforced in CI, and the additive `prompt_template_id` / `agent_run_id` columns on `core.ai_execution` | 🟡 in review |
 
 **Delivered separately:** P6 agent observability (`agentRunId`/`toolCallId`/`proposalId`) is
 tracked against the Observability HLD-LLD rather than against T17, because it is correlation work
 rather than CI/CD packaging. See the observability phases below.
 
-**Carried into slice 3.** `core.ai_execution` records neither the prompt template nor the agent run,
-so two things the proposal now distinguishes are still indistinguishable in the database:
+**Closed in slice 3.** `core.ai_execution` now records both, so the pivot reaches durable
+provenance rather than stopping at the database:
 
-| Missing column | What cannot be answered without it |
+| Column | What it answers |
 | --- | --- |
-| `prompt_template_id` | whether an execution generated an assessment item or evaluated a response — both record `ASSESSMENT_PROMPT_V1` |
-| `agent_run_id` | which orchestrated run produced a durable execution record, so the log-to-provenance pivot stops at the database |
+| `prompt_template_id` | whether an execution generated an assessment item or evaluated a response — both otherwise record `ASSESSMENT_PROMPT_V1` |
+| `agent_run_id` | which orchestrated run produced a durable execution record |
 
-Both are additive columns, which is expand/contract work.
+Both were added as an expand: nullable, no default, no backfill. A rollback restores the previous
+image against this schema and that image inserts without them.
+
+**The rule is now enforced rather than remembered.** `scripts/ci/check-migration-compatibility.py`
+refuses any migration the previously released image cannot run against — dropped or renamed columns,
+tightened nullability, narrowed types, new constraints, and revoked grants — unless the line above
+declares the contract phase and names the release whose expand made it safe.
 
 ### Observability phases (Business Logging / Exception / Observability HLD-LLD v1.0 §15)
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| P6 — Agents | `agentRunId`/`toolCallId`/`proposalId` correlation through the graph, tool calls, logs, spans and the proposal contract | 🟡 in review |
+| P6 — Agents | `agentRunId`/`toolCallId`/`proposalId` correlation through the graph, tool calls, logs, spans and the proposal contract | ✅ done |
 
 P6's exit criterion is that agent workflows are traceable end to end. The chain now runs
 interactionId → agentRunId → proposalId → toolCallId in every log line a run emits, and the
 proposal carries `agentRunId` across the plane boundary so the deterministic core's records can name
-the run that proposed a decision. What it does not yet reach is the durable execution row — see the
-slice 3 columns above.
+the run that proposed a decision. M1-T17 slice 3 carries it the last step, into the durable execution
+row.
 
 ### Completed readiness slices
 

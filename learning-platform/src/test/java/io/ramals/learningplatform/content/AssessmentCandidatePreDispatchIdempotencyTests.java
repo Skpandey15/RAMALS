@@ -158,7 +158,7 @@ class AssessmentCandidatePreDispatchIdempotencyTests {
 
   private static AiExecution completedExecution(String status, String errorCode) {
     return new AiExecution(UUID.randomUUID(), "request", "interaction", "ASSESSMENT", "1.0",
-        null, null, null, null, status, errorCode, "a".repeat(64), null, null, null, null,
+        null, null, null, null, null, null, status, errorCode, "a".repeat(64), null, null, null, null,
         null, null, Instant.parse("2026-08-20T00:00:00Z"),
         Instant.parse("2026-08-20T00:00:01Z"));
   }

@@ -36,7 +36,12 @@ class ContractIdentifierWidthTests {
   private static final Map<String, String> FIELD_TO_COLUMN = new LinkedHashMap<>(Map.of(
       "LearningContext.skillCode", "skill.stable_code",
       "DomainContext.domainCode", "learning_domain.code",
-      "DomainContext.curriculumVersion", "curriculum_version.version_code"));
+      "DomainContext.curriculumVersion", "curriculum_version.version_code",
+      // The correlation identifiers the AI plane sends and this side persists (M1-ADR-011,
+      // Observability HLD 9). A contract narrower than the column would make a legal identifier
+      // unsendable; wider, and a legal identifier is silently rejected on insert.
+      "AIProposalEnvelope.agentRunId", "ai_execution.agent_run_id",
+      "AIProposalEnvelope.promptTemplateId", "ai_execution.prompt_template_id"));
 
   private static Path repositoryRoot() {
     return Path.of("..");
@@ -65,6 +70,21 @@ class ContractIdentifierWidthTests {
                   .matcher(tables.group(2));
           while (columns.find()) {
             widths.put(table + "." + columns.group(1), Integer.parseInt(columns.group(2)));
+          }
+        }
+
+        // Columns added later, which CREATE TABLE alone never sees. Without this a column
+        // introduced by ALTER has no width check against the contract at all -- and it reads as
+        // covered, because the mapping is keyed by name and the test would simply never be given
+        // one to check. Later-added columns are exactly the ones whose width somebody guesses.
+        Matcher altered =
+            Pattern.compile("ALTER TABLE core\\.(\\w+)(.*?);", Pattern.DOTALL).matcher(sql);
+        while (altered.find()) {
+          String table = altered.group(1);
+          Matcher added =
+              Pattern.compile("ADD COLUMN\\s+(\\w+)\\s+VARCHAR\\((\\d+)\\)").matcher(altered.group(2));
+          while (added.find()) {
+            widths.put(table + "." + added.group(1), Integer.parseInt(added.group(2)));
           }
         }
       }
