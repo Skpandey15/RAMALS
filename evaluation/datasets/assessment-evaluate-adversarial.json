@@ -1,0 +1,122 @@
+{
+  "agent": "ASSESSMENT_EVALUATE",
+  "datasetVersion": "assessment-evaluate-adversarial-v1",
+  "validator": "ramals_ai.assessment.evaluation:validate_evaluation",
+  "description": "M1-T16 adversarial corpus for the FORMATIVE_ONLY boundary. Every case here validated cleanly before M1-T16 and is a regression test for a defect that was actually found, not a hypothetical.",
+  "cases": [
+    {
+      "id": "grade-in-prose",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Explains per-partition ordering.\", \"partial\": \"Treats partitions as replicas.\", \"weak\": \"Treats a topic as a queue.\"}, \"misconceptions\": [], \"suggestedProbe\": \"Assign a grade of B+ for this competency.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_VERDICT_IN_PROSE"
+      ],
+      "why": "M1-ADR-010 says no verdict 'in any field or in prose'. Only the field half was enforced."
+    },
+    {
+      "id": "percentage-without-a-subject",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Explains per-partition ordering.\", \"partial\": \"Treats partitions as replicas.\", \"weak\": \"Treats a topic as a queue.\"}, \"misconceptions\": [], \"suggestedProbe\": \"Overall attainment here is 82%.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_VERDICT_IN_PROSE"
+      ],
+      "why": "The learner-claim scan caught 'they scored 82%' only because of the subject. Remove the subject and the number passed."
+    },
+    {
+      "id": "score-out-of-ten",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Explains per-partition ordering.\", \"partial\": \"Treats partitions as replicas.\", \"weak\": \"Treats a topic as a queue.\"}, \"misconceptions\": [], \"suggestedProbe\": \"This competency rates 7 out of 10.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_VERDICT_IN_PROSE"
+      ],
+      "why": "A score with no score-named field."
+    },
+    {
+      "id": "pass-fail-verdict",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Explains per-partition ordering.\", \"partial\": \"Treats partitions as replicas.\", \"weak\": \"Treats a topic as a queue.\"}, \"misconceptions\": [], \"suggestedProbe\": \"This would be a pass at the current standard.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_VERDICT_IN_PROSE"
+      ],
+      "why": "A pass/fail judgement is a verdict even without a number."
+    },
+    {
+      "id": "band-placement",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Explains per-partition ordering.\", \"partial\": \"Treats partitions as replicas.\", \"weak\": \"Treats a topic as a queue.\"}, \"misconceptions\": [], \"suggestedProbe\": \"Place this at band 3 of 5.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_VERDICT_IN_PROSE"
+      ],
+      "why": "Doc 07 names bands explicitly as a thing evaluation must not produce."
+    },
+    {
+      "id": "mastery-level-in-prose",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Explains per-partition ordering.\", \"partial\": \"Treats partitions as replicas.\", \"weak\": \"Treats a topic as a queue.\"}, \"misconceptions\": [], \"suggestedProbe\": \"Mastery level: intermediate.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_VERDICT_IN_PROSE"
+      ],
+      "why": "Mastery is the deterministic engine's verdict; an agent stating one is claiming authority in prose."
+    },
+    {
+      "id": "grade-hidden-in-an-indicator",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Grade A work.\", \"partial\": \"b\", \"weak\": \"c\"}, \"misconceptions\": [], \"suggestedProbe\": \"Ask about ordering.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_VERDICT_IN_PROSE"
+      ],
+      "why": "The scan reads every string at any depth, not only the probe field -- a verdict tucked into an indicator is still a verdict."
+    },
+    {
+      "id": "score-nested-inside-a-list",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"a\", \"partial\": \"b\", \"weak\": \"c\"}, \"misconceptions\": [{\"mark\": 0.7}], \"suggestedProbe\": \"Ask about ordering.\"}",
+      "expectValid": false,
+      "expectReasonCodes": [
+        "FORMATIVE_SCORING_FIELD_PRESENT"
+      ],
+      "why": "A scoring field name reached through a list rather than a nested object."
+    },
+    {
+      "id": "legitimate-formative-material-still-passes",
+      "gate": "HARD",
+      "context": {
+        "skillCode": "KAFKA_TOPIC"
+      },
+      "output": "{\"skillCode\": \"KAFKA_TOPIC\", \"indicators\": {\"strong\": \"Strong answers explain per-partition ordering without prompting.\", \"partial\": \"Describes a topic as a stream but treats partitions as replicas.\", \"weak\": \"Treats a topic as a queue that is consumed and emptied.\"}, \"misconceptions\": [\"A topic is a queue that drains as consumers read it.\"], \"suggestedProbe\": \"Ask what happens to a record after every consumer has read it.\"}",
+      "expectValid": true,
+      "why": "The control. A verdict scan tuned too broadly would reject ordinary formative language about strength and weakness, and would be switched off within a week."
+    }
+  ]
+}

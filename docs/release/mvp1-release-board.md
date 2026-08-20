@@ -53,8 +53,8 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T13 ai_execution persistence | ✅ done | M1-ADR-005 ✅ |
 | M1-T14 Resilience, latency, cost | ✅ done | — |
 | M1-T15 AI evaluation release gates | ✅ done | M1-ADR-009 ✅ |
-| M1-T16 AI security challenge | ⬜ | — |
-| M1-T17 CI/CD and deployment packaging | ⬜ | — |
+| M1-T16 AI security challenge | ✅ done | — |
+| M1-T17 CI/CD and deployment packaging | ⬜ next | — |
 | M1-T18 MVP-1 E2E validation and RC | ⬜ | **R1** 🔴 |
 
 ### Completed readiness slices
