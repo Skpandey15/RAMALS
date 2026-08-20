@@ -3,6 +3,25 @@
 - **Status:** Accepted
 - **Relates to:** M1-T13, M1-ADR-001, M1-ADR-003, M1-ADR-008
 
+## M1-T13A amendment: pre-dispatch commissioning
+
+The original terminal-only row is not sufficient to prevent a provider dispatch during a retry:
+the first caller could reach the AI plane before its `ai_execution` row existed. M1-T13A therefore
+adds an append-only `core.ai_execution_event` stream. A unique `STARTED` event for each
+`requestId` + request digest is committed in an independent transaction before the AI call.
+
+Only the caller that inserts that event may dispatch. A same-digest retry reuses the existing
+terminal `core.ai_execution` outcome when present, or receives a deterministic in-progress result
+while the original execution is unresolved. A different digest is an idempotency conflict. Terminal
+events are appended alongside the existing immutable terminal row; neither table is updated or
+deleted.
+
+This preserves the non-authoritative AI boundary and privacy decision: the event stream stores only
+bounded identifiers, lifecycle metadata, timestamps, error codes, and SHA-256 digests. It never
+stores prompts, learner context, credentials, or model output. The tradeoff is that a crash after
+provider dispatch and before terminal recording leaves a durable `STARTED` event and blocks an
+automatic duplicate dispatch; recovery must be an explicit, separately governed retry policy.
+
 ## Context
 
 The AI plane is non-authoritative, but every commissioned execution still needs durable evidence of

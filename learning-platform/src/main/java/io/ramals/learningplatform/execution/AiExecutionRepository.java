@@ -35,18 +35,68 @@ public class AiExecutionRepository {
     return jdbc.query(SELECT + " WHERE request_id = ?", MAPPER, requestId).stream().findFirst();
   }
 
+  public AiExecutionCommission commission(AiRequestEnvelope request, String agentType) {
+    String requestDigest = digest(request);
+    try {
+      jdbc.update("""
+          INSERT INTO core.ai_execution_event
+            (id, request_id, interaction_id, agent_type, contract_version, event_type,
+             request_digest, occurred_at)
+          VALUES (?, ?, ?, ?, ?, 'STARTED', ?, CURRENT_TIMESTAMP)
+          """, UuidV7.generate(), request.requestId(), request.interactionId(), agentType,
+          request.contractVersion(), requestDigest);
+      return AiExecutionCommission.claimed();
+    } catch (DuplicateKeyException duplicate) {
+      ExecutionStart existing = jdbc.query("""
+          SELECT request_digest
+            FROM core.ai_execution_event
+           WHERE request_id = ? AND event_type = 'STARTED'
+          """, (r, n) -> new ExecutionStart(r.getString("request_digest")), request.requestId())
+          .stream().findFirst()
+          .orElseThrow(() -> new IllegalStateException("AI execution commission was not readable"));
+      if (!existing.requestDigest().equals(requestDigest)) {
+        throw new AiExecutionConflictException("requestId was reused with a different request digest");
+      }
+      return findByRequestId(request.requestId())
+          .map(AiExecutionCommission::existing)
+          .orElseGet(AiExecutionCommission::inProgress);
+    }
+  }
+
   public AiExecution insertSuccess(AiRequestEnvelope request, AiProposalEnvelope proposal,
       Instant startedAt, Instant completedAt) {
     Usage usage = proposal.usage();
-    return insert(request, proposal.agentType().name(), proposal.agentVersion(), proposal.promptVersion(),
+    AiExecution execution = insert(request, proposal.agentType().name(), proposal.agentVersion(), proposal.promptVersion(),
         proposal.modelRoute(), null, "SUCCEEDED", null, digest(request), digest(proposal), usage,
         startedAt, completedAt);
+    appendCompletion(request, proposal.agentType().name(), "SUCCEEDED", null, digest(request),
+        digest(proposal), startedAt, completedAt);
+    return execution;
   }
 
   public AiExecution insertFailure(AiRequestEnvelope request, String agentType, String errorCode,
       Instant startedAt, Instant completedAt) {
-    return insert(request, agentType, null, null, null, null, "FAILED", errorCode, digest(request),
+    AiExecution execution = insert(request, agentType, null, null, null, null, "FAILED", errorCode, digest(request),
         null, null, startedAt, completedAt);
+    appendCompletion(request, agentType, "FAILED", errorCode, digest(request), null, startedAt, completedAt);
+    return execution;
+  }
+
+  private void appendCompletion(AiRequestEnvelope request, String agentType, String eventType,
+      String errorCode, String requestDigest, String proposalDigest, Instant startedAt,
+      Instant completedAt) {
+    try {
+      jdbc.update("""
+          INSERT INTO core.ai_execution_event
+            (id, request_id, interaction_id, agent_type, contract_version, event_type,
+             error_code, request_digest, proposal_digest, occurred_at, started_at, completed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+          """, UuidV7.generate(), request.requestId(), request.interactionId(), agentType,
+          request.contractVersion(), eventType, errorCode, requestDigest, proposalDigest,
+          startedAt, completedAt);
+    } catch (DuplicateKeyException duplicate) {
+      // Idempotent terminal recording: the immutable ai_execution row is authoritative.
+    }
   }
 
   private AiExecution insert(AiRequestEnvelope request, String agentType, String agentVersion,
@@ -120,6 +170,8 @@ public class AiExecutionRepository {
     OffsetDateTime value = result.getObject(column, OffsetDateTime.class);
     return value == null ? null : value.toInstant();
   }
+
+  private record ExecutionStart(String requestDigest) {}
 
   public static class AiExecutionConflictException extends RuntimeException {
     public AiExecutionConflictException(String message) { super(message); }

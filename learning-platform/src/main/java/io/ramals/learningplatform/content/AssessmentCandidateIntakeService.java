@@ -7,6 +7,7 @@ import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import io.ramals.learningplatform.execution.AiExecutionRecorder;
+import io.ramals.learningplatform.execution.AiExecutionCommission;
 import io.ramals.learningplatform.execution.NoOpAiExecutionRecorder;
 import java.time.Instant;
 import java.util.List;
@@ -58,6 +59,15 @@ public class AssessmentCandidateIntakeService {
       String createdBy,
       long deadlineMillis) {
     Instant executionStarted = Instant.now();
+    AiExecutionCommission commission = executionRecorder.commission(request, "ASSESSMENT");
+    if (!commission.dispatchAllowed()) {
+      if (commission.existingExecution().isPresent()) {
+        throw new AiExecutionAlreadyCompletedException(
+            "AI execution already completed for requestId: " + request.requestId());
+      }
+      throw new AiExecutionInProgressException(
+          "AI execution is already in progress for requestId: " + request.requestId());
+    }
     AiProposalEnvelope proposal;
     try {
       proposal = assessmentPort.requestAssessmentProposal(request, deadlineMillis, requestedDifficulty);
@@ -176,5 +186,13 @@ public class AssessmentCandidateIntakeService {
 
   public static class CandidateIntakeConflictException extends RuntimeException {
     public CandidateIntakeConflictException(String message) { super(message); }
+  }
+
+  public static class AiExecutionAlreadyCompletedException extends RuntimeException {
+    public AiExecutionAlreadyCompletedException(String message) { super(message); }
+  }
+
+  public static class AiExecutionInProgressException extends RuntimeException {
+    public AiExecutionInProgressException(String message) { super(message); }
   }
 }

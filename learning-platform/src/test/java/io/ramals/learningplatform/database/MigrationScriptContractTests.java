@@ -37,6 +37,20 @@ class MigrationScriptContractTests {
         .doesNotContain("GRANT DELETE ON ALL TABLES IN SCHEMA audit");
   }
 
+  @Test
+  void aiExecutionCommissioningIsAppendOnlyAndPrivacyBounded() throws IOException {
+    String migration = resource("/db/migration/V022__ai_execution_commissioning.sql");
+    assertThat(migration)
+        .contains("CREATE TABLE core.ai_execution_event")
+        .contains("UNIQUE (request_id, event_type)")
+        .contains("event_type IN ('STARTED', 'SUCCEEDED', 'FAILED')")
+        .contains("GRANT SELECT, INSERT ON TABLE core.ai_execution_event")
+        .contains("completed_at >= started_at")
+        .doesNotContain("prompt")
+        .doesNotContain("learner_context")
+        .doesNotContain("raw_output");
+  }
+
   private String resource(String path) throws IOException {
     try (var input = getClass().getResourceAsStream(path)) {
       assertThat(input).as("migration resource %s", path).isNotNull();
