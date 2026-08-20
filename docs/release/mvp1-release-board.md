@@ -54,7 +54,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T14 Resilience, latency, cost | ✅ done | — |
 | M1-T15 AI evaluation release gates | ✅ done | M1-ADR-009 ✅ |
 | M1-T16 AI security challenge | ✅ done | — |
-| M1-T17 CI/CD and deployment packaging | 🟡 slice 3 of 3 | M1-ADR-011 ✅ |
+| M1-T17 CI/CD and deployment packaging | ✅ done | M1-ADR-011 ✅ |
 | M1-T18 MVP-1 E2E validation and RC | ⬜ | **R1** 🔴 |
 
 ### M1-T17 slices
@@ -68,7 +68,7 @@ same prompt. A smoke gate over that would have certified a rollback that had not
 | --- | --- | --- |
 | 1 | The AI plane joins the release pipeline: built, scanned, attested, digest-pinned in the manifest, gated independently, and rollback-capable | ✅ merged |
 | 2 | Prompt identity resolves to the artifact that builds it; rollback is a configuration pin validated at startup and verified against the running service (M1-ADR-011) | ✅ merged |
-| 3 | Flyway expand/contract enforced in CI, and the additive `prompt_template_id` / `agent_run_id` columns on `core.ai_execution` | 🟡 in review |
+| 3 | Flyway expand/contract enforced in CI, and the additive `prompt_template_id` / `agent_run_id` columns on `core.ai_execution` | ✅ merged |
 
 **Delivered separately:** P6 agent observability (`agentRunId`/`toolCallId`/`proposalId`) is
 tracked against the Observability HLD-LLD rather than against T17, because it is correlation work
