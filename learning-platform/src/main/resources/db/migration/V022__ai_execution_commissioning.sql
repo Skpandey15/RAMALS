@@ -60,6 +60,10 @@ SELECT md5(request_id || ':terminal')::uuid, request_id, interaction_id, agent_t
 CREATE INDEX ix_ai_execution_event_interaction
   ON core.ai_execution_event(interaction_id, occurred_at);
 
+CREATE UNIQUE INDEX uq_ai_execution_single_terminal
+  ON core.ai_execution_event(request_id)
+  WHERE event_type IN ('SUCCEEDED', 'FAILED');
+
 CREATE OR REPLACE FUNCTION core.reject_ai_execution_event_mutation()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN

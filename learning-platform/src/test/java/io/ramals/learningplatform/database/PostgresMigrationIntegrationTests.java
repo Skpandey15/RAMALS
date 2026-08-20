@@ -144,6 +144,42 @@ class PostgresMigrationIntegrationTests {
   }
 
   @Test
+  @Order(7)
+  void databaseAllowsExactlyOneTerminalExecutionEvent() throws SQLException {
+    UUID requestId = UUID.randomUUID();
+    String request = requestId.toString();
+    String interaction = UUID.randomUUID().toString();
+    String digest = "a".repeat(64);
+    try (Connection runtime = DriverManager.getConnection(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD);
+        Statement statement = runtime.createStatement()) {
+      statement.executeUpdate("""
+          INSERT INTO core.ai_execution_event
+            (id, request_id, interaction_id, agent_type, contract_version, event_type,
+             request_digest, occurred_at)
+          VALUES ('01920000-0000-7000-8000-000000009991', '%s', '%s', 'ASSESSMENT', '1.0',
+                  'STARTED', '%s', CURRENT_TIMESTAMP)
+          """.formatted(request, interaction, digest));
+      statement.executeUpdate("""
+          INSERT INTO core.ai_execution_event
+            (id, request_id, interaction_id, agent_type, contract_version, event_type,
+             request_digest, occurred_at)
+          VALUES ('01920000-0000-7000-8000-000000009992', '%s', '%s', 'ASSESSMENT', '1.0',
+                  'SUCCEEDED', '%s', CURRENT_TIMESTAMP)
+          """.formatted(request, interaction, digest));
+
+      assertThatThrownBy(() -> statement.executeUpdate("""
+          INSERT INTO core.ai_execution_event
+            (id, request_id, interaction_id, agent_type, contract_version, event_type,
+             error_code, request_digest, occurred_at)
+          VALUES ('01920000-0000-7000-8000-000000009993', '%s', '%s', 'ASSESSMENT', '1.0',
+                  'FAILED', 'AI_TIMEOUT', '%s', CURRENT_TIMESTAMP)
+          """.formatted(request, interaction, digest)))
+          .isInstanceOfSatisfying(SQLException.class,
+              exception -> assertThat(exception.getSQLState()).isEqualTo("23505"));
+    }
+  }
+
+  @Test
   @Order(4)
   void kafkaV1SeedIsPublishedVersionedAndDeterministic() throws SQLException {
     try (Connection runtime = DriverManager.getConnection(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD);

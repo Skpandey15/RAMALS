@@ -43,6 +43,8 @@ class MigrationScriptContractTests {
     assertThat(migration)
         .contains("CREATE TABLE core.ai_execution_event")
         .contains("UNIQUE (request_id, event_type)")
+        .contains("uq_ai_execution_single_terminal")
+        .contains("WHERE event_type IN ('SUCCEEDED', 'FAILED')")
         .contains("event_type IN ('STARTED', 'SUCCEEDED', 'FAILED')")
         .contains("GRANT SELECT, INSERT ON TABLE core.ai_execution_event")
         .contains("completed_at >= started_at")
