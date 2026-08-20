@@ -31,6 +31,16 @@ public enum TutorUnavailableReason {
   /** The AI plane could not be reached, or answered in a way we could not use. */
   TRANSPORT_FAILURE(false, "AI_TRANSPORT_FAILURE"),
 
+  /**
+   * The workload identity could not be obtained, so nothing was sent to the AI plane.
+   *
+   * <p>Separate from {@link #TRANSPORT_FAILURE} because it names a different service. The AI plane
+   * may be entirely healthy while the identity provider is down, and an operator told the tutoring
+   * service could not be reached will investigate the wrong one. Operational rather than expected:
+   * a platform configured for tutoring that cannot authenticate is not an ordinary state.
+   */
+  IDENTITY_FAILURE(false, "AI_IDENTITY_FAILURE"),
+
   /** No time remained in the caller's budget to consult the AI plane. */
   DEADLINE_EXCEEDED(false, "AI_DEADLINE_EXCEEDED");
 

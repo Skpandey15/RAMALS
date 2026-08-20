@@ -135,7 +135,9 @@ class AssessmentIdentityAttributionTests {
 
       for (int attempt = 1; attempt <= THRESHOLD + 2; attempt++) {
         AiUnavailableException failure = callAndCatch(client, 250);
-        assertThat(failure.code()).isEqualTo("AI_DEADLINE_EXCEEDED");
+        // Named for the service that actually failed. The budget was spent on the token endpoint,
+        // and reporting that as an AI deadline sent operators to inspect a healthy AI plane.
+        assertThat(failure.code()).isEqualTo("AI_IDENTITY_FAILURE");
         assertThat(failure.origin())
             .as("the AI plane was never asked, so this says nothing about its health")
             .isEqualTo(FailureOrigin.CALLER);
