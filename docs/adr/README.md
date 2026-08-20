@@ -45,11 +45,12 @@ be authored before the implementation task each one gates.
 | [M1-ADR-006](M1-ADR-006-generated-assessment-trust-promotion.md) | Generated assessment content is UNVERIFIED on creation and only a human promotes it; automated validation may reject but never approve |
 | [M1-ADR-007](M1-ADR-007-limited-durable-human-approval-workflow.md) | Spring/PostgreSQL limited-durable human approval with immutable proposal revisions, atomic revalidation, and no AI authority |
 | [M1-ADR-008](M1-ADR-008-model-routing-fallback-and-rollback.md) | Routes are versioned configuration; hard budgets are enforced before dispatch; failure never escalates to a costlier route; rollback moves pointers and never rewrites recorded proposal metadata |
+| [M1-ADR-009](M1-ADR-009-ai-evaluation-release-gates.md) | Doc 07 owns the evaluation thresholds; hard gates block every pull request while quality gates block a release candidate, a baseline is approved by a named person, a quality regression needs a named owner with scope and expiry, a hard-gate regression cannot be accepted, and dataset changes never land with model changes |
 | [M1-ADR-010](M1-ADR-010-assessment-evaluation-is-formative-only.md) | AI assessment evaluation is FORMATIVE_ONLY and can never create scored evidence |
 
-Not yet authored: **M1-ADR-009** (evaluation thresholds and release-gate governance), required
-before M1-T15. Each decision is written just before the task it gates rather than as a batch, so it
-has the information its implementation produced.
+Not yet authored: none. All eleven decisions the package registers are authored and Accepted. Each
+was written just before the task it gates rather than as a batch, so it had the information its
+implementation produced.
 
 Which tasks are unblocked, and which are done, is deliberately not restated here — that is the
 [release board](../release/mvp1-release-board.md)'s, and a mapping kept in two places is a mapping
