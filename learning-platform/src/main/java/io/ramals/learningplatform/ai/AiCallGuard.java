@@ -57,7 +57,7 @@ public class AiCallGuard {
    */
   public static final class GuardRefusal extends AiUnavailableException {
     private GuardRefusal(String errorCode, String message) {
-      super(errorCode, message);
+      super(errorCode, message, FailureOrigin.GUARD);
     }
   }
 
@@ -157,17 +157,29 @@ public class AiCallGuard {
     }
   }
 
+  /**
+   * Whether a failure says anything about the health of the AI plane.
+   *
+   * <p>Classified by origin, not by error code, because one code covers more than one origin.
+   * {@code AI_DEADLINE_EXCEEDED} is raised both when the caller's budget expired before anything was
+   * sent and when the dependency was contacted and failed to answer in time — opposite facts about
+   * its health, indistinguishable by string. Two earlier versions of this method got it wrong in
+   * both directions: excluding every {@link AiUnavailableException} meant the breaker could never
+   * open, and then excluding by error code meant a genuinely slow AI plane could no longer open it
+   * either, which is the failure mode the bulkhead exists to bound and the breaker exists to escape.
+   *
+   * <p>A non-{@code AiUnavailableException} counts. Anything escaping a client without being
+   * classified came from the call, and under-counting is the more dangerous mistake here.
+   */
+  private static boolean isEvidenceAboutTheDependency(RuntimeException failure) {
+    if (failure instanceof AiUnavailableException unavailable) {
+      return unavailable.origin() == FailureOrigin.DEPENDENCY;
+    }
+    return true;
+  }
+
   private void recordFailure(RuntimeException failure) {
-    // A refusal this guard produced is not evidence about the dependency. Counting it would let a
-    // saturated bulkhead trip the breaker, turning a busy service into an unavailable one.
-    //
-    // Matched on the guard's own type rather than on AiUnavailableException, which is what this
-    // originally tested. Every client wraps a genuine transport failure — a refused connection, a
-    // read timeout, a 401 — in an AiUnavailableException before it leaves the lambda, so the wider
-    // check silently excluded exactly the failures the breaker exists to count, and the breaker
-    // could never open. A caller cannot construct a GuardRefusal, so the exclusion now covers what
-    // it is meant to cover and nothing else.
-    if (failure instanceof GuardRefusal) {
+    if (!isEvidenceAboutTheDependency(failure)) {
       return;
     }
 

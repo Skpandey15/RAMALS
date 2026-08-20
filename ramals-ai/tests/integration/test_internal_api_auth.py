@@ -133,11 +133,24 @@ AGENT_ROUTES = (
 )
 
 
-def test_every_agent_route_requires_workload_identity(client: TestClient) -> None:
-    """Enumerated against the real routes, not a synthetic probe.
+@pytest.fixture
+def shipped_client() -> Iterator[TestClient]:
+    """The application as deployed: no probe route mounted on top of it.
 
-    The probe above proves the dependency works; it cannot prove the dependency is attached to the
-    endpoints that matter, because it mounts its own route. This walks the actual agent surface.
+    The ``client`` fixture above builds the app and then includes a *second* copy of
+    ``build_internal_router()`` to hang a probe route on. That extra copy also serves the five agent
+    routes, so a test using it passes whether or not ``create_app`` wires the router at all --
+    verified by deleting ``app.include_router(build_internal_router())`` from ``main.py``, after
+    which every test in this file still passed. The tests below therefore use an untouched app.
+    """
+    app = create_app(Settings(environment=Environment.TEST))
+    app.state.workload_verifier = _AcceptingVerifier()
+    with TestClient(app) as started:
+        yield started
+
+
+def test_every_agent_route_requires_workload_identity(shipped_client: TestClient) -> None:
+    """Enumerated against the real routes of the app that ships.
 
     The platform shipped with two Java clients sending no Authorization header, so every tutor and
     adaptation call was refused here with 401 -- which the callers translated into "the AI plane is
@@ -145,18 +158,19 @@ def test_every_agent_route_requires_workload_identity(client: TestClient) -> Non
     ``AiWorkloadAuthenticationContractTests``; together they pin both sides of the same rule.
     """
     for route in AGENT_ROUTES:
-        response = client.post(route, json={})
+        response = shipped_client.post(route, json={})
         assert response.status_code == 401, route
         assert response.json()["detail"]["code"] == "WORKLOAD_AUTHENTICATION_REQUIRED", route
 
 
-def test_the_agent_surface_under_test_is_the_whole_agent_surface(client: TestClient) -> None:
-    """Fails when an agent route is added without being covered above.
+def test_the_shipped_app_serves_every_agent_route(shipped_client: TestClient) -> None:
+    """Fails if an agent route is added without joining the list, or the router stops being wired.
 
-    Otherwise the enumeration silently stops being exhaustive the day someone adds an endpoint,
-    which is exactly how the original gap survived.
+    Two failure modes, one assertion. The enumeration silently stops being exhaustive the day
+    someone adds an endpoint -- which is how the original gap survived -- and an unwired router
+    would 404 every agent call in production while a probe-mounted fixture stayed green.
     """
-    schema = client.get("/openapi.json").json()
+    schema = shipped_client.get("/openapi.json").json()
     served = {
         path
         for path, operations in schema["paths"].items()

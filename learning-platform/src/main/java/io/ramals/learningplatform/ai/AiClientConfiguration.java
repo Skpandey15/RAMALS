@@ -69,7 +69,7 @@ public class AiClientConfiguration {
       return Optional.empty();
     }
     RestClient tokenClient =
-        RestClient.builder().baseUrl(tokenUrl).requestFactory(configuredRequestFactory()).build();
+        RestClient.builder().baseUrl(tokenUrl).requestFactory(tokenRequestFactory()).build();
     return Optional.of(new WorkloadTokenProvider(tokenClient, clientId, clientSecret, audience));
   }
 
@@ -129,7 +129,8 @@ public class AiClientConfiguration {
         workloadIdentity(tokenUrl, clientId, clientSecret, audience);
     if (!configured(baseUrl, identity)) {
       return (request, deadlineMillis) -> {
-        throw new AiUnavailableException("AI_NOT_CONFIGURED", "Adaptation is not enabled in this environment.");
+        throw new AiUnavailableException("AI_NOT_CONFIGURED",
+            "Adaptation is not enabled in this environment.", FailureOrigin.CALLER);
       };
     }
 
@@ -154,7 +155,7 @@ public class AiClientConfiguration {
     if (!configured(baseUrl, identity)) {
       return (request, deadlineMillis, requestedDifficulty) -> {
         throw new AiUnavailableException("AI_NOT_CONFIGURED",
-            "Assessment commissioning is not enabled in this environment.");
+            "Assessment commissioning is not enabled in this environment.", FailureOrigin.CALLER);
       };
     }
     DeadlineAwareClientHttpRequestFactory requestFactory = configuredRequestFactory();
@@ -163,8 +164,22 @@ public class AiClientConfiguration {
   }
 
   private static DeadlineAwareClientHttpRequestFactory configuredRequestFactory() {
-    DeadlineAwareClientHttpRequestFactory requestFactory =
-        new DeadlineAwareClientHttpRequestFactory();
+    return configured(DeadlineAwareClientHttpRequestFactory.forAiPlane());
+  }
+
+  /**
+   * The transport for the workload-token call.
+   *
+   * <p>Same deadline discipline, different attribution. Reaching the identity provider is not
+   * evidence about the AI plane, so a budget spent entirely on a slow token endpoint must not open
+   * the AI plane's circuit.
+   */
+  private static DeadlineAwareClientHttpRequestFactory tokenRequestFactory() {
+    return configured(DeadlineAwareClientHttpRequestFactory.forSupportingCall());
+  }
+
+  private static DeadlineAwareClientHttpRequestFactory configured(
+      DeadlineAwareClientHttpRequestFactory requestFactory) {
     requestFactory.setConnectTimeout(RamalsAiTutorClient.CONNECT_TIMEOUT);
     requestFactory.setReadTimeout(RamalsAiTutorClient.READ_TIMEOUT);
     return requestFactory;
@@ -183,7 +198,7 @@ public class AiClientConfiguration {
     public io.ramals.learningplatform.ai.contract.AiProposalEnvelope requestTutorResponse(
         io.ramals.learningplatform.ai.contract.AiRequestEnvelope request, long deadlineMillis) {
       throw new AiUnavailableException("AI_NOT_CONFIGURED",
-          "Tutoring is not enabled in this environment.");
+          "Tutoring is not enabled in this environment.", FailureOrigin.CALLER);
     }
   }
 }

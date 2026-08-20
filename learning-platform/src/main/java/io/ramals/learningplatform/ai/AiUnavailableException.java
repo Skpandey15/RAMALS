@@ -18,13 +18,33 @@ package io.ramals.learningplatform.ai;
 public class AiUnavailableException extends RuntimeException {
 
   private final String code;
+  private final FailureOrigin origin;
 
+  /**
+   * Creates a failure attributed to the dependency.
+   *
+   * <p>{@link FailureOrigin#DEPENDENCY} is the default because the two mistakes are not
+   * symmetrical. Counting a caller-side failure degrades availability for a while; failing to count
+   * a dependency failure means the breaker never opens at all, which is the defect this class of
+   * bug already produced once. A new failure mode is therefore assumed to be about them until
+   * someone states otherwise.
+   */
   public AiUnavailableException(String code, String message) {
+    this(code, message, FailureOrigin.DEPENDENCY);
+  }
+
+  public AiUnavailableException(String code, String message, FailureOrigin origin) {
     super(message);
     this.code = code;
+    this.origin = origin;
   }
 
   public String code() {
     return code;
+  }
+
+  /** Who this failure is evidence about. Drives circuit-breaker accounting. */
+  public FailureOrigin origin() {
+    return origin;
   }
 }
