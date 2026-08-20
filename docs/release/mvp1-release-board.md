@@ -46,7 +46,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T10 Assessment Agent V1 | ✅ done | M1-ADR-006 ✅, M1-ADR-010 ✅ |
 | M1-T11 Adaptation Agent V1 | ✅ done | — |
 | M1-T12 LIMITED_DURABLE approval | ✅ done | M1-ADR-007 ✅ |
-| M1-T13 ai_execution persistence | 🟡 in progress | M1-ADR-005 ✅ |
+| M1-T13 ai_execution persistence | ✅ done | M1-ADR-005 ✅ |
 | M1-T14 Resilience, latency, cost | ✅ done | — |
 | M1-T15 AI evaluation release gates | ⬜ | M1-ADR-009 |
 | M1-T16 AI security challenge | ⬜ | — |

@@ -82,9 +82,10 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 22 with V022 (pre-dispatch AI execution commissioning). Asserting the count rather than merely that
-    // the upgrade succeeds is what makes an accidentally unapplied migration visible.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(22);
+    // 23 with V023 (AI execution retention, redaction and the AI-plane boundary). Asserting the
+    // count rather than merely that the upgrade succeeds is what makes an accidentally unapplied
+    // migration visible.
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(23);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 
