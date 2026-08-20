@@ -20,6 +20,10 @@ risk-accepted by name under that ADR.
 
 Nothing in T00–T17 will close R1. It needs an environment decision, not a commit.
 
+What *is* measured at MVP-1, and what is deliberately absent, is recorded in the
+[MVP-1 baseline record](mvp1-baseline.md). It is the reference point MVP-2 compares against, and it
+names the unmeasured dimensions so they cannot later be mistaken for baselines of zero.
+
 ## Task progress — canonical task → decision mapping
 
 **This table is the single owner of which decisions gate which task.** Other documents reference it
