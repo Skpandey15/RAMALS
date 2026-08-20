@@ -111,6 +111,8 @@ def model_or_tool(
                 deadline=state.deadline,
                 max_output_tokens=state.token_budget or None,
                 interaction_class=state.interaction_class,
+                request_cost_budget_usd=state.cost_budget_usd,
+                request_cost_spent_usd=state.cost_spent_usd,
             )
         except GatewayError as failure:
             # The gateway has already classified this. Recording it as a validation error rather

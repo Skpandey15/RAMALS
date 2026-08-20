@@ -20,6 +20,7 @@ import pytest
 
 from ramals_ai.config.settings import ModelRoute
 from ramals_ai.contracts.generated import AgentType, InteractionClass
+from ramals_ai.gateway import budget
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.gateway.gateway import LLMGateway
@@ -62,10 +63,11 @@ def state_for(
     *,
     agent_type: AgentType = AgentType.TUTOR,
     deadline_ms: int = 60_000,
+    route: ModelRoute = ModelRoute.CI_FAKE,
 ) -> AgentState:
     return run.build_state(
         agent_type=agent_type,
-        route=ModelRoute.CI_FAKE,
+        route=route,
         deadline=Deadline.in_ms(deadline_ms, clock=clock),
         interaction_id=str(uuid.uuid7()),
         request_id=str(uuid.uuid4()),
@@ -349,6 +351,78 @@ def test_cumulative_cost_stops_the_run_even_when_each_call_was_affordable() -> N
         state.record_model_call(Decimal("0.006000"))
 
     assert stop.value.control == "request cost"
+
+
+def test_repair_call_is_refused_before_dispatch_when_prior_spend_leaves_no_room() -> None:
+    class MeteredProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def count_input_tokens(self, model: str, messages: tuple[Message, ...]) -> int:  # noqa: ARG002
+            return 1000
+
+        def complete(self, _request: ProviderRequest) -> ProviderResponse:
+            self.calls += 1
+            return ProviderResponse(
+                text="repairable output",
+                input_tokens=1000,
+                cached_input_tokens=0,
+                output_tokens=200,
+            )
+
+    attempts = {"count": 0}
+
+    def validator(_text: str) -> list[str]:
+        attempts["count"] += 1
+        return ["MALFORMED"] if attempts["count"] == 1 else []
+
+    provider = MeteredProvider()
+    run, clock = build(provider=provider, validator=validator)
+    state = state_for(run, clock, route=ModelRoute.TUTOR_DEFAULT)
+    state.cost_budget_usd = Decimal("0.022000")
+
+    with pytest.raises(GatewayError) as refusal:
+        run.run(state, route=ModelRoute.TUTOR_DEFAULT, messages=MESSAGES)
+
+    assert refusal.value.code is GatewayErrorCode.COST_CEILING_EXCEEDED
+    assert provider.calls == 1
+    assert state.cost_spent_usd == Decimal("0.006000")
+    assert state.model_call_count == 1
+
+
+def test_successful_dispatch_records_actual_cost_and_model_latency() -> None:
+    class MeteredProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def count_input_tokens(self, model: str, messages: tuple[Message, ...]) -> int:  # noqa: ARG002
+            return 10
+
+        def complete(self, _request: ProviderRequest) -> ProviderResponse:
+            self.calls += 1
+            return ProviderResponse(
+                text="successful output",
+                input_tokens=10,
+                cached_input_tokens=2,
+                output_tokens=20,
+            )
+
+    provider = MeteredProvider()
+    run, clock = build(provider=provider)
+    state = state_for(run, clock, route=ModelRoute.TUTOR_DEFAULT)
+
+    result = run.run(state, route=ModelRoute.TUTOR_DEFAULT, messages=MESSAGES)
+    config = run._gateway.registry.resolve(ModelRoute.TUTOR_DEFAULT)  # noqa: SLF001
+    expected_cost = budget.actual_cost_usd(config, input_tokens=10, output_tokens=20)
+
+    assert provider.calls == 1
+    assert result.cost_spent_usd == expected_cost
+    assert result.input_tokens == 10
+    assert result.cached_input_tokens == 2
+    assert result.output_tokens == 20
+    assert result.latency_ms >= 0
 
 
 def test_an_expired_deadline_stops_the_run_before_any_model_call() -> None:

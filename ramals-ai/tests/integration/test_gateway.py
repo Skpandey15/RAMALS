@@ -16,12 +16,14 @@ import subprocess
 import sys
 import textwrap
 from collections.abc import Callable
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
 
 from ramals_ai.config.settings import ModelRoute
 from ramals_ai.contracts.generated import InteractionClass
+from ramals_ai.gateway import budget
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.gateway.gateway import MAX_ATTEMPTS_PER_ROUTE, LLMGateway
@@ -259,6 +261,80 @@ def test_a_cost_ceiling_refusal_never_reaches_the_provider() -> None:
     assert adapter.calls == 0
 
 
+def test_request_budget_with_room_allows_the_provider_call() -> None:
+    config = default_registry().resolve(ModelRoute.TUTOR_DEFAULT)
+    adapter = CountingProvider(token_count=1000)
+    gateway, clock = build(adapter)
+    projected = budget.project_cost_usd(config, input_tokens=1000, max_output_tokens=1000)
+
+    result = gateway.complete(
+        route=ModelRoute.TUTOR_DEFAULT,
+        messages=MESSAGES,
+        deadline=deadline_for(clock, 5000),
+        max_output_tokens=1000,
+        request_cost_budget_usd=projected,
+        request_cost_spent_usd=Decimal("0.000000"),
+    )
+
+    assert result.estimated_cost_usd >= Decimal("0.000000")
+    assert adapter.calls == 1
+
+
+def test_request_budget_refusal_happens_before_provider_dispatch() -> None:
+    config = default_registry().resolve(ModelRoute.TUTOR_DEFAULT)
+    adapter = CountingProvider(token_count=1000)
+    gateway, clock = build(adapter)
+    projected = budget.project_cost_usd(config, input_tokens=1000, max_output_tokens=1000)
+
+    with pytest.raises(GatewayError) as refusal:
+        gateway.complete(
+            route=ModelRoute.TUTOR_DEFAULT,
+            messages=MESSAGES,
+            deadline=deadline_for(clock, 5000),
+            max_output_tokens=1000,
+            request_cost_budget_usd=projected,
+            request_cost_spent_usd=Decimal("0.000001"),
+        )
+
+    assert refusal.value.code is GatewayErrorCode.COST_CEILING_EXCEEDED
+    assert adapter.calls == 0
+
+
+def test_request_budget_exact_boundary_is_allowed() -> None:
+    config = default_registry().resolve(ModelRoute.TUTOR_DEFAULT)
+    adapter = CountingProvider(token_count=1000)
+    gateway, clock = build(adapter)
+    projected = budget.project_cost_usd(config, input_tokens=1000, max_output_tokens=1000)
+
+    gateway.complete(
+        route=ModelRoute.TUTOR_DEFAULT,
+        messages=MESSAGES,
+        deadline=deadline_for(clock, 5000),
+        max_output_tokens=1000,
+        request_cost_budget_usd=Decimal("0.020000"),
+        request_cost_spent_usd=Decimal("0.002000"),
+    )
+
+    assert projected == Decimal("0.018000")
+    assert adapter.calls == 1
+
+
+def test_zero_request_budget_preserves_existing_route_only_semantics() -> None:
+    adapter = CountingProvider(token_count=1000)
+    gateway, clock = build(adapter)
+
+    gateway.complete(
+        route=ModelRoute.TUTOR_DEFAULT,
+        messages=MESSAGES,
+        deadline=deadline_for(clock, 5000),
+        max_output_tokens=1000,
+        request_cost_budget_usd=Decimal("0.000000"),
+        request_cost_spent_usd=Decimal("1.000000"),
+    )
+
+    assert adapter.calls == 1
+
+
 def test_an_already_expired_deadline_refuses_before_any_work() -> None:
     adapter = CountingProvider()
     gateway, clock = build(adapter)
@@ -403,6 +479,52 @@ def test_an_approved_fallback_serves_the_request_and_is_recorded() -> None:
     assert result.requested_route is ModelRoute.ASSESSMENT_DEFAULT
     assert result.route is ModelRoute.CI_FAKE, "the effective route must be the one that served it"
     assert result.fell_back
+
+
+def test_fallback_cannot_bypass_the_remaining_request_budget() -> None:
+    registry = default_registry()
+    fallback = registry.resolve(ModelRoute.DIAGNOSTIC_DEFAULT)
+    fallback = replace(
+        fallback,
+        output_cost_per_1k_usd=Decimal("0.050"),
+    )
+    registry = registry.with_route(fallback)
+    primary = registry.resolve(ModelRoute.ASSESSMENT_DEFAULT)
+    registry = registry.with_route(replace(primary, fallback_route=ModelRoute.DIAGNOSTIC_DEFAULT))
+
+    class FailPrimaryOnly(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def count_input_tokens(self, model: str, messages: tuple[Message, ...]) -> int:  # noqa: ARG002
+            return 1000
+
+        def complete(self, request: ProviderRequest) -> ProviderResponse:
+            self.calls += 1
+            if request.model == primary.model:
+                raise GatewayError(GatewayErrorCode.PROVIDER_TIMEOUT, "primary is down")
+            return super().complete(request)
+
+    adapter = FailPrimaryOnly()
+    gateway, clock = build(adapter, registry=registry)
+    primary_projected = budget.project_cost_usd(
+        primary,
+        input_tokens=1000,
+        max_output_tokens=primary.max_output_tokens,
+    )
+
+    with pytest.raises(GatewayError) as refusal:
+        gateway.complete(
+            route=ModelRoute.ASSESSMENT_DEFAULT,
+            messages=MESSAGES,
+            deadline=deadline_for(clock, 60000),
+            request_cost_budget_usd=primary_projected,
+            request_cost_spent_usd=Decimal("0.000000"),
+        )
+
+    assert refusal.value.code is GatewayErrorCode.COST_CEILING_EXCEEDED
+    assert adapter.calls == 1, "the fallback must not bypass the remaining request budget"
 
 
 def test_a_budget_refusal_never_falls_back() -> None:

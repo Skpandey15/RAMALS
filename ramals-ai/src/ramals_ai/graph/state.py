@@ -65,6 +65,7 @@ class AgentState:
     cached_input_tokens: int = 0
     output_tokens: int = 0
     latency_ms: int = 0
+    """Sum of governed model-call durations, not full HTTP or agent/request latency."""
 
     # -- counters, checked against ceilings -------------------------------------------------------
     node_execution_count: int = 0
@@ -121,10 +122,13 @@ class AgentState:
     ) -> None:
         """Counts a model call and the money it cost.
 
-        The gateway refuses anything over the route's per-call ceiling before dispatch. What this
-        adds is the cumulative bound: three individually affordable calls can still exceed what one
-        request is allowed to spend. Usage is accumulated here so the proposal reports the complete
-        bounded graph run, including repair calls.
+        The gateway refuses anything over the route's per-call or request-level ceiling before
+        dispatch. This post-response check remains a defensive invariant for provider-reported
+        usage that is unexpectedly larger than the pre-dispatch projection. Usage is accumulated
+        here so the proposal reports the complete bounded graph run, including repair calls.
+
+        ``latency_ms`` is the sum of model-call durations returned by the gateway, including repair
+        calls; it does not represent full end-to-end request latency.
         """
         self.ensure_model_call_permitted()
         self.model_call_count += 1

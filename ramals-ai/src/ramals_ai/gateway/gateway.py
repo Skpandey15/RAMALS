@@ -81,6 +81,10 @@ class GatewayResult:
     A value, not a view: rolling a route back afterwards cannot change what this says. That is the
     mechanism behind "rollback never rewrites recorded proposal metadata" -- there is nothing to
     rewrite, because nothing points back at the registry.
+
+    ``latency_ms`` is the elapsed time for this governed model-call operation, including any
+    internal retry or fallback handling. It is not the end-to-end HTTP request or agent latency;
+    ``AgentState`` sums this value across the model calls in one graph run.
     """
 
     text: str
@@ -136,8 +140,15 @@ class LLMGateway:
         deadline: budget.Deadline,
         max_output_tokens: int | None = None,
         interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI,
+        request_cost_budget_usd: Decimal | None = None,
+        request_cost_spent_usd: Decimal = Decimal("0.000000"),
     ) -> GatewayResult:
-        """Runs one governed model call, retrying and falling back only where policy allows."""
+        """Runs one governed model call, retrying and falling back only where policy allows.
+
+        When supplied, ``request_cost_budget_usd`` and ``request_cost_spent_usd`` describe the
+        cumulative request budget before this call. Each attempted route is checked before provider
+        dispatch; callers still record actual usage after a successful response.
+        """
         started = self._clock()
         requested = route
         config = self._registry.resolve(route)
@@ -146,7 +157,12 @@ class LLMGateway:
         while True:
             try:
                 response, attempts_used = self._attempt_route(
-                    config, messages, deadline, max_output_tokens
+                    config,
+                    messages,
+                    deadline,
+                    max_output_tokens,
+                    request_cost_budget_usd,
+                    request_cost_spent_usd,
                 )
             except GatewayError as failure:
                 attempts += getattr(failure, "attempts_used", 1)
@@ -204,8 +220,14 @@ class LLMGateway:
         messages: tuple[Message, ...],
         deadline: budget.Deadline,
         max_output_tokens: int | None,
+        request_cost_budget_usd: Decimal | None,
+        request_cost_spent_usd: Decimal,
     ) -> tuple[ProviderResponse, int]:
-        """Enforces this route's budgets, then calls it, retrying within the caller's deadline."""
+        """Enforces this route's budgets, then calls it, retrying within the caller's deadline.
+
+        ``config`` is resolved again for every fallback route, so the request-level check governs
+        the route that is actually about to contact a provider rather than only the requested route.
+        """
         deadline.raise_if_expired()
 
         output_ceiling = budget.resolve_output_ceiling(config, max_output_tokens)
@@ -217,6 +239,12 @@ class LLMGateway:
                 config, input_tokens=input_tokens, max_output_tokens=output_ceiling
             )
             budget.enforce_cost_ceiling(config, projected)
+            budget.enforce_request_cost_ceiling(
+                config,
+                projected,
+                request_budget_usd=request_cost_budget_usd,
+                cost_spent_usd=request_cost_spent_usd,
+            )
         except GatewayError as refusal:
             gateway_refusals.add(1, {"route": config.route.value, "code": refusal.code.value})
             logger.warning(

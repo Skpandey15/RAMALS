@@ -136,6 +136,47 @@ def test_a_call_exactly_at_the_hard_ceiling_is_allowed() -> None:
     budget.enforce_cost_ceiling(config, config.hard_cost_ceiling_usd)
 
 
+def test_request_cost_ceiling_allows_the_exact_remaining_boundary() -> None:
+    config = default_registry().resolve(ModelRoute.TUTOR_DEFAULT)
+    projected = budget.project_cost_usd(config, input_tokens=1000, max_output_tokens=1000)
+
+    budget.enforce_request_cost_ceiling(
+        config,
+        projected,
+        request_budget_usd=Decimal("0.020000"),
+        cost_spent_usd=Decimal("0.002000"),
+    )
+
+
+def test_request_cost_ceiling_uses_existing_stable_cost_error() -> None:
+    config = default_registry().resolve(ModelRoute.TUTOR_DEFAULT)
+    projected = budget.project_cost_usd(config, input_tokens=1000, max_output_tokens=1000)
+
+    with pytest.raises(GatewayError) as refusal:
+        budget.enforce_request_cost_ceiling(
+            config,
+            projected,
+            request_budget_usd=projected,
+            cost_spent_usd=Decimal("0.000001"),
+        )
+
+    assert refusal.value.code is GatewayErrorCode.COST_CEILING_EXCEEDED
+    assert not refusal.value.retryable
+    assert not refusal.value.fallback_eligible
+
+
+def test_disabled_request_cost_ceiling_preserves_route_budget_semantics() -> None:
+    config = default_registry().resolve(ModelRoute.TUTOR_DEFAULT)
+    projected = budget.project_cost_usd(config, input_tokens=1000, max_output_tokens=1000)
+
+    budget.enforce_request_cost_ceiling(
+        config,
+        projected,
+        request_budget_usd=Decimal("0.000000"),
+        cost_spent_usd=Decimal("1.000000"),
+    )
+
+
 def test_a_budget_refusal_is_neither_retryable_nor_fallback_eligible() -> None:
     """The decision that stops a transient error becoming an unbounded bill."""
     for code in (GatewayErrorCode.TOKEN_CEILING_EXCEEDED, GatewayErrorCode.COST_CEILING_EXCEEDED):

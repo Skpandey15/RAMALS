@@ -130,3 +130,30 @@ def enforce_cost_ceiling(config: RouteConfig, projected_usd: Decimal) -> None:
             f"projected {projected_usd} USD exceeds the {config.route} hard ceiling of "
             f"{config.hard_cost_ceiling_usd} USD",
         )
+
+
+def enforce_request_cost_ceiling(
+    config: RouteConfig,
+    projected_usd: Decimal,
+    *,
+    request_budget_usd: Decimal | None,
+    cost_spent_usd: Decimal,
+) -> None:
+    """Refuses a call whose worst case exceeds the request's remaining hard budget.
+
+    ``None`` and non-positive budgets mean that request-level cost governance is disabled. This is
+    the existing behaviour for routes such as ``ci-fake``; their route-level check still runs.
+    The caller supplies actual usage from completed calls only. The projection itself is calculated
+    once by :func:`project_cost_usd` and is shared with the per-route check at the gateway.
+    """
+    if request_budget_usd is None or request_budget_usd <= 0:
+        return
+
+    remaining_budget_usd = request_budget_usd - cost_spent_usd
+    if projected_usd > remaining_budget_usd:
+        raise GatewayError(
+            GatewayErrorCode.COST_CEILING_EXCEEDED,
+            f"projected {projected_usd} USD exceeds the remaining request budget of "
+            f"{remaining_budget_usd} USD for {config.route} "
+            f"(budget {request_budget_usd} USD, spent {cost_spent_usd} USD)",
+        )
