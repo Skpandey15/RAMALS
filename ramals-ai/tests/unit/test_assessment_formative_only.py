@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from ramals_ai.assessment.evaluation import validate_evaluation
 
 CONTEXT: dict[str, Any] = {"skillCode": "KAFKA_TOPIC", "masteryStatus": "NEEDS_PRACTICE"}
@@ -89,6 +91,74 @@ def test_a_scoring_field_name_is_caught_case_insensitively() -> None:
     payload["indicators"]["extra"] = {"  MasteryScore  ": "high"}
 
     assert "FORMATIVE_SCORING_FIELD_PRESENT" in validate_evaluation(json.dumps(payload), CONTEXT)
+
+
+# -- nothing shaped like a verdict, in prose (M1-T16) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "probe",
+    [
+        "Assign a grade of B+ for this competency.",
+        "Overall attainment here is 82%.",
+        "This competency rates 7 out of 10.",
+        "This would be a pass at the current standard.",
+        "Place this at band 3 of 5.",
+        "Mastery level: intermediate.",
+    ],
+    ids=["grade", "percentage", "out-of-ten", "pass-fail", "band", "mastery-level"],
+)
+def test_a_verdict_in_prose_is_refused(probe: str) -> None:
+    """Found by the M1-T16 adversarial pass, where all six of these validated cleanly.
+
+    M1-ADR-010 and the prompt both say no verdict "in any field or in prose", but only the field
+    half was enforced. The scoring-field scan catches a key called ``score``; the learner-claim scan
+    catches a sentence about a learner. Neither catches a grade with no subject and no field.
+
+    It creates no evidence and the database boundary is untouched, so nothing becomes authoritative
+    -- but it reaches a human reviewer as a verdict, from an endpoint whose whole contract is that
+    it does not produce one.
+    """
+    assert "FORMATIVE_VERDICT_IN_PROSE" in validate_evaluation(
+        evaluation(suggestedProbe=probe), CONTEXT
+    )
+
+
+def test_a_verdict_anywhere_in_the_payload_is_refused() -> None:
+    """Not only the probe field. The scan reads every string at any depth."""
+    indicators = {
+        "strong": "Grade A work.",
+        "partial": "Describes a topic as a stream.",
+        "weak": "Treats a topic as a queue.",
+    }
+
+    assert "FORMATIVE_VERDICT_IN_PROSE" in validate_evaluation(
+        evaluation(indicators=indicators), CONTEXT
+    )
+
+
+def test_ordinary_formative_language_is_not_a_verdict() -> None:
+    """The control, and the reason the scan is narrow.
+
+    Formative material legitimately discusses strength and weakness. A scan broad enough to flag
+    "strong answers" would be switched off within a week, and then it would catch nothing at all.
+    """
+    indicators = {
+        "strong": "Strong answers explain per-partition ordering without prompting.",
+        "partial": "Describes a topic as a stream but treats partitions as replicas.",
+        "weak": "Treats a topic as a queue that is consumed and emptied.",
+    }
+
+    assert (
+        validate_evaluation(
+            evaluation(
+                indicators=indicators,
+                suggestedProbe="Ask what happens to a record after every consumer has read it.",
+            ),
+            CONTEXT,
+        )
+        == []
+    )
 
 
 # -- nothing claimed about a learner ---------------------------------------------------------------

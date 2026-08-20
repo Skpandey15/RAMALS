@@ -83,6 +83,36 @@ _LEARNER_CLAIM = re.compile(
     re.IGNORECASE,
 )
 
+# A verdict expressed in prose rather than in a field.
+#
+# M1-ADR-010 and the prompt both say "in any field or in prose", but only the field half was
+# enforced: _SCORING_FIELD_NAMES catches a key called "score", _LEARNER_CLAIM catches a sentence
+# about a learner, and neither catches "Assign a grade of B+ for this competency". Found by the
+# M1-T16 adversarial pass, where eight phrasings -- grade, percentage, N out of M, pass/fail, band,
+# mastery level -- all validated cleanly.
+#
+# It creates no evidence and the database boundary is untouched, so nothing becomes authoritative.
+# What it does is reach a human reviewer as a verdict, from an endpoint whose entire contract is
+# that it does not produce one -- and a reviewer acting on it is acting on an AI grade.
+#
+# Deliberately narrow. Every alternative requires verdict framing rather than a bare word, because
+# formative material legitimately discusses strength and weakness, and a scan that flagged "strong"
+# would be switched off within a week.
+_VERDICT_IN_PROSE = re.compile(
+    r"("
+    r"\bgrades?\s+(?:of|is|:)\s*[A-F][+-]?\b"
+    r"|\bgrade\s+[A-F][+-]?\b"
+    r"|\b\d{1,3}\s?%"
+    r"|\b\d+(?:\.\d+)?\s*(?:/|out\s+of)\s*\d+\b"
+    r"|\b(?:would\s+be|is)\s+a\s+(?:pass|fail)\b"
+    r"|\bbands?\s+\d+\b"
+    r"|\bmastery\s+level\s*[:=]"
+    r"|\bscores?\s*[:=]\s*\d"
+    r"|\brate[sd]?\s+\d+(?:\.\d+)?\s*(?:/|out\s+of)\s*\d+\b"
+    r")",
+    re.IGNORECASE,
+)
+
 # Claims that something was written down. Nothing here is stored as evidence, and saying so would
 # tell a reviewer the platform holds a record it does not hold.
 _PERSISTENCE_CLAIM = re.compile(
@@ -163,6 +193,8 @@ def _formative_errors(parsed: dict[str, Any], context: dict[str, Any]) -> list[s
     errors: list[str] = []
 
     text = " ".join(_all_strings(parsed))
+    if _VERDICT_IN_PROSE.search(text):
+        errors.append("FORMATIVE_VERDICT_IN_PROSE")
     if _LEARNER_CLAIM.search(text):
         errors.append("FORMATIVE_CLAIMS_ABOUT_A_LEARNER")
     if _PERSISTENCE_CLAIM.search(text):

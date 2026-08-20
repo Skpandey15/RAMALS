@@ -38,7 +38,9 @@
       "modelRoute": "ci-fake",
       "datasetVersion": "diagnostic-golden-v1",
       "hardGatePassed": true,
-      "quality": { "primaryTaskFunctionalRubric": "UNMEASURED" },
+      "quality": {
+        "primaryTaskFunctionalRubric": "UNMEASURED"
+      },
       "approval": {
         "approvedBy": "mvp1-hard-gate-baseline",
         "approvedOn": "2026-08-20"
@@ -52,7 +54,9 @@
       "modelRoute": "ci-fake",
       "datasetVersion": "assessment-golden-v1",
       "hardGatePassed": true,
-      "quality": { "primaryTaskFunctionalRubric": "UNMEASURED" },
+      "quality": {
+        "primaryTaskFunctionalRubric": "UNMEASURED"
+      },
       "approval": {
         "approvedBy": "mvp1-hard-gate-baseline",
         "approvedOn": "2026-08-20"
@@ -66,7 +70,9 @@
       "modelRoute": "ci-fake",
       "datasetVersion": "assessment-evaluate-golden-v1",
       "hardGatePassed": true,
-      "quality": { "primaryTaskFunctionalRubric": "UNMEASURED" },
+      "quality": {
+        "primaryTaskFunctionalRubric": "UNMEASURED"
+      },
       "approval": {
         "approvedBy": "mvp1-hard-gate-baseline",
         "approvedOn": "2026-08-20"
@@ -80,9 +86,27 @@
       "modelRoute": "ci-fake",
       "datasetVersion": "adaptation-golden-v1",
       "hardGatePassed": true,
-      "quality": { "primaryTaskFunctionalRubric": "UNMEASURED" },
+      "quality": {
+        "primaryTaskFunctionalRubric": "UNMEASURED"
+      },
       "approval": {
         "approvedBy": "mvp1-hard-gate-baseline",
+        "approvedOn": "2026-08-20"
+      },
+      "supersededBy": null
+    },
+    {
+      "agent": "ASSESSMENT_EVALUATE",
+      "agentVersion": "ASSESSMENT_AGENT_V1",
+      "promptVersion": "ASSESSMENT_PROMPT_V1",
+      "modelRoute": "ci-fake",
+      "datasetVersion": "assessment-evaluate-adversarial-v1",
+      "hardGatePassed": true,
+      "quality": {
+        "primaryTaskFunctionalRubric": "UNMEASURED"
+      },
+      "approval": {
+        "approvedBy": "m1-t16-adversarial-baseline",
         "approvedOn": "2026-08-20"
       },
       "supersededBy": null
