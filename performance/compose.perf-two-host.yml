@@ -1,0 +1,26 @@
+# Two-host perf-standard-01 network exposure.
+#
+# The canonical deployment topology intentionally publishes backend and Keycloak on loopback. A
+# qualified R1 run uses a separate load generator, so those two endpoints must also be reachable on
+# the SUT's private VPC interface. Require that address explicitly: binding 0.0.0.0 would make host
+# exposure broader than the topology needs and would turn an AWS security-group mistake into public
+# exposure.
+#
+# Apply after the canonical topology and the fixed-resource override:
+#
+#   RAMALS_PERF_SUT_BIND_ADDRESS=<sut-private-ip> docker compose \
+#     -f deploy/compose.deploy.yml \
+#     -f performance/compose.perf-fixed.yml \
+#     -f performance/compose.perf-two-host.yml up -d
+#
+# AWS must continue to restrict 8080/8081 ingress to the load-generator security group.
+services:
+  backend:
+    ports: !override
+      - "127.0.0.1:${RAMALS_BACKEND_PORT:-8080}:8080"
+      - "${RAMALS_PERF_SUT_BIND_ADDRESS:?Set RAMALS_PERF_SUT_BIND_ADDRESS to the SUT private IP}:${RAMALS_BACKEND_PORT:-8080}:8080"
+
+  keycloak:
+    ports: !override
+      - "127.0.0.1:${RAMALS_KEYCLOAK_PORT:-8081}:8080"
+      - "${RAMALS_PERF_SUT_BIND_ADDRESS:?Set RAMALS_PERF_SUT_BIND_ADDRESS to the SUT private IP}:${RAMALS_KEYCLOAK_PORT:-8081}:8080"

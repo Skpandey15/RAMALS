@@ -107,7 +107,10 @@ assertion, so a reader can see which it was.
 Pin the system under test to the spec's resources when making a qualified run:
 
 ```bash
-docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-fixed.yml up -d
+RAMALS_PERF_SUT_BIND_ADDRESS=<sut-private-ip> docker compose \
+  -f deploy/compose.deploy.yml \
+  -f performance/compose.perf-fixed.yml \
+  -f performance/compose.perf-two-host.yml up -d
 ```
 
 ./run-baseline.sh diagnostic          # ADL baseline

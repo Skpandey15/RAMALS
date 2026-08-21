@@ -106,6 +106,37 @@ check "a limit that differs from the spec is refused"   "1" "$(verdict_count 'ba
 check "a service that is not running is refused"        "1" "$(verdict_count 'postgres not running')"
 check "a load generator on the host is refused"         "1" "$(verdict_count 'load generator on host')"
 
+cat > "${WORK}/compose_resolution.py" <<'PYEOF'
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+perf = Path(sys.argv[1])
+loader = importlib.util.spec_from_file_location("attest", perf / "environment" / "attest.py")
+attest = importlib.util.module_from_spec(loader)
+loader.loader.exec_module(attest)
+
+host_config = json.dumps({"NanoCpus": 4_000_000_000, "Memory": 4 * 1024**3})
+responses = [
+    subprocess.CalledProcessError(1, ["docker", "inspect", "backend"]),
+    subprocess.CompletedProcess([], 0, stdout="abc123\n", stderr=""),
+    subprocess.CompletedProcess([], 0, stdout=host_config, stderr=""),
+]
+with patch.object(attest.subprocess, "run", side_effect=responses) as run:
+    measured = attest.container_limits(["backend"])
+    label_call = run.call_args_list[1].args[0]
+
+valid = measured == {"backend": {"running": True, "cpus": 4.0, "memory_gib": 4.0}}
+valid = valid and "label=com.docker.compose.service=backend" in label_call
+sys.exit(0 if valid else 1)
+PYEOF
+
+status="$("${PYTHON}" "${WORK}/compose_resolution.py" "${PERF}"; echo $?)"
+check "Compose-prefixed service containers are resolved by label" "0" "${status}"
+
 # -- the spec itself --------------------------------------------------------------------------------
 
 status="$("${PYTHON}" -c "

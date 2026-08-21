@@ -146,9 +146,18 @@ up -- budget ten to twenty minutes for step 3 the first time. `learning-platform
 pulled by digest and are public, so no registry login is needed.
 
 ```bash
-# 3. bring the stack up on the SUT, pinned to the spec's resources
-ssh ubuntu@<sut> 'docker compose -f deploy/compose.deploy.yml \
-    -f performance/compose.perf-fixed.yml up -d'
+# 3. bring the stack up on the SUT, pinned to the spec's resources and bound only to its private IP
+ssh ubuntu@<sut> 'RAMALS_PERF_SUT_BIND_ADDRESS=<sut-private-ip> \
+  RAMALS_PULL_CMD="docker compose --env-file deploy/.env \
+    -f deploy/compose.deploy.yml \
+    -f performance/compose.perf-fixed.yml \
+    -f performance/compose.perf-two-host.yml pull" \
+  RAMALS_UP_CMD="docker compose --env-file deploy/.env \
+    -f deploy/compose.deploy.yml \
+    -f performance/compose.perf-fixed.yml \
+    -f performance/compose.perf-two-host.yml up -d" \
+  RAMALS_HEALTH_CMD="bash deploy/health-gates.sh" \
+  bash deploy/deploy-controller.sh'
 
 # 4. the SUT attests itself — this must exit 0
 ssh ubuntu@<sut> 'python3 performance/environment/attest.py --require \
@@ -168,12 +177,19 @@ ssh ubuntu@<loadgen>
   export RAMALS_TOKEN_URL=http://<sut-private-ip>:8081/realms/ramals/protocol/openid-connect/token
   export RAMALS_PERF_ENV=perf-standard-01
   export RAMALS_PERF_ATTESTATION=~/attestation.json
+  export RAMALS_PERF_LOAD_GENERATOR_OFF_HOST=true
   export RAMALS_KEYCLOAK_ADMIN=admin RAMALS_KEYCLOAK_ADMIN_PASSWORD=...
   export RAMALS_LOAD_PASSWORD=...
   ./performance/run-baseline.sh mixed-learning
 ```
 
 Use the **private** IP. The public path leaves the VPC and comes back.
+
+The two-host override requires the private bind address and replaces, rather than implicitly merges
+with, the canonical port list. It explicitly retains loopback for local health gates and adds only
+the SUT private interface for the load generator. Verify the resulting bindings with
+`docker compose ps` or `docker inspect`: they must name `127.0.0.1` and `<sut-private-ip>`, never
+`0.0.0.0`. AWS ingress for both ports remains restricted to the load-generator security group.
 
 The runner re-checks the carried attestation — right spec, records conformance, no older than 24
 hours — rather than taking it at its word.

@@ -8,7 +8,8 @@
 #
 # Run it on the VM, not from your workstation:
 #
-#   scp -r performance <host>:~/  &&  ssh <host> 'bash performance/environment/provision-sut.sh'
+#   git archive HEAD performance deploy infrastructure | \
+#     ssh <host> 'tar -x' && ssh <host> 'bash performance/environment/provision-sut.sh'
 #
 # It is idempotent: re-running installs nothing twice and re-prints the attestation, which is the
 # thing you actually want from a second run.
@@ -16,10 +17,27 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPEC="${HERE}/perf-standard-01.json"
+REPO_ROOT="$(cd "${HERE}/../.." && pwd)"
 
 say() { printf '\n=== %s\n' "$*"; }
 
 [ -f "${SPEC}" ] || { echo "no spec at ${SPEC}; copy the whole performance/ directory" >&2; exit 1; }
+
+# The deployment builds the PostgreSQL and Keycloak infrastructure images locally and reads the
+# immutable desired-version manifest. Copying performance/ alone leaves a host that provisions
+# successfully but cannot deploy. Refuse that partial state before installing anything.
+for required in \
+  deploy/compose.deploy.yml \
+  deploy/desired-version.json \
+  infrastructure/docker/postgres-init/Dockerfile \
+  infrastructure/docker/keycloak/Dockerfile \
+  performance/compose.perf-fixed.yml \
+  performance/compose.perf-two-host.yml; do
+  [ -f "${REPO_ROOT}/${required}" ] || {
+    echo "missing ${required}; copy tracked performance, deploy, and infrastructure trees" >&2
+    exit 1
+  }
+done
 
 # -- refuse early, and say why ----------------------------------------------------------------------
 #
@@ -101,7 +119,10 @@ and the load generator lives on another machine.
 
 Next, from this host:
 
-  docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-fixed.yml up -d
+  RAMALS_PERF_SUT_BIND_ADDRESS=<sut-private-ip> docker compose \
+    -f deploy/compose.deploy.yml \
+    -f performance/compose.perf-fixed.yml \
+    -f performance/compose.perf-two-host.yml up -d
   python3 performance/environment/attest.py --require --load-generator-off-host
 
 The second command must exit 0 before any run can claim the qualified id. When it does, this host is
