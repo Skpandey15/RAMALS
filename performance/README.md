@@ -92,7 +92,8 @@ and downgrades the run to `local-unqualified` if any of that fails. `RAMALS_PERF
 sets the staleness bound, 24 by default: a host that conformed last month may have been resized since,
 and a file cannot notice that on its own.
 
-Provisioning both machines:
+Provisioning both machines — [`RUNBOOK-aws.md`](environment/RUNBOOK-aws.md) covers creating them on
+AWS, including the burstable-instance trap the attestation cannot catch:
 
 ```bash
 bash performance/environment/provision-sut.sh       # on the system under test

@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in. That file is gitignored -- operator_cidr is your home or
+# office address, and pinning it in git would be publishing it.
+
+region        = "ap-south-1"
+subnet_id     = "subnet-xxxxxxxxxxxxxxxxx"
+key_pair_name = "my-ec2-keypair"
+
+# Your public address with /32. Find it with: curl -s https://checkip.amazonaws.com
+operator_cidr = "203.0.113.42/32"
+
+# Defaults conform to perf-standard-01; override only with a reason.
+# sut_instance_type     = "m6i.2xlarge"
+# loadgen_instance_type = "c6i.xlarge"

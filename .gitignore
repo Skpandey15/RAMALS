@@ -21,3 +21,16 @@ Thumbs.db
 coverage/
 **/coverage/
 learning-platform/build/
+
+# Terraform state for the performance reference environment (R1).
+#
+# State records what was actually created -- ids, addresses, and whatever the provider returns --
+# and can carry values that were never meant to be published. It also describes infrastructure that
+# exists right now, which a commit cannot keep true. The declaration is reviewed; the state is not
+# an artifact.
+performance/environment/terraform/.terraform/
+performance/environment/terraform/*.tfstate
+performance/environment/terraform/*.tfstate.*
+performance/environment/terraform/*.tfvars
+performance/environment/terraform/.terraform.lock.hcl
+performance/environment/terraform/tfplan
