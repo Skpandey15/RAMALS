@@ -274,6 +274,9 @@ check "one with no measurements behind it is refused"   "1" "$(verify_says no_me
 grep -q 'RAMALS_PERF_ATTESTATION' "${PERF}/run-baseline.sh"
 check "the runner accepts an attestation from the host under test" "0" "$?"
 
+runner_mode="$(git -C "${REPO_ROOT}" ls-files --stage -- performance/run-baseline.sh | awk '{print $1}')"
+check "the documented benchmark runner is executable" "100755" "${runner_mode}"
+
 # -- result ------------------------------------------------------------------------------------------
 
 echo
