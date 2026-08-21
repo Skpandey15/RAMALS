@@ -1,0 +1,4 @@
+ramals-deploy-backend-1 restarts=0 oomkilled=false
+ramals-deploy-postgres-1 restarts=0 oomkilled=false
+ramals-deploy-keycloak-1 restarts=0 oomkilled=false
+ramals-deploy-web-ui-1 restarts=0 oomkilled=false

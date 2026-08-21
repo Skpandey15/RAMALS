@@ -36,49 +36,92 @@ class Mvp1ReleaseBoardTests {
     return Files.readString(BOARD, StandardCharsets.UTF_8).replace("\r\n", "\n");
   }
 
+  /**
+   * Whether the board claims R1 is resolved.
+   *
+   * <p>Deliberately generous in what it recognises as a closure claim: every plausible way of
+   * writing one counts, so the strict checks below cannot be sidestepped by choosing a different
+   * tick.
+   */
+  private static boolean claimsR1Closed(String board) {
+    return board.contains("R1 — calibrated performance baseline** | ✅")
+        || board.contains("R1 — calibrated performance baseline** | 🟢")
+        || board.toLowerCase(java.util.Locale.ROOT).contains("r1 closed");
+  }
+
   @Test
-  @DisplayName("the release board names R1 and marks it open")
+  @DisplayName("the release board names R1, and marks it open until it is genuinely closed")
   void r1IsOnTheBoardAndOpen() throws IOException {
     String board = board();
 
     assertThat(board).as("R1 must appear on the board").contains("R1");
-    assertThat(board)
-        .as("R1 must be marked open; it blocks the MVP-1 release candidate")
-        .containsIgnoringCase("OPEN");
+
+    if (!claimsR1Closed(board)) {
+      assertThat(board)
+          .as("R1 must be marked open; it blocks the MVP-1 release candidate")
+          .containsIgnoringCase("OPEN");
+    }
   }
 
   @Test
-  @DisplayName("R1 is stated to block the release candidate")
+  @DisplayName("while R1 is open, the board says what it blocks")
   void r1IsStatedToBlockTheReleaseCandidate() throws IOException {
+    String board = board();
+
     // Naming it is not enough. Somebody reading the board must be told what it stops, or "open"
     // reads as a note rather than a gate.
-    assertThat(board())
+    //
+    // Only while it is open. Once R1 closes the sentence is no longer true, and a gate that forces
+    // the board to keep asserting a resolved blocker is a gate that teaches people to write things
+    // that are not so.
+    if (claimsR1Closed(board)) {
+      return;
+    }
+    assertThat(board)
         .as("the board must say what R1 blocks, not merely that it exists")
         .containsIgnoringCase("blocks M1-T18");
   }
 
   @Test
-  @DisplayName("closing R1 requires evidence, not an edit to a word")
+  @DisplayName("closing R1 requires a calibrated baseline, not an edit to a word")
   void closingR1RequiresEvidence() throws IOException {
     String board = board();
 
-    boolean claimsClosed =
-        board.contains("R1 — calibrated performance baseline** | ✅")
-            || board.contains("R1 — calibrated performance baseline** | 🟢")
-            || board.toLowerCase().contains("r1 closed");
-
-    if (!claimsClosed) {
+    if (!claimsR1Closed(board)) {
       return;
     }
 
-    // If the board ever claims R1 is closed, there must be a baseline captured somewhere other than
-    // a developer workstation. Doc 07 §4 is explicit that developer-machine numbers are indicative
-    // only, so a green R1 with nothing behind it would be a worse state than an honest red one.
-    Path evidence = Path.of("..", "docs", "release", "evidence", "performance-baseline.md");
-    assertThat(evidence).as("R1 cannot be closed without a baseline evidence file").exists();
-    assertThat(Files.readString(evidence, StandardCharsets.UTF_8))
-        .as("closing R1 requires a baseline from an authoritative environment, not a workstation")
-        .doesNotContainIgnoringCase("developer workstation");
+    // R1 asks for a calibrated baseline, so the file this points at is the calibrated one. It used
+    // to point at the MVP-0 evidence, which is an honest record of an indicative workstation run and
+    // could never satisfy R1 — checking it for the absence of the words "developer workstation" was
+    // therefore a check that could only ever be failed by the very document it named.
+    //
+    // What replaces it asks for the properties that make a baseline calibrated rather than for the
+    // absence of a phrase.
+    Path evidence =
+        Path.of("..", "docs", "release", "evidence", "r1-calibrated-baseline.md");
+    assertThat(evidence).as("R1 cannot be closed without a calibrated baseline record").exists();
+
+    String record = Files.readString(evidence, StandardCharsets.UTF_8).replace("\r\n", "\n");
+
+    assertThat(record)
+        .as("the baseline must name the environment spec it was measured against")
+        .contains("perf-standard-01");
+    assertThat(record)
+        .as("the baseline must record that the environment attested as conforming")
+        .containsIgnoringCase("conforms");
+    assertThat(record)
+        .as("Doc 07 §4: a workstation run is indicative only and cannot close R1")
+        .doesNotContainIgnoringCase("measured on a developer workstation");
+    assertThat(record)
+        .as(
+            "a baseline taken with the rate-limit override relaxed measures capacity, not the "
+                + "platform's own policy, and cannot be the authoritative result on its own")
+        .containsIgnoringCase("production");
+
+    assertThat(board)
+        .as("the board must link the evidence that closes R1, so the claim is one click from proof")
+        .contains("evidence/r1-calibrated-baseline.md");
   }
 
   @Test

@@ -44,6 +44,15 @@ for path in "${changed[@]}"; do
     docs/database/*)
       database=true
       ;;
+    # The release board and its evidence are executable documents: Mvp1ReleaseBoardTests reads them,
+    # and it is the gate that stops R1 being closed by editing a word in a table. That test lives in
+    # the backend module, so classifying these as docs-only skipped Backend CI and the guard never
+    # ran on the one kind of change it exists to police -- including the change that closed R1.
+    # A gate that cannot run on the thing it guards is not a gate.
+    docs/release/*)
+      backend=true
+      docs_only=false
+      ;;
     docs/*|README.md|.editorconfig|.gitignore|.env.example|knowledge/*)
       ;;
     *)

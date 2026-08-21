@@ -1,0 +1,24 @@
+RAMALS_RATE_LIMIT_* env on the backend container (0 lines = production defaults in force):
+(none)
+
+compose files in effect:
+/home/ubuntu/deploy/compose.deploy.yml
+/home/ubuntu/performance/compose.perf-fixed.yml
+/home/ubuntu/performance/compose.perf-two-host.yml
+
+packaged application.yml rate-limit block:
+    rate-limit:
+      enabled: ${RAMALS_RATE_LIMIT_ENABLED:true}
+      # Pre-authentication, keyed on client IP. Deliberately generous: a whole school or office
+      # behind one NAT shares this bucket, and throttling them as a group is not the intent.
+      capacity: ${RAMALS_RATE_LIMIT_CAPACITY:600}
+      refill-per-second: ${RAMALS_RATE_LIMIT_REFILL_PER_SECOND:300}
+      # Post-authentication, keyed on the verified token subject. These are the limits an individual
+      # learner actually experiences. Bound explicitly so they are configurable per environment --
+      # previously they were reachable only by editing Java.
+      subject:
+        capacity: ${RAMALS_RATE_LIMIT_SUBJECT_CAPACITY:120}
+        refill-per-second: ${RAMALS_RATE_LIMIT_SUBJECT_REFILL_PER_SECOND:60}
+
+management:
+  otlp:

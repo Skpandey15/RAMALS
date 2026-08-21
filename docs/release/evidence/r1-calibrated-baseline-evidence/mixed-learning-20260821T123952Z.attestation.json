@@ -1,0 +1,34 @@
+{
+  "specId": "perf-standard-01",
+  "specVersion": "1",
+  "specStatus": "proposed",
+  "attestedAt": "2026-08-21T12:39:06+00:00",
+  "conforms": true,
+  "failures": [],
+  "measured": {
+    "host": {
+      "cpus": 8,
+      "memory_gib": 30.81,
+      "os_type": "linux",
+      "architecture": "x86_64",
+      "operating_system": "Ubuntu 24.04.4 LTS",
+      "kernel_version": "6.17.0-1019-aws",
+      "docker_version": "29.7.2",
+      "runtime_host_name": "ip-172-31-7-56"
+    },
+    "containers": {
+      "backend": {
+        "running": true,
+        "cpus": 4.0,
+        "memory_gib": 4.0
+      },
+      "postgres": {
+        "running": true,
+        "cpus": 2.0,
+        "memory_gib": 2.0
+      }
+    },
+    "load_generator_off_host": true
+  },
+  "$comment": "load_generator_off_host is asserted by the operator, not measured. Every other field was read from the container runtime at the moment of the run."
+}
