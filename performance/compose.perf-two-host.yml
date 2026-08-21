@@ -14,13 +14,45 @@
 #     -f performance/compose.perf-two-host.yml up -d
 #
 # AWS must continue to restrict 8080/8081 ingress to the load-generator security group.
+# The token issuer has to stop depending on how Keycloak was reached
+# -------------------------------------------------------------------
+# The canonical topology runs Keycloak with KC_HOSTNAME_STRICT=false, so it derives the hostname --
+# and therefore the `iss` claim -- from the address each request arrived on. On one host that is
+# invisible: everything uses the in-network name and every issuer agrees.
+#
+# Two hosts break that silently. k6 must mint its tokens through the published address, so they
+# carry iss=http://<sut-private-ip>:8081/realms/ramals, while the backend validates against
+# http://keycloak:8080/realms/ramals. Every token is well-formed, correctly signed, and refused.
+#
+# That is what the first completed R1 attempt measured: 9,599 of 9,619 requests returned 401 in one
+# to two milliseconds. The latency thresholds passed -- p95 of 4 ms against a 250 ms budget -- for
+# the sole reason that no request ever reached anything. A run can fail this way and look green in
+# every column except one.
+#
+# So the issuer is pinned to the address both parties can agree on, and the backend is told the same
+# value. It is a property of the realm here, not of the route taken to it.
 services:
   backend:
     ports: !override
       - "127.0.0.1:${RAMALS_BACKEND_PORT:-8080}:8080"
       - "${RAMALS_PERF_SUT_BIND_ADDRESS:?Set RAMALS_PERF_SUT_BIND_ADDRESS to the SUT private IP}:${RAMALS_BACKEND_PORT:-8080}:8080"
+    environment:
+      # Must equal the issuer Keycloak now advertises, below. Spring derives both the JWKS location
+      # and the expected `iss` from this one value, so they cannot drift apart -- but it does mean
+      # the backend fetches keys over the published port rather than the in-network name. That path
+      # is the host's own interface and is reachable from the container; preflight-r1.sh proves it
+      # by presenting a real token before any measured run.
+      RAMALS_OIDC_ISSUER_URI: "http://${RAMALS_PERF_SUT_BIND_ADDRESS:?Set RAMALS_PERF_SUT_BIND_ADDRESS to the SUT private IP}:${RAMALS_KEYCLOAK_PORT:-8081}/realms/ramals"
 
   keycloak:
     ports: !override
       - "127.0.0.1:${RAMALS_KEYCLOAK_PORT:-8081}:8080"
       - "${RAMALS_PERF_SUT_BIND_ADDRESS:?Set RAMALS_PERF_SUT_BIND_ADDRESS to the SUT private IP}:${RAMALS_KEYCLOAK_PORT:-8081}:8080"
+    environment:
+      # Pinning the hostname makes the issuer identical whichever address a token was requested
+      # through, which is the property the two-host split needs and the canonical single-host
+      # deployment never had to have.
+      KC_HOSTNAME: "http://${RAMALS_PERF_SUT_BIND_ADDRESS:?Set RAMALS_PERF_SUT_BIND_ADDRESS to the SUT private IP}:${RAMALS_KEYCLOAK_PORT:-8081}"
+      # Keycloak still answers to the in-network name for the backend's own calls; only the issued
+      # `iss` is fixed. Leaving strict mode off keeps that working.
+      KC_HOSTNAME_STRICT: "false"

@@ -333,6 +333,48 @@ esac
 check "fixtures name the missing Keycloak address as the reason" "named" "${refused}"
 check "fixtures refuse to provision with no reachable Keycloak address" "1" "${refusal_status}"
 
+# -- the credential chain, end to end ----------------------------------------------------------------
+#
+# Keycloak derives the `iss` claim from the address a token was requested through unless the
+# hostname is pinned. On one host nobody notices; on two, k6 mints tokens via the published address
+# and the backend validates against the in-network name, so every token is well-formed, correctly
+# signed and refused. The completed R1 attempt returned 401 to 9,599 of 9,619 requests and passed
+# every latency threshold doing it, because rejecting a token takes a millisecond.
+#
+# So the two values that have to agree are checked for agreeing, textually, here -- where it costs
+# nothing -- rather than on a paid environment.
+
+AGREEMENT="$("${PYTHON}" - "${PERF}/compose.perf-two-host.yml" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+
+def value_of(key):
+    match = re.search(rf'^\s*{re.escape(key)}:\s*"([^"]+)"', text, re.MULTILINE)
+    return match.group(1) if match else None
+
+hostname = value_of("KC_HOSTNAME")
+issuer = value_of("RAMALS_OIDC_ISSUER_URI")
+
+if hostname is None or issuer is None:
+    print("missing")
+elif not issuer.startswith(hostname + "/realms/"):
+    # Compared before interpolation on purpose: both sides must be built from the same variables,
+    # so they cannot diverge for any value the operator supplies.
+    print("disagree")
+else:
+    print("agree")
+PYEOF
+)"
+check "the pinned Keycloak hostname and the backend's expected issuer agree" "agree" "${AGREEMENT%$'\r'}"
+
+# The smoke has to spend a token, not merely obtain one. Acquisition succeeded throughout the run
+# that measured nothing: Keycloak was never the component that disagreed.
+grep -q "url('/api/v1/me')" "${PERF}/auth-setup-smoke.js"
+check "the smoke presents a token to the backend, not just acquires one" "0" "$?"
+
+grep -q 'RAMALS_BASE_URL' "${PERF}/preflight-r1.sh"
+check "the preflight requires a backend address to present it to" "0" "$?"
+
 # -- things that must not drift back ---------------------------------------------------------------
 
 RUNBOOK="${PERF}/environment/RUNBOOK-aws.md"

@@ -31,7 +31,9 @@ fail() { printf '\nPREFLIGHT FAILED: %s\n' "$*" >&2; exit 1; }
 say "Checking the environment this needs"
 
 missing=0
-for required in RAMALS_TOKEN_URL RAMALS_KEYCLOAK_ADMIN RAMALS_KEYCLOAK_ADMIN_PASSWORD RAMALS_LOAD_PASSWORD; do
+# RAMALS_BASE_URL is required because the smoke now spends a token on a real backend request.
+# Without it the check would fall back to a default, quietly test the wrong host, and pass.
+for required in RAMALS_BASE_URL RAMALS_TOKEN_URL RAMALS_KEYCLOAK_ADMIN RAMALS_KEYCLOAK_ADMIN_PASSWORD RAMALS_LOAD_PASSWORD; do
   if [ -z "${!required:-}" ]; then
     echo "  missing: ${required}" >&2
     missing=$((missing + 1))
@@ -78,9 +80,11 @@ say "Provisioning load fixtures"
 trap '"${HERE}/fixtures.sh" restore || true' EXIT INT TERM
 echo "  fixtures provisioned"
 
-say "Acquiring the learner token pool (no workload requests)"
+say "Acquiring the learner token pool and spending one token on the backend"
 "${RAMALS_K6_CMD:-k6}" run --quiet "${HERE}/auth-setup-smoke.js" \
-  || fail "the scenarios cannot authenticate; a measured run would fail in setup()"
+  || fail "the credential chain is broken; a measured run would return 401 to everything and still
+  report passing latencies, because refusing a token is fast"
 
-printf '\nPreflight passed: fixtures provision and every load learner can authenticate.\n'
-printf 'The realm has been restored. Nothing was measured.\n'
+printf '\nPreflight passed: fixtures provision, every load learner can authenticate, and the\n'
+printf 'backend accepts a token that Keycloak issued. The realm has been restored.\n'
+printf 'Nothing was measured.\n'
