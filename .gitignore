@@ -32,5 +32,10 @@ performance/environment/terraform/.terraform/
 performance/environment/terraform/*.tfstate
 performance/environment/terraform/*.tfstate.*
 performance/environment/terraform/*.tfvars
-performance/environment/terraform/.terraform.lock.hcl
 performance/environment/terraform/tfplan
+#
+# .terraform.lock.hcl is deliberately NOT ignored. It pins the provider version and its hashes,
+# which is what makes `terraform init` resolve the same provider on another machine -- the same
+# reproducibility the reference environment exists for. Terraform's own init output says to commit
+# it, and an unpinned provider is how a re-created environment quietly stops matching the one the
+# baseline was measured on.

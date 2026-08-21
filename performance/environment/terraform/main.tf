@@ -36,7 +36,7 @@ data "aws_ami" "ubuntu" {
   owners      = ["099720109477"] # Canonical
 
   filter {
-    name   = "name"
+    name = "name"
     # Both the hvm-ssd and hvm-ssd-gp3 publication paths are matched. Canonical uses both
     # depending on release and region, and pinning to one makes the data source fail
     # outright in regions that only carry the other -- a confusing error for a detail that
@@ -166,8 +166,8 @@ resource "aws_instance" "sut" {
 }
 
 resource "aws_instance" "loadgen" {
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.loadgen_instance_type
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.loadgen_instance_type
   # The same subnet, so the same availability zone. Cross-AZ adds roughly a millisecond each way,
   # which is a material fraction of the 250 ms skill_map_read budget: the run would be measuring
   # the network rather than the platform.
