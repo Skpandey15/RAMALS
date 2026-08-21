@@ -104,6 +104,53 @@ services:
     tmpfs: ["/tmp:size=64m,mode=1777"]
     security_opt: [no-new-privileges:true]
 
+  # The AI plane, deployed when the manifest pins it.
+  #
+  # It was published, digest-pinned, scanned and validated by deploy-controller.sh -- and then not
+  # deployed by anything, because no compose file in the repository defined it. MVP-1's defining
+  # capability shipped as an artifact nobody could start by the documented path, and the gap was
+  # invisible because health-gates.sh skips the plane when AI_URL is unset and reports the
+  # deterministic core unaffected, which is true and was passing.
+  #
+  # Behind a profile so that remains true. A manifest without a ramals-ai component still deploys the
+  # core alone; deploy-controller.sh activates this profile only when a digest is actually pinned, so
+  # the manifest decides the topology rather than a flag somebody has to remember.
+  ramals-ai:
+    profiles: [ai-plane]
+    image: ${RAMALS_AI_IMAGE:?deploy-controller.sh exports RAMALS_AI_IMAGE when the manifest pins ramals-ai}
+    environment:
+      RAMALS_AI_ENVIRONMENT: ${RAMALS_AI_ENVIRONMENT:-dev}
+      # Workload authentication is the only thing separating the core workload from a replayed
+      # learner token, and the plane refuses to start with it disabled outside a local run.
+      RAMALS_AI_WORKLOAD_AUTH_ENABLED: "true"
+      RAMALS_AI_OIDC_ISSUER: ${RAMALS_AI_OIDC_ISSUER:-http://keycloak:8080/realms/ramals}
+      RAMALS_AI_OIDC_AUDIENCE: ${RAMALS_AI_WORKLOAD_AUDIENCE:-ramals-ai}
+      RAMALS_AI_EXPECTED_WORKLOAD_CLIENT_ID: ${RAMALS_AI_WORKLOAD_CLIENT_ID:-ramals-core-workload}
+      RAMALS_AI_AI_ENABLED: ${RAMALS_AI_AI_ENABLED:-false}
+      RAMALS_AI_MODEL_ROUTE: ${RAMALS_AI_MODEL_ROUTE:-ci-fake}
+      RAMALS_AI_PROVIDER_API_KEY: ${RAMALS_AI_PROVIDER_API_KEY:-}
+      RAMALS_AI_LOG_LEVEL: ${RAMALS_AI_LOG_LEVEL:-INFO}
+    depends_on:
+      keycloak: {condition: service_healthy}
+    networks: [edge]
+    ports: ["127.0.0.1:${RAMALS_AI_PORT:-8000}:8000"]
+    # Probed with the interpreter the image already has. The runtime stage carries no curl or wget,
+    # so a shell-tool healthcheck would report unhealthy for want of a binary rather than a service.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).status == 200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    security_opt: [no-new-privileges:true]
+
   web-ui:
     image: ${RAMALS_WEBUI_IMAGE:?deploy-controller.sh must export RAMALS_WEBUI_IMAGE}
     depends_on:
