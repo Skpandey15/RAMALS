@@ -85,6 +85,29 @@ terraform plan                                  # read it: both instances bill b
 terraform apply
 ```
 
+### `aws login` credentials are invisible to Terraform
+
+If `terraform plan` fails with **"No valid credential sources found"** and **"no EC2 IMDS role
+found"** while the AWS CLI works perfectly, this is why: AWS CLI v2's `aws login` stores credentials
+in a session cache the CLI understands and the Terraform provider does not. `aws configure list`
+shows their type as `login` rather than a file, and `~/.aws/config` carries a `login_session` line
+instead of a profile the SDK can resolve.
+
+Export them for the run:
+
+```bash
+# PowerShell
+aws configure export-credentials --format env-no-export | ForEach-Object {
+  if ($_ -match '^([A-Z_]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+}
+
+# bash
+eval "$(aws configure export-credentials --format env)"
+```
+
+They are session credentials and expire, so this is a per-shell step rather than something to put in
+a file.
+
 `terraform output next_steps` then prints the whole sequence below with the real addresses filled in.
 
 State is gitignored. It records what exists right now, which a commit cannot keep true, and it can
