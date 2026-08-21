@@ -78,16 +78,45 @@ def container_limits(names: list[str]) -> dict[str, dict[str, Any]]:
     """
     found: dict[str, dict[str, Any]] = {}
     for name in names:
+        reference = name
         try:
             completed = subprocess.run(
-                ["docker", "inspect", name, "--format", "{{json .HostConfig}}"],
+                ["docker", "inspect", reference, "--format", "{{json .HostConfig}}"],
                 capture_output=True,
                 text=True,
                 check=True,
             )
-        except (FileNotFoundError, subprocess.CalledProcessError):
+        except FileNotFoundError:
             found[name] = {"running": False}
             continue
+        except subprocess.CalledProcessError:
+            # Compose container names include the project prefix and replica suffix. Resolve the
+            # service by its stable Compose label, but reject missing or ambiguous deployments.
+            candidates = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "--filter",
+                    f"label=com.docker.compose.service={name}",
+                    "--filter",
+                    "status=running",
+                    "--format",
+                    "{{.ID}}",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+            if len(candidates) != 1:
+                found[name] = {"running": False}
+                continue
+            reference = candidates[0]
+            completed = subprocess.run(
+                ["docker", "inspect", reference, "--format", "{{json .HostConfig}}"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
         config = json.loads(completed.stdout)
         nano = config.get("NanoCpus") or 0
         memory = config.get("Memory") or 0
