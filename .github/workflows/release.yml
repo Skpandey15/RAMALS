@@ -89,7 +89,11 @@ jobs:
           # M1-T17. The AI plane is a released component, not a development convenience: it is built
           # once, digest-addressed, scanned and attested on the same path as the other two. An image
           # that only ever exists on a developer's machine cannot be rolled back to.
-          - component: ramals-ai
+          #
+          # 'ai', not 'ramals-ai'. The image name is built as ramals-${COMPONENT} a few steps below,
+          # so naming the component 'ramals-ai' published ghcr.io/<owner>/ramals-ramals-ai. The
+          # directory keeps its name; only the matrix key is the component.
+          - component: ai
             dockerfile: ramals-ai/Dockerfile
     outputs:
       learning_platform_digest: ${{ steps.export.outputs.learning_platform_digest }}
@@ -205,7 +209,7 @@ jobs:
           case "${COMPONENT}" in
             learning-platform) echo "learning_platform_digest=${DIGEST}" >> "$GITHUB_OUTPUT" ;;
             web-ui)            echo "web_ui_digest=${DIGEST}" >> "$GITHUB_OUTPUT" ;;
-            ramals-ai)         echo "ramals_ai_digest=${DIGEST}" >> "$GITHUB_OUTPUT" ;;
+            ai)                echo "ramals_ai_digest=${DIGEST}" >> "$GITHUB_OUTPUT" ;;
             *) echo "unknown component '${COMPONENT}' has no digest output" >&2; exit 1 ;;
           esac
 
