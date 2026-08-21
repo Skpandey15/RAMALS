@@ -116,12 +116,19 @@
           "type": "number"
         },
         "p99": {
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "null means the run did not capture p99, not that it was zero. k6's summary export emits only avg/min/med/max/p(90)/p(95) unless --summary-trend-stats asks for more; runs before the harness did so have no p99 to record. The key stays required so its absence is a deliberate statement rather than an omission."
         }
       }
     },
     "adaptive_decision_latency_ms": {
-      "type": "object",
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
         "p50": {
           "type": "number"
@@ -132,7 +139,8 @@
         "p99": {
           "type": "number"
         }
-      }
+      },
+      "description": "null when the scenario does not measure adaptive decision latency. Only the diagnostic scenario does."
     },
     "error_rate": {
       "type": "number"
@@ -177,6 +185,18 @@
           "type": "object"
         }
       }
+    },
+    "thresholds_passed": {
+      "type": "boolean",
+      "description": "Whether every k6 threshold held. A baseline may record a FAIL; that is the point."
+    },
+    "k6_exit_status": {
+      "type": "integer",
+      "description": "k6's exit status, preserved so a non-threshold failure is distinguishable from a breached threshold."
+    },
+    "performance_rate_limit_override": {
+      "type": "boolean",
+      "description": "Whether performance/compose.perf-override.yml was active. A capacity run and a production-policy run produce very different numbers from an identical workload, and are otherwise indistinguishable once console output is gone."
     }
   },
   "allOf": [
@@ -194,6 +214,25 @@
       "then": {
         "required": [
           "environment_attestation"
+        ]
+      }
+    },
+    {
+      "$comment": "A baseline from a harness that records its own verdict must actually record it. mvp0-perf-harness-v1 predates those fields and is exempt.",
+      "if": {
+        "properties": {
+          "script_version": {
+            "not": {
+              "const": "mvp0-perf-harness-v1"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "thresholds_passed",
+          "k6_exit_status",
+          "performance_rate_limit_override"
         ]
       }
     }

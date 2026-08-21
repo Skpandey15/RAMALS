@@ -219,6 +219,75 @@ check "a qualified id without attestation is invalid"         "False" "$(schema_
 check "a qualified id with its attestation is valid"          "True"  "$(schema_says qualified_with_attestation)"
 check "a qualified id with a FAILED attestation is invalid"   "False" "$(schema_says qualified_with_failed_attestation)"
 
+# -- the baselines we actually keep must satisfy the schema we actually ship --------------------------
+#
+# The suite validated the *example* against the schema and never validated a real one. So the schema
+# and the runner drifted apart in three places at once and every check stayed green: the runner began
+# emitting thresholds_passed, k6_exit_status and performance_rate_limit_override into a schema with
+# additionalProperties:false, and wrote latency_ms.p99 as null into a schema requiring a number.
+#
+# The authoritative R1 baseline was therefore a file that did not conform to its own contract, in the
+# same commit that used it to close a release gate.
+
+cat > "${WORK}/committed_baselines.py" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+import jsonschema
+
+root = Path(sys.argv[1])
+schema = json.loads((root / "performance" / "baselines" / "baseline.schema.json").read_text(encoding="utf-8"))
+
+results = {}
+for path in sorted(root.glob("docs/**/*.baseline.json")):
+    name = path.relative_to(root).as_posix()
+    try:
+        jsonschema.validate(json.loads(path.read_text(encoding="utf-8")), schema)
+        results[name] = "valid"
+    except jsonschema.ValidationError as failure:
+        results[name] = f"invalid: {failure.message[:120]}"
+
+json.dump(results, sys.stdout)
+PYEOF
+
+BASELINES="$("${PYTHON}" "${WORK}/committed_baselines.py" "${REPO_ROOT}")"
+
+baseline_count="$(printf '%s' "${BASELINES}" | "${PYTHON}" -c "import json,sys; print(len(json.load(sys.stdin)))")"
+check "there are committed baselines to validate" "yes" \
+  "$([ "${baseline_count%$'\r'}" -gt 0 ] && echo yes || echo no)"
+
+invalid="$(printf '%s' "${BASELINES}" | "${PYTHON}" -c "
+import json,sys
+bad = {k: v for k, v in json.load(sys.stdin).items() if v != 'valid'}
+print('none' if not bad else '; '.join(f'{k} -> {v}' for k, v in bad.items()))
+")"
+check "every committed baseline conforms to baseline.schema.json" "none" "${invalid%$'\r'}"
+
+# The verdict has to be a field, not an inference. Before this, "there is a baseline" and "the run
+# passed" were the same statement, because a failing run wrote no file at all -- so a reader could
+# only tell PASS from FAIL by whether something existed.
+AUTHORITATIVE="${REPO_ROOT}/docs/release/evidence/r1-calibrated-baseline-evidence"
+verdict="$("${PYTHON}" - "${AUTHORITATIVE}" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+files = sorted(Path(sys.argv[1]).glob("*.baseline.json"))
+if len(files) != 1:
+    print(f"expected exactly one authoritative baseline, found {len(files)}")
+else:
+    baseline = json.loads(files[0].read_text(encoding="utf-8"))
+    if "thresholds_passed" not in baseline:
+        print("no thresholds_passed field")
+    elif baseline["thresholds_passed"] is not True:
+        print(f"thresholds_passed={baseline['thresholds_passed']!r}")
+    elif baseline.get("performance_rate_limit_override") is not False:
+        print("the authoritative baseline was taken with the rate-limit override active")
+    else:
+        print("pass")
+PYEOF
+)"
+check "the authoritative baseline states its own verdict, under production policy" "pass" "${verdict%$'\r'}"
+
 # -- the runner refuses an id with no spec behind it -------------------------------------------------
 
 grep -q 'names no spec at' "${PERF}/run-baseline.sh"

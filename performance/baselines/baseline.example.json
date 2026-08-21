@@ -5,21 +5,62 @@
   "environment": "perf-standard-01",
   "commit": "<sha>",
   "dataset_version": "mvp0-baseline-v1",
-  "script_version": "mvp0-perf-harness-v1",
+  "script_version": "mvp1-perf-harness-v2",
   "measured_at": "2026-08-16T00:00:00Z",
   "arrival_rate_rps": 60,
   "observed_concurrency": 42,
   "think_time_ms": 0,
   "warmup_discarded": true,
-  "steady_state": { "window": "last 2m of a 3m30s run" },
+  "steady_state": {
+    "window": "last 2m of a 3m30s run"
+  },
   "host": {
     "cpu_limit": "4 vCPU",
     "memory_limit": "8 GiB",
     "jvm": "Temurin 25",
     "db_version": "PostgreSQL 18.1"
   },
-  "latency_ms": { "p50": 82, "p95": 184, "p99": 291 },
-  "adaptive_decision_latency_ms": { "p50": 96, "p95": 210, "p99": 340 },
+  "latency_ms": {
+    "p50": 82,
+    "p95": 184,
+    "p99": 291
+  },
+  "adaptive_decision_latency_ms": {
+    "p50": 96,
+    "p95": 210,
+    "p99": 340
+  },
   "error_rate": 0.001,
-  "throughput_rps": 105
+  "throughput_rps": 105,
+  "environment_attestation": {
+    "specId": "perf-standard-01",
+    "specVersion": "1",
+    "specStatus": "proposed",
+    "attestedAt": "2026-08-21T12:39:06+00:00",
+    "conforms": true,
+    "failures": [],
+    "measured": {
+      "host": {
+        "cpus": 8,
+        "memory_gib": 30.81,
+        "architecture": "x86_64"
+      },
+      "containers": {
+        "backend": {
+          "running": true,
+          "cpus": 4.0,
+          "memory_gib": 4.0
+        },
+        "postgres": {
+          "running": true,
+          "cpus": 2.0,
+          "memory_gib": 2.0
+        }
+      },
+      "load_generator_off_host": true
+    }
+  },
+  "thresholds_passed": true,
+  "k6_exit_status": 0,
+  "performance_rate_limit_override": false
 }

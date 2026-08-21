@@ -13,8 +13,9 @@ recorded as closed without evidence.
 | --- | --- | --- | --- |
 | **R1 — calibrated performance baseline** | ✅ **CLOSED** 2026-08-21 | — | Closed by the `v0.1.0-rc4` canonical run on an attested `perf-standard-01` environment, under production rate-limit policy with no override: 12,455 requests at 59.11 rps, **0.00% failures**, every committed threshold passed. Evidence: [R1 calibrated baseline](evidence/r1-calibrated-baseline.md). The rc3 Run A / Run B pair is retained as historical qualification evidence and is not superseded. |
 
-**What changed on 2026-08-21.** R1 is still open, but for a different reason than before. The
-environment question is answered: a conforming host and a separate load generator were provisioned
+**How R1 closed, 2026-08-21.** It took three runs. The first two, on `v0.1.0-rc3`, are retained
+as historical qualification evidence and are what made the third possible.
+The environment question was answered first: a conforming host and a separate load generator were provisioned
 under Terraform, the attestation passed with zero failures, `v0.1.0-rc3` was deployed by immutable
 digest, and two runs were recorded.
 
@@ -47,9 +48,9 @@ The spec's status is `proposed`, not `reference`: its values are a reasoned star
 MVP-0 indicative run, and the first calibrated run on a registered host confirms or revises them.
 
 **R1 blocked M1-T18, and no longer does.** It closed on 2026-08-21; M1-T18 is unblocked and remains ⬜ not started, awaiting its own explicit step. The rule it operated under is unchanged and is recorded here because it governs any future risk of the same shape. Under [M1-ADR-000](../adr/M1-ADR-000-mvp1-engineering-before-r1.md), MVP-1
-engineering may proceed while R1 is open — that exception covers *building*, not *releasing*. The RC
-and any deterministic-versus-agentic comparison remain blocked until R1 closes or is explicitly
-risk-accepted by name under that ADR.
+engineering could proceed while R1 was open — that exception covered *building*, not *releasing*,
+so the RC and any deterministic-versus-agentic comparison were blocked until R1 closed or was
+risk-accepted by name. R1 closed on its own terms; the exception was never invoked.
 
 Nothing in T00–T17 closed R1. It took an environment, a configuration fix (**TD-R1-01**) and a
 re-run against a release candidate built after that fix — rc3 could not close it, because
@@ -67,7 +68,9 @@ the refactor it names is broader than the fix that landed.
 | Item | Status | What it is | What closing it requires |
 | --- | --- | --- | --- |
 | **TD-R1-01 — canonical workload vs rate-limit policy** | ✅ fixed 2026-08-21 | `application.yml` bound the pre-authentication IP tier to `capacity 120 / refill 60` — the values `RateLimitProperties` intends for the *per-subject* tier, whose own IP-tier default is `600 / 300` — and did not bind the subject tier at all. The two-tier design shipped in code and in no deployed system: the shared bucket was five times tighter than designed, so a school or office behind one NAT throttled itself. | Fixed in configuration only, preserving both tiers and their ordering: IP tier restored to `600 / 300`, subject tier bound explicitly at `120 / 60`. Proven by the rc4 canonical run at 0.00% failures under production policy. `RateLimitPropertiesContractTests` fails if the YAML defaults drift from the Java defaults again, and `SharedEgressRateLimitTests` runs against the shipped configuration rather than pinning it, so a classroom sharing one address is exercised at the limits a deployment actually uses. |
-| **TD-R1-02 — failed threshold runs must still produce a baseline** | 🟡 fixed, refactor outstanding | k6 exits non-zero on a breached threshold and `run-baseline.sh` ran under `set -e`, so it aborted before distillation: the run most worth recording was the only one that recorded nothing. R1 Run A produced no `.baseline.json`. Because the `setup_data` scrub lives in that same block, Run A's summary also retained **20 live bearer tokens**, caught by gitleaks. | The immediate defect is fixed: the status is captured rather than fatal, distillation and the scrub always run, the status is re-raised afterwards, and the baseline records `thresholds_passed`, `k6_exit_status` and `performance_rate_limit_override`. A CI guard drives the script with a stub k6 that fails after writing `setup_data`. What remains is the refactor proper — a FAIL baseline is currently the same schema with a flag, and `baseline.schema.json` does not yet require the verdict field, so a consumer can still read a failing baseline as a passing one. |
+| **TD-R1-02 — failed threshold runs must still produce a baseline** | ✅ fixed 2026-08-21 | k6 exits non-zero on a breached threshold and `run-baseline.sh` ran under `set -e`, so it aborted before distillation: the run most worth recording was the only one that recorded nothing. R1 Run A produced no `.baseline.json`. Because the `setup_data` scrub lives in that same block, Run A's summary also retained **20 live bearer tokens**, caught by gitleaks. | Both halves fixed: the status is captured rather than fatal, distillation and the scrub always run, and the status is re-raised afterwards so callers see what they saw before. The schema refactor that was outstanding is now done — `baseline.schema.json` defines `thresholds_passed`, `k6_exit_status` and `performance_rate_limit_override`, and **requires** all three of any harness version that emits them, so a FAIL baseline can no longer be read as a PASS. The verdict is a field, not an inference from whether a file exists. |
+| **TD-R1-03 — baseline host provenance describes the wrong machine** | 🟡 partially fixed | `run-baseline.sh` recorded `host.jvm` and `host.db_version` by probing the machine it runs on. Two defects: it folded the shell's own "command not found" into the value, so both R1 baselines carry `"jvm": "./performance/run-baseline.sh: line 87: java: command not found
+unknown"` where a version string belongs; and on a two-host run it executes on the **load generator**, so even a successful probe would describe the machine generating load rather than the system under test. | The captured error message is fixed: the runner probes with `command -v` first and records `unavailable` when it cannot answer, which is true rather than misleading. Collecting the real values **from the SUT** is not done — it needs the runner to reach across to the system under test, or the attestation to carry them. Until then a calibrated baseline cannot say which JVM or PostgreSQL build produced it. **R1 was not re-run to populate this**: the numbers are unaffected, and burning an environment for metadata would be the wrong trade. |
 
 ## Task progress — canonical task → decision mapping
 

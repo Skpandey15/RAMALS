@@ -124,6 +124,66 @@ class Mvp1ReleaseBoardTests {
         .contains("evidence/r1-calibrated-baseline.md");
   }
 
+  /** The M1-T18 row, or an empty string if the board has stopped tracking it. */
+  private static String t18Row(String board) {
+    return board
+        .lines()
+        .filter(line -> line.startsWith("| M1-T18"))
+        .findFirst()
+        .orElse("");
+  }
+
+  @Test
+  @DisplayName("claiming M1-T18 done requires the release evidence behind it")
+  void completingT18RequiresEvidence() throws IOException {
+    String board = board();
+    String row = t18Row(board);
+    assertThat(row).as("the board must still track M1-T18").isNotEmpty();
+
+    String[] cells = row.split("\\|");
+    String status = cells.length > 2 ? cells[2].trim() : "";
+
+    // M1-T18 produces the release candidate, so it is the last claim anybody checks and the one
+    // with the most riding on it. R1 was pinned precisely because a risk nobody could fail was easy
+    // to close by editing a word; T18 had no such gate at all, and until this test it could be
+    // marked done on a board with nothing behind it and every suite would stay green.
+    boolean claimsDone = status.contains("✅") || status.toLowerCase(java.util.Locale.ROOT).contains("done");
+    if (!claimsDone) {
+      return;
+    }
+
+    Path evidence = Path.of("..", "docs", "release", "evidence", "m1-t18-e2e-validation.md");
+    assertThat(evidence)
+        .as(
+            "M1-T18 is marked done, so docs/release/evidence/m1-t18-e2e-validation.md must exist "
+                + "and record what was validated")
+        .exists();
+
+    String record = Files.readString(evidence, StandardCharsets.UTF_8).replace("\r\n", "\n");
+
+    // Each of these is a gate M1-T18 exists to clear. Naming them individually means a partial
+    // record fails on the specific thing it is missing, rather than passing because it is long.
+    assertThat(record)
+        .as("the E2E record must name the release candidate it validated")
+        .containsPattern("v\\d+\\.\\d+\\.\\d+");
+    assertThat(record)
+        .as("the release candidate must be identified by immutable digest, never by tag alone")
+        .contains("sha256:");
+    assertThat(record)
+        .as("MVP-1's release candidate rests on the calibrated performance baseline; cite it")
+        .contains("r1-calibrated-baseline");
+    assertThat(record)
+        .as("the record must state the outcome of end-to-end validation, not merely that it ran")
+        .containsPattern("(?i)(pass|fail)");
+    assertThat(record)
+        .as("a record that says the work is outstanding cannot also be the evidence it is done")
+        .doesNotContainIgnoringCase("not yet validated");
+
+    assertThat(board)
+        .as("the board must link the evidence, so the claim is one click from proof")
+        .contains("m1-t18-e2e-validation.md");
+  }
+
   @Test
   @DisplayName("the board tracks every task in the MVP-1 plan")
   void everyTaskIsTracked() throws IOException {
