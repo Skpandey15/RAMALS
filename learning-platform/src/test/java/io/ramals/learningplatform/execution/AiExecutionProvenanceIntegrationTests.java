@@ -13,6 +13,12 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
+import io.ramals.learningplatform.ai.contract.LearnerRef;
+import io.ramals.learningplatform.ai.contract.LearningContext;
+import io.ramals.learningplatform.ai.contract.Constraints;
+import io.ramals.learningplatform.ai.contract.InteractionClass;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -313,5 +319,46 @@ class AiExecutionProvenanceIntegrationTests {
         SELECT column_name FROM information_schema.columns
          WHERE table_schema = ? AND table_name = ?
         """, String.class, schema, table);
+  }
+
+  @Test
+  @DisplayName("an execution row can actually be written to PostgreSQL")
+  void executionRowsAreWritableAgainstPostgres() {
+    // The test this class was missing. Twelve tests asserted the shape of the table, its
+    // constraints, its retention and its redaction -- and none wrote a row through the repository,
+    // so nothing noticed that every write failed against a real database.
+    //
+    // PostgreSQL's JDBC driver refuses a java.time.Instant parameter outright: "Can't infer the SQL
+    // type to use for an instance of java.time.Instant". H2, which the unit tests use, accepts it.
+    // M1-T18 found it on a deployed candidate, where the adaptation comparison dispatched, the row
+    // could not be written, and the failure-recording path failed the same way -- so nothing was
+    // left behind to notice either.
+    AiExecutionRepository repository = new AiExecutionRepository(jdbc, tools.jackson.databind.json.JsonMapper.builder().build());
+    Instant startedAt = Instant.now().minusMillis(120);
+    Instant completedAt = Instant.now();
+
+    AiExecution failure = repository.insertFailure(
+        envelope("request-fail-1"), "ADAPTATION", "AI_UNAVAILABLE", startedAt, completedAt);
+
+    assertThat(failure).as("a failed execution must be recordable").isNotNull();
+    assertThat(jdbc.queryForObject(
+        "SELECT count(*) FROM core.ai_execution WHERE request_id = ?", Integer.class,
+        "request-fail-1"))
+        .isEqualTo(1);
+    assertThat(jdbc.queryForObject(
+        "SELECT started_at IS NOT NULL AND completed_at IS NOT NULL FROM core.ai_execution "
+            + "WHERE request_id = ?", Boolean.class, "request-fail-1"))
+        .as("the timestamps must survive the round trip, not merely the insert")
+        .isTrue();
+  }
+
+  private static AiRequestEnvelope envelope(String requestId) {
+    return new AiRequestEnvelope(
+        AiRequestEnvelope.CONTRACT_VERSION, "01a02500-0000-7000-8000-000000000001", requestId,
+        new LearnerRef(UUID.randomUUID().toString(), "en"),
+        new LearningContext("SKILL-1", null, null, null, null),
+        null, null,
+        new Constraints(InteractionClass.INTERACTIVE_AI, 12000, null, null, null),
+        "ADAPT");
   }
 }
