@@ -100,7 +100,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T15 AI evaluation release gates | ✅ done | M1-ADR-009 ✅ |
 | M1-T16 AI security challenge | ✅ done | — |
 | M1-T17 CI/CD and deployment packaging | ✅ done | M1-ADR-011 ✅ |
-| M1-T18 MVP-1 E2E validation and RC | ⬜ | **R1** 🔴 |
+| M1-T18 MVP-1 E2E validation and RC | ⬜ | **R1** ✅ closed 2026-08-21 |
 
 ### M1-T17 slices
 
