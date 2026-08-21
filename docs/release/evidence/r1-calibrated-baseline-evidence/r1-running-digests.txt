@@ -1,0 +1,2 @@
+ghcr.io/skpandey15/ramals-learning-platform@sha256:5f04c3db1e7d4894005f78ae89213eb20ca97080c2e3e04df7af953097355e56
+ghcr.io/skpandey15/ramals-web-ui@sha256:d9aa1c00d33d000c539f4e6e134535ba2aecd2f7f222263a7919f135cf8d7fb6

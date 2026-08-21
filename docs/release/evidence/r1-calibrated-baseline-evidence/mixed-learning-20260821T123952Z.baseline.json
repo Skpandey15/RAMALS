@@ -1,0 +1,62 @@
+{
+  "scenario": "mixed-learning",
+  "executor_model": "open",
+  "environment": "perf-standard-01",
+  "environment_attestation": {
+    "specId": "perf-standard-01",
+    "specVersion": "1",
+    "specStatus": "proposed",
+    "attestedAt": "2026-08-21T12:39:06+00:00",
+    "conforms": true,
+    "failures": [],
+    "measured": {
+      "host": {
+        "cpus": 8,
+        "memory_gib": 30.81,
+        "os_type": "linux",
+        "architecture": "x86_64",
+        "operating_system": "Ubuntu 24.04.4 LTS",
+        "kernel_version": "6.17.0-1019-aws",
+        "docker_version": "29.7.2",
+        "runtime_host_name": "ip-172-31-7-56"
+      },
+      "containers": {
+        "backend": {
+          "running": true,
+          "cpus": 4.0,
+          "memory_gib": 4.0
+        },
+        "postgres": {
+          "running": true,
+          "cpus": 2.0,
+          "memory_gib": 2.0
+        }
+      },
+      "load_generator_off_host": true
+    },
+    "$comment": "load_generator_off_host is asserted by the operator, not measured. Every other field was read from the container runtime at the moment of the run."
+  },
+  "commit": "86d1033b366b75e2258cc10fd5be80a591bbfe8d",
+  "dataset_version": "mvp0-baseline-v1",
+  "script_version": "mvp0-perf-harness-v1",
+  "measured_at": "2026-08-21T12:39:52Z",
+  "warmup_discarded": true,
+  "steady_state": {
+    "window": "documented per scenario"
+  },
+  "host": {
+    "jvm": "./performance/run-baseline.sh: line 87: java: command not found\nunknown",
+    "db_version": "unknown"
+  },
+  "latency_ms": {
+    "p50": 2.59483,
+    "p95": 20.003019899999998,
+    "p99": null
+  },
+  "adaptive_decision_latency_ms": null,
+  "error_rate": 0,
+  "throughput_rps": 59.1062142134259,
+  "thresholds_passed": true,
+  "k6_exit_status": 0,
+  "performance_rate_limit_override": false
+}

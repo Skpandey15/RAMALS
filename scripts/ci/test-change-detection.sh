@@ -33,4 +33,16 @@ run_case learning-platform/src/main/java/Example.java true false false
 run_case web-ui/src/Example.tsx false true false
 run_case docs/architecture/example.md false false true
 
-echo 'Backend-only, frontend-only, and docs-only change detection passed.'
+# The release board is an executable document. Mvp1ReleaseBoardTests reads it and is what stops R1
+# being closed by editing a word in a table -- and that test lives in the backend module, so a board
+# change classified as docs-only skips Backend CI and the guard never runs on the one kind of change
+# it exists to police. It has to pull backend in.
+run_case docs/release/mvp1-release-board.md true false false
+run_case docs/release/evidence/example.md true false false
+
+# Documentation that no test reads stays docs-only. Widening the trigger to all of docs/ would run
+# the backend suite on every typo, and a suite that runs when it cannot fail is one people learn to
+# ignore.
+run_case docs/architecture/nested/example.md false false true
+
+echo 'Backend-only, frontend-only, docs-only, and release-board change detection passed.'

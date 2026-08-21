@@ -1,14 +1,18 @@
-# R1 evidence package — calibrated baseline on `perf-standard-01`
+# R1 — calibrated performance baseline on `perf-standard-01`
 
-**Date (UTC):** 2026-08-21 · **Status of R1: still OPEN** — see [Disposition](#disposition).
+**Status: R1 CLOSED.** The authoritative calibrated baseline is the `v0.1.0-rc4` run of 2026-08-21,
+executed under normal production rate-limit policy with no override of any kind.
 
-This is the authoritative R1 evidence. It supersedes nothing: the MVP-0 measurements in
-[`performance-baseline.md`](performance-baseline.md) remain valid as *indicative* numbers taken on a
-developer workstation, and are explicitly not a calibrated baseline. What is new here is that the
-same measurements were taken on an attested fixed-spec environment with the load generator on a
-separate machine.
+Three runs exist and all three are permanent record. The rc3 pair is retained as historical
+qualification evidence — it is what proved the environment, found the defect, and established that
+the defect was configuration rather than capacity. Nothing in this document supersedes or relabels
+them.
 
-Two runs were executed. **Both are permanent record. Neither replaces the other.**
+| Run | Release | Policy | Disposition |
+| --- | --- | --- | --- |
+| **RC4 canonical** | `v0.1.0-rc4` | production defaults | **PASS — authoritative baseline** |
+| RC3 Run A | `v0.1.0-rc3` | production defaults (defective) | VALID / FAIL — historical |
+| RC3 Run B | `v0.1.0-rc3` | capacity override | PASS — capacity characterization, historical |
 
 ---
 
@@ -16,25 +20,33 @@ Two runs were executed. **Both are permanent record. Neither replaces the other.
 
 | | |
 | --- | --- |
-| Release | **`v0.1.0-rc3`** |
-| Release commit | `f7fb9efad94fbbebd68ea24cabdf79a1e2f50cb8` |
-| Benchmark tooling | `main@84bddbc18e72c5687d9946ced312774653c27e80` |
+| Release | **`v0.1.0-rc4`** |
+| Release commit | `86d1033b366b75e2258cc10fd5be80a591bbfe8d` |
+| Benchmark tooling | the same commit — tooling and application ship from one tree |
 
-Deployed by immutable digest, verified on the running containers rather than taken from the
-manifest:
+Verified on the running containers, not read from the manifest:
 
 | Component | Image and digest |
 | --- | --- |
-| learning-platform | `ghcr.io/skpandey15/ramals-learning-platform@sha256:c233e3ef7275b2ca63a8613547d69829def6deda150c3d30bdbaa5fdb3f330b9` |
-| web-ui | `ghcr.io/skpandey15/ramals-web-ui@sha256:a8a01caea253341bfe37357e53e43ab346f6e548b26cad3442407093cffe2637` |
-| ramals-ai | `ghcr.io/skpandey15/ramals-ai@sha256:12105fa07e32e6cca0467cc46cfb3d44fb30e81aefb4f89fae2cee85e1726da0` |
+| learning-platform | `ghcr.io/skpandey15/ramals-learning-platform@sha256:5f04c3db1e7d4894005f78ae89213eb20ca97080c2e3e04df7af953097355e56` |
+| web-ui | `ghcr.io/skpandey15/ramals-web-ui@sha256:d9aa1c00d33d000c539f4e6e134535ba2aecd2f7f222263a7919f135cf8d7fb6` |
+| ramals-ai | `ghcr.io/skpandey15/ramals-ai@sha256:91f5cc91b87da94da4afa86d75b89ff5786f25f342078c9b5d70f53aed9f338c` |
+
+Published by the trusted release pipeline from tag `v0.1.0-rc4`; every job passed, including
+Contract, Backend, Frontend, Security and Python CI. Digests were cross-checked against GHCR
+independently of the pipeline's own report and agree exactly.
+
+**Why rc3 could not be used.** `application.yml` is packaged into the backend jar. Reading it out of
+the published rc3 digest shows `capacity: 120 / refill-per-second: 60` on the pre-authentication
+tier and no subject binding — the TD-R1-01 defect, frozen into the artifact. A run against rc3 would
+have reproduced Run A exactly.
 
 ## 2. Environment attestation
 
-`perf-standard-01`, spec version 1, **`conforms: true` with zero failures**, exit 0. The same
-attestation was carried to the load generator for both runs and re-validated there.
+`perf-standard-01`, spec version 1, **`conforms: true`, zero failures, exit 0**. Carried to the load
+generator and re-validated there.
 
-| Measured | Value | Spec requires |
+| Measured | Value | Spec |
 | --- | --- | --- |
 | Host CPUs visible to the container runtime | 8 | ≥ 8 |
 | Host memory visible to the container runtime | 30.81 GiB | ≥ 16 |
@@ -42,85 +54,107 @@ attestation was carried to the load generator for both runs and re-validated the
 | `postgres` container | running, 2.0 CPU / 2.0 GiB | 2.0 / 2 |
 | Load generator off-host | `true` | required |
 
-SUT `m6i.2xlarge`; load generator `c6i.xlarge`, a separate instance in the same subnet. The
-attestation is machine-measured, not asserted: `attest.py` reads the container runtime and the
-running containers, and the runner refuses a qualified environment id without it.
+SUT `m6i.2xlarge`; load generator `c6i.xlarge`, separate instance, same subnet.
 
-The spec remains `status: proposed`. These are the first measurements against which its container
-limits can be reviewed.
+## 3. Effective rate-limit configuration — production policy, verified before load
 
-## 3. Workload configuration — identical in both runs
+This is the point of the run, so it was established before any traffic was generated:
 
-| | |
+```
+RAMALS_RATE_LIMIT_* variables on the backend container : none (0)
+compose files in effect                                : deploy/compose.deploy.yml
+                                                         performance/compose.perf-fixed.yml
+                                                         performance/compose.perf-two-host.yml
+```
+
+`compose.perf-override.yml` was **not** applied, and `deploy/.env` contains no rate-limit variable,
+so the packaged defaults were in force:
+
+| Tier | Capacity | Refill/s |
+| --- | --- | --- |
+| Pre-authentication, keyed on client IP | **600** | **300** |
+| Post-authentication, keyed on token subject | **120** | **60** |
+
+## 4. Pre-flight gates, all passed before traffic
+
+Every check introduced in response to an earlier R1 failure, run in order:
+
+| Gate | Result |
 | --- | --- |
-| Scenario | `mixed-learning` |
-| Executor | open model, ramping arrival rate |
-| Stages | 30 s warm-up at 10 rps → 1 min ramp 10→60 rps → 2 min steady at 60 rps |
-| Total duration | 3 m 30 s |
-| VUs | 50 preallocated, 300 maximum |
-| Load learners | 20, provisioned at runtime and removed afterwards |
-| Dataset | `mvp0-baseline-v1` |
-| Request mix | skill-map 35%, content 20%, assessment write 15%, diagnostic 10%, recommendation 10%, mastery 5%, auth 5% |
-| Thresholds | overall failure < 1%; p95 < 250 ms skill-map/mastery/recommendation; < 400 ms assessment write; < 500 ms diagnostic |
+| Runner and fixture scripts executable (the exit-126 class) | pass |
+| Two-host network contract — 6 checks | **holds** |
+| Backend and Keycloak reachable from the load generator over the private interface | pass |
+| Neither benchmark port answers on the public address | pass |
+| `compose.deploy.yml` alone still binds loopback only | pass |
+| Database migrations | **24 applied, schema at v024** |
+| Health gates | pass |
+| Authentication smoke — token pool acquired *and spent on the backend* | **21 requests, 0 failures** |
+| `perf-standard-01` attestation | **exit 0, zero failures** |
 
----
+## 5. The canonical run
 
-## 4. R1 Run A — **VALID / FAIL** — normal rate-limit policy
-
-The canonical result: the platform as configured to run, with **no override of any kind**.
-`docker inspect` of the backend showed no `RAMALS_RATE_LIMIT_*` variable, so application defaults
-were in force.
+Committed workload, unmodified: `mixed-learning`, 20 learners, 30 s at 10 rps → 1 min ramp 10→60 rps
+→ 2 min steady at 60 rps, 50 preallocated / 300 maximum VUs, existing thresholds.
 
 | Field | Value |
 | --- | --- |
 | Iterations | **9,599** |
-| Requests | **12,417** |
-| Sustained rate | **60 rps** for the full duration |
-| `http_req_failed` | **17.33%** (2,153) |
-| Checks | 88.73% (8,518 / 9,599) |
-| Latency thresholds | **PASS** |
-| Error-rate threshold | **FAIL** |
+| Requests | **12,455** |
+| Throughput | **59.11 req/s** sustained |
+| `http_req_failed` | **0.00%** (0 of 12,455) |
+| Checks | **100.00%** (9,599 / 9,599) |
+| HTTP 429 | **0** |
+| Thresholds | **all passed**, including `rate<0.01` at 0.00% |
+| k6 exit status | 0 |
 
 ### HTTP status distribution
 
 | Status | Count |
 | --- | --- |
-| 200 | 9,947 |
-| **429** | **2,153** |
-| 201 | 342 |
+| 200 | 11,049 |
+| 201 | 1,426 |
 | 401 | 1 |
 
-The 429 count matches `http_req_failed` exactly.
+No 429 and no 5xx. The single 401 is the unauthenticated probe the harness issues before
+authenticating.
 
-### Latency by request class
+### Latency
 
-| Class | p90 | p95 | Budget | Result |
+Overall: **p50 2.59 ms**, **p95 20.00 ms**.
+
+| Class | med | p90 | p95 | Budget | Result |
+| --- | --- | --- | --- | --- | --- |
+| skill_map_read | 2.75 ms | 3.54 ms | **4.17 ms** | 250 ms | pass |
+| mastery_read | 2.75 ms | 3.44 ms | **4.27 ms** | 250 ms | pass |
+| recommendation_read | 1.83 ms | 2.31 ms | **2.84 ms** | 250 ms | pass |
+| assessment_write | 16.35 ms | 22.21 ms | **23.99 ms** | 400 ms | pass |
+| diagnostic | 3.04 ms | 3.83 ms | **4.42 ms** | 500 ms | pass |
+
+**p99 is not recorded, and is not available.** k6's `--summary-export` emits only
+`avg/min/med/max/p(90)/p(95)` for `http_req_duration`; the harness does not configure additional
+percentiles. This is a gap in the harness rather than a measurement that was taken and omitted, and
+it is recorded here as such rather than filled with a substitute.
+
+### Resource telemetry — 50 samples across the run
+
+| Service | Peak CPU | Limit | Memory (final) | Limit |
 | --- | --- | --- | --- | --- |
-| skill_map_read | 3.91 ms | **5.38 ms** | 250 ms | pass |
-| mastery_read | 3.65 ms | **4.71 ms** | 250 ms | pass |
-| recommendation_read | 2.59 ms | **3.41 ms** | 250 ms | pass |
-| assessment_write | 18.37 ms | **21.37 ms** | 400 ms | pass |
-| diagnostic | 3.95 ms | **4.88 ms** | 500 ms | pass |
+| backend | **237.79%** | 400% (4 CPU) | 301.8 MiB | 4 GiB |
+| postgres | 21.60% | 200% (2 CPU) | 96.5 MiB | 2 GiB |
+| keycloak | 4.34% | — | 778.2 MiB | — |
+| web-ui | 2.17% | — | 7.6 MiB | — |
 
-### 429 attribution
+The backend peaked at 237% of its 4-CPU allocation — roughly 40% headroom, and notably lower than
+the 340% RC3 Run B reached, because that run was serving the requests this one no longer has to
+refuse and retry around. Memory never exceeded 8% of its limit.
 
-The failures are the **pre-authentication rate-limit tier, keyed on client IP**. Failures
-concentrate in the `submit COMPLETED` check (1,077 of 1,399); every other check passed at 99% or
-better.
+### PostgreSQL
 
-`application.yml` binds that tier to:
+Across 50 samples: 2–3 backends, commits rising 152 → 17,980, **0 rollbacks, 0 deadlocks, 0 temp
+files, 0 conflicts**. Buffer reads 538 against 2.64 million cache hits — the working set is
+resident.
 
-```yaml
-rate-limit:
-  capacity: ${RAMALS_RATE_LIMIT_CAPACITY:120}
-  refill-per-second: ${RAMALS_RATE_LIMIT_REFILL_PER_SECOND:60}
-```
-
-The run drove **12,417 requests over 210 s = 59.1 req/s from a single load-generator IP** against a
-60/s refill with a 120-token burst allowance. Bursts above refill exhaust the bucket and are
-refused.
-
-### Restart / OOM evidence — the 429s were policy, not exhaustion
+### Restarts and OOM
 
 | Service | Restarts | OOM killed |
 | --- | --- | --- |
@@ -129,107 +163,29 @@ refused.
 | keycloak | 0 | false |
 | web-ui | 0 | false |
 
-Successful-request latency stayed in single-digit milliseconds throughout. Rejection is cheap; a
-saturated system does not look like this.
+## 6. Historical qualification evidence — the rc3 pair
 
----
+Retained in full, not superseded. Detail in
+[`r1-20260821-run-a-and-run-b-report.md`](../../validation/r1-20260821-run-a-and-run-b-report.md)
+and [`r1-20260821-evidence/`](../../validation/r1-20260821-evidence/).
 
-## 5. R1 Run B — **PASS** — capacity characterization with documented override
+**RC3 Run A — VALID / FAIL, production policy.** 9,599 iterations, 12,417 requests, 60 rps
+sustained, 2,153 HTTP 429, `http_req_failed` 17.33%. Latency thresholds passed comfortably; the
+error-rate threshold failed. Zero restarts and zero OOM kills — policy, not saturation.
 
-**Not a production-policy result and must not be read as one.** Run B answers only the question Run
-A cannot: what the application does when the infrastructure protection ceiling is not the binding
-constraint.
+**RC3 Run B — PASS, capacity characterization** with `compose.perf-override.yml` active and recorded
+as active. 12,519 requests, 0.00% failures. Established that the refusals were the ceiling and not
+the application.
 
-`performance/compose.perf-override.yml` was applied — the file the repository provides for exactly
-this ("reach for this only to probe above the IP ceiling itself").
+Together they located TD-R1-01: `application.yml` bound the pre-authentication IP tier to the
+per-subject tier's numbers and left the subject tier unbound, so the two-tier design existed in code
+and in no deployed system. The RC4 run above is the same workload against the corrected
+configuration.
 
-### Override values, verified on the running container *before* load
+## 7. Teardown
 
-```
-RAMALS_RATE_LIMIT_CAPACITY=1000000
-RAMALS_RATE_LIMIT_REFILL_PER_SECOND=1000000
-RAMALS_RATE_LIMIT_SUBJECT_CAPACITY=1000000
-RAMALS_RATE_LIMIT_SUBJECT_REFILL_PER_SECOND=1000000
-```
-
-Only the first two took effect. `RAMALS_RATE_LIMIT_SUBJECT_*` is not referenced by any resource
-file and does not match the `ramals.security.rate-limit` binding prefix, so those two values bound
-to nothing: **the per-subject fair-use tier remained at its shipped 120 / 60 throughout Run B.** At
-20 learners and 60 rps each learner issued roughly 3 req/s, far under that tier, so it never
-engaged. Run B therefore relaxed the IP ceiling only.
-
-That the override was active is recorded in machine-readable form alongside the raw evidence in
-[`runB-override-metadata.json`](../../validation/r1-20260821-evidence/run-b/runB-override-metadata.json).
-
-### Results
-
-| Field | Value |
-| --- | --- |
-| Iterations | **9,599** |
-| Requests | **12,519** |
-| Throughput | **59.41 req/s** sustained |
-| `http_req_failed` | **0.00%** (0 of 12,519) |
-| Checks | **100.00%** (9,599 / 9,599) |
-| HTTP 429 | **0** |
-| All thresholds | **PASS** |
-
-Status distribution: `11,073 × 200`, `1,454 × 201`. No 4xx and no 5xx of any kind.
-
-### Latency by request class
-
-| Class | p95 | Budget | Result |
-| --- | --- | --- | --- |
-| skill_map_read | 5.58 ms | 250 ms | pass |
-| mastery_read | 4.13 ms | 250 ms | pass |
-| assessment_write | 25.37 ms | 400 ms | pass |
-| diagnostic | 5.28 ms | 500 ms | pass |
-
-### Telemetry — 49 samples across the run
-
-| Service | Peak CPU | Limit | Memory (final) | Limit |
-| --- | --- | --- | --- | --- |
-| backend | **340.68%** | 400% (4 CPU) | 309.9 MiB | 4 GiB |
-| keycloak | 18.63% | — | 844.5 MiB | — |
-| postgres | 19.29% | 200% (2 CPU) | 105.3 MiB | 2 GiB |
-| web-ui | 2.30% | — | 8.4 MiB | — |
-
-PostgreSQL: 5 backends, ~34,000 commits, **0 rollbacks, 0 deadlocks, 0 temp files, 0 conflicts**.
-Restarts and OOM kills: **zero on all four services**.
-
-The backend reached 340% of its 4-CPU allocation at peak — the binding resource, with roughly 15%
-headroom. Memory never exceeded 8% of its limit. **This is not a capacity ceiling**: the arrival
-rate was capped at 60 rps by the scenario, and no saturation point was searched for.
-
----
-
-## 6. Evidence that nothing else changed between Run A and Run B
-
-Verified by inspection of the running containers after the override was applied, not by assertion:
-
-| Property | Run A | Run B | Same |
-| --- | --- | --- | --- |
-| Backend image digest | `sha256:c233e3ef…f330b9` | `sha256:c233e3ef…f330b9` | ✅ |
-| Backend CPU limit | 4 000 000 000 ns (4 CPU) | 4 000 000 000 ns | ✅ |
-| Backend memory limit | 4 294 967 296 (4 GiB) | 4 294 967 296 | ✅ |
-| PostgreSQL CPU limit | 2 000 000 000 ns (2 CPU) | 2 000 000 000 ns | ✅ |
-| PostgreSQL memory limit | 2 147 483 648 (2 GiB) | 2 147 483 648 | ✅ |
-| Database configuration | unchanged | unchanged | ✅ |
-| Application code | unchanged | unchanged | ✅ |
-| Scenario, rate, VUs, duration | `mixed-learning`, 60 rps, 50/300, 3m30s | identical | ✅ |
-| Latency thresholds | unmodified | unmodified | ✅ |
-| Load learners / dataset | 20 / `mvp0-baseline-v1` | 20 / `mvp0-baseline-v1` | ✅ |
-| Instance types | `m6i.2xlarge` / `c6i.xlarge` | identical | ✅ |
-| OIDC issuer configuration | `http://172.31.11.69:8081/realms/ramals` | identical | ✅ |
-| Rate-limit configuration | **application defaults** | **override active** | ⬅ the only change |
-
-The benchmark tooling was also deliberately **not** modified between the two runs, so both measured
-the same implementation. The `run-baseline.sh` fix described in §8 was made afterwards.
-
-## 7. Teardown — no chargeable R1 infrastructure remains
-
-`terraform destroy` completed: **`Destroy complete! Resources: 4 destroyed.`**
-
-Independently verified afterwards against AWS, not read from Terraform's own output:
+`terraform destroy` completed: **`Destroy complete! Resources: 4 destroyed.`** Verified directly
+against AWS afterwards, not from Terraform's output:
 
 | Check | Result |
 | --- | --- |
@@ -239,47 +195,25 @@ Independently verified afterwards against AWS, not read from Terraform's own out
 | Elastic IPs in the account | **0** |
 | Terraform state entries | **0** |
 
-Both root volumes were `DeleteOnTermination=true`. Ephemeral runtime credentials were generated on
-the SUT only, held at mode `0600`, never written to Terraform state or any repository file, and
-destroyed with the volume.
+Ephemeral runtime credentials were generated on the SUT only, at mode `0600`, never written to
+Terraform state or any repository file, and destroyed with the root volume.
 
-## 8. Corrections and defects recorded during this exercise
+## 8. Disposition
 
-**A claim in an earlier version of this exercise was wrong and is corrected here.** The validation
-report first stated that this build "has only the IP tier" and that no subject-keyed rate limit
-exists. That is false. `RateLimitProperties` defines both tiers and `SubjectRateLimitFilter`
-implements the second, applied after token validation, exactly as
-[`performance-baseline.md` §4](performance-baseline.md) describes.
+**R1 is closed.** There is now a calibrated baseline taken on an attested fixed-spec environment,
+with the load generator on a separate machine, against an immutable release candidate, under the
+platform's own production rate-limit policy, passing every committed threshold.
 
-What is true, and is the actual defect, is narrower: **`application.yml` binds the
-pre-authentication IP tier to `120` / `60`** — the values intended for the per-learner fair-use tier
-— while the code's own default for that tier is `600` / `300`. The two-tier fix shipped; the
-configuration still carries the pre-fix numbers on the wrong tier. The IP ceiling is therefore five
-times tighter than designed, which both caused Run A's 429s and partially reinstates the
-shared-egress problem MVP-0 recorded as resolved. Tracked as **TD-R1-01**.
+The `perf-standard-01` spec remains `status: proposed`. This run is the first calibrated measurement
+against which its container limits can be reviewed: the backend used 237% of four CPUs at peak and
+under 8% of four GiB, which suggests the memory allocation is generous and the CPU allocation is
+about right. Revising the spec is a separate decision and is not taken here.
 
-**A failing run produced no baseline, and leaked credentials.** Run A wrote no `.baseline.json`:
-k6 exits non-zero on a breached threshold and `run-baseline.sh` ran under `set -e`, aborting before
-distillation. Because the `setup_data` scrub lives in that same block, Run A's summary also retained
-**20 live bearer tokens** — caught by gitleaks when this evidence was first committed. The tokens
-were already invalid (Keycloak destroyed, learners deleted at teardown) and never reached a
-published branch; the committed copy has `setup_data` removed with a `$scrub_note`, and no
-measurement was altered. Fixed and guarded; tracked as **TD-R1-02**.
-
-## Disposition
-
-**R1 remains OPEN.** It is no longer blocked on hardware — an attested `perf-standard-01`
-environment was provisioned, measured and destroyed, and both runs are recorded. What remains is a
-decision, not a machine: the canonical 60 rps workload run from a single source IP collides with a
-rate-limit ceiling that is itself misconfigured, so **there is not yet a calibrated baseline that is
-simultaneously a pass and taken under production policy.**
-
-Closing R1 requires resolving TD-R1-01 and re-running. That is a release-review decision and is
-deliberately not taken here.
+This baseline does not establish a capacity ceiling. The arrival rate was capped at 60 rps by the
+scenario and no saturation point was searched for.
 
 ## Raw evidence
 
-[`docs/validation/r1-20260821-evidence/`](../../validation/r1-20260821-evidence/) — k6 summaries,
-the Run B baseline, attestations, console logs, complete backend request logs (gzipped), status
-distributions, effective rate-limit readings, restart/OOM records and Run B telemetry. Analysis in
-[`r1-20260821-run-a-and-run-b-report.md`](../../validation/r1-20260821-run-a-and-run-b-report.md).
+[`r1-calibrated-baseline-evidence/`](r1-calibrated-baseline-evidence/) — k6 summary and distilled
+baseline, attestation, console log, complete backend request log (gzipped), status distribution,
+effective rate-limit readings, running digests, restart/OOM records and telemetry.
