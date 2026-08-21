@@ -137,6 +137,23 @@ export RAMALS_BACKEND_IMAGE="$(json_get "${MANIFEST}" components.learning-platfo
 export RAMALS_WEBUI_IMAGE="$(json_get "${MANIFEST}" components.web-ui.image)@${WEBUI_DIGEST}"
 if [ -n "${AI_DIGEST}" ]; then
   export RAMALS_AI_IMAGE="$(json_get "${MANIFEST}" components.ramals-ai.image)@${AI_DIGEST}"
+
+  # The manifest decides the topology. Pinning a ramals-ai digest is the statement that this release
+  # includes the AI plane, so pinning it is what deploys it -- rather than a separate flag somebody
+  # has to remember to set, which is how the plane came to be published, scanned and digest-pinned
+  # for a release that had nowhere to run it.
+  #
+  # Existing profiles are preserved: an operator composing this with their own selection keeps it.
+  case ":${COMPOSE_PROFILES:-}:" in
+    *:ai-plane:*) ;;
+    *) export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}ai-plane" ;;
+  esac
+
+  # And the core is told where the plane is. Without this the backend starts with an empty base URL,
+  # installs UnconfiguredTutorPort and logs that tutoring is unavailable -- a deployment that is
+  # healthy, passes its gates, and quietly has no agent plane. An explicit override still wins, for
+  # an environment that runs the plane elsewhere.
+  export RAMALS_AI_BASE_URL="${RAMALS_AI_BASE_URL:-http://ramals-ai:8000}"
 fi
 
 write_state DEPLOYING "${DESIRED_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "${FAILURES}" \
