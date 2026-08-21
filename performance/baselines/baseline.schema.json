@@ -19,53 +19,183 @@
     "throughput_rps"
   ],
   "properties": {
-    "scenario": { "type": "string", "examples": ["mixed-learning", "diagnostic", "auth", "concurrency-idempotency"] },
-    "executor_model": { "type": "string", "enum": ["open", "closed"] },
+    "scenario": {
+      "type": "string",
+      "examples": [
+        "mixed-learning",
+        "diagnostic",
+        "auth",
+        "concurrency-idempotency"
+      ]
+    },
+    "executor_model": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closed"
+      ]
+    },
     "executor": {
       "type": "string",
-      "enum": ["constant-arrival-rate", "ramping-arrival-rate", "constant-vus", "per-vu-iterations"]
+      "enum": [
+        "constant-arrival-rate",
+        "ramping-arrival-rate",
+        "constant-vus",
+        "per-vu-iterations"
+      ]
     },
-    "environment": { "type": "string", "description": "Authoritative fixed-spec env id, e.g. perf-standard-01. 'local-unqualified' marks informational runs." },
-    "commit": { "type": "string" },
-    "dataset_version": { "type": "string" },
-    "script_version": { "type": "string" },
-    "measured_at": { "type": "string", "format": "date-time" },
-    "arrival_rate_rps": { "type": "number" },
-    "observed_concurrency": { "type": "number" },
-    "think_time_ms": { "type": "number" },
-    "warmup_discarded": { "type": "boolean" },
+    "environment": {
+      "type": "string",
+      "description": "Authoritative fixed-spec env id, e.g. perf-standard-01. 'local-unqualified' marks informational runs. Any other value requires environment_attestation: the id is earned by a host measured against performance/environment/<id>.json, not asserted by a variable."
+    },
+    "commit": {
+      "type": "string"
+    },
+    "dataset_version": {
+      "type": "string"
+    },
+    "script_version": {
+      "type": "string"
+    },
+    "measured_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "arrival_rate_rps": {
+      "type": "number"
+    },
+    "observed_concurrency": {
+      "type": "number"
+    },
+    "think_time_ms": {
+      "type": "number"
+    },
+    "warmup_discarded": {
+      "type": "boolean"
+    },
     "steady_state": {
       "type": "object",
-      "required": ["window"],
-      "properties": { "window": { "type": "string" } }
+      "required": [
+        "window"
+      ],
+      "properties": {
+        "window": {
+          "type": "string"
+        }
+      }
     },
     "host": {
       "type": "object",
       "properties": {
-        "cpu_limit": { "type": "string" },
-        "memory_limit": { "type": "string" },
-        "jvm": { "type": "string" },
-        "db_version": { "type": "string" }
+        "cpu_limit": {
+          "type": "string"
+        },
+        "memory_limit": {
+          "type": "string"
+        },
+        "jvm": {
+          "type": "string"
+        },
+        "db_version": {
+          "type": "string"
+        }
       }
     },
     "latency_ms": {
       "type": "object",
-      "required": ["p50", "p95", "p99"],
+      "required": [
+        "p50",
+        "p95",
+        "p99"
+      ],
       "properties": {
-        "p50": { "type": "number" },
-        "p95": { "type": "number" },
-        "p99": { "type": "number" }
+        "p50": {
+          "type": "number"
+        },
+        "p95": {
+          "type": "number"
+        },
+        "p99": {
+          "type": "number"
+        }
       }
     },
     "adaptive_decision_latency_ms": {
       "type": "object",
       "properties": {
-        "p50": { "type": "number" },
-        "p95": { "type": "number" },
-        "p99": { "type": "number" }
+        "p50": {
+          "type": "number"
+        },
+        "p95": {
+          "type": "number"
+        },
+        "p99": {
+          "type": "number"
+        }
       }
     },
-    "error_rate": { "type": "number" },
-    "throughput_rps": { "type": "number" }
-  }
+    "error_rate": {
+      "type": "number"
+    },
+    "throughput_rps": {
+      "type": "number"
+    },
+    "environment_attestation": {
+      "type": "object",
+      "description": "What the host was measured to be at the moment of the run. Present only for a qualified environment id, and its absence is the answer to whether a baseline was calibrated -- run-baseline.sh cannot write a qualified id without it.",
+      "required": [
+        "specId",
+        "conforms",
+        "measured",
+        "attestedAt"
+      ],
+      "properties": {
+        "specId": {
+          "type": "string"
+        },
+        "specVersion": {
+          "type": "string"
+        },
+        "specStatus": {
+          "type": "string"
+        },
+        "attestedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "conforms": {
+          "const": true,
+          "description": "A non-conforming run is never recorded under a qualified id."
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "measured": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "The rule R1 exists for: an environment id other than local-unqualified is only valid alongside the attestation that earned it.",
+      "if": {
+        "properties": {
+          "environment": {
+            "not": {
+              "const": "local-unqualified"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "environment_attestation"
+        ]
+      }
+    }
+  ]
 }

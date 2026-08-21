@@ -11,7 +11,24 @@ recorded as closed without evidence.
 
 | Item | Status | Owner | What closing it requires |
 | --- | --- | --- | --- |
-| **R1 — calibrated performance baseline** | 🔴 **OPEN** | not assigned | An authoritative fixed-spec environment. The harness is repaired and produces clean data, but only from a developer workstation, and developer-machine numbers are indicative only (Doc 07 §4). |
+| **R1 — calibrated performance baseline** | 🔴 **OPEN** | not assigned | A host that conforms to [`perf-standard-01`](../../performance/environment/perf-standard-01.json), and a second machine to run the load generator from. The harness is repaired and the environment is now defined and machine-checkable — what remains is hardware, not engineering. Developer-machine numbers stay indicative only (Doc 07 §4). |
+
+**What changed, and what did not.** R1 is still open and still needs a machine. What is closed is
+the hole that would have survived buying one: `RAMALS_PERF_ENV` was free text copied into the
+baseline, so a laptop run could label itself `perf-standard-01` and nothing anywhere would disagree.
+The id is now earned -- `performance/environment/attest.py` measures the host against a declared
+spec, a non-conforming run is recorded as `local-unqualified` whatever the operator asked for, and
+`baseline.schema.json` refuses a baseline whose label and attestation disagree.
+
+Running the attestation on any candidate machine prints exactly what it lacks, so provisioning is now
+a checklist rather than a judgement:
+
+```bash
+python3 performance/environment/attest.py
+```
+
+The spec's status is `proposed`, not `reference`: its values are a reasoned starting point from the
+MVP-0 indicative run, and the first calibrated run on a registered host confirms or revises them.
 
 **R1 blocks M1-T18.** Under [M1-ADR-000](../adr/M1-ADR-000-mvp1-engineering-before-r1.md), MVP-1
 engineering may proceed while R1 is open — that exception covers *building*, not *releasing*. The RC

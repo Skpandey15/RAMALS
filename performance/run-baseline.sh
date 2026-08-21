@@ -21,6 +21,68 @@ export RAMALS_DATASET_VERSION="${RAMALS_DATASET_VERSION:-mvp0-baseline-v1}"
 export RAMALS_LOAD_LEARNERS="${RAMALS_LOAD_LEARNERS:-20}"
 
 export SCENARIO STAMP
+
+# -- the environment label has to be earned ---------------------------------------------------------
+#
+# R1's failure mode is not a bad number, it is a good-looking number nobody can place. RAMALS_PERF_ENV
+# used to be copied straight into the baseline, so setting it to a qualified id on a laptop produced
+# a file that claimed to be calibrated. Provisioning the right machine would not have fixed that --
+# the claim was never checked against anything.
+#
+# So the run attests the host first. Anything other than 'local-unqualified' has to conform to the
+# spec of that name, and a run that does not conform keeps the honest label whatever the operator
+# asked for. Downgrading rather than failing is deliberate: an informational run is useful and should
+# stay easy, it just must not be able to describe itself as something it was not.
+ATTESTATION="${RESULTS}/${SCENARIO}-${STAMP}.attestation.json"
+SPEC="${HERE}/environment/${RAMALS_PERF_ENV}.json"
+
+if [ "${RAMALS_PERF_ENV}" = "local-unqualified" ]; then
+  echo "Environment: local-unqualified (informational run; no attestation required)"
+  ATTESTED=0
+elif [ ! -f "${SPEC}" ]; then
+  echo "FATAL: RAMALS_PERF_ENV='${RAMALS_PERF_ENV}' names no spec at ${SPEC}." >&2
+  echo "       An environment id with no spec behind it is a label, not a claim anybody can check." >&2
+  exit 1
+elif [ -n "${RAMALS_PERF_ATTESTATION:-}" ]; then
+  # The attestation has to describe the system under test, and this script runs wherever k6 runs --
+  # which, once the load generator is on its own machine, is not the system under test. Attesting
+  # locally here would certify the load generator and say nothing about the thing being measured.
+  #
+  # So the SUT attests itself and the file is carried over. It is re-validated rather than trusted:
+  # a file is easy to edit and easy to keep after the host it describes has changed.
+  if python3 "${HERE}/environment/verify-attestation.py" "${RAMALS_PERF_ATTESTATION}" \
+       --expect-spec "${RAMALS_PERF_ENV}" \
+       --max-age-hours "${RAMALS_PERF_ATTESTATION_MAX_AGE_HOURS:-24}"; then
+    cp "${RAMALS_PERF_ATTESTATION}" "${ATTESTATION}"
+    ATTESTED=1
+  else
+    echo
+    echo "Recording this run as 'local-unqualified' instead of '${RAMALS_PERF_ENV}'." >&2
+    RAMALS_PERF_ENV="local-unqualified"
+    export RAMALS_PERF_ENV
+    ATTESTED=0
+  fi
+else
+  # No attestation was supplied, so this run must be measuring the machine it is on. That is the
+  # single-host arrangement, which the spec refuses anyway -- the load-generator check below fails
+  # and the run is downgraded, which is the correct outcome rather than an inconvenience.
+  off_host_flag=""
+  [ "${RAMALS_PERF_LOAD_GENERATOR_OFF_HOST:-false}" = "true" ] && \
+    off_host_flag="--load-generator-off-host"
+
+  if python3 "${HERE}/environment/attest.py" --spec "${SPEC}" --out "${ATTESTATION}" \
+       --require ${off_host_flag}; then
+    ATTESTED=1
+  else
+    echo
+    echo "Recording this run as 'local-unqualified' instead of '${RAMALS_PERF_ENV}'." >&2
+    RAMALS_PERF_ENV="local-unqualified"
+    export RAMALS_PERF_ENV
+    ATTESTED=0
+  fi
+fi
+export ATTESTATION ATTESTED
+
 DB_VERSION="$(psql "${RAMALS_DB_URL:-}" -tAc 'SHOW server_version' 2>/dev/null || echo unknown)"
 JVM_VERSION="$(java -version 2>&1 | head -1 | tr -d '"' || echo unknown)"
 export DB_VERSION JVM_VERSION
@@ -74,6 +136,13 @@ baseline = {
     "scenario": os.environ["SCENARIO"],
     "executor_model": "closed" if os.environ["SCENARIO"] == "concurrency-idempotency" else "open",
     "environment": os.environ["RAMALS_PERF_ENV"],
+    # Present only when the host was attested against a spec. Its absence is itself the
+    # answer to "was this calibrated": there is no way to record a qualified id without it.
+    **(
+        {"environment_attestation": json.load(open(os.environ["ATTESTATION"]))}
+        if os.environ.get("ATTESTED") == "1"
+        else {}
+    ),
     "commit": os.environ["RAMALS_COMMIT"],
     "dataset_version": os.environ["RAMALS_DATASET_VERSION"],
     "script_version": "mvp0-perf-harness-v1",

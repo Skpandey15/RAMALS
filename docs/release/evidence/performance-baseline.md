@@ -13,6 +13,23 @@
 | Learner pool | 20 distinct learners, provisioned at runtime |
 | Environment label | `local-unqualified` |
 
+## The label was a claim, not evidence
+
+That `local-unqualified` was honest, but only because whoever ran it chose to be. `RAMALS_PERF_ENV`
+was free text copied straight into the baseline, so the same run with the variable set to
+`perf-standard-01` would have produced a file asserting it was calibrated, on this same workstation,
+with nothing anywhere to disagree.
+
+Provisioning the authoritative environment would not have closed that. The claim was never checked
+against anything, so a conforming host and a laptop would have produced equally confident labels.
+
+The environment is now declared in `performance/environment/perf-standard-01.json` and measured by
+`attest.py`: a run that does not conform is recorded as `local-unqualified` whatever was asked for,
+and `baseline.schema.json` rejects a baseline whose label and attestation disagree. Run it against
+any candidate machine and it prints what that machine lacks.
+
+R1 is still open, and still needs hardware. What it no longer needs is trust in the label.
+
 ## 1. The harness could not run at all — four defects
 
 **a. It could not authenticate.** The scenarios use `grant_type=password` against `ramals-web-ui`,
