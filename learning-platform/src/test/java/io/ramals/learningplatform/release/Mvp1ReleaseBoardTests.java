@@ -124,6 +124,147 @@ class Mvp1ReleaseBoardTests {
         .contains("evidence/r1-calibrated-baseline.md");
   }
 
+  /** The M1-T18 row, or an empty string if the board has stopped tracking it. */
+  private static String t18Row(String board) {
+    return board
+        .lines()
+        .filter(line -> line.startsWith("| M1-T18"))
+        .findFirst()
+        .orElse("");
+  }
+
+  /**
+   * One canonical line, deliberately.
+   *
+   * <p>The first version of this gate accepted {@code containsPattern("(?i)(pass|fail)")}, which is
+   * satisfied by the word FAIL — so a record of a failed end-to-end validation would have let the
+   * board claim the task complete. It is also satisfied by "pass/fail criteria", "0 failures" and
+   * "the previous run failed", none of which are verdicts at all. Searching prose for a word cannot
+   * distinguish a result from a sentence that mentions one.
+   *
+   * <p>So the verdict is a line with a fixed shape rather than a word somewhere in a document.
+   * Markdown emphasis is tolerated because authors reach for it; the value is not.
+   */
+  private static final Pattern OUTCOME_LINE =
+      // Emphasis is allowed on either side of the colon, because both **Outcome:** PASS and
+      // **Outcome**: PASS are what people actually write -- the first version of this pattern only
+      // accepted the second and rejected a perfectly good verdict.
+      Pattern.compile("^\\*{0,2}Outcome\\*{0,2}:\\*{0,2}[ \\t]*\\*{0,2}([A-Za-z]+)\\*{0,2}[ \\t]*$",
+          Pattern.MULTILINE);
+
+  /**
+   * The document's verdict: {@code PASS}, {@code FAIL}, {@code none} when no canonical line is
+   * present, or {@code ambiguous} when more than one disagrees.
+   *
+   * <p>Two outcome lines are refused rather than resolved by precedence. A record asserting both
+   * PASS and FAIL has not stated a verdict, and picking one for it would be inventing the answer.
+   */
+  static String outcomeVerdict(String record) {
+    Matcher outcomes = OUTCOME_LINE.matcher(record.replace("\r\n", "\n"));
+    java.util.List<String> found = new java.util.ArrayList<>();
+    while (outcomes.find()) {
+      found.add(outcomes.group(1).toUpperCase(java.util.Locale.ROOT));
+    }
+    if (found.isEmpty()) {
+      return "none";
+    }
+    if (found.stream().distinct().count() > 1) {
+      return "ambiguous";
+    }
+    return found.get(0);
+  }
+
+  @Test
+  @DisplayName("only a canonical 'Outcome: PASS' line counts as a successful verdict")
+  void theOutcomeMarkerIsCanonicalRatherThanProse() {
+    // The shapes that must count.
+    assertThat(outcomeVerdict("# T18\n\nOutcome: PASS\n")).isEqualTo("PASS");
+    assertThat(outcomeVerdict("**Outcome:** **PASS**\n")).as("markdown emphasis").isEqualTo("PASS");
+    assertThat(outcomeVerdict("Outcome:PASS")).as("no space after the colon").isEqualTo("PASS");
+
+    // A failed run is real evidence and an honest record. It is not completion.
+    assertThat(outcomeVerdict("Outcome: FAIL\n")).isEqualTo("FAIL");
+    assertThat(outcomeVerdict("**Outcome:** FAIL\n")).isEqualTo("FAIL");
+
+    // Nothing stated at all.
+    assertThat(outcomeVerdict("The run completed and everything looked healthy.\n"))
+        .isEqualTo("none");
+    assertThat(outcomeVerdict("")).isEqualTo("none");
+
+    // Prose that mentions the words. Every one of these satisfied the original gate.
+    assertThat(outcomeVerdict("These are the pass/fail criteria for the release.\n"))
+        .as("'pass/fail criteria' is a heading, not a verdict")
+        .isEqualTo("none");
+    assertThat(outcomeVerdict("The suite reported 0 failures across 455 tests.\n"))
+        .as("'0 failures' is a count, not a verdict")
+        .isEqualTo("none");
+    assertThat(outcomeVerdict("The previous run failed and was recorded as invalid.\n"))
+        .as("a sentence about an earlier failure is not this run's verdict")
+        .isEqualTo("none");
+    assertThat(outcomeVerdict("Outcome of the review: everything passed.\n"))
+        .as("a sentence beginning with the word Outcome is still prose")
+        .isEqualTo("none");
+    assertThat(outcomeVerdict("  Outcome: PASS\n"))
+        .as("an indented line is inside a code block or list, not the record's verdict")
+        .isEqualTo("none");
+
+    // Saying both is saying neither.
+    assertThat(outcomeVerdict("Outcome: FAIL\n\n...later...\n\nOutcome: PASS\n"))
+        .as("a record cannot assert both and be read as complete")
+        .isEqualTo("ambiguous");
+  }
+
+  @Test
+  @DisplayName("claiming M1-T18 done requires the release evidence behind it")
+  void completingT18RequiresEvidence() throws IOException {
+    String board = board();
+    String row = t18Row(board);
+    assertThat(row).as("the board must still track M1-T18").isNotEmpty();
+
+    String[] cells = row.split("\\|");
+    String status = cells.length > 2 ? cells[2].trim() : "";
+
+    // M1-T18 produces the release candidate, so it is the last claim anybody checks and the one
+    // with the most riding on it. R1 was pinned precisely because a risk nobody could fail was easy
+    // to close by editing a word; T18 had no such gate at all, and until this test it could be
+    // marked done on a board with nothing behind it and every suite would stay green.
+    boolean claimsDone = status.contains("✅") || status.toLowerCase(java.util.Locale.ROOT).contains("done");
+    if (!claimsDone) {
+      return;
+    }
+
+    Path evidence = Path.of("..", "docs", "release", "evidence", "m1-t18-e2e-validation.md");
+    assertThat(evidence)
+        .as(
+            "M1-T18 is marked done, so docs/release/evidence/m1-t18-e2e-validation.md must exist "
+                + "and record what was validated")
+        .exists();
+
+    String record = Files.readString(evidence, StandardCharsets.UTF_8).replace("\r\n", "\n");
+
+    // Each of these is a gate M1-T18 exists to clear. Naming them individually means a partial
+    // record fails on the specific thing it is missing, rather than passing because it is long.
+    assertThat(record)
+        .as("the E2E record must name the release candidate it validated")
+        .containsPattern("v\\d+\\.\\d+\\.\\d+");
+    assertThat(record)
+        .as("the release candidate must be identified by immutable digest, never by tag alone")
+        .contains("sha256:");
+    assertThat(record)
+        .as("MVP-1's release candidate rests on the calibrated performance baseline; cite it")
+        .contains("r1-calibrated-baseline");
+    assertThat(outcomeVerdict(record))
+        .as(
+            "the record must carry exactly one canonical outcome line reading 'Outcome: PASS'. "
+                + "A failed end-to-end validation is legitimate evidence that a run happened; it is "
+                + "not evidence the task is done, and must not let the board say it is.")
+        .isEqualTo("PASS");
+
+    assertThat(board)
+        .as("the board must link the evidence, so the claim is one click from proof")
+        .contains("m1-t18-e2e-validation.md");
+  }
+
   @Test
   @DisplayName("the board tracks every task in the MVP-1 plan")
   void everyTaskIsTracked() throws IOException {

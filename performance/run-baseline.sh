@@ -83,8 +83,31 @@ else
 fi
 export ATTESTATION ATTESTED
 
-DB_VERSION="$(psql "${RAMALS_DB_URL:-}" -tAc 'SHOW server_version' 2>/dev/null || echo unknown)"
-JVM_VERSION="$(java -version 2>&1 | head -1 | tr -d '"' || echo unknown)"
+# Host provenance, recorded honestly or not at all.
+#
+# `java -version 2>&1` folds the shell's own "command not found" into the value when java is absent,
+# so both R1 baselines carry a captured error message where a version string belongs:
+#
+#   "jvm": "./performance/run-baseline.sh: line 87: java: command not found\nunknown"
+#
+# Worse than useless -- it reads as data. Probe first, and say "unavailable" when it is.
+#
+# The deeper problem is not fixed here and is tracked as TD-R1-03: on a two-host run this script
+# executes on the load generator, so a JVM or psql found here describes the machine generating load
+# rather than the system under test. Reporting the load generator's JVM as the baseline's would be a
+# confident wrong answer, which is the failure mode this whole exercise keeps finding. "unavailable"
+# is the correct answer until the value is collected from the SUT.
+if [ -n "${RAMALS_DB_URL:-}" ] && command -v psql >/dev/null 2>&1; then
+  DB_VERSION="$(psql "${RAMALS_DB_URL}" -tAc 'SHOW server_version' 2>/dev/null | tr -d ' \n' )"
+  [ -n "${DB_VERSION}" ] || DB_VERSION="unavailable"
+else
+  DB_VERSION="unavailable"
+fi
+if command -v java >/dev/null 2>&1; then
+  JVM_VERSION="$(java -version 2>&1 | head -1 | tr -d '"')"
+else
+  JVM_VERSION="unavailable"
+fi
 export DB_VERSION JVM_VERSION
 
 # The shipped realm has direct access grants disabled and no users, so the scenarios cannot
@@ -111,7 +134,11 @@ learners=${RAMALS_LOAD_LEARNERS})"
 # The exit status is preserved and re-raised at the end, so callers and CI still see the failure.
 # What changes is that the measurement is written down first.
 K6_STATUS=0
-${RAMALS_K6_CMD:-k6} run --summary-export "${SUMMARY}" "${SCRIPT}" || K6_STATUS=$?
+# --summary-trend-stats is why every baseline so far records p99 as null: k6's default trend
+# statistics stop at p(95), so there was no p99 in the export to read. The harness now asks for it.
+${RAMALS_K6_CMD:-k6} run \
+  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
+  --summary-export "${SUMMARY}" "${SCRIPT}" || K6_STATUS=$?
 export K6_STATUS
 
 if [ "${K6_STATUS}" -ne 0 ]; then
@@ -171,7 +198,7 @@ baseline = {
     ),
     "commit": os.environ["RAMALS_COMMIT"],
     "dataset_version": os.environ["RAMALS_DATASET_VERSION"],
-    "script_version": "mvp0-perf-harness-v1",
+    "script_version": "mvp1-perf-harness-v2",
     "measured_at": f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:11]}:{stamp[11:13]}:{stamp[13:15]}Z",
     "warmup_discarded": True,
     "steady_state": {"window": "documented per scenario"},
