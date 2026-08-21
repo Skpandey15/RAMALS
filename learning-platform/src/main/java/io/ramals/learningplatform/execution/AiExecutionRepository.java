@@ -102,8 +102,8 @@ public class AiExecutionRepository {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
           """, UuidV7.generate(), execution.requestId(), execution.interactionId(),
           execution.agentType(), execution.contractVersion(), execution.status(), execution.errorCode(),
-          execution.requestDigest(), execution.proposalDigest(), execution.startedAt(),
-          execution.completedAt());
+          execution.requestDigest(), execution.proposalDigest(), timestamp(execution.startedAt()),
+          timestamp(execution.completedAt()));
     } catch (DuplicateKeyException duplicate) {
       TerminalEvent existing = jdbc.query("""
           SELECT event_type, request_digest, proposal_digest, error_code
@@ -136,7 +136,8 @@ public class AiExecutionRepository {
           errorCode, requestDigest,
           proposalDigest, usage == null ? null : usage.inputTokens(),
           usage == null ? null : usage.cachedInputTokens(), usage == null ? null : usage.outputTokens(),
-          cost(usage), usage == null ? null : usage.latencyMs(), startedAt, completedAt);
+          cost(usage), usage == null ? null : usage.latencyMs(),
+          timestamp(startedAt), timestamp(completedAt));
     } catch (DuplicateKeyException duplicate) {
       AiExecution existing = findByRequestId(request.requestId())
           .orElseThrow(() -> new IllegalStateException("AI execution conflict was not readable"));
@@ -231,5 +232,22 @@ public class AiExecutionRepository {
 
   public static class AiExecutionConflictException extends RuntimeException {
     public AiExecutionConflictException(String message) { super(message); }
+  }
+
+  /**
+   * PostgreSQL's JDBC driver cannot bind a {@link Instant} directly.
+   *
+   * <p>Passing one produces {@code Can't infer the SQL type to use for an instance of
+   * java.time.Instant}, so every write to this table failed against a real database while passing
+   * everywhere it was tested. M1-T18 found it on a deployed candidate: the adaptation comparison
+   * dispatched, the agent answered, and the row could not be written -- and the failure of the
+   * failure-recording path meant nothing was left behind to notice.
+   *
+   * <p>The reason it survived is worth keeping next to the fix: the only production writer was a
+   * path no controller reached, and the tests that covered this class did not run against
+   * PostgreSQL. A type the driver rejects is invisible to any database that accepts it.
+   */
+  private static java.sql.Timestamp timestamp(Instant moment) {
+    return moment == null ? null : java.sql.Timestamp.from(moment);
   }
 }
