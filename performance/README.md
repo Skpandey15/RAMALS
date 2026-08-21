@@ -50,10 +50,64 @@ export RAMALS_TOKEN_URL=http://localhost:8081/realms/ramals/protocol/openid-conn
 export RAMALS_KEYCLOAK_ADMIN=admin RAMALS_KEYCLOAK_ADMIN_PASSWORD=***
 export RAMALS_LOAD_PASSWORD=***          # load-only credential, never a real one
 export RAMALS_LOAD_LEARNERS=20           # VUs are spread across this pool of distinct learners
-export RAMALS_PERF_ENV=perf-standard-01   # authoritative env id; leave default for informational runs
+export RAMALS_PERF_ENV=perf-standard-01   # qualified env id; the run must earn it (see below)
+export RAMALS_PERF_LOAD_GENERATOR_OFF_HOST=true   # assert k6 runs on a different machine
 
 # If published ports are not reachable from the host, run provisioning inside the compose network:
 export RAMALS_FIXTURE_NETWORK=ramals-deploy_edge
+
+## The environment id has to be earned
+
+`RAMALS_PERF_ENV` used to be copied straight into the baseline, so setting it to a qualified id on a
+laptop produced a file that claimed to be calibrated. That is R1's failure mode, and provisioning
+the right machine would not have fixed it -- the claim was never checked against anything.
+
+Anything other than `local-unqualified` now names a spec in `environment/`, and the run attests the
+host against it first:
+
+```bash
+python3 performance/environment/attest.py            # what this host is, and what it lacks
+python3 performance/environment/attest.py --require  # non-zero unless it conforms
+```
+
+A run on a non-conforming host is still useful and still easy -- it is simply recorded as
+`local-unqualified`, whatever the operator asked for, and the baseline carries no attestation. A
+qualified id is only written alongside the attestation that earned it, and `baseline.schema.json`
+rejects a baseline where those two disagree.
+
+### Two hosts, so the attestation has to travel
+
+Once the load generator is on its own machine, `run-baseline.sh` is no longer running on the host it
+measures — so it cannot attest that host itself. The system under test attests itself and the file is
+carried:
+
+```bash
+ssh <sut> 'python3 performance/environment/attest.py --require --load-generator-off-host --out /tmp/a.json'
+scp <sut>:/tmp/a.json ./attestation.json
+export RAMALS_PERF_ATTESTATION=./attestation.json
+```
+
+The runner re-checks it rather than believing it — right spec, records conformance, recent enough —
+and downgrades the run to `local-unqualified` if any of that fails. `RAMALS_PERF_ATTESTATION_MAX_AGE_HOURS`
+sets the staleness bound, 24 by default: a host that conformed last month may have been resized since,
+and a file cannot notice that on its own.
+
+Provisioning both machines:
+
+```bash
+bash performance/environment/provision-sut.sh       # on the system under test
+bash performance/environment/provision-loadgen.sh   # on the load generator
+```
+
+One requirement cannot be measured from inside the run: whether the load generator is on the host it
+is measuring. It is asserted with `RAMALS_PERF_LOAD_GENERATOR_OFF_HOST` and recorded as an
+assertion, so a reader can see which it was.
+
+Pin the system under test to the spec's resources when making a qualified run:
+
+```bash
+docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-fixed.yml up -d
+```
 
 ./run-baseline.sh diagnostic          # ADL baseline
 ./run-baseline.sh mixed-learning      # authoritative whole-system SLO

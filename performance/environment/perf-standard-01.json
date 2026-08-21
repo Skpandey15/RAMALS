@@ -1,0 +1,83 @@
+{
+  "$comment": [
+    "The reference performance environment (R1).",
+    "",
+    "R1 has been open since MVP-0 for one reason: numbers measured on a developer workstation are",
+    "indicative only, and nothing stopped one being labelled as though it were calibrated. The",
+    "environment id was a free-text variable copied straight into the baseline, so",
+    "RAMALS_PERF_ENV=perf-standard-01 on a laptop produced a file claiming to be authoritative. The",
+    "label was a claim about the run rather than evidence of it.",
+    "",
+    "This file is the other half of that claim. attest.py measures the host and the running",
+    "containers against it, and run-baseline.sh refuses to stamp a qualified id on a run that did",
+    "not match. Owning the right hardware does not close R1 on its own -- without the check, a",
+    "laptop can still assert the label.",
+    "",
+    "COMPARABILITY BY CONSTRAINT, NOT BY IDENTICAL HARDWARE.",
+    "",
+    "Requiring one exact machine makes the baseline unreproducible the moment that machine is",
+    "replaced. Instead the system under test runs under pinned CPU and memory limits, and the host",
+    "is required to have enough headroom that those limits -- rather than contention -- decide what",
+    "the run measures. Two hosts that both satisfy this produce comparable numbers even when their",
+    "totals differ. What cannot be constrained away is recorded instead: CPU model and kernel go",
+    "into the attestation so a later reader can see whether two baselines share a processor class.",
+    "",
+    "WHERE THESE NUMBERS COME FROM.",
+    "",
+    "They are a reasoned starting point, not a measurement. The MVP-0 indicative run met every",
+    "request-class budget at 60 rps on a 12-CPU / 7.6 GiB workstation with the load generator, the",
+    "backend and the database all sharing one host. The limits below give the system under test",
+    "more headroom than that arrangement had, and move the generator off the host so it stops",
+    "competing with what it is measuring.",
+    "",
+    "status is 'proposed' deliberately: the first calibrated run on a registered host confirms or",
+    "revises these values, and only then does the spec become 'reference'. A spec that declared",
+    "itself authoritative before anything had been measured against it would be the same kind of",
+    "unearned claim this file exists to prevent."
+  ],
+
+  "id": "perf-standard-01",
+  "status": "proposed",
+  "specVersion": "1",
+
+  "host": {
+    "$comment": [
+      "Headroom, so the pinned limits below are what bounds the run. min_cpus is the sum of the",
+      "container limits plus room for the kernel, the container runtime and the database's own I/O",
+      "threads. A host that only just fits the limits measures scheduling contention."
+    ],
+    "min_cpus": 8,
+    "min_memory_gib": 16,
+    "os_type": "linux",
+    "architecture": "x86_64"
+  },
+
+  "containers": {
+    "$comment": [
+      "Every service under test must carry an explicit limit. An unpinned container inherits the",
+      "whole host, which is precisely what makes two runs on different machines incomparable.",
+      "performance/compose.perf-fixed.yml sets these; the attestation checks what is actually",
+      "running rather than what a file says."
+    ],
+    "backend": { "cpus": 4.0, "memory_gib": 4 },
+    "postgres": { "cpus": 2.0, "memory_gib": 2 }
+  },
+
+  "isolation": {
+    "$comment": [
+      "The load generator must not run on the host it is measuring. On the MVP-0 workstation run it",
+      "did, so k6's own CPU time was taken from the system under test and the reported latency",
+      "included that interference. This is the requirement that cannot be met by resource limits",
+      "alone, and the one that needs a second machine."
+    ],
+    "load_generator_off_host": true
+  },
+
+  "recorded_not_enforced": {
+    "$comment": [
+      "Facts that cannot be required without pinning the baseline to one machine, but that change",
+      "the numbers enough that a reader must be able to see them. Recorded in every attestation."
+    ],
+    "fields": ["cpu_model", "kernel_version", "docker_version", "operating_system"]
+  }
+}

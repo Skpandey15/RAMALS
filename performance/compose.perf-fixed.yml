@@ -1,0 +1,37 @@
+# Pins the system under test to the resources perf-standard-01 declares.
+#
+#   docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-fixed.yml up -d
+#
+# This is what makes two baselines comparable without owning identical machines. An unpinned
+# container inherits whatever the host has, so the same commit measured on an 8-core box and a
+# 32-core box produces two numbers with nothing to say to each other -- and the difference looks
+# like a performance change.
+#
+# The limits are the spec's, and attest.py reads them back off the running containers rather than
+# from this file. A compose file records an intention; the container records what the kernel will
+# enforce, and the two differ the moment somebody brings the stack up another way.
+#
+# Unlike compose.perf-override.yml, this weakens no security control. It constrains resources, which
+# is the opposite of relaxing a limit, and a run made with it is the run the spec describes.
+services:
+  backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+    # Compose only honours deploy.resources under Swarm, so the same limits are repeated in the
+    # fields the plain `docker compose up` path applies. Setting one and not the other is how a
+    # stack ends up unpinned while a file says otherwise -- which the attestation would catch, but
+    # only after somebody had spent a run finding out.
+    cpus: 4.0
+    mem_limit: 4g
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    cpus: 2.0
+    mem_limit: 2g

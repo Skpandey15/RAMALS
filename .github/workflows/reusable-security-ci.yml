@@ -26,6 +26,8 @@ jobs:
         run: python3 scripts/ci/check-migration-compatibility.py
       - name: Verify the migration compatibility checker
         run: bash scripts/ci/test-migration-compatibility.sh
+      - name: Verify the performance environment attestation
+        run: bash scripts/ci/test-perf-attestation.sh
       - name: Install checksum-verified Gitleaks
         env:
           GITLEAKS_VERSION: 8.30.1
