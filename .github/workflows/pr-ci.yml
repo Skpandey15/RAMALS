@@ -65,10 +65,69 @@ jobs:
     needs: detect-changes
     uses: ./.github/workflows/reusable-security-ci.yml
 
+  # Would these images actually publish?
+  #
+  # release.yml builds and scans them, but it runs on push to main -- after merge -- so the answer
+  # used to arrive only in hindsight. M1-T17 slice 1 connected ramals-ai to the publish matrix with
+  # an image that had never been scanned, and eight consecutive merges went red while every pull
+  # request showed green. The gate worked; nothing ran it where anybody would look.
+  #
+  # Gated on infrastructure as well as the component's own paths, so a change to the check or the
+  # workflow that calls it exercises itself. A gate whose own change cannot run it is how the first
+  # one got shipped broken.
+  image-learning-platform:
+    name: Image releaseability (learning-platform)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.infrastructure == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out untrusted PR without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Build, scan and smoke the image
+        run: bash scripts/ci/check-image-releaseability.sh learning-platform
+
+  image-web-ui:
+    name: Image releaseability (web-ui)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.infrastructure == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out untrusted PR without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Build, scan and smoke the image
+        run: bash scripts/ci/check-image-releaseability.sh web-ui
+
+  image-ai:
+    name: Image releaseability (ramals-ai)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.python == 'true' || needs.detect-changes.outputs.infrastructure == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out untrusted PR without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Build, scan and smoke the image
+        run: bash scripts/ci/check-image-releaseability.sh ai
+
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [detect-changes, backend-ci, frontend-ci, python-ci, contract-ci, security-ci]
+    needs: [detect-changes, backend-ci, frontend-ci, python-ci, contract-ci, security-ci,
+            image-learning-platform, image-web-ui, image-ai]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate required and conditional jobs
@@ -79,9 +138,12 @@ jobs:
           PYTHON_RESULT: ${{ needs.python-ci.result }}
           CONTRACT_RESULT: ${{ needs.contract-ci.result }}
           SECURITY_RESULT: ${{ needs.security-ci.result }}
+          IMAGE_BACKEND_RESULT: ${{ needs.image-learning-platform.result }}
+          IMAGE_WEBUI_RESULT: ${{ needs.image-web-ui.result }}
+          IMAGE_AI_RESULT: ${{ needs.image-ai.result }}
         run: |
           required=("detect-changes:$DETECT_RESULT" "security-ci:$SECURITY_RESULT")
-          conditional=("backend-ci:$BACKEND_RESULT" "frontend-ci:$FRONTEND_RESULT" "python-ci:$PYTHON_RESULT" "contract-ci:$CONTRACT_RESULT")
+          conditional=("backend-ci:$BACKEND_RESULT" "frontend-ci:$FRONTEND_RESULT" "python-ci:$PYTHON_RESULT" "contract-ci:$CONTRACT_RESULT" "image-learning-platform:$IMAGE_BACKEND_RESULT" "image-web-ui:$IMAGE_WEBUI_RESULT" "image-ai:$IMAGE_AI_RESULT")
 
           for entry in "${required[@]}"; do
             name="${entry%%:*}"
