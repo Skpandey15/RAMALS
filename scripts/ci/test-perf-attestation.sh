@@ -238,14 +238,41 @@ import jsonschema
 root = Path(sys.argv[1])
 schema = json.loads((root / "performance" / "baselines" / "baseline.schema.json").read_text(encoding="utf-8"))
 
+VERDICT = ("thresholds_passed", "k6_exit_status", "performance_rate_limit_override")
+
+# Baselines written before the runner recorded its own verdict. Listed by path, deliberately.
+#
+# This used to be an `if script_version == "mvp0-perf-harness-v1"` clause inside the schema, which
+# is an exemption a document grants itself: nothing stops a new run typing the old version string to
+# skip the fields, and RC4 already shows the shape without meaning to -- it claims that version and
+# carries the fields anyway. An allowlist of paths cannot be entered by editing a file's contents,
+# only by editing this list, which is a reviewable act.
+#
+# The measured data in these files is not touched. They are validated against the contract they were
+# actually written against.
+HISTORICAL = {
+    "docs/validation/r1-20260821-evidence/run-b/mixed-learning-20260821T100034Z.baseline.json":
+        "rc3 Run B, taken before run-baseline.sh recorded thresholds_passed/k6_exit_status/"
+        "performance_rate_limit_override. Retained as historical qualification evidence.",
+}
+
+relaxed = json.loads(json.dumps(schema))
+relaxed["required"] = [f for f in relaxed["required"] if f not in VERDICT]
+
 results = {}
 for path in sorted(root.glob("docs/**/*.baseline.json")):
     name = path.relative_to(root).as_posix()
+    applied = relaxed if name in HISTORICAL else schema
     try:
-        jsonschema.validate(json.loads(path.read_text(encoding="utf-8")), schema)
-        results[name] = "valid"
+        jsonschema.validate(json.loads(path.read_text(encoding="utf-8")), applied)
+        results[name] = "valid(historical)" if name in HISTORICAL else "valid"
     except jsonschema.ValidationError as failure:
         results[name] = f"invalid: {failure.message[:120]}"
+
+# An allowlist entry for a file that no longer exists is a stale exemption nobody will notice.
+for name in HISTORICAL:
+    if not (root / name).exists():
+        results[name] = "invalid: allowlisted as historical but the file is gone"
 
 json.dump(results, sys.stdout)
 PYEOF
@@ -258,10 +285,19 @@ check "there are committed baselines to validate" "yes" \
 
 invalid="$(printf '%s' "${BASELINES}" | "${PYTHON}" -c "
 import json,sys
-bad = {k: v for k, v in json.load(sys.stdin).items() if v != 'valid'}
+bad = {k: v for k, v in json.load(sys.stdin).items() if not v.startswith('valid')}
 print('none' if not bad else '; '.join(f'{k} -> {v}' for k, v in bad.items()))
 ")"
 check "every committed baseline conforms to baseline.schema.json" "none" "${invalid%$'\r'}"
+
+# How many are exempted, stated out loud. An allowlist that grows quietly is how a temporary
+# accommodation becomes the normal case; naming the count means adding to it is a visible edit here
+# as well as in the list itself.
+historical="$(printf '%s' "${BASELINES}" | "${PYTHON}" -c "
+import json,sys
+print(sum(1 for v in json.load(sys.stdin).values() if v == 'valid(historical)'))
+")"
+check "exactly one baseline predates the verdict fields" "1" "${historical%$'\r'}"
 
 # The verdict has to be a field, not an inference. Before this, "there is a baseline" and "the run
 # passed" were the same statement, because a failing run wrote no file at all -- so a reader could
@@ -287,6 +323,55 @@ else:
 PYEOF
 )"
 check "the authoritative baseline states its own verdict, under production policy" "pass" "${verdict%$'\r'}"
+
+# The exemption must not be claimable by the document.
+#
+# A schema can only read what it is handed, so any exemption keyed on a field inside the baseline is
+# one the baseline can award itself -- write "mvp0-perf-harness-v1" and the verdict requirement
+# disappears. That is not a hypothetical shape: the authoritative RC4 baseline carries exactly that
+# version string today.
+cat > "${WORK}/no_self_exemption.py" <<'PYEOF'
+"""A new baseline must not escape the verdict requirement by claiming to be an old one."""
+import json, sys
+from pathlib import Path
+
+import jsonschema
+
+root = Path(sys.argv[1])
+schema = json.loads((root / "performance" / "baselines" / "baseline.schema.json").read_text(encoding="utf-8"))
+conforming = json.loads(
+    (root / "performance" / "baselines" / "baseline.example.json").read_text(encoding="utf-8"))
+
+def refused(document):
+    return bool(list(jsonschema.Draft202012Validator(schema).iter_errors(document)))
+
+results = {}
+
+# The example, unaltered, must still pass -- otherwise the checks below prove nothing.
+results["conforming_example_accepted"] = not refused(conforming)
+
+for field in ("thresholds_passed", "k6_exit_status", "performance_rate_limit_override"):
+    for claimed in ("mvp0-perf-harness-v1", "mvp1-perf-harness-v2", "anything-at-all"):
+        forged = {k: v for k, v in conforming.items() if k != field}
+        forged["script_version"] = claimed
+        results[f"{field}_missing_claiming_{claimed}"] = refused(forged)
+
+json.dump(results, sys.stdout)
+PYEOF
+
+SELF_EXEMPT="$("${PYTHON}" "${WORK}/no_self_exemption.py" "${REPO_ROOT}")"
+self_exempt_says() { printf '%s' "${SELF_EXEMPT}" | "${PYTHON}" -c \
+  "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
+
+check "a fully conforming baseline is still accepted" "True" "$(self_exempt_says conforming_example_accepted)"
+check "dropping thresholds_passed is refused even claiming the legacy harness version" \
+  "True" "$(self_exempt_says thresholds_passed_missing_claiming_mvp0-perf-harness-v1)"
+check "dropping k6_exit_status is refused even claiming the legacy harness version" \
+  "True" "$(self_exempt_says k6_exit_status_missing_claiming_mvp0-perf-harness-v1)"
+check "dropping the override flag is refused even claiming the legacy harness version" \
+  "True" "$(self_exempt_says performance_rate_limit_override_missing_claiming_mvp0-perf-harness-v1)"
+check "no script_version value grants an exemption" \
+  "True" "$(self_exempt_says thresholds_passed_missing_claiming_anything-at-all)"
 
 # -- the runner refuses an id with no spec behind it -------------------------------------------------
 

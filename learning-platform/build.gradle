@@ -207,6 +207,15 @@ tasks.named('check') {
 
 tasks.named('test') {
   finalizedBy tasks.named('jacocoTestReport')
+
+  // PerformanceHarnessTests reads the baseline schema and example from outside this module, so
+  // without declaring them an edit to either leaves the task up to date and the assertions unrun.
+  // Hit while hardening the schema in this very change: the suite reported a confident pass in
+  // 716ms without executing anything. CI starts clean and never sees it, which is what makes it
+  // worth declaring rather than remembering.
+  inputs.dir(rootProject.file('performance/baselines'))
+      .withPropertyName('baselineContract')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 jacoco {

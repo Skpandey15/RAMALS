@@ -16,7 +16,10 @@
     "steady_state",
     "latency_ms",
     "error_rate",
-    "throughput_rps"
+    "throughput_rps",
+    "thresholds_passed",
+    "k6_exit_status",
+    "performance_rate_limit_override"
   ],
   "properties": {
     "scenario": {
@@ -188,7 +191,7 @@
     },
     "thresholds_passed": {
       "type": "boolean",
-      "description": "Whether every k6 threshold held. A baseline may record a FAIL; that is the point."
+      "description": "Whether every k6 threshold held. A baseline may record a FAIL; that is the point. Required unconditionally: an exemption keyed on any field of this document would be one the document could claim for itself. Baselines written before these fields existed are validated against the relaxed contract by an explicit path allowlist in scripts/ci/test-perf-attestation.sh, which a new file cannot enter by editing its own contents."
     },
     "k6_exit_status": {
       "type": "integer",
@@ -214,25 +217,6 @@
       "then": {
         "required": [
           "environment_attestation"
-        ]
-      }
-    },
-    {
-      "$comment": "A baseline from a harness that records its own verdict must actually record it. mvp0-perf-harness-v1 predates those fields and is exempt.",
-      "if": {
-        "properties": {
-          "script_version": {
-            "not": {
-              "const": "mvp0-perf-harness-v1"
-            }
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "thresholds_passed",
-          "k6_exit_status",
-          "performance_rate_limit_override"
         ]
       }
     }
