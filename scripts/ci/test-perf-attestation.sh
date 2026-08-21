@@ -277,6 +277,85 @@ check "the runner accepts an attestation from the host under test" "0" "$?"
 runner_mode="$(git -C "${REPO_ROOT}" ls-files --stage -- performance/run-baseline.sh | awk '{print $1}')"
 check "the documented benchmark runner is executable" "100755" "${runner_mode}"
 
+# -- the two-host fixture path -------------------------------------------------------------------------
+#
+# The load generator reaches Keycloak twice by two different names: k6 POSTs to RAMALS_TOKEN_URL,
+# and the fixture script drives the admin API at RAMALS_KEYCLOAK_URL. Only the first was ever
+# supplied, so the second fell back to the Compose service name -- which resolves on the SUT and
+# nowhere else. The run died provisioning fixtures, on a host the operator had already given a
+# perfectly good address for.
+#
+# These run in CI because the transform is the whole fix, and it needs no network to check.
+
+# shellcheck source=../../performance/lib/keycloak-url.sh
+. "${PERF}/lib/keycloak-url.sh"
+
+CANONICAL_TOKEN_URL="http://172.31.12.172:8081/realms/ramals/protocol/openid-connect/token"
+
+check "the Keycloak base URL is derived from the token endpoint" \
+  "http://172.31.12.172:8081" \
+  "$(keycloak_base_url_from_token_url "${CANONICAL_TOKEN_URL}")"
+
+# A realm called 'realms' must not truncate the result at the wrong slash.
+check "a realm named 'realms' does not confuse the derivation" \
+  "https://idp.example:8443" \
+  "$(keycloak_base_url_from_token_url 'https://idp.example:8443/realms/realms/protocol/openid-connect/token')"
+
+# Guessing a prefix for something that is not a realm-scoped endpoint would produce a plausible URL
+# pointing at nothing, which is worse than refusing.
+keycloak_base_url_from_token_url 'http://idp.example/oauth2/token' >/dev/null 2>&1
+check "a non-realm URL is refused rather than guessed at" "1" "$?"
+
+derived="$(RAMALS_TOKEN_URL="${CANONICAL_TOKEN_URL}" RAMALS_KEYCLOAK_URL="" \
+  "${SHELL_BIN:-bash}" -c ". '${PERF}/lib/keycloak-url.sh'; export_keycloak_base_url; printf '%s' \"\${RAMALS_KEYCLOAK_URL:-}\"")"
+check "export sets RAMALS_KEYCLOAK_URL when only the token URL is given" \
+  "http://172.31.12.172:8081" "${derived}"
+
+explicit="$(RAMALS_TOKEN_URL="${CANONICAL_TOKEN_URL}" RAMALS_KEYCLOAK_URL="http://elsewhere:9090" \
+  "${SHELL_BIN:-bash}" -c ". '${PERF}/lib/keycloak-url.sh'; export_keycloak_base_url; printf '%s' \"\${RAMALS_KEYCLOAK_URL}\"")"
+check "an explicitly set RAMALS_KEYCLOAK_URL is not overruled" \
+  "http://elsewhere:9090" "${explicit}"
+
+# The perturbation that matters: with neither variable set and no fixture network, off-host
+# provisioning must refuse rather than fall through to a hostname only the SUT can resolve.
+#
+# Asserted on the message rather than the exit status. Deleting the guard leaves fixtures.sh running
+# on to provision-load-fixtures.py, which exits non-zero anyway on the first missing admin
+# credential -- so an exit-code assertion passes whether the guard is there or not, which is how
+# this check read before it was perturbed. The status is checked too, but it is the weaker half.
+refusal="$( unset RAMALS_KEYCLOAK_URL RAMALS_TOKEN_URL RAMALS_FIXTURE_NETWORK
+            "${PERF}/fixtures.sh" provision 2>&1 >/dev/null )"
+refusal_status=$?
+case "${refusal}" in
+  *"needs a reachable Keycloak address"*) refused="named" ;;
+  *)                                      refused="not-named" ;;
+esac
+check "fixtures name the missing Keycloak address as the reason" "named" "${refused}"
+check "fixtures refuse to provision with no reachable Keycloak address" "1" "${refusal_status}"
+
+# -- things that must not drift back ---------------------------------------------------------------
+
+RUNBOOK="${PERF}/environment/RUNBOOK-aws.md"
+
+# The runbook used to print 'RAMALS_KEYCLOAK_ADMIN=admin' as though it were the value rather than an
+# example. The real one is whatever the SUT's deploy/.env holds, and a mismatch is only discovered
+# after the environment has been built and attested.
+grep -qE '^\s*export RAMALS_KEYCLOAK_ADMIN=admin\b' "${RUNBOOK}"
+check "the runbook does not present a hardcoded Keycloak admin username as fact" "1" "$?"
+
+# auth-setup-smoke.js shipped with the two-host support and nothing called it for two releases. A
+# smoke test nothing invokes cannot be distinguished from one that passes.
+grep -q 'auth-setup-smoke.js' "${PERF}/preflight-r1.sh"
+check "the authentication smoke test is actually invoked" "0" "$?"
+
+grep -q 'preflight-r1.sh' "${RUNBOOK}"
+check "the runbook tells the operator to run the preflight" "0" "$?"
+
+for runnable in preflight-r1.sh environment/check-two-host-network.sh; do
+  mode="$(git -C "${REPO_ROOT}" ls-files --stage -- "performance/${runnable}" | awk '{print $1}')"
+  check "performance/${runnable} is executable" "100755" "${mode}"
+done
+
 # -- result ------------------------------------------------------------------------------------------
 
 echo

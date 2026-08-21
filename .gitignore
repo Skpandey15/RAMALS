@@ -39,3 +39,7 @@ performance/environment/terraform/tfplan
 # reproducibility the reference environment exists for. Terraform's own init output says to commit
 # it, and an unpinned provider is how a re-created environment quietly stops matching the one the
 # baseline was measured on.
+
+# Raw R1 evidence bundles. The curated report in docs/validation/ is the committed record;
+# these are the machine outputs behind it and are archived out of band.
+r1-evidence-*/

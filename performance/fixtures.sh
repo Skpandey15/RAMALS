@@ -15,6 +15,24 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ACTION="${1:?usage: fixtures.sh provision|restore}"
 
+# On a two-host run the caller has RAMALS_TOKEN_URL and this needs the server root. Derive one from
+# the other rather than making the operator supply the same address twice -- see lib/keycloak-url.sh
+# for why the missing second variable failed here rather than visibly.
+# shellcheck source=lib/keycloak-url.sh
+. "${HERE}/lib/keycloak-url.sh"
+export_keycloak_base_url
+
+# Fail here rather than inside the admin API call. Unset, RAMALS_KEYCLOAK_URL defaults to the
+# Compose service name, which resolves on the SUT and on no other machine -- so the load generator
+# reports a DNS failure for a host it was never supposed to contact, after the environment has been
+# provisioned and attested. Naming the real problem costs one line.
+if [ -z "${RAMALS_KEYCLOAK_URL:-}" ] && [ -z "${RAMALS_FIXTURE_NETWORK:-}" ]; then
+  echo "fixtures.sh: neither RAMALS_KEYCLOAK_URL nor RAMALS_TOKEN_URL is set, and no fixture" >&2
+  echo "  network was given. Off-host fixture provisioning needs a reachable Keycloak address;" >&2
+  echo "  the in-network default 'http://keycloak:8080' only resolves on the SUT itself." >&2
+  exit 1
+fi
+
 STATE_DIR="${RAMALS_LOAD_FIXTURE_DIR:-${HERE}/.fixtures}"
 mkdir -p "${STATE_DIR}"
 STATE_FILE="${STATE_DIR}/state.json"
