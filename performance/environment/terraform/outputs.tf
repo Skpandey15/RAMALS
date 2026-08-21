@@ -28,9 +28,11 @@ output "next_steps" {
 
     Everything below is driven from your own machine; nothing needs an interactive login.
 
-    1. copy the harness to both hosts
-       scp -r performance ubuntu@${aws_instance.sut.public_ip}:~/
-       scp -r performance ubuntu@${aws_instance.loadgen.public_ip}:~/
+    1. copy the harness to both hosts -- tracked files only, about 140 KB.
+       Not 'scp -r performance': after terraform init that tree carries the AWS provider and is
+       over 600 MB, none of which either host uses.
+       git archive HEAD performance | ssh ubuntu@${aws_instance.sut.public_ip} 'tar -x'
+       git archive HEAD performance | ssh ubuntu@${aws_instance.loadgen.public_ip} 'tar -x'
 
     2. prepare each host
        ssh ubuntu@${aws_instance.sut.public_ip} 'bash performance/environment/provision-sut.sh'

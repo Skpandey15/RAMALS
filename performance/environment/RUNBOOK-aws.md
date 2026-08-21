@@ -119,9 +119,12 @@ If you created the instances by hand instead, the same sequence applies — use 
 substitute your own addresses:
 
 ```bash
-# 1. copy the harness to both
-scp -r performance ubuntu@<sut>:~/
-scp -r performance ubuntu@<loadgen>:~/
+# 1. copy what the SUT needs -- the harness, the deploy topology, and the image build contexts.
+#    Not 'scp -r performance': after terraform init that tree carries the AWS provider and is
+#    over 600 MB, none of which either host uses. And performance/ alone is not enough: the
+#    compose builds postgres and keycloak from infrastructure/, so those must be present too.
+git archive HEAD performance deploy infrastructure | ssh ubuntu@<sut> 'tar -x'
+git archive HEAD performance | ssh ubuntu@<loadgen> 'tar -x'   # the generator only runs k6
 
 # 2. prepare each host
 ssh ubuntu@<sut>     'bash performance/environment/provision-sut.sh'
@@ -130,6 +133,17 @@ ssh ubuntu@<loadgen> 'bash performance/environment/provision-loadgen.sh'
 
 `provision-sut.sh` checks capacity **before installing anything** and refuses a host that is too
 small, so a wrongly sized instance costs a few seconds rather than a full setup.
+
+### The stack needs an .env, and builds two of its four images
+
+`deploy/compose.deploy.yml` declares twelve variables with `:?Set X`, so it refuses to start until
+every one is present -- database and Keycloak credentials among them. Copy `.env.example` on the SUT
+and fill it in before step 3; there is no default that works.
+
+`postgres` and `keycloak` are **built** on the host from `infrastructure/docker/`, not pulled. The
+Keycloak build runs an `--optimized` augmentation step and is the slowest part of bringing the stack
+up -- budget ten to twenty minutes for step 3 the first time. `learning-platform` and `web-ui` are
+pulled by digest and are public, so no registry login is needed.
 
 ```bash
 # 3. bring the stack up on the SUT, pinned to the spec's resources
