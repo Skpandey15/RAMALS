@@ -351,9 +351,56 @@ check "the authentication smoke test is actually invoked" "0" "$?"
 grep -q 'preflight-r1.sh' "${RUNBOOK}"
 check "the runbook tells the operator to run the preflight" "0" "$?"
 
-for runnable in preflight-r1.sh environment/check-two-host-network.sh; do
-  mode="$(git -C "${REPO_ROOT}" ls-files --stage -- "performance/${runnable}" | awk '{print $1}')"
-  check "performance/${runnable} is executable" "100755" "${mode}"
+# Every script the harness runs directly has to carry the executable bit -- derived from where the
+# invocations actually are, not from a list somebody remembers to extend.
+#
+# A hardcoded list is what existed, and it named run-baseline.sh alone. fixtures.sh is executed the
+# same way from run-baseline.sh:95, was committed 100644, and would have failed with exit 126 on the
+# load generator -- the identical failure that invalidated the first authorised R1 attempt, one step
+# further down the same path. It survived local testing because Windows does not enforce the bit.
+#
+# Scripts invoked as `bash x.sh` are excluded on purpose: the mode is irrelevant there, which is why
+# every scripts/ci entry is fine at 100644.
+DIRECT_TARGETS="$("${PYTHON}" - "${REPO_ROOT}" <<'PYEOF'
+import re, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+# "${HERE}/name.sh" -- resolved against the referencing script's own directory.
+here = re.compile(r'"\$\{HERE\}/([a-z0-9-]+\.sh)"')
+# ./performance/name.sh -- resolved against the repository root.
+rooted = re.compile(r'\./(performance/[a-z0-9/-]+\.sh)')
+
+targets = set()
+for source in sorted(root.glob("performance/**/*.sh")):
+    for line in source.read_text(encoding="utf-8").splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        for name in here.findall(line):
+            targets.add((source.parent / name).relative_to(root).as_posix())
+        for path in rooted.findall(line):
+            targets.add(path)
+
+print("\n".join(sorted(targets)))
+PYEOF
+)"
+
+[ -n "${DIRECT_TARGETS}" ] || { echo "FAIL could not find any directly-invoked scripts to check"; FAILURES=$((FAILURES + 1)); }
+
+while IFS= read -r target; do
+  # Python on Windows writes CRLF, and a path with a trailing carriage return matches no file --
+  # git would report an empty mode and the check would fail for a reason that has nothing to do
+  # with the permission it is testing. This suite has to give the same answer on both platforms.
+  target="${target%$'\r'}"
+  [ -n "${target}" ] || continue
+  mode="$(git -C "${REPO_ROOT}" ls-files --stage -- "${target}" | awk '{print $1}')"
+  check "${target} is executable (it is invoked directly)" "100755" "${mode}"
+done <<< "${DIRECT_TARGETS}"
+
+for runnable in performance/environment/check-two-host-network.sh; do
+  mode="$(git -C "${REPO_ROOT}" ls-files --stage -- "${runnable}" | awk '{print $1}')"
+  check "${runnable} is executable" "100755" "${mode}"
 done
 
 # -- result ------------------------------------------------------------------------------------------
