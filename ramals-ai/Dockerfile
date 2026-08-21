@@ -19,6 +19,37 @@ RUN groupadd --system --gid 10001 ramals \
 
 COPY --from=build /install /usr/local
 
+# Patch the base image's OS packages before anything else.
+#
+# python:3.14-slim currently ships util-linux 2.41-5, which carries four HIGH advisories
+# (CVE-2026-53612 through -53615) with a fix already published as 2.41.5-0+deb13u1. The release
+# scan runs with --ignore-unfixed, so these count: a fix exists and this image does not have it.
+#
+# Pinning the base by digest is what makes a build reproducible, and it is also what stops it
+# picking up security updates on its own. The current digest IS the newest python:3.14-slim -- there
+# is no rebuilt base to move to -- so the packages are upgraded here instead. When upstream rebuilds,
+# this layer becomes a no-op rather than something that has to be remembered and removed.
+#
+# Only the util-linux family is upgraded. A blanket 'apt-get upgrade' would quietly change packages
+# nobody reviewed, which is the opposite of what pinning a digest is for.
+RUN apt-get update  && apt-get install --yes --no-install-recommends --only-upgrade       bsdutils libblkid1 liblastlog2-2 libmount1 libsmartcols1 libuuid1 login mount util-linux  && rm -rf /var/lib/apt/lists/*
+
+# Remove pip from the runtime image.
+#
+# Not a size optimisation. pip vendors its own copies of libraries, and those copies are what the
+# release scan flags: msgpack and setuptools inside pip/_vendor, neither of which this service
+# imports and neither of which any project dependency asks for. They arrive with the base image and
+# there is no version of them to bump, because they are not dependencies -- they are pip's insides.
+#
+# Removing pip fixes that by deleting the thing that carries them, and it is the right answer
+# independently of any advisory: a running service has no reason to install packages, and an image
+# that ships an installer hands anyone who achieves code execution a way to fetch more code. The
+# entrypoint is uvicorn and the healthcheck is python -c; neither needs pip.
+#
+# The glob avoids naming the Python version, so a base-image bump does not silently stop deleting
+# anything.
+RUN rm -rf /usr/local/lib/python*/site-packages/pip            /usr/local/lib/python*/site-packages/pip-*.dist-info            /usr/local/lib/python*/site-packages/pkg_resources            /usr/local/lib/python*/site-packages/setuptools            /usr/local/lib/python*/site-packages/setuptools-*.dist-info            /usr/local/bin/pip /usr/local/bin/pip[0-9]*
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     RAMALS_AI_SERVICE_NAME=ramals-ai
