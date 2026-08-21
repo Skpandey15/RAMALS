@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import org.slf4j.MDC;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,14 +26,17 @@ public class RecommendationService {
   private final RecommendationPolicy policy;
   private final RecommendationRepository repository;
   private final LearnerService learnerService;
+  private final ApplicationEventPublisher events;
 
   public RecommendationService(
       RecommendationPolicy policy,
       RecommendationRepository repository,
-      LearnerService learnerService) {
+      LearnerService learnerService,
+      ApplicationEventPublisher events) {
     this.policy = policy;
     this.repository = repository;
     this.learnerService = learnerService;
+    this.events = events;
   }
 
   @Transactional
@@ -66,6 +70,15 @@ public class RecommendationService {
             "outcome", "SUCCESS",
             "interactionId", correlationValue(interactionId, "interactionId"),
             "traceId", correlationValue(traceId, "traceId")));
+
+    // The AI adaptation comparison listens for this and runs after this transaction commits. It is
+    // deliberately not called inline: M1-T11 makes the comparison research input, and the
+    // deterministic recommendation above is already durable and authoritative whether or not the
+    // agent ever answers. Calling the plane from inside this transaction would also hold a database
+    // connection across a network call with a twelve-second deadline.
+    events.publishEvent(new RecommendationDecidedEvent(
+        snapshot.learnerId(), snapshot.skillId(), decision, interactionId, traceId));
+
     return recommendation;
   }
 
