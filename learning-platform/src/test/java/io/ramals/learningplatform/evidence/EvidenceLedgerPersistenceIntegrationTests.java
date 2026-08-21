@@ -133,7 +133,7 @@ class EvidenceLedgerPersistenceIntegrationTests {
           new MasteryRepository(runtimeJdbc), evidence, new WeightedMasteryCalculator(),
           new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
       RecommendationService recommendationService = new RecommendationService(
-          new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
+          new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService, event -> { });
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorer(), evidenceService, masteryService,
           recommendationService, mapper);

@@ -132,7 +132,7 @@ class RecommendationPersistenceIntegrationTests {
           new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
       policy = new RecommendationPolicy();
       recommendations = new RecommendationRepository(runtimeJdbc);
-      recommendationService = new RecommendationService(policy, recommendations, learnerService);
+      recommendationService = new RecommendationService(policy, recommendations, learnerService, event -> { });
       AssessmentRepository assessments = new AssessmentRepository(runtimeJdbc, mapper);
       diagnostics = new DiagnosticService(assessments, learnerService);
       submissions = new DiagnosticSubmissionService(
