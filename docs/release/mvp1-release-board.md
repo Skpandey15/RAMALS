@@ -11,14 +11,30 @@ recorded as closed without evidence.
 
 | Item | Status | Owner | What closing it requires |
 | --- | --- | --- | --- |
-| **R1 — calibrated performance baseline** | 🔴 **OPEN** | not assigned | A host that conforms to [`perf-standard-01`](../../performance/environment/perf-standard-01.json), and a second machine to run the load generator from. The harness is repaired and the environment is now defined and machine-checkable — what remains is hardware, not engineering. Developer-machine numbers stay indicative only (Doc 07 §4). |
+| **R1 — calibrated performance baseline** | 🔴 **OPEN** | not assigned | **No longer hardware.** An attested `perf-standard-01` environment was provisioned, measured and destroyed on 2026-08-21 — see the [R1 evidence package](evidence/r1-calibrated-baseline.md). What remains is a decision: the canonical 60 rps workload run from one source IP collides with a rate-limit ceiling that is itself misconfigured (**TD-R1-01**), so there is not yet a baseline that is both a pass and taken under production policy. |
 
-**What changed, and what did not.** R1 is still open and still needs a machine. What is closed is
-the hole that would have survived buying one: `RAMALS_PERF_ENV` was free text copied into the
-baseline, so a laptop run could label itself `perf-standard-01` and nothing anywhere would disagree.
-The id is now earned -- `performance/environment/attest.py` measures the host against a declared
-spec, a non-conforming run is recorded as `local-unqualified` whatever the operator asked for, and
-`baseline.schema.json` refuses a baseline whose label and attestation disagree.
+**What changed on 2026-08-21.** R1 is still open, but for a different reason than before. The
+environment question is answered: a conforming host and a separate load generator were provisioned
+under Terraform, the attestation passed with zero failures, `v0.1.0-rc3` was deployed by immutable
+digest, and two runs were recorded.
+
+- **R1 Run A — VALID / FAIL — normal rate-limit policy.** 9,599 iterations, 12,417 requests, 60 rps
+  sustained. Every latency threshold passed comfortably (p95 5.38 ms against a 250 ms budget on
+  skill-map reads). The error-rate threshold failed at **17.33%**, all of it HTTP 429 from the
+  pre-authentication IP rate-limit tier. Zero restarts and zero OOM kills: policy, not saturation.
+- **R1 Run B — PASS — capacity characterization** with the documented `compose.perf-override.yml`
+  active and recorded as active. Same workload, images, limits and configuration; only the
+  rate-limit ceiling differed. **0.00% failures across 12,519 requests**, all thresholds passed.
+
+Run B does not close R1 and does not supersede Run A. It establishes only that the refusals were the
+ceiling rather than the application. **Run A is the canonical result and is not to be relabelled.**
+
+**What was closed earlier, and still is.** The hole that would have survived buying a machine:
+`RAMALS_PERF_ENV` was free text copied into the baseline, so a laptop run could label itself
+`perf-standard-01` and nothing anywhere would disagree. The id is now earned --
+`performance/environment/attest.py` measures the host against a declared spec, a non-conforming run
+is recorded as `local-unqualified` whatever the operator asked for, and `baseline.schema.json`
+refuses a baseline whose label and attestation disagree.
 
 Running the attestation on any candidate machine prints exactly what it lacks, so provisioning is now
 a checklist rather than a judgement:
@@ -35,11 +51,22 @@ engineering may proceed while R1 is open — that exception covers *building*, n
 and any deterministic-versus-agentic comparison remain blocked until R1 closes or is explicitly
 risk-accepted by name under that ADR.
 
-Nothing in T00–T17 will close R1. It needs an environment decision, not a commit.
+Nothing in T00–T17 will close R1. As of 2026-08-21 it needs a policy decision — **TD-R1-01** — and a
+re-run under whatever that decision settles on; the environment itself is no longer the obstacle.
 
 What *is* measured at MVP-1, and what is deliberately absent, is recorded in the
 [MVP-1 baseline record](mvp1-baseline.md). It is the reference point MVP-2 compares against, and it
 names the unmeasured dimensions so they cannot later be mistaken for baselines of zero.
+
+## Open technical debt from R1
+
+Raised by the 2026-08-21 runs. TD-R1-01 gates closing R1; TD-R1-02 is already fixed in code and is
+listed because the refactor it names is broader than the fix that landed.
+
+| Item | Status | What it is | What closing it requires |
+| --- | --- | --- | --- |
+| **TD-R1-01 — canonical workload vs rate-limit policy** | 🔴 open | The canonical 60 rps `mixed-learning` workload runs from a single load-generator IP and is refused by the pre-authentication rate-limit tier, which `application.yml` binds to `capacity 120 / refill 60` — the values `RateLimitProperties` intends for the *per-subject* tier, whose own default is `600 / 300` for the IP tier. The two-tier design shipped; the configuration kept the pre-fix numbers on the wrong tier. Beyond benchmarking, this partially reinstates the shared-egress problem [`performance-baseline.md` §4](evidence/performance-baseline.md) recorded as resolved: users behind one NAT still share a 60 rps allowance. | A decision on how future calibrated runs are made: (a) run with a documented capacity override and label every baseline accordingly, (b) distribute load across multiple source IPs so the benchmark exercises the application rather than the ceiling, or (c) keep the canonical run under production policy and add a **separate** rate-limit-resilience scenario that asserts the limiter behaves correctly. Whichever is chosen, the IP-tier binding in `application.yml` needs review on its own merits — it is a product concern, not only a benchmarking one. |
+| **TD-R1-02 — failed threshold runs must still produce a baseline** | 🟡 fixed, refactor outstanding | k6 exits non-zero on a breached threshold and `run-baseline.sh` ran under `set -e`, so it aborted before distillation: the run most worth recording was the only one that recorded nothing. R1 Run A produced no `.baseline.json`. Because the `setup_data` scrub lives in that same block, Run A's summary also retained **20 live bearer tokens**, caught by gitleaks. | The immediate defect is fixed: the status is captured rather than fatal, distillation and the scrub always run, the status is re-raised afterwards, and the baseline records `thresholds_passed`, `k6_exit_status` and `performance_rate_limit_override`. A CI guard drives the script with a stub k6 that fails after writing `setup_data`. What remains is the refactor proper — a FAIL baseline is currently the same schema with a flag, and `baseline.schema.json` does not yet require the verdict field, so a consumer can still read a failing baseline as a passing one. |
 
 ## Task progress — canonical task → decision mapping
 
