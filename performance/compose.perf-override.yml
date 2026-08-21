@@ -3,14 +3,25 @@
 #
 #   docker compose -f deploy/compose.deploy.yml -f performance/compose.perf-override.yml up -d
 #
-# Since R9 this is usually NOT needed. Rate limiting now has two tiers: a pre-authentication ceiling
-# keyed on client IP (generous, sized to shed floods) and a post-authentication tier keyed on the
-# verified token subject (per-learner fair use). A load generator is a single IP but authenticates as
-# many distinct learners, so provisioning enough learners keeps each one under the fair-use limit and
-# the run measures the application rather than the limiter.
+# Since R9 rate limiting has two tiers: a pre-authentication ceiling keyed on client IP (generous,
+# sized to shed floods) and a post-authentication tier keyed on the verified token subject
+# (per-learner fair use). A load generator is a single IP but authenticates as many distinct
+# learners, so with enough learners each stays under the fair-use limit.
 #
 # Before R9 the bucket was keyed on IP alone, so every simulated learner shared one allowance and a
 # 60 rps run returned roughly 16% 429s no matter how many identities the harness used.
+#
+# That R9 claim was true of the code and false of any deployed system until TD-R1-01. application.yml
+# bound the IP tier to the subject tier's numbers (120/60 rather than 600/300) and left the subject
+# tier unbound, so the shared bucket was five times tighter than designed and adding learners could
+# not relieve it. R1 Run A measured the result: 2,153 of 12,417 requests refused at a sustained
+# 60 rps. Both tiers are now bound explicitly, and RateLimitPropertiesContractTests fails if the
+# YAML defaults drift from RateLimitProperties again.
+#
+# Every variable below therefore binds to a real property. The two SUBJECT_ ones previously did not:
+# nothing in application.yml exposed the subject tier, so they matched no binding under the
+# ramals.security.rate-limit prefix and were read by nothing. This file looked like it relaxed both
+# tiers and relaxed one — which is why R1 Run B is recorded as having relaxed the IP ceiling only.
 #
 # Reach for this only to probe above the IP ceiling itself. It materially weakens a security control
 # and is NOT a deployment artefact: never apply it to a real environment, and label any run made with

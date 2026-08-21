@@ -168,6 +168,12 @@ governanceTest.configure {
   inputs.file(rootProject.file('docs/release/mvp1-release-board.md'))
       .withPropertyName('releaseBoard')
       .withPathSensitivity(PathSensitivity.RELATIVE)
+  // RateLimitPropertiesContractTests reads this to check that every rate-limit variable the
+  // performance override sets actually binds to a property. Undeclared, an edit to it would leave
+  // the task up to date and the check unrun — locally silent, since CI always starts clean.
+  inputs.file(rootProject.file('performance/compose.perf-override.yml'))
+      .withPropertyName('performanceRateLimitOverride')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // These suites intentionally reset and re-provision the same PostgreSQL database. Run the

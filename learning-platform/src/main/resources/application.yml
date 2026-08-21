@@ -42,10 +42,23 @@ ramals:
     workload-audience: ${RAMALS_AI_WORKLOAD_AUDIENCE:ramals-ai}
   security:
     web-origin: ${RAMALS_WEB_ORIGIN:http://localhost:5173}
+    # Two tiers, and the placeholder defaults must equal the defaults in RateLimitProperties.
+    # RateLimitPropertiesContractTests fails if they drift: this file previously bound the
+    # pre-authentication tier to 120/60 -- the subject tier's numbers -- which silently reinstated
+    # the single-tier behaviour the two-tier split exists to remove, because a value set here always
+    # wins over the Java default and nothing compared the two.
     rate-limit:
       enabled: ${RAMALS_RATE_LIMIT_ENABLED:true}
-      capacity: ${RAMALS_RATE_LIMIT_CAPACITY:120}
-      refill-per-second: ${RAMALS_RATE_LIMIT_REFILL_PER_SECOND:60}
+      # Pre-authentication, keyed on client IP. Deliberately generous: a whole school or office
+      # behind one NAT shares this bucket, and throttling them as a group is not the intent.
+      capacity: ${RAMALS_RATE_LIMIT_CAPACITY:600}
+      refill-per-second: ${RAMALS_RATE_LIMIT_REFILL_PER_SECOND:300}
+      # Post-authentication, keyed on the verified token subject. These are the limits an individual
+      # learner actually experiences. Bound explicitly so they are configurable per environment --
+      # previously they were reachable only by editing Java.
+      subject:
+        capacity: ${RAMALS_RATE_LIMIT_SUBJECT_CAPACITY:120}
+        refill-per-second: ${RAMALS_RATE_LIMIT_SUBJECT_REFILL_PER_SECOND:60}
 
 management:
   otlp:
