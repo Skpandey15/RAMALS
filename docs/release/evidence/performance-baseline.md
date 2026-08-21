@@ -132,6 +132,17 @@ This also means a future load run needs `RAMALS_LOAD_LEARNERS` set high enough t
 learners are not individually over the fair-use limit; the override below is no longer required for
 that reason alone.
 
+> **Update, 2026-08-21 — the resolution shipped in code but not in configuration.** The calibrated
+> run on `perf-standard-01` reproduced this section's Run A almost exactly (17.33% failures, all
+> HTTP 429) on `v0.1.0-rc3`. `SubjectRateLimitFilter` and the two-tier `RateLimitProperties` are
+> present and correct, but `application.yml` binds the **pre-authentication IP tier** to
+> `capacity 120 / refill 60` — the numbers intended for the per-subject tier, whose own IP-tier
+> default is `600 / 300` — and does not configure the subject tier at all. So the shared-egress
+> problem described above is only partly resolved in a deployed system, and raising
+> `RAMALS_LOAD_LEARNERS` cannot relieve it, because the binding constraint is the shared IP bucket.
+> Tracked as **TD-R1-01** on the [release board](../mvp1-release-board.md). Qualified evidence:
+> [R1 evidence package](r1-calibrated-baseline.md).
+
 ## Reproducing
 
 ```bash

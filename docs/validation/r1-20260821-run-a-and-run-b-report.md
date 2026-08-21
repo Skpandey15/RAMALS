@@ -70,16 +70,36 @@ Corroborating evidence that this was policy rather than exhaustion: **zero resta
 OOM kills across all four services**, and successful-request latency remained in single-digit
 milliseconds throughout.
 
-### Note on a stale claim in the repository
+### Correction: the two-tier design does exist; its configuration is wrong
 
-`performance/compose.perf-override.yml` states that since R9 rate limiting "has two tiers" — a
-generous IP ceiling plus a post-authentication tier keyed on token subject — and that the override
-is "usually NOT needed" because provisioning enough learners keeps each under the fair-use limit.
+**An earlier version of this report claimed this build "has only the IP tier" and that no
+subject-keyed rate limit exists. That was wrong, and the conclusion drawn from it was wrong.**
+`RateLimitProperties` defines both tiers and `SubjectRateLimitFilter` implements the second, applied
+after token validation — exactly as `docs/release/evidence/performance-baseline.md` §4 describes.
+The mistake was reading `application.yml` and inferring the code from it.
 
-That is not true of this build. `application.yml` exposes only `capacity` and `refill-per-second`,
-both IP-keyed. There is no subject tier. **Adding load learners cannot reduce these 429s**, because
-the limit is per-IP and the load generator is one IP by design. The override file's guidance should
-be corrected.
+The real defect is narrower and worse. `RateLimitProperties` defaults the **pre-authentication IP
+tier** to `capacity 600 / refill 300`, and the **per-subject tier** to `120 / 60`. But
+`application.yml` binds the IP tier to:
+
+```yaml
+capacity: ${RAMALS_RATE_LIMIT_CAPACITY:120}
+refill-per-second: ${RAMALS_RATE_LIMIT_REFILL_PER_SECOND:60}
+```
+
+— the per-subject numbers, applied to the shared IP bucket, and it configures the subject tier not
+at all. So the two-tier fix shipped in code while the configuration kept the pre-fix single-tier
+values on the wrong tier. The IP ceiling is five times tighter than the code intends.
+
+That is what produced Run A's 429s, and it partially reinstates the shared-egress problem MVP-0
+recorded as resolved: every user behind one NAT still shares a 60 rps allowance.
+
+`compose.perf-override.yml`'s advice that more learners would spread the load is therefore right in
+principle and ineffective in practice — the binding constraint is the misconfigured IP tier, which
+no number of learners can relieve. Its `RAMALS_RATE_LIMIT_SUBJECT_*` variables are also inert: they
+match no binding under the `ramals.security.rate-limit` prefix and are read by nothing.
+
+Tracked as TD-R1-01.
 
 ---
 
