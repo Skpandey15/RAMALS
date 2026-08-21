@@ -1,0 +1,1 @@
+RAMALS_OIDC_ISSUER_URI=http://172.31.11.69:8081/realms/ramals

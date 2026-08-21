@@ -98,7 +98,33 @@ fi
 
 echo "Running k6 scenario '${SCENARIO}' (env=${RAMALS_PERF_ENV}, commit=${RAMALS_COMMIT}, \
 learners=${RAMALS_LOAD_LEARNERS})"
-${RAMALS_K6_CMD:-k6} run --summary-export "${SUMMARY}" "${SCRIPT}"
+
+# A failed threshold must still produce a baseline.
+#
+# k6 exits non-zero when a threshold is breached, and this script runs under `set -e`. So the run
+# that most deserves an immutable artefact -- the one that failed -- was the only run that never
+# got one. R1 Run A drove 12,417 requests, sustained the canonical rate for its full duration, and
+# produced a summary and an attestation but no baseline, because the error-rate threshold was
+# crossed and the distillation below never executed. Its evidence survives only because it was
+# captured by hand afterwards.
+#
+# The exit status is preserved and re-raised at the end, so callers and CI still see the failure.
+# What changes is that the measurement is written down first.
+K6_STATUS=0
+${RAMALS_K6_CMD:-k6} run --summary-export "${SUMMARY}" "${SCRIPT}" || K6_STATUS=$?
+export K6_STATUS
+
+if [ "${K6_STATUS}" -ne 0 ]; then
+  echo
+  echo "k6 exited ${K6_STATUS} (a threshold was breached, or the run failed). Distilling the"
+  echo "baseline anyway: a FAIL is a result, and discarding it loses the measurement."
+fi
+
+# Whether the performance rate-limit override was in force. A run made with
+# compose.perf-override.yml measures application capacity above the infrastructure protection
+# ceiling, which is a different question from what the platform does under its own policy -- and
+# the two are indistinguishable in a baseline file that does not say which was which.
+export RAMALS_PERF_RATE_LIMIT_OVERRIDE="${RAMALS_PERF_RATE_LIMIT_OVERRIDE:-false}"
 
 # Scrub, then distil. k6 embeds setup() output in the summary export, and setup() returns access
 # tokens — so the raw summary carries live bearer credentials into a file meant to be archived.
@@ -162,6 +188,15 @@ baseline = {
     ),
     "error_rate": stat("http_req_failed", "value") or stat("http_req_failed", "rate") or 0,
     "throughput_rps": stat("http_reqs", "rate"),
+    # The verdict, recorded rather than implied by the file's existence. Before this, a baseline
+    # existed only when every threshold passed, so "there is a baseline" and "the run passed" were
+    # the same statement -- and a failing run left nothing behind to disagree with.
+    "thresholds_passed": os.environ.get("K6_STATUS") == "0",
+    "k6_exit_status": int(os.environ.get("K6_STATUS", "0")),
+    # What policy was in force. A capacity-characterisation run and a production-policy run produce
+    # very different numbers from an identical workload; without this they are indistinguishable
+    # once the console output is gone.
+    "performance_rate_limit_override": os.environ.get("RAMALS_PERF_RATE_LIMIT_OVERRIDE") == "true",
 }
 
 if baseline["latency_ms"]["p95"] is None:
@@ -172,3 +207,10 @@ with open(baseline_path, "w") as handle:
 PYEOF
 
 echo "Wrote baseline: ${BASELINE}"
+
+# Re-raise k6's verdict now that the measurement is safely on disk. Callers and CI see exactly the
+# status they saw before; the difference is that there is now a file to look at when they do.
+if [ "${K6_STATUS}" -ne 0 ]; then
+  echo "Run recorded, and it FAILED: k6 exited ${K6_STATUS}. See ${BASELINE}"
+  exit "${K6_STATUS}"
+fi

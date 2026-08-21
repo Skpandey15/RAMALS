@@ -1,0 +1,228 @@
+{
+  "metrics": {
+    "http_req_duration{request_class:recommendation_read}": {
+      "avg": 2.0832323492239495,
+      "min": 1.296512,
+      "med": 1.7623415,
+      "max": 75.836898,
+      "p(90)": 2.5904122999999997,
+      "p(95)": 3.419083949999999,
+      "thresholds": {
+        "p(95)<250": false
+      }
+    },
+    "checks": {
+      "passes": 8518,
+      "fails": 1081,
+      "value": 0.8873841025106782
+    },
+    "http_req_duration{request_class:skill_map_read}": {
+      "avg": 3.19034532927914,
+      "min": 0.320941,
+      "med": 2.825501,
+      "max": 49.126246,
+      "p(90)": 3.91005,
+      "p(95)": 5.386162000000001,
+      "thresholds": {
+        "p(95)<250": false
+      }
+    },
+    "http_req_duration{expected_response:true}": {
+      "min": 0.65855,
+      "med": 2.43676,
+      "max": 317.874851,
+      "p(90)": 4.1575319,
+      "p(95)": 7.2150421000000025,
+      "avg": 3.4003526605611984
+    },
+    "http_req_receiving": {
+      "med": 0.040633,
+      "max": 6.069558,
+      "p(90)": 0.1693954,
+      "p(95)": 0.19898819999999995,
+      "avg": 0.08111041588145258,
+      "min": 0.013433
+    },
+    "http_req_duration{request_class:assessment_write}": {
+      "max": 317.874851,
+      "p(90)": 18.377781100000004,
+      "p(95)": 21.379525200000003,
+      "avg": 4.1406612884203176,
+      "min": 0.172518,
+      "med": 1.7836045,
+      "thresholds": {
+        "p(95)<400": false
+      }
+    },
+    "http_req_duration": {
+      "avg": 2.855648288636551,
+      "min": 0.172518,
+      "med": 2.170172,
+      "max": 317.874851,
+      "p(90)": 3.8037138,
+      "p(95)": 6.239630799999999
+    },
+    "vus": {
+      "value": 0,
+      "min": 0,
+      "max": 1
+    },
+    "http_req_waiting": {
+      "avg": 2.7601934853829513,
+      "min": 0.147888,
+      "med": 2.023577,
+      "max": 317.802095,
+      "p(90)": 3.6812519999999997,
+      "p(95)": 5.984147799999998
+    },
+    "http_req_duration{request_class:diagnostic}": {
+      "avg": 2.548629074658249,
+      "min": 0.351819,
+      "med": 1.986892,
+      "max": 37.566293,
+      "p(90)": 3.952832,
+      "p(95)": 4.887677500000001,
+      "thresholds": {
+        "p(95)<500": false
+      }
+    },
+    "iterations": {
+      "count": 9599,
+      "rate": 45.54325891384272
+    },
+    "vus_max": {
+      "value": 50,
+      "min": 50,
+      "max": 50
+    },
+    "http_req_blocked": {
+      "avg": 0.006850446081984402,
+      "min": 0.001086,
+      "med": 0.002934,
+      "max": 3.184763,
+      "p(90)": 0.003932399999999999,
+      "p(95)": 0.004418399999999998
+    },
+    "http_req_connecting": {
+      "p(90)": 0,
+      "p(95)": 0,
+      "avg": 0.0031359937988241944,
+      "min": 0,
+      "med": 0,
+      "max": 3.031682
+    },
+    "data_received": {
+      "count": 36458756,
+      "rate": 172981.61935458035
+    },
+    "http_reqs": {
+      "count": 12417,
+      "rate": 58.91349577384988
+    },
+    "http_req_sending": {
+      "min": 0.004595,
+      "med": 0.01399,
+      "max": 0.133112,
+      "p(90)": 0.0187022,
+      "p(95)": 0.020775599999999995,
+      "avg": 0.01434438737215108
+    },
+    "iteration_duration": {
+      "p(90)": 4.067959600000001,
+      "p(95)": 7.124462400000007,
+      "avg": 3.77106817710181,
+      "min": 0.401608,
+      "med": 2.644965,
+      "max": 364.265189
+    },
+    "http_req_failed": {
+      "passes": 2153,
+      "fails": 10264,
+      "thresholds": {
+        "rate<0.01": true
+      },
+      "value": 0.1733913183538697
+    },
+    "data_sent": {
+      "count": 18491444,
+      "rate": 87734.20374860126
+    },
+    "http_req_tls_handshaking": {
+      "avg": 0,
+      "min": 0,
+      "med": 0,
+      "max": 0,
+      "p(90)": 0,
+      "p(95)": 0
+    },
+    "http_req_duration{request_class:mastery_read}": {
+      "min": 2.119389,
+      "med": 2.678637,
+      "max": 49.934207,
+      "p(90)": 3.650564,
+      "p(95)": 4.718514,
+      "avg": 3.043339382624767,
+      "thresholds": {
+        "p(95)<250": false
+      }
+    }
+  },
+  "root_group": {
+    "path": "",
+    "id": "d41d8cd98f00b204e9800998ecf8427e",
+    "groups": {},
+    "checks": {
+      "recommendations read": {
+        "name": "recommendations read",
+        "path": "::recommendations read",
+        "id": "9b1d8e683a1240ad066fd1823058b486",
+        "passes": 902,
+        "fails": 0
+      },
+      "progression read": {
+        "passes": 3369,
+        "fails": 2,
+        "name": "progression read",
+        "path": "::progression read",
+        "id": "ec9b79443fd835a10b6182fcd01bc8a1"
+      },
+      "identity read": {
+        "name": "identity read",
+        "path": "::identity read",
+        "id": "cf943d302595ebca440916d0a1a77a53",
+        "passes": 494,
+        "fails": 1
+      },
+      "attempt created": {
+        "name": "attempt created",
+        "path": "::attempt created",
+        "id": "61c3af139565c4201e916b2524a0c2b2",
+        "passes": 950,
+        "fails": 1
+      },
+      "mastery read": {
+        "path": "::mastery read",
+        "id": "b2b3eef6127d5bce7d1bd5b9f907fe30",
+        "passes": 541,
+        "fails": 0,
+        "name": "mastery read"
+      },
+      "submit COMPLETED": {
+        "fails": 1077,
+        "name": "submit COMPLETED",
+        "path": "::submit COMPLETED",
+        "id": "475342406dd9146e157f465896475b01",
+        "passes": 322
+      },
+      "curriculum read": {
+        "fails": 0,
+        "name": "curriculum read",
+        "path": "::curriculum read",
+        "id": "18860db52833de1eb421f6b7386bfa1b",
+        "passes": 1940
+      }
+    },
+    "name": ""
+  },
+  "$scrub_note": "setup_data (20 access tokens) was removed after the fact. run-baseline.sh scrubs it during baseline distillation, which never ran for Run A because k6 exits non-zero on a breached threshold and the script ran under set -e. No measurement data was altered: setup_data is the return value of k6's setup() and contains only bearer tokens. The tokens were already invalid -- the Keycloak instance was destroyed and the load learners deleted at teardown."
+}

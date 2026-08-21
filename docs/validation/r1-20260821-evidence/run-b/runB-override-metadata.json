@@ -1,0 +1,38 @@
+{
+  "$comment": "Run B ran with performance/compose.perf-override.yml active. The baseline artifact produced by run-baseline.sh carries no field for this, which is why it is recorded here alongside it -- the tooling was deliberately not modified before Run B, so that Run B measured the same benchmark implementation Run A did. Making the baseline schema itself carry this fact is part of the separately-tracked tooling fix.",
+  "evidence_identity": "R1 Run B — capacity characterization / perf rate-limit override",
+  "run_identity": "mixed-learning-20260821T100034Z",
+  "disposition": "VALID / PASS — capacity characterization only, NOT a production-policy result",
+  "performance_rate_limit_override": {
+    "active": true,
+    "file": "performance/compose.perf-override.yml",
+    "purpose_per_file_header": "probe above the IP rate-limit ceiling so the run measures the application rather than the limiter",
+    "verified_before_load": true,
+    "effective_values": {
+      "RAMALS_RATE_LIMIT_CAPACITY": "1000000",
+      "RAMALS_RATE_LIMIT_REFILL_PER_SECOND": "1000000",
+      "RAMALS_RATE_LIMIT_SUBJECT_CAPACITY": "1000000",
+      "RAMALS_RATE_LIMIT_SUBJECT_REFILL_PER_SECOND": "1000000"
+    },
+    "note": "The two SUBJECT_* values are set by the override file but are not read by this build: application.yml exposes only security.rate-limit.capacity and .refill-per-second, both keyed on client IP. Only the IP tier was actually relaxed."
+  },
+  "unchanged_from_run_a": {
+    "workload": "mixed-learning, unmodified",
+    "target_rate": "60 rps",
+    "vus": "50 preallocated, 300 max",
+    "duration": "3m30s (30s warm-up, 1m ramp, 2m steady)",
+    "latency_thresholds": "unmodified",
+    "load_learners": 20,
+    "dataset_version": "mvp0-baseline-v1",
+    "backend_image": "ghcr.io/skpandey15/ramals-learning-platform@sha256:c233e3ef7275b2ca63a8613547d69829def6deda150c3d30bdbaa5fdb3f330b9",
+    "web_image": "ghcr.io/skpandey15/ramals-web-ui@sha256:a8a01caea253341bfe37357e53e43ab346f6e548b26cad3442407093cffe2637",
+    "release": "v0.1.0-rc3 @ f7fb9efad94fbbebd68ea24cabdf79a1e2f50cb8",
+    "sut_instance": "m6i.2xlarge",
+    "loadgen_instance": "c6i.xlarge",
+    "backend_limits": "4 CPU / 4 GiB",
+    "postgres_limits": "2 CPU / 2 GiB",
+    "database_configuration": "unmodified",
+    "application_code": "unmodified"
+  },
+  "relationship_to_run_a": "Run B does not replace, supersede or relabel Run A. Run A is the canonical result under production rate-limit policy. Run B answers only the question Run A could not: what the application does when the infrastructure protection ceiling is not the binding constraint."
+}
