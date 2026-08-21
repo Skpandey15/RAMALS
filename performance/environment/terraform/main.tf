@@ -145,6 +145,23 @@ resource "aws_instance" "sut" {
     encrypted   = true
   }
 
+  # IMDSv2 only. The instance metadata service answers unauthenticated GETs at a link-local address
+  # under IMDSv1, so any server-side request forgery in something running here can read it -- and
+  # what it returns includes credentials for whatever role the instance carries. IMDSv2 requires a
+  # session token obtained by PUT, which a forged GET cannot produce.
+  #
+  # This host runs the platform itself, which makes outbound HTTP calls of its own, so the SSRF
+  # surface is real rather than theoretical.
+  #
+  # hop_limit 1 stops containers reaching the metadata service at all: bridge networking adds a hop,
+  # so a limit of one keeps IMDS reachable from the host and not from inside a container. Nothing in
+  # this stack has any business reading instance metadata.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
   tags = { Name = "ramals-perf-sut", Purpose = "perf-standard-01", Role = "system-under-test" }
 }
 
@@ -162,6 +179,23 @@ resource "aws_instance" "loadgen" {
     volume_type = "gp3"
     volume_size = 30
     encrypted   = true
+  }
+
+  # IMDSv2 only. The instance metadata service answers unauthenticated GETs at a link-local address
+  # under IMDSv1, so any server-side request forgery in something running here can read it -- and
+  # what it returns includes credentials for whatever role the instance carries. IMDSv2 requires a
+  # session token obtained by PUT, which a forged GET cannot produce.
+  #
+  # This host runs the platform itself, which makes outbound HTTP calls of its own, so the SSRF
+  # surface is real rather than theoretical.
+  #
+  # hop_limit 1 stops containers reaching the metadata service at all: bridge networking adds a hop,
+  # so a limit of one keeps IMDS reachable from the host and not from inside a container. Nothing in
+  # this stack has any business reading instance metadata.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
   }
 
   tags = { Name = "ramals-perf-loadgen", Purpose = "perf-standard-01", Role = "load-generator" }
