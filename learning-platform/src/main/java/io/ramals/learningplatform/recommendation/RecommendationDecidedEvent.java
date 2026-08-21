@@ -14,9 +14,13 @@ import java.util.UUID;
  *
  * <p>Carrying the decision on the event rather than re-reading it also keeps the {@code ai} package
  * off the authoritative repositories, which ArchUnit enforces.
+ *
+ * <p>There is deliberately no learner identifier here. The adaptation listener does not need one --
+ * the AI plane is told which skill was decided, not whose it is -- and an identifier present on the
+ * event is an identifier available to every future consumer of it. Nothing that does not need
+ * learner identity should be handed it.
  */
 public record RecommendationDecidedEvent(
-    UUID learnerId,
     UUID skillId,
     RecommendationDecision decision,
     String interactionId,

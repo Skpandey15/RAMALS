@@ -87,7 +87,7 @@ class AdaptationReachabilityTests {
   private void publishInCommittedTransaction() {
     transactionTemplate.executeWithoutResult(status ->
         publisher.publishEvent(new RecommendationDecidedEvent(
-            UUID.randomUUID(), UUID.randomUUID(), DETERMINISTIC, "interaction-1", "trace-1")));
+            UUID.randomUUID(), DETERMINISTIC, "interaction-1", "trace-1")));
   }
 
   @Test
@@ -115,7 +115,7 @@ class AdaptationReachabilityTests {
     // reached the plane; an AFTER_COMMIT listener must not fire at all.
     transactionTemplate.executeWithoutResult(status -> {
       publisher.publishEvent(new RecommendationDecidedEvent(
-          UUID.randomUUID(), UUID.randomUUID(), DETERMINISTIC, "interaction-2", "trace-2"));
+          UUID.randomUUID(), DETERMINISTIC, "interaction-2", "trace-2"));
       status.setRollbackOnly();
     });
 
@@ -158,4 +158,74 @@ class AdaptationReachabilityTests {
         .recordFailure(any(), eq("ADAPTATION"), anyString(), any(Instant.class), any(Instant.class));
   }
 
+
+  @Test
+  @DisplayName("a replayed decision does not dispatch the agent a second time")
+  void aReplayedDecisionIsNotDispatchedTwice() {
+    when(adaptationPort.requestAdaptationProposal(any(), anyLong()))
+        .thenReturn(proposing("PRACTICE"));
+
+    // The same decision, delivered twice. The first commission is allowed; the second is refused,
+    // which is how ai_execution's uniqueness on (request_id, event_type) shows up at this layer.
+    AiExecutionCommission allowed = mock(AiExecutionCommission.class);
+    when(allowed.dispatchAllowed()).thenReturn(true);
+    AiExecutionCommission refused = mock(AiExecutionCommission.class);
+    when(refused.dispatchAllowed()).thenReturn(false);
+    when(executionRecorder.commission(any(), anyString())).thenReturn(allowed, refused);
+
+    UUID skillId = UUID.randomUUID();
+    for (int replay = 0; replay < 2; replay++) {
+      final UUID skill = skillId;
+      transactionTemplate.executeWithoutResult(status ->
+          publisher.publishEvent(new RecommendationDecidedEvent(
+              skill, DETERMINISTIC, "interaction-replay", "trace-replay")));
+    }
+
+    verify(adaptationPort, times(1)).requestAdaptationProposal(any(), anyLong());
+    verify(executionRecorder, times(1))
+        .recordSuccess(any(), any(), any(Instant.class), any(Instant.class));
+  }
+
+  @Test
+  @DisplayName("the request id is derived from the decision, so a replay collides by construction")
+  void theRequestIdIsDeterministicForTheSameDecision() {
+    when(adaptationPort.requestAdaptationProposal(any(), anyLong()))
+        .thenReturn(proposing("PRACTICE"));
+
+    UUID skillId = UUID.randomUUID();
+    for (int replay = 0; replay < 2; replay++) {
+      final UUID skill = skillId;
+      transactionTemplate.executeWithoutResult(status ->
+          publisher.publishEvent(new RecommendationDecidedEvent(
+              skill, DETERMINISTIC, "interaction-stable", "trace-stable")));
+    }
+
+    ArgumentCaptor<AiRequestEnvelope> sent = ArgumentCaptor.forClass(AiRequestEnvelope.class);
+    verify(executionRecorder, times(2)).commission(sent.capture(), anyString());
+
+    // A random request id per invocation would make every replay a new execution and dispatch the
+    // agent again. Idempotency has to be a property of the id, not of the caller behaving.
+    assertThat(sent.getAllValues().get(0).requestId())
+        .as("the same decision must commission the same execution")
+        .isEqualTo(sent.getAllValues().get(1).requestId());
+  }
+
+  @Test
+  @DisplayName("the interaction id reaches the execution evidence")
+  void correlationReachesTheExecutionEvidence() {
+    when(adaptationPort.requestAdaptationProposal(any(), anyLong()))
+        .thenReturn(proposing("PRACTICE"));
+
+    transactionTemplate.executeWithoutResult(status ->
+        publisher.publishEvent(new RecommendationDecidedEvent(
+            UUID.randomUUID(), DETERMINISTIC, "interaction-correlated", "trace-correlated")));
+
+    ArgumentCaptor<AiRequestEnvelope> sent = ArgumentCaptor.forClass(AiRequestEnvelope.class);
+    verify(executionRecorder).recordSuccess(
+        sent.capture(), any(), any(Instant.class), any(Instant.class));
+
+    // ai_execution stores interaction_id from the envelope, so this is what makes a row findable
+    // from the support code a learner was shown.
+    assertThat(sent.getValue().interactionId()).isEqualTo("interaction-correlated");
+  }
 }

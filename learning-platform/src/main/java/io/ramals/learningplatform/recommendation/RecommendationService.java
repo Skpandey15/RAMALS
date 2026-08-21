@@ -77,7 +77,7 @@ public class RecommendationService {
     // agent ever answers. Calling the plane from inside this transaction would also hold a database
     // connection across a network call with a twelve-second deadline.
     events.publishEvent(new RecommendationDecidedEvent(
-        snapshot.learnerId(), snapshot.skillId(), decision, interactionId, traceId));
+        snapshot.skillId(), decision, interactionId, traceId));
 
     return recommendation;
   }

@@ -8,6 +8,7 @@ import io.ramals.learningplatform.ai.contract.LearningContext;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
 import io.ramals.learningplatform.execution.AiExecutionRecorder;
 import io.ramals.learningplatform.recommendation.RecommendationDecidedEvent;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.UUID;
@@ -35,6 +36,22 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * back the submission, and must not.</strong> By the time this runs the learner's evidence, mastery
  * and recommendation are durable and authoritative. The agent may agree, disagree, or never answer;
  * none of those change what the learner is told. Disagreement is a metric, not a branch.
+ *
+ * <h2>Delivery limitation, accepted for MVP-1</h2>
+ *
+ * <p>{@code AFTER_COMMIT} isolates the AI call from the authoritative transaction, which is what it
+ * is for. It is <strong>not durable delivery.</strong> The event lives in memory between commit and
+ * listener completion, so a process failure in that window loses the comparison silently: the
+ * learner's state is correct and complete, and no {@code ai_execution} row is ever written for that
+ * decision.
+ *
+ * <p>That is acceptable here and only here, because the comparison is research and observability
+ * input rather than learner-visible behaviour. Losing one is a gap in a metric series, not a
+ * correctness fault. It would not be acceptable for anything the learner or an auditor depends on.
+ *
+ * <p>Durable delivery — a transactional outbox, or a broker — is recorded as technical debt rather
+ * than built here: introducing one is an infrastructure decision with its own operational surface,
+ * and doing it inside a release-blocking correction would be the wrong trade.
  */
 @Component
 public class AdaptationComparisonListener {
@@ -67,7 +84,9 @@ public class AdaptationComparisonListener {
       LOGGER.atInfo()
           .addKeyValue("operation", "ai.adaptation.compare")
           .addKeyValue("outcome", "NOT_DISPATCHED")
-          .log("adaptation comparison not dispatched");
+          .addKeyValue("interactionId", event.interactionId())
+          .addKeyValue("traceId", event.traceId())
+          .log("adaptation comparison not dispatched; already commissioned for this decision");
       return;
     }
 
@@ -93,17 +112,35 @@ public class AdaptationComparisonListener {
           .setCause(unexpected)
           .addKeyValue("operation", "ai.adaptation.compare")
           .addKeyValue("outcome", "FAILED")
+          .addKeyValue("interactionId", event.interactionId())
+          .addKeyValue("traceId", event.traceId())
           .log("adaptation comparison failed; the deterministic recommendation is unaffected");
       executionRecorder.recordFailure(
           request, AGENT_TYPE, "ADAPTATION_COMPARISON_FAILED", startedAt, Instant.now());
     }
   }
 
+  /**
+   * A request id derived from what is being compared, not a fresh one per call.
+   *
+   * <p>{@code ai_execution} is unique on {@code (request_id, event_type)}, so this is what makes a
+   * replay idempotent at the execution layer. A random id per invocation would commission a second
+   * execution for the same decision and dispatch the agent twice.
+   *
+   * <p>The upstream flow already prevents most of that — a replayed submission finds the attempt
+   * {@code COMPLETED} and returns without recomputing, so no second event is published at all. This
+   * makes the guarantee hold by construction rather than by that upstream behaviour remaining true.
+   */
+  private static String requestIdFor(RecommendationDecidedEvent event) {
+    String key = AGENT_TYPE + '|' + event.interactionId() + '|' + event.skillId();
+    return UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
+  }
+
   private static AiRequestEnvelope envelopeFor(RecommendationDecidedEvent event) {
     return new AiRequestEnvelope(
         AiRequestEnvelope.CONTRACT_VERSION,
         event.interactionId(),
-        UUID.randomUUID().toString(),
+        requestIdFor(event),
         // Opaque and single-use, as on the tutor path: the plane is told which skill was decided,
         // not which learner it belongs to, and cannot link this call to any other.
         new LearnerRef(UUID.randomUUID().toString(), Locale.ENGLISH.toLanguageTag()),
