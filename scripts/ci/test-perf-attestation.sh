@@ -375,6 +375,83 @@ check "the smoke presents a token to the backend, not just acquires one" "0" "$?
 grep -q 'RAMALS_BASE_URL' "${PERF}/preflight-r1.sh"
 check "the preflight requires a backend address to present it to" "0" "$?"
 
+# -- a failing run still has to leave a baseline behind -----------------------------------------------
+#
+# k6 exits non-zero on a breached threshold and run-baseline.sh runs under `set -e`, so the run most
+# worth recording was the only one that recorded nothing. R1 Run A sustained the canonical rate for
+# its full duration, produced 12,417 requests of evidence, and wrote no baseline -- the error-rate
+# threshold was crossed and distillation never ran.
+#
+# Driven with a stub k6 rather than asserted by reading the source: the behaviour under test is what
+# the script does when its subprocess fails, and only running it can show that.
+
+STUB_DIR="${WORK}/stub"
+mkdir -p "${STUB_DIR}"
+cat > "${STUB_DIR}/k6" <<'STUBEOF'
+#!/usr/bin/env bash
+# Writes a plausible summary, then fails the way a breached threshold fails.
+summary=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "--summary-export" ] && summary="$2"
+  shift
+done
+# setup_data is included deliberately. k6 puts setup()'s return value in the summary export, and
+# for these scenarios that is the learner access-token pool -- so an unscrubbed summary is a file
+# full of live bearer credentials. R1 Run A's summary reached a commit with 20 of them in it,
+# because scrubbing happens during distillation and distillation never ran.
+cat > "${summary}" <<'JSON'
+{"metrics":{"http_req_duration":{"med":10.0,"p(95)":20.0,"p(99)":30.0},
+            "http_req_failed":{"value":0.1733},
+            "http_reqs":{"rate":59.1}},
+ "setup_data":{"tokens":["eyJstub.stub.stub"]}}
+JSON
+exit 99
+STUBEOF
+chmod +x "${STUB_DIR}/k6"
+
+BEFORE="$(ls -1 "${PERF}/results/" 2>/dev/null | wc -l | tr -d ' ')"
+( cd "${REPO_ROOT}" && \
+  RAMALS_K6_CMD="${STUB_DIR}/k6" \
+  RAMALS_SKIP_FIXTURES=1 \
+  RAMALS_PERF_ENV=local-unqualified \
+  RAMALS_PERF_RATE_LIMIT_OVERRIDE=true \
+  PY_BIN="${PYTHON}" \
+  bash "${PERF}/run-baseline.sh" mixed-learning >/dev/null 2>&1 )
+stub_status=$?
+
+check "a breached threshold still propagates k6's exit status" "99" "${stub_status}"
+
+# The security half of the same defect, and the more serious one: a failing run used to leave the
+# access-token pool sitting in the summary export, because the scrub lives in the step that was
+# skipped. Losing a measurement is bad; publishing credentials is worse.
+NEW_SUMMARY="$(ls -1t "${PERF}/results/"*.summary.json 2>/dev/null | head -1)"
+if [ -n "${NEW_SUMMARY}" ] && grep -q 'setup_data' "${NEW_SUMMARY}" 2>/dev/null; then
+  scrubbed="no"
+else
+  scrubbed="yes"
+fi
+check "a FAILING run still scrubs the access tokens from its summary" "yes" "${scrubbed}"
+
+NEW_BASELINE="$(ls -1t "${PERF}/results/"*.baseline.json 2>/dev/null | head -1)"
+if [ -n "${NEW_BASELINE}" ] && [ "$(ls -1 "${PERF}/results/" | wc -l | tr -d ' ')" -gt "${BEFORE}" ]; then
+  wrote="yes"
+else
+  wrote="no"
+fi
+check "a FAILING run still writes a baseline artifact" "yes" "${wrote}"
+
+if [ "${wrote}" = "yes" ]; then
+  verdict="$("${PYTHON}" -c "
+import json,sys
+b=json.load(open(sys.argv[1]))
+print(f\"{b.get('thresholds_passed')}|{b.get('k6_exit_status')}|{b.get('performance_rate_limit_override')}\")
+" "${NEW_BASELINE}")"
+  check "the baseline records the failure and the policy in force" \
+    "False|99|True" "${verdict%$'\r'}"
+  # Written by this suite, not by a run anybody should keep.
+  rm -f "${NEW_BASELINE}" "${NEW_BASELINE%.baseline.json}".*
+fi
+
 # -- things that must not drift back ---------------------------------------------------------------
 
 RUNBOOK="${PERF}/environment/RUNBOOK-aws.md"
