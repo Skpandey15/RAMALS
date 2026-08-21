@@ -178,12 +178,56 @@ ssh ubuntu@<loadgen>
   export RAMALS_PERF_ENV=perf-standard-01
   export RAMALS_PERF_ATTESTATION=~/attestation.json
   export RAMALS_PERF_LOAD_GENERATOR_OFF_HOST=true
-  export RAMALS_KEYCLOAK_ADMIN=admin RAMALS_KEYCLOAK_ADMIN_PASSWORD=...
-  export RAMALS_LOAD_PASSWORD=...
+  # Both values below must match the SUT's deploy/.env exactly. RAMALS_KEYCLOAK_ADMIN is whatever
+  # was put there when the environment was built -- it is NOT necessarily 'admin', and a mismatch
+  # fails fixture provisioning after the environment has already been provisioned and attested.
+  export RAMALS_KEYCLOAK_ADMIN=<the value in the SUT's deploy/.env>
+  export RAMALS_KEYCLOAK_ADMIN_PASSWORD=<the value in the SUT's deploy/.env>
+  # A run-scoped password for the simulated learners. It is not part of the deployment contract and
+  # has no entry in deploy/.env -- provision-load-fixtures.py sets it on the users it creates and
+  # k6 authenticates with it, so it only has to be consistent within one run. Generate a fresh one:
+  #   export RAMALS_LOAD_PASSWORD="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+  export RAMALS_LOAD_PASSWORD=<generated, see above>
+
+  # Prove the setup path before committing to a measured run. This provisions fixtures, acquires the
+  # full learner token pool exactly as the scenarios do, restores the realm, and measures nothing.
+  ./performance/preflight-r1.sh
   ./performance/run-baseline.sh mixed-learning
 ```
 
 Use the **private** IP. The public path leaves the VPC and comes back.
+
+`RAMALS_KEYCLOAK_URL` is deliberately absent from that list. `fixtures.sh` derives it from
+`RAMALS_TOKEN_URL`, because the two used to be supplied separately and only one of them ever was:
+the fixtures fell back to the in-network default `http://keycloak:8080`, which resolves on the SUT
+and on no other machine, so provisioning failed on a hostname while k6 held a working address for
+the same server. Set it explicitly only if the admin API lives somewhere other than the issuer.
+
+### Two credentials have to cross to the load generator
+
+`deploy/.env` is generated on the SUT and stays there, with one unavoidable exception: fixture
+provisioning runs on the **load generator**, and it drives the Keycloak admin API. So
+`RAMALS_KEYCLOAK_ADMIN` and `RAMALS_KEYCLOAK_ADMIN_PASSWORD` must be present in that shell too.
+
+Type them into the interactive session rather than writing a second `.env`, and do not pass them on
+a command line — arguments are visible in `/proc` to every user on the box. They are destroyed with
+the instances; they are valid nowhere else and are never reused between environments.
+
+### Before the measured run, check the network contract
+
+The canonical topology publishes on loopback and the runbook targets the private interface;
+`compose.perf-two-host.yml` is what reconciles them. Run the two together before spending a run:
+
+```bash
+performance/environment/check-two-host-network.sh \
+  --sut-public <ip> --sut-private <ip> --loadgen-public <ip> --key ~/.ssh/<key>.pem
+```
+
+It asserts that the load generator reaches backend and Keycloak over the private interface, that
+neither port answers publicly, and that `compose.deploy.yml` still binds loopback only. Add
+`--prove-guard` to also confirm that removing the override genuinely breaks the path — without that,
+a passing connectivity check could be measuring the security group rather than the binding. It
+restarts the stack twice, so run it before attestation rather than after.
 
 The two-host override requires the private bind address and replaces, rather than implicitly merges
 with, the canonical port list. It explicitly retains loopback for local health gates and adds only
