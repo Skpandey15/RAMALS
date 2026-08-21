@@ -29,6 +29,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -298,6 +299,35 @@ public class ApiExceptionHandler {
         "Invalid request",
         "MALFORMED_REQUEST",
         "The request body could not be parsed.",
+        request);
+  }
+
+  /**
+   * A route that does not exist is a 404, not a server failure.
+   *
+   * <p>Spring raises {@link NoResourceFoundException} for an unmapped path, which fell through to the
+   * catch-all below and was reported as {@code 500 UNEXPECTED_ERROR} with a stack trace logged at
+   * ERROR. M1-T18 found it while diagnosing the missing tutor endpoint: the symptom of a route that
+   * had never been written was indistinguishable from the platform breaking.
+   *
+   * <p>Three things that costs. A client cannot tell "you asked for something that is not here" from
+   * "we failed" — and {@code tutorApi.ts} maps any non-OK response onto AI_TRANSPORT_FAILURE, so a
+   * missing route reads to the learner as an AI outage. Every scan for a path an attacker guesses
+   * lands in the error log at ERROR with a stack trace, which is both noise and a signal to whoever
+   * is guessing. And the error counter attributes probing traffic to UNEXPECTED_ERROR, burying real
+   * failures among 404s.
+   *
+   * <p>The detail deliberately does not echo the path: a 404 should confirm nothing about what does
+   * exist. The interaction id is still returned, so a learner who hits one can still quote a code.
+   */
+  @ExceptionHandler(NoResourceFoundException.class)
+  ResponseEntity<ApiProblem> handleNoResourceFound(
+      NoResourceFoundException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        "Not found",
+        "RESOURCE_NOT_FOUND",
+        "The requested resource does not exist.",
         request);
   }
 
