@@ -43,3 +43,9 @@ performance/environment/terraform/tfplan
 # Raw R1 evidence bundles. The curated report in docs/validation/ is the committed record;
 # these are the machine outputs behind it and are archived out of band.
 r1-evidence-*/
+
+# Evidence bundles are the exception to the blanket *.log rule above: console and service
+# logs are the primary record behind a release gate, and the rule silently dropped four of them
+# from the rc3 R1 bundle while its README listed them as present.
+!docs/release/evidence/**/*.log
+!docs/validation/**/*.log

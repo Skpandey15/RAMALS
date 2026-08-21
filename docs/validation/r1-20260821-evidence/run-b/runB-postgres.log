@@ -1,0 +1,81 @@
+The files belonging to this database system will be owned by user "postgres".
+This user must also own the server process.
+
+The database cluster will be initialized with locale "en_US.utf8".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
+
+Data page checksums are enabled.
+
+fixing permissions on existing directory /var/lib/postgresql/18/docker ... ok
+creating subdirectories ... ok
+selecting dynamic shared memory implementation ... posix
+selecting default "max_connections" ... 100
+selecting default "shared_buffers" ... 128MB
+selecting default time zone ... UTC
+creating configuration files ... ok
+running bootstrap script ... ok
+sh: locale: not found
+2026-08-21 09:45:26.096 UTC [38] WARNING:  no usable system locales were found
+performing post-bootstrap initialization ... ok
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+syncing data to disk ... ok
+
+
+Success. You can now start the database server using:
+
+    pg_ctl -D /var/lib/postgresql/18/docker -l logfile start
+
+waiting for server to start....2026-08-21 09:45:26.505 UTC [44] LOG:  starting PostgreSQL 18.1 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-08-21 09:45:26.508 UTC [44] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-08-21 09:45:26.519 UTC [50] LOG:  database system was shut down at 2026-08-21 09:45:26 UTC
+2026-08-21 09:45:26.524 UTC [44] LOG:  database system is ready to accept connections
+ done
+server started
+CREATE DATABASE
+
+
+/usr/local/bin/docker-entrypoint.sh: sourcing /docker-entrypoint-initdb.d/01-keycloak-database.sh
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+ALTER ROLE
+ALTER ROLE
+ALTER DATABASE
+REVOKE
+GRANT
+CREATE ROLE
+CREATE DATABASE
+
+waiting for server to shut down....2026-08-21 09:45:26.719 UTC [44] LOG:  received fast shutdown request
+2026-08-21 09:45:26.724 UTC [44] LOG:  aborting any active transactions
+2026-08-21 09:45:26.725 UTC [44] LOG:  background worker "logical replication launcher" (PID 53) exited with exit code 1
+2026-08-21 09:45:26.726 UTC [48] LOG:  shutting down
+2026-08-21 09:45:26.730 UTC [48] LOG:  checkpoint starting: shutdown immediate
+2026-08-21 09:45:26.787 UTC [48] LOG:  checkpoint complete: wrote 1895 buffers (11.6%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.036 s, sync=0.009 s, total=0.061 s; sync files=610, longest=0.004 s, average=0.001 s; distance=8710 kB, estimate=8710 kB; lsn=0/1FE0B98, redo lsn=0/1FE0B98
+2026-08-21 09:45:26.799 UTC [44] LOG:  database system is shut down
+ done
+server stopped
+
+PostgreSQL init process complete; ready for start up.
+
+2026-08-21 09:45:26.841 UTC [1] LOG:  starting PostgreSQL 18.1 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-08-21 09:45:26.841 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-08-21 09:45:26.841 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-08-21 09:45:26.847 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-08-21 09:45:26.855 UTC [68] LOG:  database system was shut down at 2026-08-21 09:45:26 UTC
+2026-08-21 09:45:26.878 UTC [1] LOG:  database system is ready to accept connections
+2026-08-21 09:45:35.263 UTC [79] ERROR:  function aurora_version() does not exist at character 8
+2026-08-21 09:45:35.263 UTC [79] HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+2026-08-21 09:45:35.263 UTC [79] STATEMENT:  SELECT aurora_version()
+2026-08-21 09:45:35.279 UTC [79] ERROR:  relation "migration_model" does not exist at character 25
+2026-08-21 09:45:35.279 UTC [79] STATEMENT:  SELECT ID, VERSION FROM MIGRATION_MODEL ORDER BY UPDATE_TIME DESC
+2026-08-21 09:45:36.013 UTC [87] ERROR:  relation "public.databasechangeloglock" does not exist at character 22
+2026-08-21 09:45:36.013 UTC [87] STATEMENT:  SELECT COUNT(*) FROM public.databasechangeloglock
+2026-08-21 09:50:26.911 UTC [66] LOG:  checkpoint starting: time
+2026-08-21 09:53:15.217 UTC [66] LOG:  checkpoint complete: wrote 1685 buffers (10.3%), wrote 5 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=168.282 s, sync=0.006 s, total=168.307 s; sync files=924, longest=0.004 s, average=0.001 s; distance=15889 kB, estimate=15889 kB; lsn=0/2FC9E30, redo lsn=0/2F65070
+2026-08-21 09:55:26.305 UTC [66] LOG:  checkpoint starting: time
+2026-08-21 09:55:27.925 UTC [66] LOG:  checkpoint complete: wrote 16 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.606 s, sync=0.003 s, total=1.620 s; sync files=8, longest=0.002 s, average=0.001 s; distance=405 kB, estimate=14340 kB; lsn=0/2FCA670, redo lsn=0/2FCA618
+2026-08-21 10:00:27.012 UTC [66] LOG:  checkpoint starting: time
+2026-08-21 10:00:27.730 UTC [66] LOG:  checkpoint complete: wrote 7 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.704 s, sync=0.004 s, total=0.719 s; sync files=7, longest=0.003 s, average=0.001 s; distance=33 kB, estimate=12910 kB; lsn=0/2FD2D50, redo lsn=0/2FD2CF8
