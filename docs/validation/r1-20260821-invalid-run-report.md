@@ -1,7 +1,8 @@
 # R1 authoritative benchmark attempt — INVALID
 
-**Attempt date (UTC):** 2026-08-21  
-**Disposition:** **INVALID — workload did not start**  
+**Attempt date (UTC):** 2026-08-21
+
+**Disposition:** **INVALID — workload did not start**
 **Release effect:** none. This record does not close R1 and does not release MVP-1.
 
 ## Executive finding
