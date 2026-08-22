@@ -82,10 +82,10 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 28 with V028 (M2 grounding retrieval/gate audit). Asserting the count rather
-    // than merely that the upgrade succeeds is what makes an accidentally unapplied migration
-    // visible.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(28);
+    // 29 with V029 (M2-T09 diagnostic assessment decision correlation). Asserting the count
+    // rather than merely that the upgrade succeeds is what makes an accidentally unapplied
+    // migration visible -- it caught V029 the first time it ran.
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(29);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 

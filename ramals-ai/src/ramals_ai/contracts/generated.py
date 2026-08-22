@@ -9,7 +9,7 @@ from datetime import date
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel
 
 
 class ContractVersion(RootModel[str]):
@@ -199,6 +199,90 @@ class AIProposalEnvelope(BaseModel):
     ]
     validation: Validation | None = None
     usage: Usage | None = None
+
+
+class SourceType(StrEnum):
+    LEARNER_EVIDENCE = 'LEARNER_EVIDENCE'
+    MASTERY = 'MASTERY'
+    SKILL_GRAPH = 'SKILL_GRAPH'
+    ASSESSMENT = 'ASSESSMENT'
+    APPROVED_CONTENT = 'APPROVED_CONTENT'
+    CURRICULUM_POLICY = 'CURRICULUM_POLICY'
+    DOMAIN_POLICY = 'DOMAIN_POLICY'
+
+
+class Authority(StrEnum):
+    AUTHORITATIVE_FACT = 'AUTHORITATIVE_FACT'
+    MODEL_GENERATED_SUMMARY = 'MODEL_GENERATED_SUMMARY'
+
+
+class Value(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description='A bounded scalar. Never a nested structure, and never free-form learner text.',
+            max_length=2048,
+        ),
+    ]
+
+
+class GroundedContextItemEnvelope(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    evidenceId: Annotated[str, Field(max_length=64, min_length=1)]
+    sourceType: SourceType
+    sourceVersion: Annotated[str, Field(max_length=64, min_length=1)]
+    authority: Authority
+    factType: Annotated[str, Field(max_length=64, min_length=1)]
+    value: Annotated[
+        Value | float | int | bool,
+        Field(
+            description='A bounded scalar. Never a nested structure, and never free-form learner text.'
+        ),
+    ]
+    observedAt: AwareDatetime
+    expiresAt: AwareDatetime | None = None
+
+
+class GroundedContextEnvelope(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    contractVersion: Annotated[
+        Literal['1.0'],
+        Field(
+            description='The GroundedContext contract version, stated explicitly and failed closed on.'
+        ),
+    ]
+    contextId: Annotated[str, Field(max_length=64, min_length=1)]
+    learnerRef: Annotated[
+        str,
+        Field(
+            description='Opaque. Never a natural learner identifier, and never reaches a prompt.',
+            max_length=64,
+            min_length=1,
+        ),
+    ]
+    asOf: AwareDatetime
+    expiresAt: AwareDatetime
+    retrievalPolicyVersion: Annotated[str, Field(max_length=64, min_length=1)]
+    items: Annotated[list[GroundedContextItemEnvelope], Field(max_length=64)]
+
+
+class DiagnosticAssessmentRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    contractVersion: ContractVersion
+    interactionId: Annotated[
+        str, Field(description='Logical learner action. Stable across safe retries.', max_length=64)
+    ]
+    requestId: Annotated[
+        str, Field(description='One transport attempt. New per retry.', max_length=64)
+    ]
+    constraints: Constraints
+    groundedContext: GroundedContextEnvelope
 
 
 class Capabilities(BaseModel):

@@ -127,6 +127,7 @@ def test_workload_auth_cannot_be_disabled_outside_local() -> None:
 AGENT_ROUTES = (
     "/internal/v1/tutor/respond",
     "/internal/v1/diagnostic/propose",
+    "/internal/v1/diagnostic-assessment/propose",
     "/internal/v1/assessment/propose",
     "/internal/v1/assessment/evaluate",
     "/internal/v1/adaptation/propose",
