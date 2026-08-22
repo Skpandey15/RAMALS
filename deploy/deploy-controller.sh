@@ -196,14 +196,36 @@ if [ "${KNOWN_GOOD}" != "none" ] \
   # bad artefact while the state file claims otherwise.
   export RAMALS_BACKEND_IMAGE="${KNOWN_GOOD_BACKEND}"
   export RAMALS_WEBUI_IMAGE="${KNOWN_GOOD_WEBUI}"
+
+  # The AI plane is a released component and has to come back with the rest of the release.
+  #
+  # Omitting it is not a partial rollback, it is a mixed-version deployment: backend and web-ui
+  # revert while the plane keeps running the FAILED image, and the state file says ROLLED_BACK. That
+  # is the same failure the comment above describes, for the one component it did not cover, and it
+  # was observed in a live environment rather than reasoned about.
+  AI_ROLLBACK_UNRESOLVED=0
+  if [ "${KNOWN_GOOD_AI}" != "none" ] && [ -n "${KNOWN_GOOD_AI}" ]; then
+    export RAMALS_AI_IMAGE="${KNOWN_GOOD_AI}"
+  elif [ -n "${AI_DIGEST}" ]; then
+    # The failed release introduced the plane and the known-good never ran one, so there is no
+    # digest to return it to -- and swapping a digest cannot express removing a component. Refuse to
+    # call this a clean rollback rather than leave the failed plane running behind a state file that
+    # claims otherwise.
+    AI_ROLLBACK_UNRESOLVED=1
+    log "ERROR: known-good ${KNOWN_GOOD} ran no AI plane, so the failed plane cannot be rolled back"
+    log "       by digest. The AI plane needs manual removal; the core rollback continues."
+  fi
+
   ${PULL_CMD} || log "WARN: rollback pull reported an error"
   ${UP_CMD} || log "WARN: rollback up reported an error"
   # Never claim a rollback we did not verify.
-  if ${HEALTH_CMD}; then
+  if ! ${HEALTH_CMD}; then
+    log "ERROR: rollback to ${KNOWN_GOOD} did not pass health gates; environment needs manual recovery."
+  elif [ "${AI_ROLLBACK_UNRESOLVED}" = "1" ]; then
+    log "ERROR: core rolled back to ${KNOWN_GOOD} but the AI plane did not; environment is mixed-version."
+  else
     ROLLBACK_OK=1
     log "ROLLED_BACK to ${KNOWN_GOOD}"
-  else
-    log "ERROR: rollback to ${KNOWN_GOOD} did not pass health gates; environment needs manual recovery."
   fi
 elif [ "${KNOWN_GOOD}" != "none" ]; then
   log "ERROR: known-good commit ${KNOWN_GOOD} recorded without its image digests; cannot roll back."

@@ -36,6 +36,7 @@ check() { # check <description> <actual> <expected>
 cat > "${WORK}/up.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "${RAMALS_BACKEND_IMAGE:-none}" >> "${WORK_DIR}/deployed.log"
+printf '%s\n' "${RAMALS_AI_IMAGE:-none}" >> "${WORK_DIR}/deployed-ai.log"
 EOF
 
 # Stub health: unhealthy exactly when the deployed artefact carries the digest marked bad. This
@@ -62,6 +63,21 @@ ai_manifest() { # ai_manifest <commit> <digest-suffix> -- a three-component rele
     "learning-platform": { "image": "ghcr.io/test/lp", "digest": "sha256:$2" },
     "web-ui": { "image": "ghcr.io/test/ui", "digest": "sha256:$2" },
     "ramals-ai": { "image": "ghcr.io/test/ai", "digest": "sha256:$2" }
+  }
+}
+EOF
+}
+
+mixed_manifest() { # mixed_manifest <commit> <core-digest> <ai-digest>
+  cat > "${WORK}/desired.json" <<EOF
+{
+  "manifest_version": 1,
+  "environment": "test",
+  "release": { "commit": "$1", "version": "v0.0.0-test" },
+  "components": {
+    "learning-platform": { "image": "ghcr.io/test/lp", "digest": "sha256:$2" },
+    "web-ui": { "image": "ghcr.io/test/ui", "digest": "sha256:$2" },
+    "ramals-ai": { "image": "ghcr.io/test/ai", "digest": "sha256:$3" }
   }
 }
 EOF
@@ -97,6 +113,7 @@ print(json.load(open(sys.argv[1])).get(sys.argv[2], '<absent>'))
 " "${WORK}/state.json" "$1"; }
 
 last_deployed() { tail -n 1 "${WORK}/deployed.log" 2>/dev/null || echo "<none>"; }
+last_deployed_ai() { tail -n 1 "${WORK}/deployed-ai.log" 2>/dev/null || echo "<none>"; }
 
 aaaa=$(printf 'a%.0s' {1..64})
 bbbb=$(printf 'b%.0s' {1..64})
@@ -144,7 +161,7 @@ print('bad-commit' in json.load(open(sys.argv[1]))['held_versions'])
 " "${WORK}/state.json")" "True"
 
 # 6. A failure with no known-good digests on record must NOT claim a rollback.
-rm -f "${WORK}/state.json" "${WORK}/deployed.log"
+rm -f "${WORK}/state.json" "${WORK}/deployed.log" "${WORK}/deployed-ai.log"
 printf '%s' "${bbbb}" > "${WORK}/bad-digest"
 manifest first-ever-commit "${bbbb}"
 check "first-ever bad deploy exits 3" "$(run)" "3"
@@ -183,6 +200,16 @@ check "bad AI release rolls back (exit 3)" "$(run)" "3"
 check "held after bad AI release" "$(state_field state)" "RELEASE_HELD"
 check "AI known-good survives the rollback"   "$(state_field known_good_ai_image)" "ghcr.io/test/ai@sha256:${aaaa}"
 
+# The state field surviving is not the same as the plane being restored, and the difference
+# is a mixed-version environment. The rollback exported the backend and web-ui digests and
+# not the AI one, so the plane kept running the FAILED image while the state file said
+# ROLLED_BACK. Observed live during RC8 requalification, and invisible here because the up
+# stub recorded only the backend image -- exactly the blindness this header warns about.
+check "AI plane was actually returned to the known-good image" \
+  "$(last_deployed_ai)" "ghcr.io/test/ai@sha256:${aaaa}"
+check "backend came back with it, so the environment is not mixed-version" \
+  "$(last_deployed)" "ghcr.io/test/lp@sha256:${aaaa}"
+
 # A mutable AI tag is refused exactly as a mutable backend tag is. Found by perturbation: removing
 # the AI digest from the immutability loop passed every other check in this file, because nothing
 # had ever supplied one.
@@ -208,6 +235,29 @@ rm -f "${WORK}/state.json"
 manifest no-ai "${aaaa}"
 check "two-component manifest still deploys" "$(run)" "0"
 check "AI known-good is 'none' when unconfigured" "$(state_field known_good_ai_image)" "none"
+
+# A rollback that cannot restore the AI plane must not claim to have rolled back.
+#
+# The known-good ran no AI plane and the failed release introduced one, so there is no digest to
+# return it to, and swapping a digest cannot express removing a component.
+#
+# Only the CORE digest is marked bad here. That is deliberate: if the AI digest were bad too, the
+# rollback health probe would fail on its own and this would pass without the flag ever being
+# read -- which is exactly how the first version of this test passed under perturbation.
+rm -f "${WORK}/state.json" "${WORK}/deployed.log" "${WORK}/deployed-ai.log"
+: > "${WORK}/bad-digest"
+manifest core-only-good "${aaaa}"
+check "core-only baseline deploys" "$(run)" "0"
+check "baseline records no AI plane" "$(state_field known_good_ai_image)" "none"
+
+printf '%s' "${bbbb}" > "${WORK}/bad-digest"
+mixed_manifest ai-introduced-bad "${bbbb}" "${aaaa}"
+check "bad release that adds the AI plane exits 3" "$(run)" "3"
+check "held after a bad AI-introducing release" "$(state_field state)" "RELEASE_HELD"
+# The core rollback itself is healthy -- the AI image is good and the core is back on aaaa -- so
+# the only thing that can refuse the clean-rollback claim is the unrestorable AI plane.
+check "core did return to the known-good image" "$(last_deployed)" "ghcr.io/test/lp@sha256:${aaaa}"
+check "no clean-rollback claim when the AI plane cannot be restored" "$(state_field current_commit)" "ai-introduced-bad"
 
 if [ "${failures}" -gt 0 ]; then
   printf '\n%d deployment state-machine check(s) failed\n' "${failures}"
