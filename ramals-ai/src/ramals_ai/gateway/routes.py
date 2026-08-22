@@ -24,6 +24,21 @@ ROUTE_TABLE_VERSION = "ROUTE_TABLE_V1"
 
 
 @dataclass(frozen=True)
+class ApprovedModel:
+    """A model a route may be pointed at, carrying the prices that apply when it is.
+
+    Prices travel with the model rather than with the route because they are the only reason the
+    cost ceiling is enforceable at all. A binding that inherited the route's prices would project
+    one provider's spend at another provider's list price: the ceiling would go on refusing and
+    allowing exactly as before, while describing a bill nobody was running up.
+    """
+
+    model: str
+    input_cost_per_1k_usd: Decimal
+    output_cost_per_1k_usd: Decimal
+
+
+@dataclass(frozen=True)
 class RouteConfig:
     """One governed route. Immutable: rollback replaces the pointer, never edits the value."""
 
@@ -65,6 +80,19 @@ class RouteConfig:
     learners with an environment variable, which is the opposite of what a rollback lever is for.
     """
 
+    alternate_models: tuple[ApprovedModel, ...] = ()
+    """Approved peers of the current model -- a different provider serving the same contract.
+
+    Distinct from ``previously_approved_models``, and deliberately not merged with it. That tuple is
+    a history: where this route may be returned *to*. This one is a set of equals: which vendors may
+    serve this route *now*. Collapsing them would make a rollback and a provider switch
+    indistinguishable in the table, and the audit question "what was this route approved to run
+    before the incident" would no longer have an answer.
+
+    The route contract -- prompt version, token ceilings, cost ceiling, latency target -- is
+    unchanged by the choice. Only the model identity and its prices differ, and both are recorded.
+    """
+
     fallback_route: ModelRoute | None = None
     """An approved, semantically equivalent route (Doc 04 §4).
 
@@ -79,7 +107,22 @@ class RouteConfig:
     @property
     def approved_models(self) -> tuple[str, ...]:
         """Every model this route may be pointed at, current one included."""
-        return (*self.previously_approved_models, self.model)
+        return (
+            *self.previously_approved_models,
+            *(binding.model for binding in self.alternate_models),
+            self.model,
+        )
+
+    def binding_for(self, model: str) -> ApprovedModel | None:
+        """The price binding for an alternate model, or ``None`` if this route declares none.
+
+        ``None`` is the correct answer for the current model and for a rollback target, both of
+        which are already priced by the route itself.
+        """
+        for binding in self.alternate_models:
+            if binding.model == model:
+                return binding
+        return None
 
     def prompt_version_for(self, template_id: PromptTemplateId) -> str:
         """The revision of one prompt this route serves.
@@ -109,6 +152,7 @@ def _route(
     p95_ms: int,
     input_per_1k: str,
     output_per_1k: str,
+    alternates: tuple[ApprovedModel, ...] = (),
 ) -> RouteConfig:
     return RouteConfig(
         route=route,
@@ -121,8 +165,22 @@ def _route(
         completion_target_p95_ms=p95_ms,
         input_cost_per_1k_usd=Decimal(input_per_1k),
         output_cost_per_1k_usd=Decimal(output_per_1k),
+        alternate_models=alternates,
     )
 
+
+# The OpenAI binding approved for the live routes, so a deployment holding an OpenAI credential can
+# serve them without a table edit. A dated snapshot rather than the moving ``gpt-4.1`` alias, for
+# the reason RouteConfig.model already gives: an alias silently changes what produced an answer.
+#
+# The prices are OpenAI list prices as of ROUTE_TABLE_V1 and are governance numbers, not trivia --
+# they are what the cost ceiling projects against when this binding is pinned. Both sit below the
+# Anthropic pin they stand in for, which _validate requires of an alternate.
+_GPT_4_1 = ApprovedModel(
+    model="gpt-4.1-2025-04-14",
+    input_cost_per_1k_usd=Decimal("0.002"),
+    output_cost_per_1k_usd=Decimal("0.008"),
+)
 
 # Doc 04 §2 and §3 verbatim. These numbers are versioned engineering guardrails, not external SLAs;
 # TokenAndCostCeilingTests asserts them against the document so a quiet edit fails the build.
@@ -138,6 +196,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
         p95_ms=8000,
         input_per_1k="0.003",
         output_per_1k="0.015",
+        alternates=(_GPT_4_1,),
     ),
     _route(
         ModelRoute.DIAGNOSTIC_DEFAULT,
@@ -150,6 +209,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
         p95_ms=6000,
         input_per_1k="0.003",
         output_per_1k="0.015",
+        alternates=(_GPT_4_1,),
     ),
     _route(
         ModelRoute.ASSESSMENT_DEFAULT,
@@ -165,6 +225,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
         p95_ms=10000,
         input_per_1k="0.003",
         output_per_1k="0.015",
+        alternates=(_GPT_4_1,),
     ),
     _route(
         ModelRoute.ADAPTATION_DEFAULT,
@@ -177,6 +238,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
         p95_ms=6000,
         input_per_1k="0.003",
         output_per_1k="0.015",
+        alternates=(_GPT_4_1,),
     ),
     # Doc 04 §2: zero cost, deterministic, local. Not a mock bolted onto the tests -- a real route,
     # so CI exercises the same gateway path a provider call takes.
@@ -220,6 +282,39 @@ def _validate(routes: dict[ModelRoute, RouteConfig]) -> None:
                 f"{config.route}: soft target {config.soft_target_cost_usd} exceeds hard ceiling "
                 f"{config.hard_cost_ceiling_usd}"
             )
+        seen: set[str] = set()
+        for binding in config.alternate_models:
+            # An alternate naming the current model is not an error by itself: pinning promotes
+            # an alternate to primary, and the binding it came from is still listed. What must
+            # never hold is the two disagreeing on price -- then which number the ceiling projects
+            # against depends on whether the route was pinned, and the same call is affordable or
+            # refused for reasons nothing in the table explains.
+            if binding.model == config.model and (
+                binding.input_cost_per_1k_usd != config.input_cost_per_1k_usd
+                or binding.output_cost_per_1k_usd != config.output_cost_per_1k_usd
+            ):
+                raise RouteTableError(
+                    f"{config.route}: alternate '{binding.model}' names the route's current "
+                    "model at a different price; the primary and its binding must agree"
+                )
+            if binding.model in seen:
+                raise RouteTableError(
+                    f"{config.route}: '{binding.model}' is declared twice as an alternate, so "
+                    "which price applies would depend on declaration order"
+                )
+            seen.add(binding.model)
+            if (
+                binding.input_cost_per_1k_usd > config.input_cost_per_1k_usd
+                or binding.output_cost_per_1k_usd > config.output_cost_per_1k_usd
+            ):
+                raise RouteTableError(
+                    f"{config.route}: alternate model '{binding.model}' is priced above the model "
+                    f"the route was approved at ({binding.input_cost_per_1k_usd}/"
+                    f"{binding.output_cost_per_1k_usd} vs {config.input_cost_per_1k_usd}/"
+                    f"{config.output_cost_per_1k_usd} per 1k); changing provider must never "
+                    "escalate cost (M1-ADR-008)"
+                )
+
         if config.fallback_route is None:
             continue
         if config.fallback_route not in routes:
@@ -276,7 +371,12 @@ class RouteRegistry:
         model: str | None = None,
         prompts: Mapping[PromptTemplateId, str] | None = None,
     ) -> RouteRegistry:
-        """Points a route at a previously approved model and/or prompt revisions.
+        """Points a route at an approved model and/or prompt revisions.
+
+        Serves two motions that look identical in the table and differ only in intent: withdrawing a
+        bad model (a rollback, to ``previously_approved_models``) and selecting an equally approved
+        vendor (a provider switch, to ``alternate_models``). Both are pins, both are checked against
+        what this image ships, and both are recorded in the resolved table version.
 
         Model and prompts roll back independently (M1-ADR-008): a prompt regression should not force
         a model rollback, and coupling them would make the cheap remedy carry the expensive one's
@@ -309,11 +409,23 @@ class RouteRegistry:
             register.resolve(template_id, version)
             updated_prompts[template_id] = version
 
+        # Pinning an alternate carries its prices across with it. Leaving the route's prices in
+        # place would project an OpenAI call at Anthropic list price -- the ceiling would still
+        # refuse and allow, just against a number describing a bill nobody was running up.
+        input_price = current.input_cost_per_1k_usd
+        output_price = current.output_cost_per_1k_usd
+        binding = None if model is None else current.binding_for(model)
+        if binding is not None:
+            input_price = binding.input_cost_per_1k_usd
+            output_price = binding.output_cost_per_1k_usd
+
         rolled = self.with_route(
             replace(
                 current,
                 model=current.model if model is None else model,
                 prompt_versions=updated_prompts,
+                input_cost_per_1k_usd=input_price,
+                output_cost_per_1k_usd=output_price,
             )
         )
         return RouteRegistry(version=rolled._pinned_version(), routes=rolled.routes)

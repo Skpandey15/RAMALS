@@ -48,6 +48,16 @@ dev = [
   "openapi-spec-validator==0.9.0",
   "pyyaml==6.0.3",
   "ruff==0.16.3",
+  # The provider SDK, so the test suite can construct an app on a live model route.
+  #
+  # It was left out originally on the reasoning that CI runs every agent path on `ci-fake` and never
+  # calls a provider. True of the call path, and it turned out to be the reason a build shipped
+  # without the extra at all: with the SDK absent from the test environment too, no test could
+  # construct a live-route app, so nothing ever executed the configuration production actually runs.
+  #
+  # Must stay equal to the pin in the `provider` group above -- test_provider_bindings asserts it,
+  # because CI validating one version while the image ships another is worse than not testing.
+  "litellm==1.97.0",
 ]
 
 [build-system]

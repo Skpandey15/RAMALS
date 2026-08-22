@@ -38,7 +38,7 @@ SESSION_POLICY_V1
 M1-ADR-009 identifies an evaluation baseline by `agentVersion`, `promptVersion` and `modelRoute`.
 Those values at MVP-1 exit:
 
-| Agent | Agent version | Prompt version | Route | Model | Soft / hard cost (USD) | p95 budget |
+| Agent | Agent version | Prompt version | Route | Default model | Soft / hard cost (USD) | p95 budget |
 | --- | --- | --- | --- | --- | --- | --- |
 | Tutor | `TUTOR_AGENT_V1` | `TUTOR_PROMPT_V1` | `tutor-default` | claude-sonnet-5 | 0.020 / 0.050 | 8000 ms |
 | Diagnostic | `DIAGNOSTIC_AGENT_V1` | `DIAGNOSTIC_PROMPT_V1` | `diagnostic-default` | claude-sonnet-5 | 0.015 / 0.040 | 6000 ms |
@@ -48,6 +48,28 @@ Those values at MVP-1 exit:
 
 Cost ceilings are enforced before dispatch, not observed after it: a call whose worst case would
 exceed the remaining request budget never reaches a provider.
+
+### Approved providers
+
+Each live route is approved for two models, so a deployment can serve it with whichever provider
+credential it holds. The second is selected with `RAMALS_AI_MODEL_PINS` and needs no image build:
+
+| Route | Default (Anthropic) | Alternate (OpenAI) |
+| --- | --- | --- |
+| `tutor-default`, `diagnostic-default`, `assessment-default`, `adaptation-default` | claude-sonnet-5 — 0.003 / 0.015 per 1k | gpt-4.1-2025-04-14 — 0.002 / 0.008 per 1k |
+
+`ci-fake` has no alternate: it is deterministic and local, and never calls a provider.
+
+Switching provider moves the model identity and its prices, and nothing else. The route contract --
+prompt version, token ceilings, cost ceiling, p95 budget -- is unchanged, which is what keeps two
+runs labelled with the same route comparable. The route table refuses to express an alternate
+priced above the model the route was approved at, so changing vendor can never escalate cost
+(M1-ADR-008). A pin is recorded in the resolved table version, for example
+`ROUTE_TABLE_V1+adaptation-default:model=gpt-4.1-2025-04-14`, so a proposal from one vendor never
+labels itself as the other.
+
+Prices are provider list prices as of `ROUTE_TABLE_V1`. They are governance numbers, not
+documentation: they are what the cost ceiling projects against before dispatch.
 
 ## Measured
 

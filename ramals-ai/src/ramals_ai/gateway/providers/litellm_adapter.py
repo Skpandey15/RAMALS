@@ -51,6 +51,16 @@ class LiteLLMProvider:
             self._litellm = litellm
         return self._litellm
 
+    def ensure_available(self) -> None:
+        """Imports the SDK now, so a build that cannot reach a provider says so at startup.
+
+        The lazy import is right for the call path -- a service on ``ci-fake`` should never pay for
+        a library it will not use -- but it also means a build missing the ``provider`` extra looks
+        perfectly healthy until the first learner request reaches an agent, and then fails as an
+        opaque routing error with nothing pointing at the packaging decision that caused it.
+        """
+        self._module()
+
     def count_input_tokens(self, model: str, messages: tuple[Message, ...]) -> int:
         litellm = self._module()
         try:
