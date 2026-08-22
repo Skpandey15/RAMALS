@@ -40,6 +40,14 @@ ramals:
     workload-client-id: ${RAMALS_AI_WORKLOAD_CLIENT_ID:}
     workload-client-secret: ${RAMALS_AI_WORKLOAD_CLIENT_SECRET:}
     workload-audience: ${RAMALS_AI_WORKLOAD_AUDIENCE:ramals-ai}
+    dispatcher:
+      enabled: ${RAMALS_AI_DISPATCHER_ENABLED:true}
+      poll-interval-ms: ${RAMALS_AI_DISPATCHER_POLL_INTERVAL_MS:1000}
+      batch-size: ${RAMALS_AI_DISPATCHER_BATCH_SIZE:4}
+      lease-millis: ${RAMALS_AI_DISPATCHER_LEASE_MS:60000}
+      max-attempts: ${RAMALS_AI_DISPATCHER_MAX_ATTEMPTS:5}
+      initial-backoff-millis: ${RAMALS_AI_DISPATCHER_INITIAL_BACKOFF_MS:1000}
+      max-backoff-millis: ${RAMALS_AI_DISPATCHER_MAX_BACKOFF_MS:60000}
   security:
     web-origin: ${RAMALS_WEB_ORIGIN:http://localhost:5173}
     # Two tiers, and the placeholder defaults must equal the defaults in RateLimitProperties.

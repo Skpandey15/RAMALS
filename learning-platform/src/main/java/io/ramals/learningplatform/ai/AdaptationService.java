@@ -27,17 +27,25 @@ public class AdaptationService {
       RecommendationDecision deterministicDecision,
       long deadlineMillis) {
     try {
-      AiProposalEnvelope proposal =
-          adaptationPort.requestAdaptationProposal(request, deadlineMillis);
-      AdaptationProposalGate.Result compared = gate.compare(
-          deterministicDecision,
-          new AdaptationProposalGate.Proposal(
-              request.learningContext() == null ? null : request.learningContext().skillCode(),
-              actionFrom(proposal)));
-      return new Outcome(compared.deterministicDecision(), proposal, compared.disagreement());
+      return compareRequired(request, deterministicDecision, deadlineMillis);
     } catch (AiUnavailableException failure) {
       return new Outcome(deterministicDecision, null, false);
     }
+  }
+
+  /** Same comparison, but preserves failures so a durable dispatcher can apply retry policy. */
+  public Outcome compareRequired(
+      AiRequestEnvelope request,
+      RecommendationDecision deterministicDecision,
+      long deadlineMillis) {
+    AiProposalEnvelope proposal =
+        adaptationPort.requestAdaptationProposal(request, deadlineMillis);
+    AdaptationProposalGate.Result compared = gate.compare(
+        deterministicDecision,
+        new AdaptationProposalGate.Proposal(
+            request.learningContext() == null ? null : request.learningContext().skillCode(),
+            actionFrom(proposal)));
+    return new Outcome(compared.deterministicDecision(), proposal, compared.disagreement());
   }
 
   private static String actionFrom(AiProposalEnvelope proposal) {
