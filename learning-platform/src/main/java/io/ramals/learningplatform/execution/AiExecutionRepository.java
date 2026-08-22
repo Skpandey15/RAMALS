@@ -16,6 +16,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -75,7 +76,8 @@ public class AiExecutionRepository {
     String proposalDigest = digest(proposal);
     AiExecution execution = insert(request, proposal.agentType().name(), proposal.agentVersion(),
         proposal.agentRunId(), proposal.promptTemplateId(), proposal.promptVersion(),
-        proposal.modelRoute(), null, "SUCCEEDED", null, requestDigest, proposalDigest, usage,
+        proposal.modelRoute(), proposal.resolvedProvider(), proposal.modelId(),
+        proposal.routeVersion(), traceId(request), "SUCCEEDED", null, requestDigest, proposalDigest, usage,
         startedAt, completedAt);
     appendCompletion(request, execution);
     return execution;
@@ -87,7 +89,8 @@ public class AiExecutionRepository {
     // No proposal came back, so there is no run and no prompt to name. Left null rather
     // than filled with something plausible: a failure that claims a prompt produced it is
     // worse than one that admits it got nothing.
-    AiExecution execution = insert(request, agentType, null, null, null, null, null, null,
+    AiExecution execution = insert(request, agentType,
+        null, null, null, null, null, null, null, null, traceId(request),
         "FAILED", errorCode, requestDigest, null, null, startedAt, completedAt);
     appendCompletion(request, execution);
     return execution;
@@ -119,7 +122,8 @@ public class AiExecutionRepository {
 
   private AiExecution insert(AiRequestEnvelope request, String agentType, String agentVersion,
       String agentRunId, String promptTemplateId, String promptVersion, String modelRoute,
-      String modelId, String status, String errorCode,
+      String resolvedProvider, String modelId, String routeVersion, String traceId,
+      String status, String errorCode,
       String requestDigest, String proposalDigest, Usage usage, Instant startedAt, Instant completedAt) {
     UUID id = UuidV7.generate();
     try {
@@ -127,13 +131,14 @@ public class AiExecutionRepository {
           INSERT INTO core.ai_execution
             (id, request_id, interaction_id, agent_type, contract_version, agent_version,
              agent_run_id, prompt_template_id, prompt_version, model_route, model_id, status,
+             resolved_provider, route_version, trace_id,
              error_code, request_digest,
              proposal_digest, input_tokens, cached_input_tokens, output_tokens, estimated_cost_usd,
              latency_ms, started_at, completed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           """, id, request.requestId(), request.interactionId(), agentType, request.contractVersion(),
           agentVersion, agentRunId, promptTemplateId, promptVersion, modelRoute, modelId, status,
-          errorCode, requestDigest,
+          resolvedProvider, routeVersion, traceId, errorCode, requestDigest,
           proposalDigest, usage == null ? null : usage.inputTokens(),
           usage == null ? null : usage.cachedInputTokens(), usage == null ? null : usage.outputTokens(),
           cost(usage), usage == null ? null : usage.latencyMs(),
@@ -179,6 +184,7 @@ public class AiExecutionRepository {
       SELECT id, request_id, interaction_id, agent_type, contract_version, agent_version,
              agent_run_id, prompt_template_id,
              prompt_version, model_route, model_id, status, error_code, request_digest,
+             resolved_provider, route_version, trace_id,
              proposal_digest, input_tokens, cached_input_tokens, output_tokens, estimated_cost_usd,
              latency_ms, started_at, completed_at
         FROM core.ai_execution
@@ -188,12 +194,19 @@ public class AiExecutionRepository {
       r.getObject("id", UUID.class), r.getString("request_id"), r.getString("interaction_id"),
       r.getString("agent_type"), r.getString("contract_version"), r.getString("agent_version"),
       r.getString("agent_run_id"), r.getString("prompt_template_id"),
-      r.getString("prompt_version"), r.getString("model_route"), r.getString("model_id"),
+      r.getString("prompt_version"), r.getString("model_route"),
+      r.getString("resolved_provider"), r.getString("model_id"),
+      r.getString("route_version"), r.getString("trace_id"),
       r.getString("status"), r.getString("error_code"), r.getString("request_digest"),
       r.getString("proposal_digest"), (Integer) r.getObject("input_tokens"),
       (Integer) r.getObject("cached_input_tokens"), (Integer) r.getObject("output_tokens"),
       r.getObject("estimated_cost_usd", BigDecimal.class), (Integer) r.getObject("latency_ms"),
       instant(r, "started_at"), instant(r, "completed_at"));
+
+  private static String traceId(AiRequestEnvelope request) {
+    String traceId = MDC.get("traceId");
+    return traceId == null || traceId.isBlank() ? request.interactionId() : traceId;
+  }
 
   private static Instant instant(ResultSet result, String column) throws SQLException {
     OffsetDateTime value = result.getObject(column, OffsetDateTime.class);

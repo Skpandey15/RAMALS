@@ -50,6 +50,17 @@ class RouteConfig:
     model change a configuration change with a review and a rollback path.
     """
 
+    @property
+    def resolved_provider(self) -> str:
+        """Stable provider identity implied by the approved concrete model binding."""
+        if self.model == "ci-fake-deterministic-v1":
+            return "ci-fake"
+        if self.model.startswith("claude-"):
+            return "anthropic"
+        if self.model.startswith("gpt-"):
+            return "openai"
+        raise RouteTableError(f"model '{self.model}' has no governed provider identity")
+
     prompt_versions: Mapping[PromptTemplateId, str]
     """Which revision of each prompt this route serves. The pointer M1-ADR-008 rolls back.
 

@@ -41,10 +41,22 @@ public record AiProposalEnvelope(
     String promptTemplateId,
     String promptVersion,
     String modelRoute,
+    String resolvedProvider,
+    String modelId,
+    String routeVersion,
     TrustLevel trustLevel,
     String confidence,
     List<String> reasonCodes,
     Map<String, Object> proposal,
     Validation validation,
     Usage usage) {
+  /** Source-compatible constructor for proposals from the pre-M2-T04 contract. */
+  public AiProposalEnvelope(String contractVersion, String proposalId, AgentType agentType,
+      String agentVersion, String agentRunId, String promptTemplateId, String promptVersion,
+      String modelRoute, TrustLevel trustLevel, String confidence, List<String> reasonCodes,
+      Map<String, Object> proposal, Validation validation, Usage usage) {
+    this(contractVersion, proposalId, agentType, agentVersion, agentRunId, promptTemplateId,
+        promptVersion, modelRoute, null, null, null, trustLevel, confidence, reasonCodes, proposal,
+        validation, usage);
+  }
 }

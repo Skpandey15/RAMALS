@@ -162,6 +162,27 @@ class AIProposalEnvelope(BaseModel):
     ] = None
     promptVersion: Annotated[str | None, Field(max_length=64)] = None
     modelRoute: Annotated[str, Field(max_length=64)]
+    resolvedProvider: Annotated[
+        str | None,
+        Field(
+            description='Provider resolved by the governed route table; never supplied by the caller.',
+            max_length=64,
+        ),
+    ] = None
+    modelId: Annotated[
+        str | None,
+        Field(
+            description='Immutable concrete model identifier used for this execution.',
+            max_length=128,
+        ),
+    ] = None
+    routeVersion: Annotated[
+        str | None,
+        Field(
+            description='Version/configuration stamp of the route resolution used for this execution.',
+            max_length=256,
+        ),
+    ] = None
     trustLevel: TrustLevel
     confidence: Annotated[
         DecimalString | None,

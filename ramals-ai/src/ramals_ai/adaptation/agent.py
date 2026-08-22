@@ -95,6 +95,9 @@ class AdaptationAgent:
             promptTemplateId=state.prompt_template_id.value,
             promptVersion=state.prompt_version,
             modelRoute=(state.final_proposal or {}).get("modelRoute", self._route.value),
+            resolvedProvider=(state.final_proposal or {}).get("resolvedProvider"),
+            modelId=(state.final_proposal or {}).get("modelId"),
+            routeVersion=(state.final_proposal or {}).get("routeVersion"),
             trustLevel=TrustLevel.NON_AUTHORITATIVE,
             reasonCodes=[ReasonCode(code) for code in dict.fromkeys(state.validation_errors)][:16]
             or None,

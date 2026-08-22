@@ -24,7 +24,10 @@ public record AiExecution(
     String promptTemplateId,
     String promptVersion,
     String modelRoute,
+    String resolvedProvider,
     String modelId,
+    String routeVersion,
+    String traceId,
     String status,
     String errorCode,
     String requestDigest,
@@ -35,4 +38,17 @@ public record AiExecution(
     BigDecimal estimatedCostUsd,
     Integer latencyMs,
     Instant startedAt,
-    Instant completedAt) {}
+    Instant completedAt) {
+  /** Source-compatible constructor for historical provenance rows and pre-M2-T04 callers. */
+  public AiExecution(UUID id, String requestId, String interactionId, String agentType,
+      String contractVersion, String agentVersion, String agentRunId, String promptTemplateId,
+      String promptVersion, String modelRoute, String modelId, String status, String errorCode,
+      String requestDigest, String proposalDigest, Integer inputTokens, Integer cachedInputTokens,
+      Integer outputTokens, BigDecimal estimatedCostUsd, Integer latencyMs, Instant startedAt,
+      Instant completedAt) {
+    this(id, requestId, interactionId, agentType, contractVersion, agentVersion, agentRunId,
+        promptTemplateId, promptVersion, modelRoute, null, modelId, null, null, status, errorCode,
+        requestDigest, proposalDigest, inputTokens, cachedInputTokens, outputTokens,
+        estimatedCostUsd, latencyMs, startedAt, completedAt);
+  }
+}
