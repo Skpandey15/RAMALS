@@ -42,6 +42,12 @@ dev = [
   # canonical OpenAPI; the others lint it and keep the committed output honest.
   "datamodel-code-generator==0.73.0",
   "httpx==0.28.1",
+  # The MVP-2 contract tests validate produced payloads against the JSON Schema files in
+  # contracts/mvp2/ directly. Declared rather than relied upon transitively: it arrives via
+  # litellm and openapi-spec-validator today, and a contract test must not depend on that
+  # staying true. The stub pin tracks the runtime pin, because mypy runs strict over tests.
+  "jsonschema==4.26.0",
+  "types-jsonschema==4.26.0.20260518",
   "mypy==2.3.1",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",

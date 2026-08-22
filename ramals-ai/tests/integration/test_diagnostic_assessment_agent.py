@@ -194,7 +194,8 @@ class TimeoutProvider(FakeProvider):
 
 def _context_from(messages: tuple[Message, ...]) -> dict[str, Any]:
     user = next(message for message in messages if message.role == "user")
-    return json.loads(user.content.split("\n", 1)[1])
+    parsed: dict[str, Any] = json.loads(user.content.split("\n", 1)[1])
+    return parsed
 
 
 def agent_for(provider: FakeProvider) -> DiagnosticAssessmentAgent:
@@ -299,9 +300,10 @@ def test_e03_single_variable_perturbation_moves_only_the_changed_skill() -> None
     )
 
     def classification(envelope: Any, skill: str) -> str:
-        return next(
+        found: str = next(
             d["classification"] for d in envelope.proposal["diagnoses"] if d["skillCode"] == skill
         )
+        return found
 
     assert classification(baseline, "offset-management") == "WEAK"
     assert classification(perturbed, "offset-management") == "STRONG"
@@ -451,6 +453,64 @@ def test_the_learner_reference_never_reaches_the_prompt() -> None:
     propose(agent_for(provider), context())
 
     assert all("opaque-learner" not in message.content for message in provider.prompts[0])
+
+
+# -- guards that only fire on malformed or unsupported output --------------------------------------
+
+
+def test_duplicate_evidence_references_are_refused() -> None:
+    """`uniqueItems`. Repeating a reference does not make a claim better supported."""
+    padded = json.loads(WELL_FORMED)
+    padded["diagnoses"][0]["evidenceIds"] = [MASTERY_EVIDENCE, MASTERY_EVIDENCE]
+
+    envelope = propose(agent_for(ScriptedProvider(json.dumps(padded))), context())
+
+    assert envelope.validation.schemaValid is False
+    assert envelope.proposal["diagnoses"] == []
+
+
+def test_duplicate_recommended_skills_are_refused() -> None:
+    """Same rule on the recommendation list."""
+    repeated = json.loads(WELL_FORMED)
+    repeated["recommendedNextSkills"] = ["offset-management", "offset-management"]
+
+    envelope = propose(agent_for(ScriptedProvider(json.dumps(repeated))), context())
+
+    assert envelope.validation.schemaValid is False
+
+
+def test_json_that_is_not_an_object_is_refused() -> None:
+    """Valid JSON is not the same shape as a proposal."""
+    envelope = propose(agent_for(ScriptedProvider("[1, 2, 3]")), context())
+
+    assert envelope.validation.schemaValid is False
+    assert "SCHEMA_NOT_OBJECT" in [code.root for code in envelope.reasonCodes]
+
+
+def test_a_skill_absent_from_the_context_is_refused_when_the_context_names_skills() -> None:
+    """The skill check binds only when the context actually carries skill codes.
+
+    A context with no skill-graph facts cannot answer the question, and rejecting every
+    classification on that basis would fail closed for the wrong reason -- so the evidence check
+    stays the binding one there. Here the context does name skills, so an invented one is caught.
+    """
+    named_skills = [
+        _item(
+            "ev-skill-offsets",
+            source="SKILL_GRAPH",
+            fact="SKILL_CODE",
+            value="offset-management",
+        )
+    ]
+    invented = json.loads(WELL_FORMED)
+    invented["diagnoses"][0]["skillCode"] = "skill-that-does-not-exist"
+
+    envelope = propose(
+        agent_for(ScriptedProvider(json.dumps(invented))), context(extra=named_skills)
+    )
+
+    assert envelope.validation.schemaValid is False
+    assert "SKILL_NOT_IN_CONTEXT" in [code.root for code in envelope.reasonCodes]
 
 
 # -- MVP-1 isolation -----------------------------------------------------------------------------
