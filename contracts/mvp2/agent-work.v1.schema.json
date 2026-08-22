@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramals.io/contracts/mvp2/agent-work.v1.schema.json",
+  "title": "RAMALS MVP-2 AgentWork v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "workId", "requestId", "interactionId", "traceId", "agentType", "capability", "sourceDecisionId", "groundedContextId", "createdAt"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "workId": { "$ref": "#/$defs/id" },
+    "requestId": { "$ref": "#/$defs/id" },
+    "interactionId": { "$ref": "#/$defs/id" },
+    "traceId": { "$ref": "#/$defs/id" },
+    "agentType": { "enum": ["DIAGNOSTIC", "ASSESSMENT", "ADAPTATION", "TUTOR"] },
+    "capability": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "sourceDecisionId": { "$ref": "#/$defs/id" },
+    "groundedContextId": { "$ref": "#/$defs/id" },
+    "payloadVersion": { "type": "integer", "minimum": 1 },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 }
+  }
+}
