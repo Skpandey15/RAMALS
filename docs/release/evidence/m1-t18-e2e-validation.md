@@ -236,7 +236,13 @@ forward:
 ## 11. Known non-blocking technical debt
 
 - **TD-T18-02 — the adaptation chain is proven as far as the AI plane, not through the proposal
-  gate. Accepted explicitly for MVP-1.**
+  gate. Accepted at the time of this run; CLOSED 2026-08-22 on `v0.1.0-rc8`.**
+
+  > **Superseded.** What follows describes the state during this RC7 run and is retained as the
+  > record of it. The item was closed by a live-provider run on `v0.1.0-rc8`: a real model went
+  > through `AdaptationProposalGate`, and `agent_run_id`, `prompt_template_id`, `prompt_version` and
+  > `model_route` are populated on every row. See `td-t18-02-closure.md`. `model_id` remains NULL and
+  > is tracked separately as TD-RC8-02.
 
   The canonical chain is `learner event → deterministic recommendation → commit → AFTER_COMMIT
   listener → AdaptationService → ramals-ai → AdaptationProposalGate → ai_execution`. Every link is
@@ -278,9 +284,40 @@ forward:
   by decision, not omission. Both are recorded in the integration contract with the seven-question
   analysis behind them.
 
+## 12. Reconciliation to `v0.1.0-rc8` — the candidate that was released
+
+This record validated `v0.1.0-rc7`. **RC7 is superseded and must never be deployed**: it was later
+found to ship without the provider SDK, so no live model route on it could dispatch at all. The
+released candidate is `v0.1.0-rc8` @ `0c01c8518abae97bf986700a9af616e17a656aea`.
+
+The verdict below is retained as the honest record of what was validated on the day, against the
+artifact named in §1. It is not a claim about RC8. What carries across, and what does not, rests on
+one checkable fact rather than on judgement:
+
+```
+git diff --name-only 98aedf8..v0.1.0-rc8 -- learning-platform/src web-ui/src
+→ 0 files
+```
+
+No backend or web-ui source changed between the two candidates. The entire functional delta is in
+`ramals-ai`. So:
+
+- criteria §3 (authentication and authorization) and §4 (canonical learner journey) were
+  **re-executed on RC8** under a real Keycloak-issued learner token and passed;
+- criterion §5 (agent plane) is **superseded by RC8-scoped evidence** — this is the component that
+  changed, and the RC8 evidence is stronger, proving a live model through the proposal gate;
+- criteria §2b (fresh deployment) and §7 (failure-path regression) were **not re-executed on RC8**
+  and rest on this RC7 record plus the zero-source-delta fact above. Stated rather than waived.
+
+The full criterion-by-criterion reconciliation, the four accepted debt items, and the release
+decision are in **`rc8-release-decision.md`**, which is the authoritative release record.
+
 ## Disposition
 
 **Outcome: PASS**
+
+Scoped to `v0.1.0-rc7`, the artifact this run validated; see §12 for the reconciliation to the
+released candidate.
 
 `v0.1.0-rc7` is fit to be the MVP-1 release candidate. The deterministic core is complete and
 correct, the agent plane is deployed, secured and reachable from the learner journey, AI output is

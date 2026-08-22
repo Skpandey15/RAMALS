@@ -2,6 +2,17 @@
 
 The standing view of what blocks the MVP-1 release candidate. Updated as tasks land.
 
+**Release candidate: `v0.1.0-rc8`** @ `0c01c8518abae97bf986700a9af616e17a656aea`.
+**Outcome: PASS_WITH_ACCEPTED_DEBT** — qualified for MVP-1 release and approved for the shared dev
+environment, **not** certified production-ready, carrying four accepted debt items (TD-T18-01,
+TD-R1-03, TD-RC8-01, TD-RC8-02). The authoritative record is
+[the RC8 release decision](evidence/rc8-release-decision.md); qualification is in
+[the RC8 requalification](evidence/rc8-requalification.md).
+
+`v0.1.0-rc7` is **superseded and must never be deployed**: it shipped without the provider SDK, so no
+live model route on it could dispatch. M1-T18 originally validated rc7; §12 of its record reconciles
+that to rc8.
+
 This exists because R1 has been open since MVP-0 and is easy to lose sight of: it is not blocked on
 engineering, so it never surfaces in a task, and every task can pass without it moving. It must not
 become a surprise at M1-T18. `Mvp1ReleaseBoardTests` fails if R1 disappears from this file or is
@@ -47,7 +58,7 @@ python3 performance/environment/attest.py
 The spec's status is `proposed`, not `reference`: its values are a reasoned starting point from the
 MVP-0 indicative run, and the first calibrated run on a registered host confirms or revises them.
 
-**R1 blocked M1-T18, and no longer does.** It closed on 2026-08-21, M1-T18 ran against `v0.1.0-rc7` on 2026-08-22 and passed, and the MVP-1 release candidate is no longer blocked. The rule it operated under is unchanged and is recorded here because it governs any future risk of the same shape. Under [M1-ADR-000](../adr/M1-ADR-000-mvp1-engineering-before-r1.md), MVP-1
+**R1 blocked M1-T18, and no longer does.** It closed on 2026-08-21, M1-T18 ran against `v0.1.0-rc7` on 2026-08-22 and passed, and the MVP-1 release candidate is no longer blocked. The candidate has since moved to `v0.1.0-rc8`, which was requalified and reconciled criterion by criterion — see [the RC8 release decision](evidence/rc8-release-decision.md). The rule it operated under is unchanged and is recorded here because it governs any future risk of the same shape. Under [M1-ADR-000](../adr/M1-ADR-000-mvp1-engineering-before-r1.md), MVP-1
 engineering could proceed while R1 was open — that exception covered *building*, not *releasing*,
 so the RC and any deterministic-versus-agentic comparison were blocked until R1 closed or was
 risk-accepted by name. R1 closed on its own terms; the exception was never invoked.
@@ -60,7 +71,10 @@ What *is* measured at MVP-1, and what is deliberately absent, is recorded in the
 [MVP-1 baseline record](mvp1-baseline.md). It is the reference point MVP-2 compares against, and it
 names the unmeasured dimensions so they cannot later be mistaken for baselines of zero.
 
-## Open technical debt from R1
+## Open technical debt
+
+Originally R1's register; it now carries the accepted debt from M1-T18 and RC8 as well, so that the
+release decision has one place to point at rather than several.
 
 Raised by the 2026-08-21 runs. Both are fixed; TD-R1-02 is listed as partially outstanding because
 the refactor it names is broader than the fix that landed.
@@ -106,7 +120,7 @@ ADR file. Having the file is not enough — an ADR in Draft is a decision still 
 | M1-T15 AI evaluation release gates | ✅ done | M1-ADR-009 ✅ |
 | M1-T16 AI security challenge | ✅ done | — |
 | M1-T17 CI/CD and deployment packaging | ✅ done | M1-ADR-011 ✅ |
-| M1-T18 MVP-1 E2E validation and RC | ✅ done 2026-08-22 | **R1** ✅ closed 2026-08-21 — [E2E evidence](evidence/m1-t18-e2e-validation.md) |
+| M1-T18 MVP-1 E2E validation and RC | ✅ done 2026-08-22 | **R1** ✅ closed 2026-08-21 — [E2E evidence](evidence/m1-t18-e2e-validation.md) (rc7-scoped), reconciled to rc8 by [the RC8 release decision](evidence/rc8-release-decision.md) |
 
 ### M1-T17 slices
 
