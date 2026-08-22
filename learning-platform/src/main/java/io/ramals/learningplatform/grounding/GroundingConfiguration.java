@@ -33,6 +33,24 @@ public class GroundingConfiguration {
   }
 
   @Bean
+  io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentProposalGate
+      diagnosticAssessmentProposalGate(ProposalGroundingGate grounding) {
+    return new io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentProposalGate(
+        grounding);
+  }
+
+  @Bean
+  io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentService
+      diagnosticAssessmentService(
+          GroundingRetrievalService retrieval,
+          io.ramals.learningplatform.ai.DiagnosticAssessmentPort agent,
+          io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentProposalGate gate,
+          ProposalGateDecisionPort decisions) {
+    return new io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentService(
+        retrieval, agent, gate, decisions, Clock.systemUTC());
+  }
+
+  @Bean
   ProposalGroundingService proposalGroundingService(
       ProposalGroundingGate gate,
       ProposalGateDecisionPort decisions) {

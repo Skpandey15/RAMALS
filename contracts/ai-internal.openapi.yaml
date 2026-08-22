@@ -191,6 +191,42 @@ paths:
         '503': { $ref: '#/components/responses/AiUnavailable' }
         '504': { $ref: '#/components/responses/DeadlineExceeded' }
 
+  /internal/v1/diagnostic-assessment/propose:
+    post:
+      operationId: diagnosticAssessmentPropose
+      tags: [agents]
+      summary: Propose a grounded reading of what a learner's evidence shows
+      description: >
+        M2-T08/T09. Distinct from /internal/v1/diagnostic/propose, which proposes the next probe.
+        This operation classifies skills from evidence and must cite it, so it takes a
+        GroundedContext rather than a minimized learning context. Spring builds that context from the
+        authenticated learner and remains the authority: DiagnosticAssessmentProposalGate decides
+        whether the returned proposal has any effect.
+
+        A separate operation rather than a new optional field on AIRequestEnvelope. The context is
+        mandatory here and meaningless on the MVP-1 operations, and an optional field carrying that
+        distinction would leave every existing operation with an ambiguous "is it required for me?"
+        semantic that no schema states.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiagnosticAssessmentRequest'
+      responses:
+        '200':
+          description: A diagnostic assessment proposal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProposalEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableProposal' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+        '504': { $ref: '#/components/responses/DeadlineExceeded' }
+
 components:
   securitySchemes:
     workloadIdentity:
@@ -538,6 +574,84 @@ components:
           additionalProperties: true
         validation: { $ref: '#/components/schemas/Validation' }
         usage: { $ref: '#/components/schemas/Usage' }
+
+    GroundedContextItemEnvelope:
+      type: object
+      additionalProperties: false
+      required: [evidenceId, sourceType, sourceVersion, authority, factType, value, observedAt]
+      description: >
+        One transported context fact. Mirrors contracts/mvp2/grounded-context.v1.schema.json; a
+        contract test asserts the two agree, because a transport that drifts from the contract it
+        claims to carry is worse than no contract.
+      properties:
+        evidenceId: { type: string, minLength: 1, maxLength: 64 }
+        sourceType:
+          type: string
+          enum: [LEARNER_EVIDENCE, MASTERY, SKILL_GRAPH, ASSESSMENT, APPROVED_CONTENT,
+                 CURRICULUM_POLICY, DOMAIN_POLICY]
+        sourceVersion: { type: string, minLength: 1, maxLength: 64 }
+        authority:
+          type: string
+          enum: [AUTHORITATIVE_FACT, MODEL_GENERATED_SUMMARY]
+        factType: { type: string, minLength: 1, maxLength: 64 }
+        value:
+          description: A bounded scalar. Never a nested structure, and never free-form learner text.
+          oneOf:
+            - { type: string, maxLength: 2048 }
+            - { type: number }
+            - { type: integer }
+            - { type: boolean }
+        observedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+
+    GroundedContextEnvelope:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, contextId, learnerRef, asOf, expiresAt, retrievalPolicyVersion,
+                 items]
+      description: >
+        The bounded, authorized context Spring retrieved. The AI plane consumes it and cannot widen
+        it: there is no identifier here it could use to ask for more, and no database reachable from
+        the plane if it tried.
+      properties:
+        contractVersion:
+          type: string
+          enum: ['1.0']
+          description: The GroundedContext contract version, stated explicitly and failed closed on.
+        contextId: { type: string, minLength: 1, maxLength: 64 }
+        learnerRef:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Opaque. Never a natural learner identifier, and never reaches a prompt.
+        asOf: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        retrievalPolicyVersion: { type: string, minLength: 1, maxLength: 64 }
+        items:
+          type: array
+          maxItems: 64
+          items: { $ref: '#/components/schemas/GroundedContextItemEnvelope' }
+
+    DiagnosticAssessmentRequest:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, interactionId, requestId, constraints, groundedContext]
+      description: >
+        Carries correlation identity and the grounded context, and nothing else. There is no learner
+        reference beyond the opaque one inside the context, and no capability string: this operation
+        does one thing.
+      properties:
+        contractVersion: { $ref: '#/components/schemas/ContractVersion' }
+        interactionId:
+          type: string
+          maxLength: 64
+          description: Logical learner action. Stable across safe retries.
+        requestId:
+          type: string
+          maxLength: 64
+          description: One transport attempt. New per retry.
+        constraints: { $ref: '#/components/schemas/Constraints' }
+        groundedContext: { $ref: '#/components/schemas/GroundedContextEnvelope' }
 
     Capabilities:
       type: object

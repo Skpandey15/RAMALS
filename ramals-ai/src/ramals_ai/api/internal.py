@@ -12,6 +12,7 @@ learner data.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -20,11 +21,20 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ramals_ai.adaptation.agent import AdaptationAgent
 from ramals_ai.assessment.agent import AssessmentAgent
-from ramals_ai.contracts.generated import AIProposalEnvelope, AIRequestEnvelope
+from ramals_ai.contracts.generated import (
+    AIProposalEnvelope,
+    AIRequestEnvelope,
+    DiagnosticAssessmentRequest,
+)
 from ramals_ai.diagnostic.agent import DiagnosticAgent
+from ramals_ai.diagnostic_assessment.agent import (
+    REQUIRED_SOURCES,
+    DiagnosticAssessmentAgent,
+)
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.graph.limits import CeilingExceeded
+from ramals_ai.grounding.contracts import GroundedContext
 from ramals_ai.security.workload_identity import (
     WorkloadAuthenticationError,
     WorkloadIdentity,
@@ -109,6 +119,42 @@ def build_internal_router() -> APIRouter:
         agent: DiagnosticAgent = request.app.state.agents["diagnostic"]
         return _run(agent.propose, envelope)
 
+    @router.post("/diagnostic-assessment/propose", response_model=AIProposalEnvelope)
+    def diagnostic_assessment_propose(
+        request: Request, payload: DiagnosticAssessmentRequest
+    ) -> AIProposalEnvelope | JSONResponse:
+        """M2-T09. Consumes the context Spring built; Spring's gate decides what it means.
+
+        The transported context is re-validated here against the fail-closed consumer contract
+        rather than trusted because it arrived over a typed boundary. The generated model proves the
+        shape; ``GroundedContext`` proves the freshness, size and sensitivity rules, and those are
+        the ones that fail closed.
+        """
+        agent: DiagnosticAssessmentAgent = request.app.state.agents["diagnostic_assessment"]
+        try:
+            context = GroundedContext.model_validate(
+                payload.groundedContext.model_dump(mode="json")
+            )
+            # Checked before dispatch so a context missing a required source costs no provider call.
+            # The agent checks again; this is the boundary refusing early, not instead.
+            context.require_grounding(set(REQUIRED_SOURCES))
+        except ValueError as refused:
+            return _problem(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                _grounding_code(refused),
+                "The supplied grounded context was refused.",
+            )
+        deadline = Deadline.in_ms(payload.constraints.deadlineMs)
+        return _execute(
+            lambda: agent.propose(
+                context,
+                interaction_id=payload.interactionId,
+                request_id=payload.requestId,
+                deadline=deadline,
+                interaction_class=payload.constraints.interactionClass,
+            )
+        )
+
     @router.post("/tutor/respond", response_model=AIProposalEnvelope)
     def tutor_respond(
         request: Request, envelope: AIRequestEnvelope
@@ -153,8 +199,13 @@ def _run(
 ) -> AIProposalEnvelope | JSONResponse:
     """Execute one agent with the caller's absolute deadline and normalize boundary failures."""
     deadline = Deadline.in_ms(envelope.constraints.deadlineMs)
+    return _execute(lambda: call(envelope, deadline=deadline, **kwargs))
+
+
+def _execute(produce: Callable[[], AIProposalEnvelope]) -> AIProposalEnvelope | JSONResponse:
+    """Runs one bounded agent call and normalizes every boundary failure to the fixed taxonomy."""
     try:
-        proposal = call(envelope, deadline=deadline, **kwargs)
+        proposal = produce()
         if proposal.validation is not None and not proposal.validation.schemaValid:
             return _problem(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -212,6 +263,20 @@ def _requested_difficulty(envelope: AIRequestEnvelope) -> str:
             "Spring must provide requestedCapability as FOUNDATIONAL, INTERMEDIATE, or ADVANCED."
         )
     return requested
+
+
+def _grounding_code(refused: Exception) -> str:
+    """The stable code a grounding refusal already carries, or a bounded fallback.
+
+    ``GroundedContext`` raises codes such as GROUNDING_STALE and GROUNDING_REQUIRED_SOURCE_MISSING.
+    Pydantic raises prose. Returning the code where there is one keeps the boundary's taxonomy the
+    same as the contract's; falling back keeps a caller from receiving a validator's English.
+    """
+    # Searched rather than matched at line start: a code raised inside a pydantic validator arrives
+    # embedded in the validator's prose ("Value error, GROUNDING_STALE [type=...]"), while
+    # require_grounding raises it bare. Both must yield the same code.
+    found = re.search(r"GROUNDING_[A-Z_]{3,50}", str(refused))
+    return found.group(0) if found else "GROUNDING_CONTRACT_INVALID"
 
 
 class InvalidPolicyInputError(ValueError):

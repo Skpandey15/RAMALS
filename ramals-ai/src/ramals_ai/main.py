@@ -22,6 +22,7 @@ from ramals_ai.api.internal import build_internal_router
 from ramals_ai.assessment.agent import AssessmentAgent
 from ramals_ai.config.settings import ConfigurationError, ModelRoute, Settings, get_settings
 from ramals_ai.diagnostic.agent import DiagnosticAgent
+from ramals_ai.diagnostic_assessment.agent import DiagnosticAssessmentAgent
 from ramals_ai.gateway.errors import GatewayError
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import ProviderAdapter
@@ -121,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.prompts = prompts
     app.state.agents = {
         "diagnostic": DiagnosticAgent(gateway, prompts=prompts),
+        "diagnostic_assessment": DiagnosticAssessmentAgent(gateway, prompts=prompts),
         "tutor": TutorAgent(gateway, prompts=prompts),
         "assessment": AssessmentAgent(gateway, prompts=prompts),
         "adaptation": AdaptationAgent(gateway, prompts=prompts),
