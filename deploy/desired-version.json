@@ -2,24 +2,24 @@
   "$comment": "Approved desired-version manifest for the shared dev environment. The dev host PULLS this; CI never pushes to an environment. Every component is addressed by an immutable digest so a deployment is byte-identical to what was built, scanned, and attested. Never reference :latest or :main here.",
   "manifest_version": 1,
   "environment": "dev",
-  "approved_by": "m1-t18-rc6-validation",
-  "approved_at": "2026-08-22T00:00:00Z",
+  "approved_by": "m1-t18-rc7-validation",
+  "approved_at": "2026-08-22T01:00:00Z",
   "release": {
-    "commit": "af91a1901497c0722eb0ab15bb7719244c140442",
-    "version": "v0.1.0-rc6"
+    "commit": "98aedf898a06289cb3a35555e729d50817a36258",
+    "version": "v0.1.0-rc7"
   },
   "components": {
     "learning-platform": {
       "image": "ghcr.io/skpandey15/ramals-learning-platform",
-      "digest": "sha256:fcf58becf3212ef16dfa8d2c1e666fd15e204c480e0c81f0bd79a43e1ebbf98b"
+      "digest": "sha256:827f81b63ee04f863af1bcb077b7092379022cc31c54365cd1fd9e0549289c0e"
     },
     "web-ui": {
       "image": "ghcr.io/skpandey15/ramals-web-ui",
-      "digest": "sha256:9207f68eeac66f659d5354305a784f02f4bc85726c25bd27b791649150e28b4f"
+      "digest": "sha256:d1935f3398a128c779803f40e39abb3cfd6ddeac8262b78d6334e1690312a8f6"
     },
     "ramals-ai": {
       "image": "ghcr.io/skpandey15/ramals-ai",
-      "digest": "sha256:ee3d876da88f012f81809c6faae99d50f555cf1265c005a20707fdf2c245f233"
+      "digest": "sha256:91552946a25535c35b88ef18a9ad1929a231d7afab7de9fd360fe3b7521b3d10"
     }
   }
 }
