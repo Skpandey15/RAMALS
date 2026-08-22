@@ -11,6 +11,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import io.ramals.learningplatform.grounding.GroundedContext;
 
 /**
  * M1-ADR-002: Java records are hand-written and validated against the canonical contract by these
@@ -84,6 +85,11 @@ class GoldenContractRoundTripTests {
   }
 
   @Test
+  void groundedContextSurvivesRoundTrip() throws IOException {
+    assertRoundTrip("grounded-context-v1.json", GroundedContext.class);
+  }
+
+  @Test
   void fullRequestDeserializesToTheExpectedValues() throws IOException {
     AiRequestEnvelope envelope =
         MAPPER.readValue(read("request-tutor-full.json"), AiRequestEnvelope.class);
@@ -127,7 +133,7 @@ class GoldenContractRoundTripTests {
         "request-tutor-minimal.json", "request-tutor-full.json",
         "request-tutor-cross-domain.json", "proposal-tutor.json",
         "proposal-assessment-evaluate.json", "capabilities.json",
-        "problem-deadline-exceeded.json");
+        "problem-deadline-exceeded.json", "grounded-context-v1.json");
 
     try (var entries = Files.list(goldenDirectory())) {
       List<String> present = entries.map(path -> path.getFileName().toString())

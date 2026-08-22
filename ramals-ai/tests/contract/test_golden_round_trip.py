@@ -22,6 +22,7 @@ from ramals_ai.contracts.generated import (
     Capabilities,
     Problem,
 )
+from ramals_ai.grounding.contracts import GroundedContext
 
 GOLDEN = Path(__file__).parents[3] / "contracts" / "golden"
 
@@ -36,6 +37,7 @@ ROUND_TRIP_CASES: list[tuple[str, type[BaseModel]]] = [
     ("proposal-assessment-evaluate.json", AIProposalEnvelope),
     ("capabilities.json", Capabilities),
     ("problem-deadline-exceeded.json", Problem),
+    ("grounded-context-v1.json", GroundedContext),
 ]
 
 
