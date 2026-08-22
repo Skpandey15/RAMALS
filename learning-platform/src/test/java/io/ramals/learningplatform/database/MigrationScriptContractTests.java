@@ -83,6 +83,23 @@ class MigrationScriptContractTests {
     assertThat(migration).doesNotContain("UPDATE core.ai_execution");
   }
 
+  @Test
+  void agentWorkOutboxIsAtomicIdempotentAndPayloadImmutable() throws IOException {
+    String migration = statements("/db/migration/V025__agent_work_transactional_outbox.sql");
+
+    assertThat(migration)
+        .contains("CREATE TABLE core.agent_work_outbox")
+        .contains("REFERENCES ledger.decision_record(id) ON DELETE RESTRICT")
+        .contains("CONSTRAINT uq_agent_work_outbox_request UNIQUE (request_id)")
+        .contains("CONSTRAINT uq_agent_work_outbox_source UNIQUE")
+        .contains("payload JSONB NOT NULL")
+        .contains("payload->>'sourceDecisionId' = source_decision_id::text")
+        .contains("CREATE TRIGGER trg_agent_work_identity_immutable")
+        .contains("status IN ('PENDING', 'CLAIMED', 'RETRY', 'COMPLETED', 'TERMINAL')")
+        .doesNotContain("Kafka")
+        .doesNotContain("ramals_ai_runtime");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");
