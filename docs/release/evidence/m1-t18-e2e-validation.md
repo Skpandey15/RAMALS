@@ -5,10 +5,19 @@
 
 **Outcome: PASS**
 
-Every release-blocking gate passes against a fresh deployment of `v0.1.0-rc7`. One limitation is
-recorded as non-blocking technical debt and is stated plainly in §11 rather than buried: a
-*successful* agent proposal could not be observed, because this environment has no LLM provider
-credential and the deterministic `ci-fake` route cannot produce one by design.
+Every release-blocking gate passes against a fresh deployment of `v0.1.0-rc7`.
+
+**What this PASS does and does not cover, decided explicitly rather than inferred.** One leg of the
+adaptation chain is not proven: the request reaches the AI plane and the execution is durably
+recorded, but no proposal reaches `AdaptationProposalGate`, because the shipped deterministic
+`ci-fake` route returns a plain string that every agent validator rejects by design. That limitation
+was reviewed and **accepted for MVP-1** as TD-T18-02 (§11), on the grounds that the agent is provably
+reachable from a real learner journey, the deterministic recommendation is unaffected by the agent
+failing, the failure is durably recorded with correlation, the gate's own logic is unit-tested, and
+no candidate defect is implicated.
+
+It is recorded here at the top rather than in a footnote because a reader deciding whether to ship
+should not have to reach §11 to find the one thing this run could not demonstrate.
 
 ---
 
@@ -31,7 +40,34 @@ the tutor endpoint. **rc5** fixed the tutor endpoint and 404 semantics but was n
 **rc6** added adaptation reachability and then failed §6 below. Each was replaced rather than
 patched in place.
 
-## 2. Fresh deployment — PASS
+## 2. Preflight and fresh deployment — PASS
+
+**Preflight on the approved SHA.** Local `HEAD` equalled `origin/main` at
+`98aedf898a06289cb3a35555e729d50817a36258` with a clean tree, and every required gate ran green
+before anything was cut or deployed:
+
+| Suite | Result |
+| --- | --- |
+| `test` | 472, 0 failures |
+| `architectureTest` | 33, 0 failures |
+| `governanceTest` | 136, 0 failures |
+| **`integrationTest` against real PostgreSQL** | **108, 0 failures, 0 skipped** |
+| Security CI scripts | 7 of 7, exit 0 |
+| ramals-ai contract + unit | 307, 0 failures |
+
+The `ai_execution` PostgreSQL round-trip test added by #109 was not merely run but **proved to
+bite**: restoring the `Instant` bind fails it with the same `BadSqlGrammarException` that made rc6
+unshippable. A guard that cannot fail is not a guard.
+
+One caveat worth recording, because it looks alarming and is not: running `test` and
+`integrationTest` concurrently against a single database produces deadlocks, connection exhaustion
+and concurrent-Flyway errors. The build orders them deliberately (`integrationTest.mustRunAfter`)
+because they reset and re-provision the same schema. Run sequentially against a clean database they
+are green.
+
+`v0.1.0-rc5` and `v0.1.0-rc6` remain immutable and unmoved; rc6 is recorded as non-shippable.
+
+## 2b. Fresh deployment — PASS
 
 Deployed through the canonical `deploy/deploy-controller.sh` path onto an empty database.
 
@@ -39,6 +75,11 @@ Deployed through the canonical `deploy/deploy-controller.sh` path onto an empty 
 - State machine: `APPROVED → DEPLOYING → HEALTHY`, recording rc7 as known-good including the AI image
 - **All 11 health gates passed**, including the AI-plane gates
 - Restarts and OOM kills: **zero across all five services**
+- **No unintended public exposure.** Every published port binds `127.0.0.1` only — backend 8080,
+  web-ui 5173, AI plane 8000, Keycloak 18081 — and PostgreSQL publishes nothing at all.
+- **Issuer agrees across every component**: backend `RAMALS_OIDC_ISSUER_URI`, the AI plane's
+  `RAMALS_AI_OIDC_ISSUER`, and the issuer Keycloak itself advertises are all
+  `http://keycloak:8080/realms/ramals`.
 
 The rollback and hold contract was exercised for real earlier in this exercise, not asserted: a
 health-gate failure drove `DEPLOYING → FAILED → ROLLBACK → RELEASE_HELD`, and the controller refused
@@ -102,36 +143,52 @@ Diagnostic-agent orchestration is out of MVP-1 scope — both recorded in
 
 ## 6. Durability and provenance — PASS
 
-**15 `ai_execution` rows written by the learner journey**, with timestamps intact and every row
-correlated by `interaction_id`.
+The gate that made rc6 unshippable, now proven against real PostgreSQL rather than inferred from
+logs. A single learner journey writes **5 `ai_execution` rows**; across the qualification run, 10.
 
-This is the gate that failed on rc6 and is the reason rc7 exists. Both write paths bound
-`java.time.Instant` straight to JDBC, which PostgreSQL's driver refuses outright, so no execution
-row could be written on a real database — on success or on failure. The failure-recording path
-failed identically, which is why nothing was left behind to notice.
-
-It survived that long because the only writer was a path no controller reached, and the tests
-covering it run on H2, which accepts the type PostgreSQL rejects. `AiExecutionProvenanceIntegrationTests`
-had twelve tests against real PostgreSQL asserting the table's shape, constraints, retention and
-redaction, and none of them wrote a row through the repository. It now does, and reads the
-timestamps back.
-
-`interactionId` and `traceId` propagate through the post-commit path into execution evidence and the
-log stream, so a row is findable from the support code a learner was shown.
-
-## 7. Failure paths — PASS
-
-| Path | Result |
+| Assertion | Result |
 | --- | --- |
-| unauthenticated agent call to the AI plane | 401 |
-| learner token presented at the internal boundary | refused |
-| duplicate / idempotent submission | same attempt returned, no second agent dispatch |
-| AI plane unavailable or unable to answer | deterministic recommendation unchanged; failure recorded with a reason |
-| authenticated request to an unmapped route | 404, not 500 |
-| deployment health-gate failure | rollback and `RELEASE_HELD` |
-| backend readiness independent of the AI plane | verified |
+| execution id present | true |
+| interaction id present | true |
+| request id present | true |
+| agent type present | true |
+| status present | true |
+| `started_at` parses as a timestamp | true |
+| `completed_at` parses as a timestamp | true |
+| `completed_at >= started_at` | true |
+| timestamps are plausible, not epoch or garbage | true |
+| duplicate `request_id` values | **0 of 10** |
 
-The AI-unavailable path is not a hypothetical here — it is the path this run actually took, and the
+**Correlation survives the post-commit boundary, proven across two ledgers**: all 10
+`core.ai_execution` rows join to a `ledger.decision_record` on `interaction_id`. A support code a
+learner was shown therefore locates both the authoritative decision and the AI execution that
+observed it.
+
+**No secrets, tokens or raw payloads are persisted, structurally.** `core.ai_execution` has **no
+free-text column at all** — every text column is an identifier, a code, a status or a digest — so
+there is nowhere for a prompt, a completion or a credential to be written. Zero JWT-shaped values
+anywhere in the table.
+
+Why this had to be proven rather than assumed: on rc6 both write paths bound `java.time.Instant`
+straight to JDBC, which PostgreSQL's driver refuses, so no row could be written on success *or*
+failure — and the failure-recording path failed identically, leaving nothing behind to notice. It
+survived because the only writer was a path no controller reached and the covering tests ran on H2,
+which accepts the type PostgreSQL rejects.
+
+## 7. Failure-path regression — PASS
+
+| Contract | Evidence |
+| --- | --- |
+| AI failure does not roll back deterministic learner state | `evidence=10, decision_records=10, recommendations=10` while `ai_failed=10`. **Every AI execution failed and no deterministic state was lost.** |
+| AI disagreement does not change the deterministic recommendation | the gate returns the deterministic decision in every case; asserted by `AdaptationReachabilityTests` with a deliberately disagreeing proposal |
+| a failed authoritative transaction causes no adaptation dispatch | asserted by publishing inside a transaction that rolls back — the agent is never called |
+| replay does not create a duplicate adaptation execution | **0 duplicate `request_id`s**; the request id is derived from the decision, and a replayed submission finds the attempt COMPLETED and never recomputes |
+| correlation survives the post-commit boundary | 10 of 10 rows join to a decision record on `interaction_id` |
+| unauthenticated agent call to the AI plane | 401 |
+| authenticated request to an unmapped route | 404, not 500 |
+| deployment health-gate failure | rollback and `RELEASE_HELD`, exercised for real earlier in this exercise |
+
+The AI-unavailable path is not hypothetical here — it is the path this entire run took, and the
 platform behaved exactly as M1-T11 specifies.
 
 ## 8. Security and release gates — PASS
@@ -178,14 +235,39 @@ forward:
 
 ## 11. Known non-blocking technical debt
 
-- **TD-T18-02 — agent proposal quality is unvalidated end to end.** Both Tutor and Adaptation return
-  `UNPROCESSABLE_PROPOSAL` on the `ci-fake` route: the deterministic fake returns canned output that
-  cannot satisfy the plane's validators, by design. Every `ai_execution` row from this run therefore
-  records `AI_UNAVAILABLE`. What is proven is that the agent is reachable, that deterministic
-  authority is preserved when it cannot answer, and that the failure is durably recorded with
-  provenance — which is what the release gate asks. What is **not** proven is that a real model
-  produces a valid, useful proposal. That needs a run with a real `RAMALS_AI_MODEL_ROUTE` and a
-  provider credential, and should happen before MVP-1 is called production-ready.
+- **TD-T18-02 — the adaptation chain is proven as far as the AI plane, not through the proposal
+  gate. Accepted explicitly for MVP-1.**
+
+  The canonical chain is `learner event → deterministic recommendation → commit → AFTER_COMMIT
+  listener → AdaptationService → ramals-ai → AdaptationProposalGate → ai_execution`. Every link is
+  proven **except the gate**: the plane returns `UNPROCESSABLE_PROPOSAL`, and `AdaptationService`
+  catches that before the gate is reached. The same is true of the Tutor agent.
+
+  The cause is the shipped deterministic route, not a defect. `FakeProvider.complete()` returns
+
+  ```
+  f"[ci-fake:{request.model}] deterministic completion {digest[:16]}"
+  ```
+
+  — a plain string, not JSON. Every agent validator rejects it after the bounded repair budget, by
+  design: the fake exists to make the transport, budget and failure paths exercisable without a
+  provider, not to imitate a model's output. Two things make this easy to misread, and both were
+  misread during this validation before the shipped provider was examined: a comment stating that
+  `ci-fake` "serves all four agents" describes the *route table*, and `test_adaptation_agent.py`
+  passes because it injects its own stub provider constructed with a real JSON payload.
+
+  **What is therefore proven:** the agent is reachable from a real learner journey, the request
+  arrives at the plane authenticated as the core workload, the deterministic recommendation is
+  unaffected by the agent failing, and the failure is durably recorded with correlation. **What is
+  not proven:** that a model's proposal passes the gate, and consequently `agent_run_id`,
+  `prompt_template_id`, `prompt_version` and `model_route` are NULL on every row, because those
+  fields come from a proposal that never existed.
+
+  **Closing it needs a run with a real `RAMALS_AI_MODEL_ROUTE` and a provider credential.** It is
+  accepted here because the gate's own logic is unit-tested, the authority contract it enforces is
+  proven by the failure path, and no candidate defect is implicated — but MVP-1 should not be called
+  production-ready until a live model has been through it.
+
 - **TD-T18-01 — adaptation comparison delivery is not durable.** `AFTER_COMMIT` isolates the AI call
   from the authoritative transaction but is not durable delivery; a process failure between commit
   and listener completion loses the comparison silently. Accepted because the comparison is research
