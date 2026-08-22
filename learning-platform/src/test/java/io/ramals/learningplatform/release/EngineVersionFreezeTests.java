@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
 import io.ramals.learningplatform.assessment.ScoredResponse;
 import io.ramals.learningplatform.evidence.Evidence;
+import io.ramals.learningplatform.grounding.GroundingRetrievalPolicy;
+import io.ramals.learningplatform.grounding.ProposalGroundingPolicy;
+import io.ramals.learningplatform.grounding.ProposalType;
 import io.ramals.learningplatform.learning.LearningSessionCommand;
 import io.ramals.learningplatform.learning.LearningSessionPolicy;
 import io.ramals.learningplatform.learning.LearningSessionStatus;
@@ -66,6 +69,8 @@ class EngineVersionFreezeTests {
     put(RecommendationPolicy.POLICY_VERSION, EngineVersionFreezeTests::recommendation);
     put(DiagnosticScorer.SCORING_VERSION, EngineVersionFreezeTests::diagnosticScoring);
     put(LearningSessionPolicy.POLICY_VERSION, EngineVersionFreezeTests::sessionPolicy);
+    put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
+    put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
   }};
 
   /**
@@ -79,7 +84,9 @@ class EngineVersionFreezeTests {
       "PROGRESSION_POLICY_V1", "08c765033f9a773c4603bc1760ede707cceaac1399937552a831beafbe1fb203",
       "RECOMMENDATION_POLICY_V1", "e048de44798cd9632934901b8354d5b50b036f8045cc66efcd6f229a24cdb212",
       "DIAGNOSTIC_SCORING_V1", "ee904dc57a615550d732e50bfd51fec72011db0e5b9a53a6f54c2d1d0ceda305",
-      "SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647");
+      "SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647",
+      "GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad",
+      "PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a");
 
   @Test
   void everyVersionedEngineHasAFrozenVector() throws IOException {
@@ -225,6 +232,26 @@ class EngineVersionFreezeTests {
         out.append(from).append(' ').append(command).append(" -> ")
             .append(target.map(Enum::name).orElse("REJECTED")).append('\n');
       }
+    }
+    return out.toString();
+  }
+
+  private static String groundingRetrievalPolicy() {
+    GroundingRetrievalPolicy policy = GroundingRetrievalPolicy.V1;
+    return String.join("|", policy.version(), policy.freshness().toString(),
+        policy.timeout().toString(), Integer.toString(policy.evidenceLimit()),
+        Integer.toString(policy.masteryLimit()), Integer.toString(policy.skillGraphLimit()),
+        Integer.toString(policy.curriculumPolicyLimit()),
+        Integer.toString(policy.approvedContentLimit()));
+  }
+
+  private static String proposalGroundingPolicy() {
+    ProposalGroundingPolicy policy = new ProposalGroundingPolicy();
+    StringBuilder out = new StringBuilder();
+    for (ProposalType type : ProposalType.values()) {
+      out.append(type).append('|').append(policy.minimumConfidence(type)).append('|')
+          .append(new TreeSet<>(policy.requiredSources(type))).append('|')
+          .append(new TreeSet<>(policy.claimEvidenceSources(type))).append('\n');
     }
     return out.toString();
   }

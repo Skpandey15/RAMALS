@@ -100,6 +100,23 @@ class MigrationScriptContractTests {
         .doesNotContain("ramals_ai_runtime");
   }
 
+  @Test
+  void groundingAuditIsBoundedAppendOnlyAndCarriesStableReasons() throws IOException {
+    String migration = statements("/db/migration/V028__grounding_retrieval_and_gate_audit.sql");
+
+    assertThat(migration)
+        .contains("CREATE TABLE ledger.grounding_retrieval_record")
+        .contains("source_count BETWEEN 1 AND 64")
+        .contains("jsonb_array_length(source_refs) = source_count")
+        .contains("CREATE TABLE ledger.proposal_gate_decision")
+        .contains("UNIQUE (proposal_id, policy_version)")
+        .contains("jsonb_array_length(reason_codes) > 0")
+        .contains("CREATE TRIGGER trg_grounding_retrieval_append_only")
+        .contains("CREATE TRIGGER trg_proposal_gate_decision_append_only")
+        .doesNotContain("raw_prompt")
+        .doesNotContain("hidden_reasoning");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");
