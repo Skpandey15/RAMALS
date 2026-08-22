@@ -60,6 +60,7 @@ public class RecommendationService {
         snapshot, decision, RecommendationPolicy.POLICY_VERSION, interactionId, traceId);
     LearningRecommendation recommendation = repository.appendRecommendation(
         snapshot, decision, decisionRecord.id());
+    repository.appendAdaptationWork(decisionRecord);
     BusinessEventLogger.info(LOGGER, "recommendation.persisted",
         "Learning recommendation persisted",
         Map.of(
@@ -71,11 +72,9 @@ public class RecommendationService {
             "interactionId", correlationValue(interactionId, "interactionId"),
             "traceId", correlationValue(traceId, "traceId")));
 
-    // The AI adaptation comparison listens for this and runs after this transaction commits. It is
-    // deliberately not called inline: M1-T11 makes the comparison research input, and the
-    // deterministic recommendation above is already durable and authoritative whether or not the
-    // agent ever answers. Calling the plane from inside this transaction would also hold a database
-    // connection across a network call with a twelve-second deadline.
+    // T02 has already persisted the durable work item in this transaction. The listener remains a
+    // best-effort compatibility dispatch until T03 replaces it with the outbox dispatcher; it is no
+    // longer the durable record or correctness boundary. No AI call runs inside this transaction.
     events.publishEvent(new RecommendationDecidedEvent(
         snapshot.skillId(), decision, interactionId, traceId));
 

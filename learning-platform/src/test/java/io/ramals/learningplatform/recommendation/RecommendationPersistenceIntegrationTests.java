@@ -245,6 +245,84 @@ class RecommendationPersistenceIntegrationTests {
         "SELECT count(*) FROM ledger.decision_record WHERE source_snapshot_id = ?",
         Long.class, snapshot.id());
     assertThat(decisions).isEqualTo(1);
+
+    Long workItems = runtimeJdbc.queryForObject(
+        "SELECT count(*) FROM core.agent_work_outbox WHERE source_decision_id = ?",
+        Long.class, first.decisionRecordId());
+    assertThat(workItems).isEqualTo(1);
+  }
+
+  @Test
+  void recommendationAndAgentWorkCommitAtomicallyWithContractPayload() {
+    wire();
+    MasterySnapshot snapshot = recomputeWithEvidence("rec-outbox-atomic", "0.6000");
+    LearningRecommendation recommendation = recommendInTx(snapshot);
+
+    var work = runtimeJdbc.queryForMap("""
+        SELECT request_id, interaction_id, trace_id, agent_type, capability, source_decision_id,
+               payload_version, status, attempt_count, payload->>'workId' AS payload_work_id,
+               payload->>'sourceDecisionId' AS payload_decision_id,
+               payload->>'groundedContextId' AS grounded_context_id
+          FROM core.agent_work_outbox
+         WHERE source_decision_id = ?
+        """, recommendation.decisionRecordId());
+
+    assertThat(work.get("interaction_id")).isEqualTo(INTERACTION_ID);
+    // The existing caller has no W3C trace in this fixture. The durable work uses the interaction
+    // identity as its non-empty compatibility correlation until the boundary always supplies one.
+    assertThat(work.get("trace_id")).isEqualTo(INTERACTION_ID);
+    assertThat(work.get("agent_type")).isEqualTo("ADAPTATION");
+    assertThat(work.get("capability")).isEqualTo("ADAPT");
+    assertThat(work.get("payload_version")).isEqualTo(1);
+    assertThat(work.get("status")).isEqualTo("PENDING");
+    assertThat(work.get("attempt_count")).isEqualTo(0);
+    assertThat(work.get("payload_decision_id"))
+        .isEqualTo(recommendation.decisionRecordId().toString());
+    assertThat(work.get("payload_work_id")).isNotNull();
+    assertThat(work.get("grounded_context_id")).isNotNull();
+  }
+
+  @Test
+  void rollbackRemovesDecisionRecommendationAndAgentWorkTogether() {
+    wire();
+    MasterySnapshot snapshot = recomputeWithEvidence("rec-outbox-rollback", "0.6000");
+
+    transactionTemplate.executeWithoutResult(status -> {
+      recommendationService.recommend(snapshot, INTERACTION_ID, "");
+      status.setRollbackOnly();
+    });
+
+    Long decisions = runtimeJdbc.queryForObject(
+        "SELECT count(*) FROM ledger.decision_record WHERE source_snapshot_id = ?",
+        Long.class, snapshot.id());
+    Long recommendations = runtimeJdbc.queryForObject(
+        "SELECT count(*) FROM core.learning_recommendation WHERE source_snapshot_id = ?",
+        Long.class, snapshot.id());
+    Long workItems = runtimeJdbc.queryForObject("""
+        SELECT count(*)
+          FROM core.agent_work_outbox work
+          JOIN ledger.decision_record decision ON decision.id = work.source_decision_id
+         WHERE decision.source_snapshot_id = ?
+        """, Long.class, snapshot.id());
+
+    assertThat(decisions).isZero();
+    assertThat(recommendations).isZero();
+    assertThat(workItems).isZero();
+  }
+
+  @Test
+  void outboxIdentityAndPayloadCannotBeRewritten() {
+    wire();
+    MasterySnapshot snapshot = recomputeWithEvidence("rec-outbox-immutable", "0.6000");
+    LearningRecommendation recommendation = recommendInTx(snapshot);
+
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        UPDATE core.agent_work_outbox
+           SET payload = jsonb_set(payload, '{capability}', '"TAMPERED"')
+         WHERE source_decision_id = ?
+        """, recommendation.decisionRecordId()))
+        .isInstanceOfSatisfying(DataAccessException.class,
+            exception -> assertThat(sqlState(exception)).isEqualTo("55000"));
   }
 
   private static String sqlState(Throwable throwable) {

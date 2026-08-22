@@ -37,21 +37,12 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * and recommendation are durable and authoritative. The agent may agree, disagree, or never answer;
  * none of those change what the learner is told. Disagreement is a metric, not a branch.
  *
- * <h2>Delivery limitation, accepted for MVP-1</h2>
+ * <h2>Compatibility dispatch during the M2-T02 to M2-T03 transition</h2>
  *
- * <p>{@code AFTER_COMMIT} isolates the AI call from the authoritative transaction, which is what it
- * is for. It is <strong>not durable delivery.</strong> The event lives in memory between commit and
- * listener completion, so a process failure in that window loses the comparison silently: the
- * learner's state is correct and complete, and no {@code ai_execution} row is ever written for that
- * decision.
- *
- * <p>That is acceptable here and only here, because the comparison is research and observability
- * input rather than learner-visible behaviour. Losing one is a gap in a metric series, not a
- * correctness fault. It would not be acceptable for anything the learner or an auditor depends on.
- *
- * <p>Durable delivery — a transactional outbox, or a broker — is recorded as technical debt rather
- * than built here: introducing one is an infrastructure decision with its own operational surface,
- * and doing it inside a release-blocking correction would be the wrong trade.
+ * <p>M2-T02 persists the logical work in {@code core.agent_work_outbox} before commit, so this
+ * in-memory event is no longer the durability boundary. It remains temporarily to preserve MVP-1
+ * behaviour while T03 introduces the claim/lease dispatcher. A crash may delay the comparison, but
+ * cannot erase the work that T03 will recover.
  */
 @Component
 public class AdaptationComparisonListener {

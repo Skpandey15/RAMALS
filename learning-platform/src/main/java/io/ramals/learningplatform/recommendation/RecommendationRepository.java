@@ -2,6 +2,7 @@ package io.ramals.learningplatform.recommendation;
 
 import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.observability.UuidV7;
+import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -12,9 +13,12 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import tools.jackson.databind.json.JsonMapper;
 
 @Repository
 public class RecommendationRepository {
+
+  private static final JsonMapper JSON = JsonMapper.builder().build();
 
   private final JdbcTemplate jdbcTemplate;
 
@@ -65,6 +69,41 @@ public class RecommendationRepository {
         decisionRecordId, snapshot.id());
     return findRecommendationByDecision(decisionRecordId).orElseThrow(
         () -> new IllegalStateException("Learning recommendation did not persist."));
+  }
+
+  /**
+   * Enqueues one durable adaptation comparison for an authoritative decision.
+   *
+   * <p>This method participates in the caller's transaction. The decision, learner-facing
+   * recommendation, and work item therefore commit or roll back together. A deterministic request
+   * ID and source uniqueness constraint make a repeated recompute return the existing work rather
+   * than create another logical dispatch.
+   */
+  public UUID appendAdaptationWork(DecisionRecord decision) {
+    UUID workId = UuidV7.generate();
+    String requestId = deterministicId("ADAPTATION|" + decision.id());
+    String groundedContextId = deterministicId("GROUNDED_CONTEXT|" + decision.id());
+    String traceId = decision.traceId() == null || decision.traceId().isBlank()
+        ? decision.interactionId()
+        : decision.traceId();
+    Instant createdAt = Instant.now();
+    AgentWorkPayload payload = new AgentWorkPayload(
+        "1.0", workId.toString(), requestId, decision.interactionId(), traceId, "ADAPTATION",
+        "ADAPT", decision.id().toString(), groundedContextId, createdAt.toString());
+
+    jdbcTemplate.update("""
+        INSERT INTO core.agent_work_outbox
+          (id, request_id, interaction_id, trace_id, agent_type, capability, source_decision_id,
+           grounded_context_id, payload_version, payload, status, attempt_count, next_attempt_at,
+           created_at)
+        VALUES (?, ?, ?, ?, 'ADAPTATION', 'ADAPT', ?, ?, 1, CAST(? AS jsonb), 'PENDING', 0, ?, ?)
+        ON CONFLICT (request_id) DO NOTHING
+        """, workId, requestId, decision.interactionId(), traceId, decision.id(), groundedContextId,
+        JSON.writeValueAsString(payload), java.sql.Timestamp.from(createdAt),
+        java.sql.Timestamp.from(createdAt));
+
+    return jdbcTemplate.queryForObject(
+        "SELECT id FROM core.agent_work_outbox WHERE request_id = ?", UUID.class, requestId);
   }
 
   public Optional<DecisionRecord> findDecisionBySnapshot(UUID snapshotId) {
@@ -155,5 +194,22 @@ public class RecommendationRepository {
   private static Instant instant(ResultSet result, String column) throws SQLException {
     OffsetDateTime value = result.getObject(column, OffsetDateTime.class);
     return value == null ? null : value.toInstant();
+  }
+
+  private static String deterministicId(String value) {
+    return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8)).toString();
+  }
+
+  private record AgentWorkPayload(
+      String contractVersion,
+      String workId,
+      String requestId,
+      String interactionId,
+      String traceId,
+      String agentType,
+      String capability,
+      String sourceDecisionId,
+      String groundedContextId,
+      String createdAt) {
   }
 }

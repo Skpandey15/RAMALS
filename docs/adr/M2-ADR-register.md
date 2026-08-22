@@ -44,3 +44,7 @@ evidence. Changing the authority, delivery, state-ownership, or replay semantics
   deliberately changes that product boundary.
 - Existing contract v1.0 remains compatible. MVP-2 contracts use independent version `1.0` schemas
   and are introduced additively.
+
+## Implementation evidence
+
+- M2-ADR-002 persistence boundary: [M2-T02 transactional outbox](../release/mvp2-t02-transactional-outbox.md)
