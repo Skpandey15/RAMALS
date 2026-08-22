@@ -14,12 +14,14 @@ from __future__ import annotations
 from ramals_ai.adaptation import prompt as adaptation_prompt
 from ramals_ai.assessment import prompt as assessment_prompt
 from ramals_ai.diagnostic import prompt as diagnostic_prompt
+from ramals_ai.diagnostic_assessment import prompt as diagnostic_assessment_prompt
 from ramals_ai.prompting.templates import PromptRegister, PromptTemplateId, register_of
 from ramals_ai.tutor import prompt as tutor_prompt
 
 _DECLARING_MODULES = (
     tutor_prompt,
     diagnostic_prompt,
+    diagnostic_assessment_prompt,
     assessment_prompt,
     adaptation_prompt,
 )
