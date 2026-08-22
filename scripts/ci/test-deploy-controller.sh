@@ -37,6 +37,10 @@ cat > "${WORK}/up.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "${RAMALS_BACKEND_IMAGE:-none}" >> "${WORK_DIR}/deployed.log"
 printf '%s\n' "${RAMALS_AI_IMAGE:-none}" >> "${WORK_DIR}/deployed-ai.log"
+printf '%s
+' "${COMPOSE_PROFILES:-none}" >> "${WORK_DIR}/deployed-profiles.log"
+printf '%s
+' "${AI_URL:-none}" >> "${WORK_DIR}/deployed-aiurl.log"
 EOF
 
 # Stub health: unhealthy exactly when the deployed artefact carries the digest marked bad. This
@@ -114,6 +118,8 @@ print(json.load(open(sys.argv[1])).get(sys.argv[2], '<absent>'))
 
 last_deployed() { tail -n 1 "${WORK}/deployed.log" 2>/dev/null || echo "<none>"; }
 last_deployed_ai() { tail -n 1 "${WORK}/deployed-ai.log" 2>/dev/null || echo "<none>"; }
+last_profiles() { tail -n 1 "${WORK}/deployed-profiles.log" 2>/dev/null || echo "<none>"; }
+last_ai_url() { tail -n 1 "${WORK}/deployed-aiurl.log" 2>/dev/null || echo "<none>"; }
 
 aaaa=$(printf 'a%.0s' {1..64})
 bbbb=$(printf 'b%.0s' {1..64})
@@ -161,7 +167,7 @@ print('bad-commit' in json.load(open(sys.argv[1]))['held_versions'])
 " "${WORK}/state.json")" "True"
 
 # 6. A failure with no known-good digests on record must NOT claim a rollback.
-rm -f "${WORK}/state.json" "${WORK}/deployed.log" "${WORK}/deployed-ai.log"
+rm -f "${WORK}/state.json" "${WORK}/deployed.log" "${WORK}/deployed-ai.log" "${WORK}/deployed-profiles.log" "${WORK}/deployed-aiurl.log"
 printf '%s' "${bbbb}" > "${WORK}/bad-digest"
 manifest first-ever-commit "${bbbb}"
 check "first-ever bad deploy exits 3" "$(run)" "3"
@@ -244,7 +250,7 @@ check "AI known-good is 'none' when unconfigured" "$(state_field known_good_ai_i
 # Only the CORE digest is marked bad here. That is deliberate: if the AI digest were bad too, the
 # rollback health probe would fail on its own and this would pass without the flag ever being
 # read -- which is exactly how the first version of this test passed under perturbation.
-rm -f "${WORK}/state.json" "${WORK}/deployed.log" "${WORK}/deployed-ai.log"
+rm -f "${WORK}/state.json" "${WORK}/deployed.log" "${WORK}/deployed-ai.log" "${WORK}/deployed-profiles.log" "${WORK}/deployed-aiurl.log"
 : > "${WORK}/bad-digest"
 manifest core-only-good "${aaaa}"
 check "core-only baseline deploys" "$(run)" "0"
@@ -258,6 +264,37 @@ check "held after a bad AI-introducing release" "$(state_field state)" "RELEASE_
 # the only thing that can refuse the clean-rollback claim is the unrestorable AI plane.
 check "core did return to the known-good image" "$(last_deployed)" "ghcr.io/test/lp@sha256:${aaaa}"
 check "no clean-rollback claim when the AI plane cannot be restored" "$(state_field current_commit)" "ai-introduced-bad"
+
+# The AI gates must actually be able to run.
+#
+# health-gates.sh keys its AI section on AI_URL and skips when it is unset -- correct for a
+# deterministic-only deployment. The controller never set it, so on every controller-driven
+# deployment that DID have a plane the AI gates silently skipped. A gate that cannot fail is not
+# a gate. AI_URL is the published address, not RAMALS_AI_BASE_URL, because the gate runs on the
+# host while the base URL is the in-network name the backend container uses.
+rm -f "${WORK}/state.json" "${WORK}/deployed.log" "${WORK}/deployed-ai.log" "${WORK}/deployed-profiles.log" "${WORK}/deployed-aiurl.log"
+: > "${WORK}/bad-digest"
+ai_manifest ai-gates "${aaaa}"
+check "AI deploy exits 0" "$(run)" "0"
+check "the ai-plane profile is active" "$(last_profiles)" "ai-plane"
+check "the gate is told how to reach the AI plane" "$(last_ai_url)" "http://localhost:8000"
+
+# A release that DROPS the AI plane must still roll back to a known-good that ran one.
+#
+# The rollback exported the known-good AI digest but not the profile, so Compose was handed a
+# digest for a service it had never been told to start and the plane was not restored.
+rm -f "${WORK}/state.json" "${WORK}/deployed.log" "${WORK}/deployed-ai.log" "${WORK}/deployed-profiles.log" "${WORK}/deployed-aiurl.log"
+: > "${WORK}/bad-digest"
+ai_manifest with-ai-good "${aaaa}"
+check "baseline with an AI plane deploys" "$(run)" "0"
+check "baseline records the AI digest" "$(state_field known_good_ai_image)" "ghcr.io/test/ai@sha256:${aaaa}"
+
+printf '%s' "${bbbb}" > "${WORK}/bad-digest"
+manifest ai-dropped-bad "${bbbb}"
+check "release dropping the AI plane fails and rolls back" "$(run)" "3"
+check "rollback restored the known-good AI image" "$(last_deployed_ai)" "ghcr.io/test/ai@sha256:${aaaa}"
+check "rollback reactivated the ai-plane profile" "$(last_profiles)" "ai-plane"
+check "rollback is claimed clean" "$(state_field current_commit)" "with-ai-good"
 
 if [ "${failures}" -gt 0 ]; then
   printf '\n%d deployment state-machine check(s) failed\n' "${failures}"
