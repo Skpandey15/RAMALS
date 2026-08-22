@@ -132,11 +132,14 @@ if [ "${DESIRED_COMMIT}" = "${CURRENT_COMMIT}" ] && [ "${CURRENT_STATE}" = "HEAL
   exit 0
 fi
 
-# --- deploy -------------------------------------------------------------------------------------
-export RAMALS_BACKEND_IMAGE="$(json_get "${MANIFEST}" components.learning-platform.image)@${BACKEND_DIGEST}"
-export RAMALS_WEBUI_IMAGE="$(json_get "${MANIFEST}" components.web-ui.image)@${WEBUI_DIGEST}"
-if [ -n "${AI_DIGEST}" ]; then
-  export RAMALS_AI_IMAGE="$(json_get "${MANIFEST}" components.ramals-ai.image)@${AI_DIGEST}"
+# Everything that makes a deployment include the AI plane, in one place.
+#
+# It has to be one place because the deploy path and the rollback path must agree on what "runs the
+# AI plane" means. They did not: rollback set the image alone, so a rollback to a known-good that
+# ran the plane -- from a release that dropped it -- exported a digest for a service Compose was
+# never told to start.
+enable_ai_plane() { # enable_ai_plane <image-ref>
+  export RAMALS_AI_IMAGE="$1"
 
   # The manifest decides the topology. Pinning a ramals-ai digest is the statement that this release
   # includes the AI plane, so pinning it is what deploys it -- rather than a separate flag somebody
@@ -149,11 +152,28 @@ if [ -n "${AI_DIGEST}" ]; then
     *) export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}ai-plane" ;;
   esac
 
-  # And the core is told where the plane is. Without this the backend starts with an empty base URL,
+  # The core is told where the plane is. Without this the backend starts with an empty base URL,
   # installs UnconfiguredTutorPort and logs that tutoring is unavailable -- a deployment that is
   # healthy, passes its gates, and quietly has no agent plane. An explicit override still wins, for
   # an environment that runs the plane elsewhere.
   export RAMALS_AI_BASE_URL="${RAMALS_AI_BASE_URL:-http://ramals-ai:8000}"
+
+  # And the gate is told how to reach it. health-gates.sh skips its AI section when AI_URL is unset,
+  # which is correct for a deterministic-only deployment -- but the controller never set it, so the
+  # AI gates skipped on every controller-driven deployment that did have a plane. A gate that cannot
+  # fail is not a gate.
+  #
+  # Deliberately NOT RAMALS_AI_BASE_URL: that is the in-network address the backend container uses,
+  # and the gate runs on the host. This is the published port, matching how the gate defaults the
+  # backend and web-ui URLs.
+  export AI_URL="${AI_URL:-http://localhost:${RAMALS_AI_PORT:-8000}}"
+}
+
+# --- deploy -------------------------------------------------------------------------------------
+export RAMALS_BACKEND_IMAGE="$(json_get "${MANIFEST}" components.learning-platform.image)@${BACKEND_DIGEST}"
+export RAMALS_WEBUI_IMAGE="$(json_get "${MANIFEST}" components.web-ui.image)@${WEBUI_DIGEST}"
+if [ -n "${AI_DIGEST}" ]; then
+  enable_ai_plane "$(json_get "${MANIFEST}" components.ramals-ai.image)@${AI_DIGEST}"
 fi
 
 write_state DEPLOYING "${DESIRED_COMMIT}" "${KNOWN_GOOD}" "${HELD}" "${FAILURES}" \
@@ -196,14 +216,38 @@ if [ "${KNOWN_GOOD}" != "none" ] \
   # bad artefact while the state file claims otherwise.
   export RAMALS_BACKEND_IMAGE="${KNOWN_GOOD_BACKEND}"
   export RAMALS_WEBUI_IMAGE="${KNOWN_GOOD_WEBUI}"
+
+  # The AI plane is a released component and has to come back with the rest of the release.
+  #
+  # Omitting it is not a partial rollback, it is a mixed-version deployment: backend and web-ui
+  # revert while the plane keeps running the FAILED image, and the state file says ROLLED_BACK. That
+  # is the same failure the comment above describes, for the one component it did not cover, and it
+  # was observed in a live environment rather than reasoned about.
+  AI_ROLLBACK_UNRESOLVED=0
+  if [ "${KNOWN_GOOD_AI}" != "none" ] && [ -n "${KNOWN_GOOD_AI}" ]; then
+    # The whole topology, not just the digest: if the failed release dropped the plane, the profile
+    # is not active and Compose would never recreate the service the digest names.
+    enable_ai_plane "${KNOWN_GOOD_AI}"
+  elif [ -n "${AI_DIGEST}" ]; then
+    # The failed release introduced the plane and the known-good never ran one, so there is no
+    # digest to return it to -- and swapping a digest cannot express removing a component. Refuse to
+    # call this a clean rollback rather than leave the failed plane running behind a state file that
+    # claims otherwise.
+    AI_ROLLBACK_UNRESOLVED=1
+    log "ERROR: known-good ${KNOWN_GOOD} ran no AI plane, so the failed plane cannot be rolled back"
+    log "       by digest. The AI plane needs manual removal; the core rollback continues."
+  fi
+
   ${PULL_CMD} || log "WARN: rollback pull reported an error"
   ${UP_CMD} || log "WARN: rollback up reported an error"
   # Never claim a rollback we did not verify.
-  if ${HEALTH_CMD}; then
+  if ! ${HEALTH_CMD}; then
+    log "ERROR: rollback to ${KNOWN_GOOD} did not pass health gates; environment needs manual recovery."
+  elif [ "${AI_ROLLBACK_UNRESOLVED}" = "1" ]; then
+    log "ERROR: core rolled back to ${KNOWN_GOOD} but the AI plane did not; environment is mixed-version."
+  else
     ROLLBACK_OK=1
     log "ROLLED_BACK to ${KNOWN_GOOD}"
-  else
-    log "ERROR: rollback to ${KNOWN_GOOD} did not pass health gates; environment needs manual recovery."
   fi
 elif [ "${KNOWN_GOOD}" != "none" ]; then
   log "ERROR: known-good commit ${KNOWN_GOOD} recorded without its image digests; cannot roll back."
