@@ -95,6 +95,7 @@ class GatewayResult:
     requested_route: ModelRoute
     interaction_class: InteractionClass
     model: str
+    resolved_provider: str
 
     prompt_template_id: PromptTemplateId
     """Which prompt produced the text. Recorded because a version alone does not identify one."""
@@ -210,6 +211,7 @@ class LLMGateway:
             requested_route=requested,
             interaction_class=interaction_class,
             model=config.model,
+            resolved_provider=config.resolved_provider,
             # From the prompt that was dispatched, not from the route table. Reading it back off the
             # configuration would record what the route currently points at, which is the same thing
             # only for as long as nobody repoints it mid-flight.

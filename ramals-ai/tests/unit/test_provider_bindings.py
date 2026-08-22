@@ -60,7 +60,18 @@ def test_every_live_route_approves_both_providers(route: ModelRoute) -> None:
 
 def test_ci_fake_has_no_provider_alternate() -> None:
     """It is deterministic and local. An alternate would imply a vendor it never calls."""
-    assert default_registry().resolve(ModelRoute.CI_FAKE).alternate_models == ()
+    config = default_registry().resolve(ModelRoute.CI_FAKE)
+    assert config.alternate_models == ()
+    assert config.resolved_provider == "ci-fake"
+
+
+def test_concrete_model_binding_resolves_provider_identity() -> None:
+    anthropic = default_registry().resolve(ModelRoute.ADAPTATION_DEFAULT)
+    openai = _pinned(ModelRoute.ADAPTATION_DEFAULT, OPENAI_MODEL).resolve(
+        ModelRoute.ADAPTATION_DEFAULT
+    )
+    assert (anthropic.resolved_provider, anthropic.model) == ("anthropic", ANTHROPIC_MODEL)
+    assert (openai.resolved_provider, openai.model) == ("openai", OPENAI_MODEL)
 
 
 def test_the_approved_model_is_a_dated_snapshot_not_a_moving_alias() -> None:

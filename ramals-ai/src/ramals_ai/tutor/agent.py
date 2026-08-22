@@ -107,6 +107,9 @@ class TutorAgent:
             promptTemplateId=state.prompt_template_id.value,
             promptVersion=state.prompt_version,
             modelRoute=(state.final_proposal or {}).get("modelRoute", self._route.value),
+            resolvedProvider=(state.final_proposal or {}).get("resolvedProvider"),
+            modelId=(state.final_proposal or {}).get("modelId"),
+            routeVersion=(state.final_proposal or {}).get("routeVersion"),
             # Stated on the wire, on every proposal, whatever the content. A proposal that arrived
             # looking confident is still a proposal.
             trustLevel=TrustLevel.NON_AUTHORITATIVE,

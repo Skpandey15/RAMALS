@@ -227,6 +227,9 @@ class AssessmentAgent:
             promptTemplateId=state.prompt_template_id.value,
             promptVersion=state.prompt_version,
             modelRoute=model_route,
+            resolvedProvider=(state.final_proposal or {}).get("resolvedProvider"),
+            modelId=(state.final_proposal or {}).get("modelId"),
+            routeVersion=(state.final_proposal or {}).get("routeVersion"),
             # Stated on the wire, on every proposal, whatever the content. A candidate that arrived
             # looking finished is still a candidate.
             trustLevel=trust_level,

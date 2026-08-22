@@ -79,6 +79,9 @@ def test_adaptation_proposal_is_non_authoritative() -> None:
     assert proposal.trustLevel is TrustLevel.NON_AUTHORITATIVE
     assert proposal.agentType.value == "ADAPTATION"
     assert proposal.proposal["recommendedAction"] == "PRACTICE"
+    assert proposal.resolvedProvider == "ci-fake"
+    assert proposal.modelId == "ci-fake-deterministic-v1"
+    assert proposal.routeVersion == "ROUTE_TABLE_V1"
 
 
 def test_adaptation_prompt_contains_exactly_minimized_context() -> None:

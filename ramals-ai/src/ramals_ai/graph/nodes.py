@@ -150,6 +150,9 @@ def model_or_tool(
         state.final_proposal = {
             "text": result.text,
             "modelRoute": result.route.value,
+            "resolvedProvider": result.resolved_provider,
+            "modelId": result.model,
+            "routeVersion": result.route_table_version,
             "promptVersion": result.prompt_version,
             "promptTemplateId": result.prompt_template_id.value,
         }

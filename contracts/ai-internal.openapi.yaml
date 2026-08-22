@@ -507,6 +507,18 @@ components:
             share a version, so promptVersion alone does not identify one.
         promptVersion: { type: string, maxLength: 64 }
         modelRoute: { type: string, maxLength: 64 }
+        resolvedProvider:
+          type: string
+          maxLength: 64
+          description: Provider resolved by the governed route table; never supplied by the caller.
+        modelId:
+          type: string
+          maxLength: 128
+          description: Immutable concrete model identifier used for this execution.
+        routeVersion:
+          type: string
+          maxLength: 256
+          description: Version/configuration stamp of the route resolution used for this execution.
         trustLevel: { $ref: '#/components/schemas/TrustLevel' }
         confidence:
           $ref: '#/components/schemas/DecimalString'

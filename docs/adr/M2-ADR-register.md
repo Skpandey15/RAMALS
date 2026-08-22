@@ -49,3 +49,4 @@ evidence. Changing the authority, delivery, state-ownership, or replay semantics
 
 - M2-ADR-002 persistence boundary: [M2-T02 transactional outbox](../release/mvp2-t02-transactional-outbox.md)
 - M2-ADR-003/004/011 delivery boundary: [M2-T03 durable dispatcher](../release/mvp2-t03-durable-dispatcher.md)
+- M2-ADR-005/014 provenance boundary: [M2-T04 AI provenance v2](../release/mvp2-t04-ai-provenance-v2.md)

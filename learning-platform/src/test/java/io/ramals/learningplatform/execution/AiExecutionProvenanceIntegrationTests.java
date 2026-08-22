@@ -18,8 +18,13 @@ import io.ramals.learningplatform.ai.contract.LearnerRef;
 import io.ramals.learningplatform.ai.contract.LearningContext;
 import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.InteractionClass;
+import io.ramals.learningplatform.ai.contract.AgentType;
+import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
+import io.ramals.learningplatform.ai.contract.TrustLevel;
+import io.ramals.learningplatform.ai.contract.Usage;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -158,6 +163,37 @@ class AiExecutionProvenanceIntegrationTests {
     // the query would return nothing rather than fail.
     assertThat(columnsOf("core", "ai_execution")).contains("interaction_id");
     assertThat(columnsOf("ledger", "decision_record")).contains("interaction_id");
+  }
+
+  @Test
+  @DisplayName("one execution identifies the resolved fake provider model and route version")
+  void resolvedRoutingProvenanceIsPersistedWithoutRawContent() {
+    AiExecutionRepository repository = new AiExecutionRepository(
+        jdbc, tools.jackson.databind.json.JsonMapper.builder().build());
+    AiRequestEnvelope request = new AiRequestEnvelope(
+        "1.0", "interaction-prov-v2", "request-" + UUID.randomUUID(),
+        new LearnerRef("opaque", "en"), new LearningContext("skill", null, null, null, null),
+        null, null, new Constraints(InteractionClass.INTERACTIVE_AI, 1000, null, null, null),
+        "ADAPT");
+    AiProposalEnvelope proposal = new AiProposalEnvelope(
+        "1.0", "proposal-" + UUID.randomUUID(), AgentType.ADAPTATION, "agent-v1", "run-v1",
+        "ADAPTATION_PLAN", "ADAPTATION_PROMPT_V1", "ci-fake", "ci-fake",
+        "ci-fake-deterministic-v1", "ROUTE_TABLE_V1", TrustLevel.NON_AUTHORITATIVE, null,
+        List.of(), java.util.Map.of("recommendedAction", "PRACTICE"), null,
+        new Usage(10, 0, 5, "0.000000", 3));
+
+    MDC.put("traceId", "trace-prov-v2");
+    try {
+      AiExecution execution = repository.insertSuccess(request, proposal, Instant.now(), Instant.now());
+      assertThat(execution.resolvedProvider()).isEqualTo("ci-fake");
+      assertThat(execution.modelId()).isEqualTo("ci-fake-deterministic-v1");
+      assertThat(execution.routeVersion()).isEqualTo("ROUTE_TABLE_V1");
+      assertThat(execution.traceId()).isEqualTo("trace-prov-v2");
+      assertThat(execution.requestDigest()).hasSize(64);
+      assertThat(execution.proposalDigest()).hasSize(64);
+    } finally {
+      MDC.remove("traceId");
+    }
   }
 
   @Test
