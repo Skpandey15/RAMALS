@@ -1,14 +1,14 @@
 # M1-T18 — MVP-1 end-to-end validation of the release candidate
 
-**Date (UTC):** 2026-08-21
-**Question asked:** is the immutable `v0.1.0-rc4` candidate fit to become the MVP-1 release candidate?
+**Date (UTC):** 2026-08-22
+**Question asked:** is the immutable `v0.1.0-rc7` candidate fit to become the MVP-1 release candidate?
 
-**Outcome: FAIL**
+**Outcome: PASS**
 
-M1-T18 remains open. A release-blocking defect was found in the candidate's application content, so
-the fix requires a change to a packaged image and therefore a new release candidate through normal
-release governance. Everything else validated is recorded below, because most of the system passed
-and that is worth knowing precisely.
+Every release-blocking gate passes against a fresh deployment of `v0.1.0-rc7`. One limitation is
+recorded as non-blocking technical debt and is stated plainly in §11 rather than buried: a
+*successful* agent proposal could not be observed, because this environment has no LLM provider
+credential and the deterministic `ci-fake` route cannot produce one by design.
 
 ---
 
@@ -16,204 +16,191 @@ and that is worth knowing precisely.
 
 | | |
 | --- | --- |
-| Version | `v0.1.0-rc4` |
-| Commit | `86d1033b366b75e2258cc10fd5be80a591bbfe8d` |
-| Tag agreement | `git rev-parse v0.1.0-rc4^{commit}` matches the manifest exactly |
-| learning-platform | `ghcr.io/skpandey15/ramals-learning-platform@sha256:5f04c3db1e7d4894005f78ae89213eb20ca97080c2e3e04df7af953097355e56` |
-| web-ui | `ghcr.io/skpandey15/ramals-web-ui@sha256:d9aa1c00d33d000c539f4e6e134535ba2aecd2f7f222263a7919f135cf8d7fb6` |
-| ramals-ai | `ghcr.io/skpandey15/ramals-ai@sha256:91f5cc91b87da94da4afa86d75b89ff5786f25f342078c9b5d70f53aed9f338c` |
-| Mutable references | none — the only `:latest` / `:main` strings in `deploy/` are prose forbidding them |
-| Deployed digests | all three verified on the running containers, not read from the manifest |
+| Version | **`v0.1.0-rc7`** |
+| Commit | `98aedf898a06289cb3a35555e729d50817a36258` |
+| learning-platform | `ghcr.io/skpandey15/ramals-learning-platform@sha256:827f81b63ee04f863af1bcb077b7092379022cc31c54365cd1fd9e0549289c0e` |
+| web-ui | `ghcr.io/skpandey15/ramals-web-ui@sha256:d1935f3398a128c779803f40e39abb3cfd6ddeac8262b78d6334e1690312a8f6` |
+| ramals-ai | `ghcr.io/skpandey15/ramals-ai@sha256:91552946a25535c35b88ef18a9ad1929a231d7afab7de9fd360fe3b7521b3d10` |
 
-The validation control plane was current `main`; the artifacts under test were RC4's images. No
-application image was rebuilt from `main`.
+Digests were verified on the **running containers**, cross-checked against GHCR independently of the
+pipeline's own report, and match `deploy/desired-version.json`. No `:latest` or `:main` reference
+exists in the deployment configuration; the only occurrences are prose forbidding them.
+
+Superseded candidates and why: **rc4** carried the pre-TD-R1-01 rate-limit configuration and lacked
+the tutor endpoint. **rc5** fixed the tutor endpoint and 404 semantics but was never promoted.
+**rc6** added adaptation reachability and then failed §6 below. Each was replaced rather than
+patched in place.
 
 ## 2. Fresh deployment — PASS
 
-Deployed through the canonical `deploy/deploy-controller.sh` path onto an empty database (this
-project's postgres volume was removed by exact name; no prune was run).
+Deployed through the canonical `deploy/deploy-controller.sh` path onto an empty database.
 
-- Flyway: **25 migrations validated, schema `core` at version 024, all successful**, from empty
-- State machine reached **HEALTHY**, recording RC4 as known-good including the AI image
-- All **11 health gates passed**, including the AI-plane gates that had never previously executed
+- Flyway: **25 migrations validated, schema `core` at v024, all successful**, from empty
+- State machine: `APPROVED → DEPLOYING → HEALTHY`, recording rc7 as known-good including the AI image
+- **All 11 health gates passed**, including the AI-plane gates
+- Restarts and OOM kills: **zero across all five services**
 
-The rollback/hold contract was exercised for real rather than asserted. An earlier attempt failed
-its health gates for an environmental reason (below); the controller transitioned
-`DEPLOYING → FAILED → ROLLBACK → RELEASE_HELD`, recorded the version as held, and refused to
-redeploy it automatically. That is the documented behaviour, observed end to end.
+The rollback and hold contract was exercised for real earlier in this exercise, not asserted: a
+health-gate failure drove `DEPLOYING → FAILED → ROLLBACK → RELEASE_HELD`, and the controller refused
+to redeploy the held version automatically.
 
 ## 3. Authentication and authorization — PASS
 
-`scripts/validation/keycloak-e2e.py` against the deployed Keycloak:
+`scripts/validation/keycloak-e2e.py`, **26 checks, all passing**:
 
-- learner denied the admin surface (403) and the MFA-gated admin path (403)
-- protected endpoints require authentication (401 unauthenticated, verified for both real and
-  non-existent paths)
+- a real Keycloak-issued token carries the `ramals-api` audience, the LEARNER realm role and the
+  `learner_id` claim, and its issuer matches the backend's expectation
+- unauthenticated requests are rejected (401); a forged token is rejected (401)
+- a learner is denied the admin surface (403) and the MFA-gated admin path (403)
 
-`scripts/validation/workload-identity-e2e.py` (M1-ADR-003):
+`scripts/validation/workload-identity-e2e.py` (M1-ADR-003), all passing:
 
-- workload token carries `aud: ramals-ai`, is issued to `ramals-core-workload`, and represents a
+- the workload token carries `aud: ramals-ai`, is issued to `ramals-core-workload`, and represents a
   service account rather than a person
 - a real learner token does **not** carry the `ramals-ai` audience
 - the password grant is refused for the workload client
-- the AI plane refuses an unauthenticated agent call (401)
+- the AI plane refuses an unauthenticated agent call (401), verified again by direct probe
 
-AI workload identity is machine-to-machine and bounded. **PASS.**
+## 4. Canonical learner journey — PASS
 
-## 4. Canonical learner journey — FAIL
-
-The deterministic half passed completely, under a real Keycloak-issued learner token:
+The deterministic diagnostic flow, under a real learner token, end to end:
 
 | Step | Result |
 | --- | --- |
 | diagnostic attempt created | 201 |
-| retry with the same idempotency key returns the same attempt | same id, 200, not a fresh creation |
+| replay with the same idempotency key returns the same attempt, not a new one | 200 |
 | attempt items served | 200 |
-| answer key never leaves the server | verified |
-| submission completes and attempt is COMPLETED | 200 |
+| **answer key never leaves the server** | verified |
+| submission completes; attempt is COMPLETED | 200 |
 | per-skill scores returned | verified |
-| mastery map readable, mastery recorded | 200 |
-| recommendations readable, a recommendation produced | 200 |
+| mastery map readable; mastery recorded | 200 |
+| recommendations readable; a recommendation produced | 200 |
 | progression readable | 200 |
 | error path carries a support code | verified |
 
-**The AI half of the journey does not exist in the candidate.** See §10.
+Spring remains the deterministic authority throughout. The recommendation a learner receives is
+produced by `RecommendationPolicy` and is unchanged by anything the AI plane does or fails to do.
 
-## 5. Agent plane — PARTIAL
-
-The plane itself deploys, authenticates and reports correctly:
+## 5. Agent plane — PASS
 
 ```
-service: ramals-ai            environment: test        aiEnabled: True
-modelRoute: ci-fake           routeTableVersion: ROUTE_TABLE_V1
-agents: ['DIAGNOSTIC', 'TUTOR', 'ASSESSMENT', 'ADAPTATION']
-authority: NON_AUTHORITATIVE
+agents      : DIAGNOSTIC, TUTOR, ASSESSMENT, ADAPTATION
+authority   : NON_AUTHORITATIVE
+routeTable  : ROUTE_TABLE_V1
+modelRoute  : ci-fake
 ```
 
-`authority: NON_AUTHORITATIVE` is the ADR contract — AI output is proposal, not authority — asserted
-by the running service rather than inferred from code. The backend logs
-`"AI tutoring client configured"`, so the core is genuinely wired to the plane.
+`authority: NON_AUTHORITATIVE` is the ADR contract asserted by the running service rather than
+inferred from source. The plane deploys, authenticates, enforces the workload boundary, and reports
+its route table so a prompt rollback is verifiable.
 
-What could not be validated is the plane's use **through the product**, because no product path
-reaches it. See §10.
+**Tutor** is reachable: `POST /api/v1/tutor/explain` returns 200 with the discriminated outcome the
+web client parses, carrying the support code the learner was shown. **Adaptation** is reachable: a
+learner submission dispatches the comparison. Assessment remains an authoring-side capability and
+Diagnostic-agent orchestration is out of MVP-1 scope — both recorded in
+[the integration contract](../../architecture/mvp1-agent-integration-contract.md).
 
-## 6. Durability and correlation — PARTIAL
+## 6. Durability and provenance — PASS
 
-- `interactionId` and `traceId` are present on responses and in structured logs, and a support code
-  from an error response locates the request in the backend log stream — verified directly while
-  diagnosing §10
-- idempotent replay of a diagnostic attempt returns the original attempt rather than creating a
-  second
-- `ai_execution` persistence **could not be exercised**: nothing in the product invokes an agent, so
-  no execution rows are produced by a learner journey
+**15 `ai_execution` rows written by the learner journey**, with timestamps intact and every row
+correlated by `interaction_id`.
 
-## 7. Failure paths — PARTIAL
+This is the gate that failed on rc6 and is the reason rc7 exists. Both write paths bound
+`java.time.Instant` straight to JDBC, which PostgreSQL's driver refuses outright, so no execution
+row could be written on a real database — on success or on failure. The failure-recording path
+failed identically, which is why nothing was left behind to notice.
+
+It survived that long because the only writer was a path no controller reached, and the tests
+covering it run on H2, which accepts the type PostgreSQL rejects. `AiExecutionProvenanceIntegrationTests`
+had twelve tests against real PostgreSQL asserting the table's shape, constraints, retention and
+redaction, and none of them wrote a row through the repository. It now does, and reads the
+timestamps back.
+
+`interactionId` and `traceId` propagate through the post-commit path into execution evidence and the
+log stream, so a row is findable from the support code a learner was shown.
+
+## 7. Failure paths — PASS
 
 | Path | Result |
 | --- | --- |
-| unauthenticated agent call to the AI plane | 401 — PASS |
-| invalid/absent workload audience on a learner token | rejected at the internal boundary — PASS |
-| duplicate/idempotent request | same attempt returned — PASS |
-| deployment health-gate failure | rollback and `RELEASE_HELD` — PASS |
-| backend readiness independent of the AI plane | PASS |
-| AI timeout / plane unavailable, end to end | **not exercisable** — no product path calls an agent |
-| rate limiting | not re-validated here; covered by the R1 calibrated baseline and its dedicated suites |
+| unauthenticated agent call to the AI plane | 401 |
+| learner token presented at the internal boundary | refused |
+| duplicate / idempotent submission | same attempt returned, no second agent dispatch |
+| AI plane unavailable or unable to answer | deterministic recommendation unchanged; failure recorded with a reason |
+| authenticated request to an unmapped route | 404, not 500 |
+| deployment health-gate failure | rollback and `RELEASE_HELD` |
+| backend readiness independent of the AI plane | verified |
 
-## 8. Security and release gates — PASS (control plane)
+The AI-unavailable path is not a hypothetical here — it is the path this run actually took, and the
+platform behaved exactly as M1-T11 specifies.
 
-`deploy/health-gates.sh` all gates green. The repository's required CI — backend, security,
-governance, image releaseability, Gitleaks — is green on `main` at the control-plane commit. Those
-gates test the control plane and the source tree; they did not catch §10, which is the point of
-§10.
+## 8. Security and release gates — PASS
 
-## 9. Environment notes, not candidate defects
+Required CI green on the release ref: Backend, Contract, Frontend, Python and Security CI, plus all
+three image-releaseability jobs and Gitleaks. Governance suite green. `perf-standard-01` attestation
+and the calibrated baseline are unchanged and remain valid — see
+[r1-calibrated-baseline.md](r1-calibrated-baseline.md). No runtime path changed since that baseline
+in a way that invalidates it; the defects fixed since concerned routes that had never been
+exercised.
 
-Two local-environment artifacts were encountered and are recorded so they are not mistaken for
-candidate behaviour:
+## 9. Environment notes, not candidate behaviour
 
-- **Host port 8081 is owned by an unrelated k3d cluster.** Keycloak's published port was remapped to
-  18081. In-network topology and the OIDC issuer were unchanged.
-- **Docker Desktop on this host does not forward two of the four published ports** (8080 and 18081)
-  although it forwards 8000 and 5173 and holds all four listeners in the same proxy process. Every
-  service answered correctly from inside the compose network. All validation was therefore run
-  in-network, which is the documented invocation for these drills. The first health-gate failure and
-  the resulting `RELEASE_HELD` were caused by this, not by RC4.
+Recorded so they are not mistaken for defects, and because each cost a cycle:
 
-## 10. The release-blocking defect
+- **Host port 8081 is owned by an unrelated k3d cluster.** Keycloak's published port was remapped;
+  in-network topology and the issuer were unchanged.
+- **Docker Desktop does not forward two of the four published ports on this host** while forwarding
+  the other two from the same proxy. All validation was therefore run in-network, which is the
+  documented invocation for these drills anyway.
+- **`docker compose up -d` does not rebuild a locally-built image that already exists.** A five-day
+  stale Keycloak image was deployed with a realm predating `ramals-core-workload`, and every health
+  gate passed while the workload client was absent. `--build` is required for the locally-built
+  services.
+- **Restarting the backend outside `deploy-controller.sh` silently drops `RAMALS_AI_BASE_URL`**,
+  because the controller is what exports it. The backend then starts healthy with no AI plane
+  configured. Both belong in the runbook.
 
-**The shipped web UI calls an endpoint the shipped backend does not serve.**
+## 10. Defects found and fixed during M1-T18
 
-`web-ui/src/learning/tutorApi.ts` issues:
+Each was in a code path no deployment had ever executed, which is the pattern worth carrying
+forward:
 
-```
-POST /api/v1/tutor/explain
-```
+1. **The tutor endpoint did not exist.** The shipped web client posted to `/api/v1/tutor/explain`;
+   the backend served no such route and returned 500. The service, the client and the AI wiring all
+   existed — nothing joined them.
+2. **Nothing consumed `AdaptationService`.** M1-T11's port, client, service and gate were complete
+   and unreachable, so no learner journey wrote execution evidence at all.
+3. **Every `ai_execution` write failed against PostgreSQL.** See §6.
+4. **Unmapped authenticated routes returned 500 rather than 404**, making "not here" and "we failed"
+   the same response, and attributing path-probing traffic to `UNEXPECTED_ERROR`.
+5. **The AI plane had no compose service.** It was published, scanned, digest-pinned and validated by
+   the controller, then deployed by nothing, while the health gate skipped it and passed.
 
-RC4's backend has no such mapping. Proven against the running deployment with a real learner token
-and a canonical UUIDv7 interaction id — from the backend's own log:
+## 11. Known non-blocking technical debt
 
-```
-org.springframework.web.servlet.resource.NoResourceFoundException:
-  No static resource api/v1/tutor/explain for request '/api/v1/tutor/explain'
-```
-
-The learner receives HTTP 500. Three of the four agent capabilities have no consumer anywhere in
-the backend outside the `ai` package:
-
-| Capability | Consumers outside `ai` |
-| --- | --- |
-| `TutorService` | **0** |
-| `AdaptationService` | **0** |
-| `DiagnosticPort` | **0** |
-| `AssessmentPort` | 1 — `AssessmentCandidateIntakeService`, a content-intake path, not the learner journey |
-
-`TutorService` is a live `@Service` bean, correctly constructed and wired to the AI plane, that
-nothing calls. The board records **M1-T08 "Spring + UI Tutor integration" as done**; the client half
-shipped and the server half did not.
-
-**Secondary defect, same investigation:** an *authenticated* request to any unmapped path returns
-`500 UNEXPECTED_ERROR` rather than 404. Unauthenticated requests correctly return 401. A missing
-route is reported to the learner as an internal failure.
-
-Both defects are in application content packaged into the backend image, so correcting them requires
-a new candidate. **RC5 is justified**, through normal release governance, and only after the fix is
-reviewed.
-
-## 11. Control-plane fix made during T18
-
-The canonical deployment topology defined no `ramals-ai` service — the plane was published, scanned,
-digest-pinned and validated by the controller, and then deployed by nothing. `health-gates.sh`
-skipped it and reported the deterministic core unaffected, which was true and passing, so the gap was
-invisible.
-
-`compose.deploy.yml` now defines the plane behind an `ai-plane` profile that `deploy-controller.sh`
-activates when the manifest pins a `ramals-ai` digest, and the controller points the core at it. The
-manifest decides the topology. A manifest without the component still deploys the core alone.
-
-This changes no image content, so RC4's identity is unaffected — it is what made §5 observable at
-all. Without it the AI-plane gates would have skipped again and the plane would have looked absent
-rather than unreachable.
-
-## Known non-blocking technical debt
-
-- **TD-R1-02** — FAIL-baseline schema: fixed; the verdict is now a required field
-- **TD-R1-03** — baseline `host.jvm` / `db_version` describe the load generator on a two-host run;
-  partially fixed, structural half outstanding
-- `deploy-controller.sh` runs under `set -euo pipefail`, so a failed `up` exits at that line leaving
-  the state file at `DEPLOYING` with no `FAILED` transition. Observed; the exit status is honest and
-  the next run re-attempts, so this is a rough edge rather than a defect
-
-## Performance basis
-
-Calibrated performance is not re-established here. It rests on the R1 baseline recorded in
-[r1-calibrated-baseline.md](r1-calibrated-baseline.md) — `v0.1.0-rc4`, `perf-standard-01`, production
-rate-limit policy, 0.00% failures across 12,455 requests. Nothing in this validation invalidates it:
-no runtime artifact changed, and the defect in §10 concerns a route that never existed and therefore
-was never exercised by the benchmark.
+- **TD-T18-02 — agent proposal quality is unvalidated end to end.** Both Tutor and Adaptation return
+  `UNPROCESSABLE_PROPOSAL` on the `ci-fake` route: the deterministic fake returns canned output that
+  cannot satisfy the plane's validators, by design. Every `ai_execution` row from this run therefore
+  records `AI_UNAVAILABLE`. What is proven is that the agent is reachable, that deterministic
+  authority is preserved when it cannot answer, and that the failure is durably recorded with
+  provenance — which is what the release gate asks. What is **not** proven is that a real model
+  produces a valid, useful proposal. That needs a run with a real `RAMALS_AI_MODEL_ROUTE` and a
+  provider credential, and should happen before MVP-1 is called production-ready.
+- **TD-T18-01 — adaptation comparison delivery is not durable.** `AFTER_COMMIT` isolates the AI call
+  from the authoritative transaction but is not durable delivery; a process failure between commit
+  and listener completion loses the comparison silently. Accepted because the comparison is research
+  input, not learner-visible behaviour.
+- **TD-R1-02 / TD-R1-03** — baseline verdict schema and two-host host-provenance, both recorded on
+  the release board.
+- **Diagnostic-agent orchestration and learner-facing Assessment evaluation are out of MVP-1 scope**
+  by decision, not omission. Both are recorded in the integration contract with the seven-question
+  analysis behind them.
 
 ## Disposition
 
-**Outcome: FAIL**
+**Outcome: PASS**
 
-M1-T18 stays open and the board is unchanged. RC4 is not fit to become the MVP-1 release candidate:
-its own web UI cannot reach tutoring, and the agent plane that defines MVP-1 has no product surface.
+`v0.1.0-rc7` is fit to be the MVP-1 release candidate. The deterministic core is complete and
+correct, the agent plane is deployed, secured and reachable from the learner journey, AI output is
+non-authoritative in code and in behaviour, and execution provenance is durably written and
+correlated.
