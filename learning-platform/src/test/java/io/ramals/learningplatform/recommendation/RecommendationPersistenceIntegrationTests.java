@@ -11,6 +11,8 @@ import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemRes
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.evidence.EvidenceService;
+import io.ramals.learningplatform.execution.AgentWorkOutboxRepository;
+import io.ramals.learningplatform.execution.ClaimedAgentWork;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
 import io.ramals.learningplatform.mastery.EvidenceConfidenceCalculator;
@@ -27,6 +29,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -132,7 +136,7 @@ class RecommendationPersistenceIntegrationTests {
           new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
       policy = new RecommendationPolicy();
       recommendations = new RecommendationRepository(runtimeJdbc);
-      recommendationService = new RecommendationService(policy, recommendations, learnerService, event -> { });
+      recommendationService = new RecommendationService(policy, recommendations, learnerService);
       AssessmentRepository assessments = new AssessmentRepository(runtimeJdbc, mapper);
       diagnostics = new DiagnosticService(assessments, learnerService);
       submissions = new DiagnosticSubmissionService(
@@ -323,6 +327,85 @@ class RecommendationPersistenceIntegrationTests {
         """, recommendation.decisionRecordId()))
         .isInstanceOfSatisfying(DataAccessException.class,
             exception -> assertThat(sqlState(exception)).isEqualTo("55000"));
+  }
+
+  @Test
+  void concurrentDispatchersClaimDifferentRows() throws Exception {
+    wire();
+    completeOutstandingWork();
+    recommendInTx(recomputeWithEvidence("rec-claim-a", "0.6000"));
+    recommendInTx(recomputeWithEvidence("rec-claim-b", "0.6000"));
+    AgentWorkOutboxRepository outbox = new AgentWorkOutboxRepository(runtimeJdbc);
+
+    try (var workers = Executors.newFixedThreadPool(2)) {
+      var first = workers.submit(() -> outbox.claim("dispatcher-a", 1, 60_000));
+      var second = workers.submit(() -> outbox.claim("dispatcher-b", 1, 60_000));
+      List<ClaimedAgentWork> claimed = java.util.stream.Stream.concat(
+          first.get(10, TimeUnit.SECONDS).stream(), second.get(10, TimeUnit.SECONDS).stream())
+          .toList();
+
+      assertThat(claimed).hasSize(2);
+      assertThat(claimed).extracting(ClaimedAgentWork::id).doesNotHaveDuplicates();
+      assertThat(claimed).extracting(ClaimedAgentWork::leaseOwner)
+          .containsExactlyInAnyOrder("dispatcher-a", "dispatcher-b");
+    }
+  }
+
+  @Test
+  void expiredLeaseIsRecoveredAndStaleOwnerCannotComplete() {
+    wire();
+    completeOutstandingWork();
+    LearningRecommendation recommendation = recommendInTx(
+        recomputeWithEvidence("rec-lease-recovery", "0.6000"));
+    AgentWorkOutboxRepository outbox = new AgentWorkOutboxRepository(runtimeJdbc);
+    ClaimedAgentWork first = outbox.claim("dispatcher-a", 1, 60_000).getFirst();
+    runtimeJdbc.update("""
+        UPDATE core.agent_work_outbox
+           SET lease_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second'
+         WHERE id = ?
+        """, first.id());
+
+    ClaimedAgentWork recovered = outbox.claim("dispatcher-b", 1, 60_000).getFirst();
+
+    assertThat(recovered.id()).isEqualTo(first.id());
+    assertThat(recovered.sourceDecisionId()).isEqualTo(recommendation.decisionRecordId());
+    assertThat(recovered.attemptCount()).isEqualTo(2);
+    assertThatThrownBy(() -> outbox.complete(first))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("lease conflict");
+    outbox.complete(recovered);
+  }
+
+  @Test
+  void terminalWorkRequiresExplicitReplayAndPreservesLifetimeAccounting() {
+    wire();
+    completeOutstandingWork();
+    recommendInTx(recomputeWithEvidence("rec-explicit-replay", "0.6000"));
+    AgentWorkOutboxRepository outbox = new AgentWorkOutboxRepository(runtimeJdbc);
+    ClaimedAgentWork claimed = outbox.claim("dispatcher-a", 1, 60_000).getFirst();
+    outbox.terminal(claimed, "AI_DEADLINE_EXCEEDED");
+
+    assertThat(outbox.claim("dispatcher-b", 1, 60_000)).isEmpty();
+    outbox.replayTerminal(claimed.id());
+    ClaimedAgentWork replayed = outbox.claim("dispatcher-b", 1, 60_000).getFirst();
+    var accounting = runtimeJdbc.queryForMap("""
+        SELECT replay_count, total_attempt_count, terminal_reason
+          FROM core.agent_work_outbox WHERE id = ?
+        """, claimed.id());
+
+    assertThat(replayed.attemptCount()).isEqualTo(1);
+    assertThat(accounting.get("replay_count")).isEqualTo(1);
+    assertThat(accounting.get("total_attempt_count")).isEqualTo(2);
+    assertThat(accounting.get("terminal_reason")).isNull();
+  }
+
+  private void completeOutstandingWork() {
+    runtimeJdbc.update("""
+        UPDATE core.agent_work_outbox
+           SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP,
+               lease_owner = NULL, lease_expires_at = NULL
+         WHERE status IN ('PENDING', 'RETRY', 'CLAIMED')
+        """);
   }
 
   private static String sqlState(Throwable throwable) {

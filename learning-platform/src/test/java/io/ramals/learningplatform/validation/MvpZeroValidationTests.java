@@ -170,7 +170,7 @@ class MvpZeroValidationTests {
     masteryService = new MasteryService(masteryRepository, evidence, new WeightedMasteryCalculator(),
         new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
     RecommendationService recommendationService =
-        new RecommendationService(new RecommendationPolicy(), recommendations, learnerService, event -> { });
+        new RecommendationService(new RecommendationPolicy(), recommendations, learnerService);
     diagnostics = new DiagnosticService(assessments, learnerService);
     submissions = new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorer(),
         new EvidenceService(evidence), masteryService, recommendationService, mapper);

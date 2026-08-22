@@ -131,7 +131,7 @@ class MasteryEnginePersistenceIntegrationTests {
       LearnerService learnerService = new LearnerService(learners);
       diagnostics = new DiagnosticService(assessments, learnerService);
       RecommendationService recommendationService = new RecommendationService(
-          new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService, event -> { });
+          new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorer(),
           new EvidenceService(evidence), masteryService, recommendationService, mapper);

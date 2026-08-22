@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import org.slf4j.MDC;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,17 +25,14 @@ public class RecommendationService {
   private final RecommendationPolicy policy;
   private final RecommendationRepository repository;
   private final LearnerService learnerService;
-  private final ApplicationEventPublisher events;
 
   public RecommendationService(
       RecommendationPolicy policy,
       RecommendationRepository repository,
-      LearnerService learnerService,
-      ApplicationEventPublisher events) {
+      LearnerService learnerService) {
     this.policy = policy;
     this.repository = repository;
     this.learnerService = learnerService;
-    this.events = events;
   }
 
   @Transactional
@@ -72,11 +68,8 @@ public class RecommendationService {
             "interactionId", correlationValue(interactionId, "interactionId"),
             "traceId", correlationValue(traceId, "traceId")));
 
-    // T02 has already persisted the durable work item in this transaction. The listener remains a
-    // best-effort compatibility dispatch until T03 replaces it with the outbox dispatcher; it is no
-    // longer the durable record or correctness boundary. No AI call runs inside this transaction.
-    events.publishEvent(new RecommendationDecidedEvent(
-        snapshot.skillId(), decision, interactionId, traceId));
+    // The durable dispatcher owns delivery. No remote call or volatile event is part of this
+    // transaction; commit makes the work recoverable and a worker claims it afterwards.
 
     return recommendation;
   }
