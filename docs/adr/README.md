@@ -63,3 +63,11 @@ looking for MVP-1 decisions should find it there, not because the package regist
 Which tasks are unblocked, and which are done, is deliberately not restated here — that is the
 [release board](../release/mvp1-release-board.md)'s, and a mapping kept in two places is a mapping
 that will disagree with itself.
+
+## MVP-2
+
+The proposed DOCX source package is retained under
+`docs/MVP02/RAMALS_MVP2_ADR_Package_v1.0`. Its fifteen decisions were accepted during M2-T01 on
+2026-08-22. The repository-native [M2-ADR register](M2-ADR-register.md) owns task mapping,
+compatibility, and implementation status; the source documents retain the detailed rationale and
+revisit triggers.

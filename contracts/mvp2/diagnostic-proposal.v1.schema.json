@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramals.io/contracts/mvp2/diagnostic-proposal.v1.schema.json",
+  "title": "RAMALS MVP-2 DiagnosticProposal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "proposalId", "requestId", "agentRunId", "diagnoses", "recommendedNextSkills", "confidence"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "proposalId": { "$ref": "#/$defs/id" },
+    "requestId": { "$ref": "#/$defs/id" },
+    "agentRunId": { "$ref": "#/$defs/id" },
+    "diagnoses": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/diagnosis" } },
+    "recommendedNextSkills": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "diagnosis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skillCode", "classification", "reason", "evidenceIds"],
+      "properties": {
+        "skillCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "classification": { "enum": ["STRONG", "WEAK", "INCONSISTENT", "INSUFFICIENT_EVIDENCE"] },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "evidenceIds": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      }
+    }
+  }
+}
