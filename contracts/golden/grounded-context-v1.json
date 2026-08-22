@@ -1,0 +1,29 @@
+{
+  "contractVersion": "1.0",
+  "contextId": "01930000-0000-7000-8000-000000000001",
+  "learnerRef": "opaque-session-learner-01",
+  "asOf": "2026-08-22T12:00:00Z",
+  "expiresAt": "2026-08-22T12:05:00Z",
+  "retrievalPolicyVersion": "GROUNDED_CONTEXT_POLICY_V1",
+  "items": [
+    {
+      "evidenceId": "mastery-snapshot-42",
+      "sourceType": "MASTERY",
+      "sourceVersion": "MASTERY_ENGINE_V1",
+      "authority": "AUTHORITATIVE_FACT",
+      "factType": "MASTERY_SCORE",
+      "value": "0.7200",
+      "observedAt": "2026-08-22T11:59:00Z",
+      "expiresAt": "2026-08-22T12:05:00Z"
+    },
+    {
+      "evidenceId": "curriculum-version-7",
+      "sourceType": "CURRICULUM_POLICY",
+      "sourceVersion": "CURRICULUM_V7",
+      "authority": "AUTHORITATIVE_FACT",
+      "factType": "MASTERY_THRESHOLD",
+      "value": "0.8000",
+      "observedAt": "2026-08-20T00:00:00Z"
+    }
+  ]
+}

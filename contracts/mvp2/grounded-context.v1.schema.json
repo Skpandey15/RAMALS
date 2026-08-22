@@ -4,16 +4,17 @@
   "title": "RAMALS MVP-2 GroundedContext v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["contractVersion", "contextId", "learnerRef", "asOf", "retrievalPolicyVersion", "items"],
+  "required": ["contractVersion", "contextId", "learnerRef", "asOf", "expiresAt", "retrievalPolicyVersion", "items"],
   "properties": {
     "contractVersion": { "const": "1.0" },
     "contextId": { "$ref": "#/$defs/id" },
     "learnerRef": { "$ref": "#/$defs/id" },
     "asOf": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
     "retrievalPolicyVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
     "items": {
       "type": "array",
-      "maxItems": 256,
+      "maxItems": 64,
       "items": { "$ref": "#/$defs/contextItem" }
     }
   },
@@ -22,13 +23,21 @@
     "contextItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evidenceId", "sourceType", "sourceVersion", "factType", "value", "observedAt"],
+      "required": ["evidenceId", "sourceType", "sourceVersion", "authority", "factType", "value", "observedAt"],
       "properties": {
         "evidenceId": { "$ref": "#/$defs/id" },
         "sourceType": { "enum": ["LEARNER_EVIDENCE", "MASTERY", "SKILL_GRAPH", "ASSESSMENT", "APPROVED_CONTENT", "CURRICULUM_POLICY", "DOMAIN_POLICY"] },
         "sourceVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "authority": { "enum": ["AUTHORITATIVE_FACT", "MODEL_GENERATED_SUMMARY"] },
         "factType": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "value": { "type": ["string", "number", "integer", "boolean", "object", "array", "null"] },
+        "value": {
+          "anyOf": [
+            { "type": "string", "maxLength": 2048 },
+            { "type": "number" },
+            { "type": "integer" },
+            { "type": "boolean" }
+          ]
+        },
         "observedAt": { "type": "string", "format": "date-time" },
         "expiresAt": { "type": "string", "format": "date-time" }
       }
