@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
@@ -87,7 +87,7 @@ class GroundedContext(BaseModel):
     def require_grounding(
         self, required_sources: set[SourceType], *, now: datetime | None = None
     ) -> GroundedContext:
-        current = now or datetime.now(timezone.utc)
+        current = now or datetime.now(UTC)
         if self.expiresAt <= current:
             raise ValueError("GROUNDING_STALE")
         authoritative = {

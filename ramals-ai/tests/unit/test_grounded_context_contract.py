@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from ramals_ai.grounding.contracts import GroundedContext, SourceType
 
-NOW = datetime(2026, 8, 22, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 22, 12, tzinfo=UTC)
 
 
 def context(*items: dict[str, object]) -> GroundedContext:
@@ -52,9 +52,7 @@ def test_missing_summary_only_and_stale_grounding_fail_closed() -> None:
             {SourceType.MASTERY}, now=NOW
         )
     with pytest.raises(ValueError, match="GROUNDING_STALE"):
-        context(item()).require_grounding(
-            {SourceType.MASTERY}, now=NOW + timedelta(minutes=6)
-        )
+        context(item()).require_grounding({SourceType.MASTERY}, now=NOW + timedelta(minutes=6))
 
 
 @pytest.mark.parametrize(
@@ -84,6 +82,4 @@ def test_unknown_fields_and_more_than_64_items_are_rejected() -> None:
 def test_shared_golden_contract_validates_in_python() -> None:
     fixture = Path(__file__).parents[3] / "contracts" / "golden" / "grounded-context-v1.json"
     grounded = GroundedContext.model_validate_json(fixture.read_text(encoding="utf-8"))
-    grounded.require_grounding(
-        {SourceType.MASTERY, SourceType.CURRICULUM_POLICY}, now=NOW
-    )
+    grounded.require_grounding({SourceType.MASTERY, SourceType.CURRICULUM_POLICY}, now=NOW)
