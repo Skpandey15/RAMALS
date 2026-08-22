@@ -8,7 +8,19 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 # Dependency metadata first: this layer is rebuilt only when the pins actually change.
 COPY ramals-ai/pyproject.toml ./
 COPY ramals-ai/src ./src
-RUN python -m pip install --prefix=/install .
+
+# Installed WITH the provider extra. The extra is optional so that CI and a local checkout can run
+# the whole gateway path on `ci-fake` without pulling a large SDK -- but this image is the
+# deployable artifact, and a deployable artifact that cannot reach a provider can only ever serve
+# the deterministic fake. Without it every live route fails at its first call with
+# ROUTE_NOT_CONFIGURED, in production, on the first learner request that reaches an agent.
+#
+# The import in litellm_adapter stays lazy regardless, so a service configured for `ci-fake` still
+# never imports it. Installing it costs image size; not installing it cost the ability to serve.
+#
+# scripts/ci/export-python-requirements.py already projects every optional group into the pip-audit
+# input, so this adds no unaudited dependency.
+RUN python -m pip install --prefix=/install ".[provider]"
 
 FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
 

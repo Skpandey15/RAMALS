@@ -22,6 +22,7 @@ from ramals_ai.api.internal import build_internal_router
 from ramals_ai.assessment.agent import AssessmentAgent
 from ramals_ai.config.settings import ConfigurationError, ModelRoute, Settings, get_settings
 from ramals_ai.diagnostic.agent import DiagnosticAgent
+from ramals_ai.gateway.errors import GatewayError
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import ProviderAdapter
 from ramals_ai.gateway.providers.fake import FakeProvider
@@ -135,7 +136,20 @@ def _adapter_for(settings: Settings) -> ProviderAdapter:
     """
     if settings.model_route is ModelRoute.CI_FAKE:
         return FakeProvider()
-    return LiteLLMProvider(api_key=settings.provider_api_key)
+
+    provider = LiteLLMProvider(api_key=settings.provider_api_key)
+    # Checked at startup for the same reason the credential is (see Settings): a live route whose
+    # SDK is absent is a misconfiguration, not a degraded mode, and it is invisible until a learner
+    # triggers it. The image installs the 'provider' extra precisely so this passes.
+    try:
+        provider.ensure_available()
+    except GatewayError as unavailable:
+        raise ConfigurationError(
+            f"model route '{settings.model_route}' needs the provider SDK, which this build does "
+            "not ship; install ramals-ai with the 'provider' extra, or set "
+            "RAMALS_AI_MODEL_ROUTE=ci-fake"
+        ) from unavailable
+    return provider
 
 
 app = create_app
