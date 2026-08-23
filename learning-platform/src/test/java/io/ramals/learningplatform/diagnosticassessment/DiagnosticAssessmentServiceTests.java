@@ -23,6 +23,9 @@ import io.ramals.learningplatform.grounding.ProposalGateResult;
 import io.ramals.learningplatform.grounding.ProposalGroundingGate;
 import io.ramals.learningplatform.grounding.ProposalGroundingPolicy;
 import io.ramals.learningplatform.grounding.ProposalGroundingRequest;
+import io.ramals.learningplatform.execution.AiExecution;
+import io.ramals.learningplatform.execution.AiExecutionCommission;
+import io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -49,11 +52,13 @@ class DiagnosticAssessmentServiceTests {
   private static final UUID CURRICULUM = UUID.randomUUID();
 
   private RecordingDecisions decisions;
+  private RecordingExecutions executions;
   private DiagnosticAssessmentProposalGate gate;
 
   @BeforeEach
   void setUp() {
     decisions = new RecordingDecisions();
+    executions = new RecordingExecutions();
     gate =
         new DiagnosticAssessmentProposalGate(
             new ProposalGroundingGate(
@@ -226,11 +231,14 @@ class DiagnosticAssessmentServiceTests {
             },
             gate,
             decisions,
+            executions,
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     assertThatThrownBy(() -> service.assess("subject-1", CURRICULUM, "r-1"))
         .isInstanceOf(AiUnavailableException.class);
     assertThat(decisions.appended).isEmpty();
+    assertThat(executions.failureCodes).containsExactly("AI_DEADLINE_EXCEEDED");
+    assertThat(executions.successfulRequests).isEmpty();
   }
 
   @Test
@@ -245,6 +253,7 @@ class DiagnosticAssessmentServiceTests {
             },
             gate,
             decisions,
+            executions,
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     service.assess("subject-1", CURRICULUM, "r-1");
@@ -255,6 +264,34 @@ class DiagnosticAssessmentServiceTests {
     assertThat(request.contractVersion()).isEqualTo(DiagnosticAssessmentRequest.CONTRACT_VERSION);
     // The only learner identity that crosses is the opaque reference inside the context.
     assertThat(request.groundedContext().learnerRef()).isNotBlank();
+    assertThat(executions.successfulRequests).containsExactly(request);
+    assertThat(executions.failureCodes).isEmpty();
+  }
+
+  @Test
+  void aDuplicateLogicalRequestIsRefusedBeforeCallingTheAgentOrWritingAnotherDecision() {
+    List<DiagnosticAssessmentRequest> sent = new ArrayList<>();
+    executions.commission = AiExecutionCommission.inProgress();
+    DiagnosticAssessmentService service =
+        new DiagnosticAssessmentService(
+            retrieval(),
+            (request, deadlineMillis) -> {
+              sent.add(request);
+              return envelopeAccepting();
+            },
+            gate,
+            decisions,
+            executions,
+            Clock.fixed(NOW, ZoneOffset.UTC));
+
+    assertThatThrownBy(() -> service.assess("subject-1", CURRICULUM, "r-1"))
+        .isInstanceOf(AiUnavailableException.class)
+        .extracting("code")
+        .isEqualTo("AI_EXECUTION_ALREADY_COMMISSIONED");
+    assertThat(sent).isEmpty();
+    assertThat(decisions.appended).isEmpty();
+    assertThat(executions.successfulRequests).isEmpty();
+    assertThat(executions.failureCodes).isEmpty();
   }
 
   // -- fixtures ---------------------------------------------------------------------------------------------
@@ -262,6 +299,7 @@ class DiagnosticAssessmentServiceTests {
   private DiagnosticAssessmentService service(AiProposalEnvelope envelope) {
     return new DiagnosticAssessmentService(
         retrieval(), (request, deadlineMillis) -> envelope, gate, decisions,
+        executions,
         Clock.fixed(NOW, ZoneOffset.UTC));
   }
 
@@ -346,6 +384,38 @@ class DiagnosticAssessmentServiceTests {
       appended.add(proposal);
       results.add(result);
       correlations.add(correlation);
+    }
+  }
+
+  private static final class RecordingExecutions
+      implements DiagnosticAssessmentExecutionRecorder {
+    private AiExecutionCommission commission = AiExecutionCommission.claimed();
+    private final List<DiagnosticAssessmentRequest> successfulRequests = new ArrayList<>();
+    private final List<String> failureCodes = new ArrayList<>();
+
+    @Override
+    public AiExecutionCommission commission(DiagnosticAssessmentRequest request) {
+      return commission;
+    }
+
+    @Override
+    public AiExecution recordSuccess(
+        DiagnosticAssessmentRequest request,
+        AiProposalEnvelope proposal,
+        Instant startedAt,
+        Instant completedAt) {
+      successfulRequests.add(request);
+      return null;
+    }
+
+    @Override
+    public AiExecution recordFailure(
+        DiagnosticAssessmentRequest request,
+        String errorCode,
+        Instant startedAt,
+        Instant completedAt) {
+      failureCodes.add(errorCode);
+      return null;
     }
   }
 }

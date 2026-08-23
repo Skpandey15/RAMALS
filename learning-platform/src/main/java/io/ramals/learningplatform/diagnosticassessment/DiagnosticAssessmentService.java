@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.diagnosticassessment;
 
 import io.ramals.learningplatform.ai.DiagnosticAssessmentPort;
+import io.ramals.learningplatform.ai.AiUnavailableException;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
@@ -14,7 +15,10 @@ import io.ramals.learningplatform.grounding.ProposalGateDecisionPort.PreParseRej
 import io.ramals.learningplatform.grounding.ProposalGateReason;
 import io.ramals.learningplatform.grounding.ProposalGateResult;
 import io.ramals.learningplatform.grounding.ProposalType;
+import io.ramals.learningplatform.execution.AiExecutionCommission;
+import io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -23,16 +27,17 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 /**
- * Orchestrates one diagnostic assessment: retrieve, ask, gate, record (M2-T09).
+ * Orchestrates one diagnostic assessment: retrieve, commission, ask, gate, record (M2-T09/T10).
  *
  * <p>Spring owns every step that carries authority. It resolves the learner from the authenticated
  * subject, builds the context, decides whether the returned proposal is acceptable, and writes the
  * decision. The agent contributes the proposal and nothing else.
  *
  * <p>Deliberately updates no mastery, no progression and no evidence ledger. An accepted proposal
- * means the reading is grounded, consistent and within policy -- not that the platform has adopted it
- * as fact. What consumes an accepted diagnosis is M2-T10 and M2-T14; inventing a domain table here
- * to hold it would create exactly the authority this task withholds.
+ * means the reading is grounded, consistent and within policy -- not that the platform has adopted
+ * it as fact. M2-T10 evaluates that behavior; future orchestration may consume it under its own
+ * deterministic policy. Inventing a domain table here would create exactly the authority this task
+ * withholds.
  */
 public class DiagnosticAssessmentService {
 
@@ -56,6 +61,7 @@ public class DiagnosticAssessmentService {
   private final DiagnosticAssessmentPort agent;
   private final DiagnosticAssessmentProposalGate gate;
   private final ProposalGateDecisionPort decisions;
+  private final DiagnosticAssessmentExecutionRecorder executions;
   private final Clock clock;
 
   public DiagnosticAssessmentService(
@@ -63,11 +69,13 @@ public class DiagnosticAssessmentService {
       DiagnosticAssessmentPort agent,
       DiagnosticAssessmentProposalGate gate,
       ProposalGateDecisionPort decisions,
+      DiagnosticAssessmentExecutionRecorder executions,
       Clock clock) {
     this.grounding = grounding;
     this.agent = agent;
     this.gate = gate;
     this.decisions = decisions;
+    this.executions = executions;
     this.clock = clock;
   }
 
@@ -93,16 +101,30 @@ public class DiagnosticAssessmentService {
     String interactionId = MDC.get("interactionId");
     String traceId = MDC.get("traceId");
 
-    AiProposalEnvelope envelope =
-        agent.requestDiagnosticAssessment(
-            new DiagnosticAssessmentRequest(
-                DiagnosticAssessmentRequest.CONTRACT_VERSION,
-                interactionId,
-                requestId,
-                new Constraints(
-                    InteractionClass.INTERACTIVE_AI, (int) DEADLINE_MS, null, null, null),
-                context),
-            DEADLINE_MS);
+    DiagnosticAssessmentRequest request =
+        new DiagnosticAssessmentRequest(
+            DiagnosticAssessmentRequest.CONTRACT_VERSION,
+            interactionId,
+            requestId,
+            new Constraints(
+                InteractionClass.INTERACTIVE_AI, (int) DEADLINE_MS, null, null, null),
+            context);
+    AiExecutionCommission commission = executions.commission(request);
+    if (!commission.dispatchAllowed()) {
+      throw new AiUnavailableException(
+          "AI_EXECUTION_ALREADY_COMMISSIONED",
+          "This diagnostic assessment request has already been commissioned.");
+    }
+
+    Instant startedAt = clock.instant();
+    AiProposalEnvelope envelope;
+    try {
+      envelope = agent.requestDiagnosticAssessment(request, DEADLINE_MS);
+    } catch (AiUnavailableException failure) {
+      executions.recordFailure(request, failure.code(), startedAt, clock.instant());
+      throw failure;
+    }
+    executions.recordSuccess(request, envelope, startedAt, clock.instant());
 
     return decide(envelope, context, interactionId, traceId, requestId);
   }
