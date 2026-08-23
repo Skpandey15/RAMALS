@@ -128,6 +128,7 @@ class DiagnosticAgentStepTests {
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
     when(executions.findExecutionState("wf-diag-" + RUN_ID))
         .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null));
+    when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(true);
 
     WorkflowAgentStep.Result result = step.diagnose(run());
 
@@ -183,6 +184,90 @@ class DiagnosticAgentStepTests {
 
       step.diagnose(run());
     }
+    verify(diagnostics, never()).assess(anyString(), any(), anyString());
+  }
+
+  // --- losing the close race: the original worker committed a real outcome meanwhile -------------
+
+  @Test
+  void losingTheCloseRaceToARealSuccessReportsUnrecoverableNotAbandoned() {
+    // The original worker commits between findExecutionState and closeAbandonedExecution.
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null))
+        .thenReturn(new RecordedExecution(ExecutionState.SUCCEEDED, null));
+    when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.reasonCode())
+        .as("the recovery worker must not report abandonment over a real outcome")
+        .isEqualTo("DIAGNOSIS_RESULT_UNRECOVERABLE");
+    assertThat(result.retryable()).isFalse();
+    verify(diagnostics, never()).assess(anyString(), any(), anyString());
+  }
+
+  @Test
+  void losingTheCloseRaceToARealFailureReportsThatFailure() {
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null))
+        .thenReturn(new RecordedExecution(ExecutionState.FAILED, "AI_TIMEOUT"));
+    when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_EXECUTION_FAILED");
+    assertThat(result.retryable()).isFalse();
+  }
+
+  @Test
+  void losingTheCloseRaceToAPeerAbandonmentIsStillReportedAsAbandonment() {
+    // Both are FAILED rows and they mean different things. Flattening them would tell an operator
+    // the provider failed when in fact nobody ever heard back from it.
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null))
+        .thenReturn(new RecordedExecution(ExecutionState.FAILED, "AI_EXECUTION_ABANDONED"));
+    when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_EXECUTION_ABANDONED");
+  }
+
+  @Test
+  void losingTheCloseRaceToACompletedVerdictAdoptsTheVerdict() {
+    // A decision that landed during the race is the most complete fact available, and outranks the
+    // execution row that produced it. Read first, for that reason.
+    when(decisions.findDecision(anyString(), any()))
+        .thenReturn(Optional.empty())
+        .thenReturn(Optional.of(recorded(true)));
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null));
+    when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.succeeded()).isTrue();
+    assertThat(result.accepted()).isTrue();
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_ACCEPTED");
+  }
+
+  @Test
+  void anUnresolvedRaceIsLeftToTheBoundedAttemptPolicyRatherThanSpinning() {
+    // Still not terminal on the re-read. Retryable, so the ordinary attempt ceiling bounds it and no
+    // thread waits on a database that has just been reported in flux.
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null));
+    when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.succeeded()).isFalse();
+    assertThat(result.retryable()).isTrue();
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_RECOVERY_UNRESOLVED");
     verify(diagnostics, never()).assess(anyString(), any(), anyString());
   }
 

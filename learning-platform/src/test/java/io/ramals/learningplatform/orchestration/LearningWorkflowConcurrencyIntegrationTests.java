@@ -561,6 +561,90 @@ class LearningWorkflowConcurrencyIntegrationTests {
         .isFalse();
   }
 
+  @Test
+  void aRealSuccessCommittedDuringTheRaceIsNeitherOverwrittenNorMisreported() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    var executions = executionRepository(jdbc);
+    String requestId = "wf-diag-race-success";
+
+    // The recovery worker observes COMMISSIONED...
+    commissionOnly(jdbc, requestId);
+    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.COMMISSIONED);
+
+    // ...and the original worker commits its real outcome before the close lands.
+    succeededExecution(jdbc, requestId);
+
+    assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED"))
+        .as("the conditional write must lose, and say so")
+        .isFalse();
+    assertThat(executions.findExecutionState(requestId).state())
+        .as("the real outcome stands")
+        .isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+    assertThat(executions.findExecutionState(requestId).errorCode()).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void aRealFailureCommittedDuringTheRaceKeepsItsOwnErrorCode() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    var executions = executionRepository(jdbc);
+    String requestId = "wf-diag-race-failure";
+
+    commissionOnly(jdbc, requestId);
+    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.COMMISSIONED);
+    failedExecution(jdbc, requestId, "AI_TIMEOUT");
+
+    assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED")).isFalse();
+    assertThat(executions.findExecutionState(requestId).errorCode())
+        .as("a real provider failure must not be relabelled as an abandonment")
+        .isEqualTo("AI_TIMEOUT");
+  }
+
+  @Test
+  void twoRecoveryWorkersRacingToCloseTheSameCommissionProduceOneTerminalRow() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-race-peers";
+    commissionOnly(jdbc, requestId);
+
+    List<Boolean> outcomes =
+        List.of(
+            executionRepository(runtimeJdbc())
+                .closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED"),
+            executionRepository(runtimeJdbc())
+                .closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED"));
+
+    assertThat(outcomes.stream().filter(Boolean::booleanValue).count())
+        .as("exactly one worker may close a commission")
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+  }
+
+  private void failedExecution(JdbcTemplate jdbc, String requestId, String errorCode) {
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, status, error_code,
+           request_digest, started_at, completed_at)
+        VALUES (?, ?, ?, 'DIAGNOSTIC', '1.0', 'FAILED', ?, ?, CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP)
+        """,
+        UUID.randomUUID(),
+        requestId,
+        "interaction-" + requestId,
+        errorCode,
+        "f".repeat(64));
+  }
+
   private io.ramals.learningplatform.execution.AiExecutionRepository executionRepository(
       JdbcTemplate jdbc) {
     return new io.ramals.learningplatform.execution.AiExecutionRepository(

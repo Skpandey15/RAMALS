@@ -410,7 +410,7 @@ must not become a loophole in.
 | # | Durable state | Detection | Recovery semantics |
 | --- | --- | --- | --- |
 | 1 | No execution, no decision | no `STARTED` event | Dispatch normally. This is an ordinary first attempt. |
-| 2 | Commissioned, no terminal record, no decision | `STARTED` event, no `core.ai_execution` row | **Indeterminate** — the provider may or may not have been called and nothing can establish which. Close the commission as `AI_EXECUTION_ABANDONED` so the ledger holds no unresolved commission, then fail the step terminally. Never dispatch again, never guess a verdict. |
+| 2 | Commissioned, no terminal record, no decision | `STARTED` event, no `core.ai_execution` row | **Indeterminate** — the provider may or may not have been called and nothing can establish which. Attempt to close the commission as `AI_EXECUTION_ABANDONED`, then fail the step terminally. Never dispatch again, never guess a verdict. The close is a *conditional* write; see below for what happens when it loses. |
 | 3 | Execution `FAILED`, no decision | `ai_execution.status = 'FAILED'` | Adopt the recorded failure and fail terminally. Retrying is worse than useless: commissioning would refuse, and the run would spend its remaining attempts rediscovering a failure already on record, then report exhaustion instead of the reason that actually stopped it. |
 | 4 | Execution `SUCCEEDED`, no decision | `ai_execution.status = 'SUCCEEDED'` | **Not recoverable with today's persistence.** Fails terminally with its own code, `DIAGNOSIS_RESULT_UNRECOVERABLE`, so the state is countable rather than hidden inside a generic failure. See below. |
 | 5 | Gate decision exists | `ledger.proposal_gate_decision` by `request_id` | Adopt the verdict, accepted or rejected. |
@@ -419,6 +419,35 @@ A step failure in states 2, 3 and 4 is *terminal* rather than retryable. `Workfl
 gained that distinction: a result may now say not merely "no verdict" but "no verdict, and no further
 attempt can produce one", and the orchestrator ends the run under the step's own reason code rather
 than under a generic exhaustion.
+
+### State 2 is a race, and the conditional write says who won
+
+Closing an abandoned commission inserts only when no terminal record exists. Losing that race is not
+an error, it is news: the original worker committed a real outcome between the state read and the
+close. An implementation that discarded the boolean would report `DIAGNOSIS_EXECUTION_ABANDONED`
+over a verdict that actually exists, which is the worst answer available here.
+
+The result is therefore honoured. On a lost close, authoritative state is re-read **decision first,
+then execution**, because a gate decision is the more complete fact and a run that can adopt a
+verdict should never settle for the execution row that produced it:
+
+| Re-read finds | Adopted as |
+| --- | --- |
+| Gate decision | `DIAGNOSIS_ACCEPTED` or `DIAGNOSIS_PROPOSAL_REJECTED` |
+| `FAILED` with a provider error code | `DIAGNOSIS_EXECUTION_FAILED` — a real failure |
+| `FAILED` with `AI_EXECUTION_ABANDONED` | `DIAGNOSIS_EXECUTION_ABANDONED` — a peer recovery worker closed it |
+| `SUCCEEDED`, still no decision | `DIAGNOSIS_RESULT_UNRECOVERABLE` |
+| Still `COMMISSIONED` | `DIAGNOSIS_RECOVERY_UNRESOLVED`, retryable |
+
+The last two rows are the ones worth stating plainly. A real provider failure and a peer's
+abandonment are both `FAILED` rows and they mean different things; flattening them would tell an
+operator the provider failed when in fact nobody ever heard back from it. And an outcome that is
+still not terminal is handed to the workflow's own bounded attempt policy rather than to a spin loop:
+the next advance re-reads a moment later, `MAX_STEP_ATTEMPTS` bounds it, and no thread sits waiting
+on a database it has just been told is in flux.
+
+At-most-once dispatch is untouched throughout. Every branch above is a read or a conditional insert;
+none of them can reach a provider.
 
 ### Does `ai_execution` retain enough to re-gate a SUCCEEDED-but-undecided execution?
 

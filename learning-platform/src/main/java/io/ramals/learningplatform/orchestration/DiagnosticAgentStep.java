@@ -96,13 +96,66 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
    *
    * <p>The provider may have been called and may even have answered; the worker died before anything
    * was written. Nothing can establish which, so this must not guess and must not dispatch again.
-   * The commission is closed as an abandoned failure -- which keeps the execution ledger free of
-   * unresolved commissions -- and the step fails terminally rather than retrying into the same wall.
+   *
+   * <p>Closing the commission is a <em>conditional</em> write: it inserts only when no terminal
+   * record exists. Losing that race is not an error, it is news -- the original worker committed a
+   * real outcome in the meantime. Its result is therefore honoured rather than discarded, because
+   * reporting abandonment over a real verdict would be the worst possible answer here.
    */
   private Result closeIndeterminate(Run run, String requestId) {
-    executions.closeAbandonedExecution(requestId, ABANDONED);
-    log(run, requestId, "abandoned", ABANDONED);
-    return Result.terminal("DIAGNOSIS_EXECUTION_ABANDONED", requestId);
+    if (executions.closeAbandonedExecution(requestId, ABANDONED)) {
+      log(run, requestId, "abandoned", ABANDONED);
+      return Result.terminal("DIAGNOSIS_EXECUTION_ABANDONED", requestId);
+    }
+    return resolveAfterLostRace(run, requestId);
+  }
+
+  /**
+   * Re-reads authoritative state after another writer won the close.
+   *
+   * <p>Decision first, then execution state: the gate decision is the more complete fact, and a run
+   * that can adopt a verdict should never settle for the execution row that produced it.
+   *
+   * <p>An outcome that is still not terminal is left to the workflow's own bounded attempt policy
+   * rather than to a spin loop here. The next advance re-reads a moment later, the attempt ceiling
+   * bounds it, and no thread sits waiting on a database it has just been told is in flux.
+   */
+  private Result resolveAfterLostRace(Run run, String requestId) {
+    Optional<RecordedDecision> decision = decisions.findDecision(requestId, ProposalType.DIAGNOSTIC);
+    if (decision.isPresent()) {
+      log(run, requestId, "adopted-after-race", decision.orElseThrow().accepted() ? "ACCEPTED" : "REJECTED");
+      return decision.orElseThrow().accepted()
+          ? Result.accepted("DIAGNOSIS_ACCEPTED", requestId)
+          : Result.rejected("DIAGNOSIS_PROPOSAL_REJECTED", requestId);
+    }
+
+    RecordedExecution execution = executions.findExecutionState(requestId);
+    return switch (execution.state()) {
+      case FAILED -> adoptFailureAfterRace(run, requestId, execution.errorCode());
+      case SUCCEEDED -> unrecoverableSuccess(run, requestId);
+      // Still not terminal. Bounded by MAX_STEP_ATTEMPTS through the ordinary retry path, which is
+      // where a wait belongs; ABSENT cannot follow COMMISSIONED, so it is treated the same way
+      // rather than being given a meaning it does not have.
+      case COMMISSIONED, ABSENT -> {
+        log(run, requestId, "unresolved", execution.state().name());
+        yield Result.failed("DIAGNOSIS_RECOVERY_UNRESOLVED", requestId);
+      }
+    };
+  }
+
+  /**
+   * A terminal failure recorded by whoever won the race.
+   *
+   * <p>Distinguishes a real provider failure from another recovery worker's abandonment. They are
+   * both FAILED rows and they mean different things, and flattening them would tell an operator the
+   * provider failed when in fact nobody ever heard back from it.
+   */
+  private Result adoptFailureAfterRace(Run run, String requestId, String errorCode) {
+    if (ABANDONED.equals(errorCode)) {
+      log(run, requestId, "abandoned-by-peer", ABANDONED);
+      return Result.terminal("DIAGNOSIS_EXECUTION_ABANDONED", requestId);
+    }
+    return adoptFailure(run, requestId, errorCode);
   }
 
   /**
