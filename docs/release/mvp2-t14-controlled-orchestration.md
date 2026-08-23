@@ -221,7 +221,7 @@ stable rather than incidentally passing.
 
 ## Activation prerequisites — not resolved here, and deliberately
 
-`trigger()` still has no production caller, and this PR does not add one. Two things must exist
+`trigger()` still has no production caller, and this PR does not add one. Three things must exist
 before it gets one. Until then the workflow is implemented, not activated, and nothing in this
 document should be read as claiming otherwise.
 
@@ -233,5 +233,79 @@ document should be read as claiming otherwise.
 2. **A deterministic, versioned rubric to normalized-score policy must exist.** The score is
    currently supplied by the caller and only range-checked. Evidence that feeds mastery needs its
    derivation frozen and versioned like every other engine in `EngineVersionFreezeTests`.
+3. **Abandoned-claim recovery / effect-to-workflow-marker atomicity.** The execution token makes
+   concurrent execution and stale completion safe; it does not make a dead process recoverable. A
+   crash after a step's effect commits and before `finishClaimedStep()` commits strands a RUNNING
+   claim with an orphaned token that no other instance can reclaim. See the analysis below.
 
-Both belong to the production-wiring task or M2-T15, not here.
+### What the execution token does and does not guarantee
+
+It does guarantee, and these are proven against real PostgreSQL:
+
+- only one worker executes a step at a time;
+- a stale worker's completion is rejected once the run is CANCELLED or TIMED_OUT;
+- attempt count rises exactly once per genuine claim.
+
+It does not guarantee recovery from process death. There is no lease, so a claim held by a dead JVM
+is never released.
+
+### Crash windows
+
+| # | Window | Effect on authoritative state | Effect on the workflow |
+| --- | --- | --- | --- |
+| 1 | Claim commits, process dies before the effect commits | None. The effect transaction rolled back. | Step stranded RUNNING with an orphaned token until the run's absolute deadline. |
+| 2 | Effect commits, process dies before `finishClaimedStep()` commits | The authoritative effect is durable and correct. | The workflow has no record that it happened. Step stranded RUNNING; `result_ref` never written. |
+| 3 | `finishClaimedStep()` commits, process dies before the cursor advances | None. | Step is COMPLETED while the run's cursor still points at it. `claimStep` accepts only absent/PENDING, and the exhausted-attempts check filters on PENDING, so neither fires: the run makes no further progress. A lease does not address this window, because the step is not RUNNING. |
+| 4 | Remote result already durably recorded, worker dies before adopting it | The AI execution and its gate decision are durable. | DIAGNOSE cannot re-derive the outcome. `commission()` commits in its own transaction before the provider call, so a replay returns `dispatchAllowed = false` and `assess()` throws `AI_EXECUTION_ALREADY_COMMISSIONED` — every time. The verdict exists in `ledger.proposal_gate_decision` keyed by `request_id` and is simply discarded. |
+
+### Current failure mode: safe, but not self-recovering
+
+No duplicate authoritative effect is introduced by any of these windows. The evidence write is
+idempotent on its lineage key, and the adaptation hand-off is idempotent on the snapshot, decision
+and request identities. What is lost is progress, not correctness: the run remains RUNNING until its
+absolute deadline and is then moved to TIMED_OUT with an explicit reason. That is a degraded outcome
+with a bounded, observable ending — not corruption, and not a silent stall.
+
+It is stated plainly because the distinction matters for sequencing: a lease added on its own would
+convert this safe degradation into an unsafe one. Reclaiming window 2 for `RECOMPUTE_MASTERY` would
+append a second snapshot at the next aggregate version with identical values, into a ledger whose
+append-only trigger makes it unremovable. Reclaiming window 4 for `DIAGNOSE` would burn every
+remaining attempt on a call that throws deterministically, and fail the run with a reason code that
+describes neither what happened nor what already succeeded.
+
+Replay safety today, established by reading each step's effect rather than inferred from the claim:
+
+| Step | Replay-safe | Why |
+| --- | --- | --- |
+| `RECORD_EVALUATION_EVIDENCE` | Yes | `lineage_key` UNIQUE with `ON CONFLICT DO NOTHING`, keyed on the evaluation request identity |
+| `RECOMPUTE_MASTERY` | No | each call takes `nextVersion = current + 1` and appends a new immutable snapshot |
+| `DIAGNOSE` | No | at-most-once commissioning makes a second dispatch throw rather than return the prior verdict |
+| `ADAPT` | Yes | one transaction, every insert `ON CONFLICT DO NOTHING` on snapshot, decision record and request id |
+
+### Agreed follow-up architecture
+
+Ordered. Each step is a prerequisite for the next, and the lease is deliberately last.
+
+- **P0** — make step completion and the run cursor/terminal transition one local database
+  transaction. Closes window 3 outright. Both are same-database writes with no remote call between
+  them.
+- **P1** — for steps whose authoritative effect is a write to this same database, commit the effect
+  and the claimed-step completion atomically, after any remote work has already returned. Closes
+  window 2 for those steps with no new idempotency key and no schema change. **No transaction may
+  span a model or provider call.**
+- **P2** — make `DIAGNOSE` recoverable by deterministic request identity: before dispatch, look up an
+  existing gate decision or execution for this workflow's stable `requestId` and adopt it if it has
+  already completed. Closes window 4 while preserving at-most-once dispatch, which must not be
+  weakened.
+- **P3** — only once every step is replay-safe, introduce abandoned-claim lease and reclaim using
+  `claimed_at`, with a lease duration greater than the step execution deadline. Reclaim increments
+  the attempt count exactly once, and the existing execution-token CAS continues to reject stale
+  completions — so a lease set too short degrades to wasted work rather than to corruption.
+
+This prerequisite must be resolved **and crash-injection-qualified** before production activation of
+T14. Building the recovery mechanism is implementation work and belongs to a focused follow-up;
+qualifying it under injected process death belongs to M2-T15.
+
+None of the three belong to this PR: they are the conditions for connecting T14 to a production
+assessment path, not for reviewing the orchestration it implements.
+
