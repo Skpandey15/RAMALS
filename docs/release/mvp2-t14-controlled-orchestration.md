@@ -1,5 +1,21 @@
 # M2-T14 — Controlled multi-agent orchestration
 
+> **Status: `IMPLEMENTED — NOT ACCEPTED — NOT ACTIVATABLE`**
+>
+> The orchestration described below is implemented, reviewed and remediated. It is **not** accepted
+> for production use, and it must not be activated until the three prerequisites in
+> [Activation prerequisites](#activation-prerequisites--mandatory-and-currently-open) are closed.
+>
+> **It is safe today because it is inert**, for three specific reasons:
+>
+> - `LearningWorkflowOrchestrator.trigger()` has no production caller;
+> - production must explicitly set `ramals.orchestration.enabled` to `false` until activation;
+> - therefore no production workflow currently depends on abandoned-claim recovery.
+>
+> That is the entire basis on which the open durability gap is tolerable. It is not tolerable once
+> anything triggers a workflow.
+
+
 ## Scope
 
 Composes evaluation, mastery, diagnosis and adaptation as one explicit, deterministic workflow. It
@@ -219,19 +235,121 @@ replaced with one that models the original defect directly.
 The race test was re-run five times with `--rerun-tasks` after the constraint fix, to confirm it is
 stable rather than incidentally passing.
 
-## Activation prerequisites — not resolved here, and deliberately
+## Activation prerequisites — mandatory and currently open
 
-`trigger()` still has no production caller, and this PR does not add one. Two things must exist
-before it gets one. Until then the workflow is implemented, not activated, and nothing in this
-document should be read as claiming otherwise.
+This section is appended by a later review. It does not revise the implementation evidence above:
+that record stands as written, including the guarantees it claimed at the time it was written. What
+follows states which guarantees exist today and which do not.
 
-1. **The production trigger must derive its facts from the immutable M2-T12 decision**, not accept a
-   caller's restatement of them. `EvaluationTrigger` currently takes the ACCEPTED outcome, learner,
-   skill, attempt and assessment version as parameters. That is adequate for a component with no
-   caller and inadequate the moment one exists: a caller that can restate the outcome can assert an
-   acceptance the gate never gave.
-2. **A deterministic, versioned rubric to normalized-score policy must exist.** The score is
-   currently supplied by the caller and only range-checked. Evidence that feeds mastery needs its
-   derivation frozen and versioned like every other engine in `EngineVersionFreezeTests`.
+### Activation gate
 
-Both belong to the production-wiring task or M2-T15, not here.
+> **No production caller may be added to `LearningWorkflowOrchestrator.trigger()`, and the
+> orchestration feature must not be enabled for production, until all three activation prerequisites
+> below are CLOSED.**
+
+M2-T15 must subsequently qualify abandoned-claim recovery using **injected process death at each of
+the four crash windows** identified in prerequisite 3. Building the recovery mechanism is
+implementation work; qualifying it under injected failure is T15's.
+
+### The three prerequisites
+
+**1. The production trigger must derive its authoritative facts from the immutable accepted M2-T12
+decision**, rather than from caller-restated values. `EvaluationTrigger` currently takes the ACCEPTED
+outcome, learner, skill, attempt and assessment version as parameters. That is adequate for a
+component with no caller and inadequate the moment one exists: a caller that can restate the outcome
+can assert an acceptance the gate never gave.
+
+*Status: OPEN.*
+
+**2. A deterministic, versioned rubric → normalized evaluation-evidence policy must be defined and
+tested** before an evaluation may affect authoritative mastery. The score is currently supplied by
+the caller and only range-checked. Evidence that feeds mastery needs its derivation frozen and
+versioned like every other engine in `EngineVersionFreezeTests`.
+
+*Status: OPEN.*
+
+**3. Abandoned-claim recovery and effect→workflow-marker atomicity must be implemented and
+crash-qualified.** The execution token added during remediation guarantees concurrency and
+stale-worker safety. It does not guarantee recovery from process death: there is no lease, so a
+claim held by a dead JVM is never released.
+
+*Status: OPEN.* Detail follows.
+
+### Prerequisite 3 — what the execution token does and does not guarantee
+
+Guaranteed, and proven against real PostgreSQL:
+
+- only one worker executes a step at a time;
+- a stale worker's completion is rejected once the run is CANCELLED or TIMED_OUT;
+- attempt count rises exactly once per genuine claim.
+
+Not guaranteed: recovery from process death.
+
+### Prerequisite 3 — the four crash windows
+
+| # | Window | Authoritative state | Workflow consequence |
+| --- | --- | --- | --- |
+| 1 | Claim committed, effect not committed | Unchanged; the effect transaction rolled back | Step stranded RUNNING with an orphaned token until the run's absolute deadline |
+| 2 | Authoritative effect committed, workflow step completion missing | Durable and correct | The workflow has no record that it happened; `result_ref` never written |
+| 3 | Step completion committed, workflow cursor not advanced | Unchanged | Step is COMPLETED while the cursor still points at it. `claimStep` accepts only absent/PENDING and the exhausted-attempts check filters on PENDING, so neither fires and the run makes no further progress. **A lease does not address this window**, because the step is not RUNNING |
+| 4 | Remote/diagnostic result durably succeeded, worker dies before workflow adoption | The AI execution and its gate decision are durable | `DIAGNOSE` cannot re-derive the outcome: `commission()` commits in its own transaction before the provider call, so a replay returns `dispatchAllowed = false` and `assess()` throws `AI_EXECUTION_ALREADY_COMMISSIONED` every time. The verdict exists in `ledger.proposal_gate_decision` keyed by `request_id` and is discarded |
+
+### Prerequisite 3 — current failure semantics
+
+> **Safe but not self-recovering. An abandoned RUNNING claim may remain stranded until the workflow
+> deadline.**
+
+No duplicate authoritative effect is introduced by any of the four windows. The evidence write is
+idempotent on its lineage key; the adaptation hand-off is idempotent on the snapshot, decision and
+request identities. A stranded run still ends at its absolute deadline, moved to TIMED_OUT with an
+explicit reason. What is lost is progress, not correctness.
+
+**Successful `DIAGNOSE` work may currently be discarded** if the worker dies before the workflow
+adopts the result. The model was called, the gate ruled, and the decision was persisted — and the
+workflow then throws that outcome away and cannot retrieve it.
+
+Replay safety today, established by reading each step's effect rather than inferred from the claim
+mechanism:
+
+| Step | Replay-safe | Why |
+| --- | --- | --- |
+| `RECORD_EVALUATION_EVIDENCE` | Yes | `lineage_key` UNIQUE with `ON CONFLICT DO NOTHING`, keyed on the evaluation request identity |
+| `RECOMPUTE_MASTERY` | No | each call takes `nextVersion = current + 1` and appends a new immutable snapshot |
+| `DIAGNOSE` | No | at-most-once commissioning makes a second dispatch throw rather than return the prior verdict |
+| `ADAPT` | Yes | one transaction; every insert `ON CONFLICT DO NOTHING` on snapshot, decision record and request id |
+
+### Prerequisite 3 — agreed remediation order
+
+- **P0** — step completion and the workflow cursor advance commit in **one local database
+  transaction**. Closes window 3. Both are same-database writes with no remote call between them.
+- **P1** — for same-database authoritative-effect steps, the effect and `finishClaimedStep` commit
+  **atomically**, after any remote work has already returned. Closes window 2 for those steps with no
+  new idempotency key and no schema change. **Never hold a database transaction across a model or
+  provider call.**
+- **P2** — `DIAGNOSE` recovers or adopts an existing durable result using its **deterministic request
+  identity** before redispatch: look up the existing gate decision or execution for this workflow's
+  stable `requestId` and adopt it if already completed. Closes window 4 while preserving at-most-once
+  dispatch, which must not be weakened.
+- **P3** — **only after replay safety is established**, introduce abandoned-claim lease and reclaim
+  using `claimed_at`. Lease duration must exceed the relevant step deadline, and stale
+  execution-token completions must continue to be rejected.
+
+### DO NOT IMPLEMENT LEASE/RECLAIM FIRST
+
+This is the ordering constraint, stated separately because it is the one an engineer is most likely
+to violate by instinct. A lease is the obvious fix for a stranded claim, and it is the wrong thing to
+build first.
+
+Reclaiming a non-idempotent authoritative step before the effect/marker atomicity gap is closed
+converts today's **safe timeout degradation into duplicate authoritative effects**:
+
+- **`RECOMPUTE_MASTERY`** — reclaiming window 2 appends a second snapshot at the next aggregate
+  version with identical values, into `ledger.mastery_snapshot`, whose append-only trigger makes the
+  duplicate unremovable.
+- **`DIAGNOSE`** — reclaiming window 4 burns every remaining attempt on a call that throws
+  deterministically, then fails the run with a reason code that describes neither what happened nor
+  what already succeeded.
+
+P0 through P3 must therefore land in order. The lease is last because it is only safe once every step
+can be replayed without producing a second authoritative effect.
+
