@@ -20,6 +20,9 @@ public enum ProposalGateReason {
   /** A classification named a skill the grounded context does not describe. */
   SKILL_NOT_IN_CONTEXT,
 
+  /** The context carries no authoritative skill universe against which membership can be checked. */
+  SKILL_CONTEXT_MISSING,
+
   /** Two classifications for the same skill. The gate does not choose between them. */
   CLASSIFICATION_CONFLICT,
 

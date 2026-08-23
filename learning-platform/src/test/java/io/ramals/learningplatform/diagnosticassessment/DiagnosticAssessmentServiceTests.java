@@ -17,6 +17,7 @@ import io.ramals.learningplatform.grounding.GroundingRetrievalPolicy;
 import io.ramals.learningplatform.grounding.GroundingRetrievalPort;
 import io.ramals.learningplatform.grounding.GroundingRetrievalService;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort;
+import io.ramals.learningplatform.grounding.ProposalGateDecisionPort.PreParseRejection;
 import io.ramals.learningplatform.grounding.ProposalGateReason;
 import io.ramals.learningplatform.grounding.ProposalGateResult;
 import io.ramals.learningplatform.grounding.ProposalGroundingGate;
@@ -146,6 +147,36 @@ class DiagnosticAssessmentServiceTests {
 
     assertThat(outcome.accepted()).isFalse();
     assertThat(outcome.reasons()).containsExactly(ProposalGateReason.PROPOSAL_INVALID);
+    assertThat(decisions.preParseRejections).hasSize(1);
+    PreParseRejection rejection = decisions.preParseRejections.get(0);
+    assertThat(rejection.proposalId()).isEqualTo("p-1");
+    assertThat(rejection.agentRunId()).isEqualTo("run-1");
+    assertThat(rejection.requestId()).isEqualTo("r-1");
+    assertThat(rejection.contextId()).isEqualTo("ctx-diagnostic-1");
+    assertThat(rejection.publicReason()).isEqualTo(ProposalGateReason.PROPOSAL_INVALID);
+    assertThat(rejection.parserReasonCode()).isEqualTo("PROPOSAL_DIAGNOSES_INVALID");
+    assertThat(rejection.correlation().interactionId()).isEqualTo("interaction-1");
+    assertThat(rejection.correlation().traceId()).isEqualTo("trace-1");
+    assertThat(decisions.appended).isEmpty();
+  }
+
+  @Test
+  void replayingTheSameMalformedLogicalRequestPreservesOneStableAuditIdentity() {
+    DiagnosticAssessmentService service = service(envelopeAccepting());
+    AiProposalEnvelope malformed = envelope(Map.of("diagnoses", "not-an-array"));
+    GroundedContext context = DiagnosticAssessmentProposalGateTests.context();
+
+    var first = service.decide(malformed, context, "interaction-1", "trace-1", "r-1");
+    var replay = service.decide(malformed, context, "interaction-1", "trace-1", "r-1");
+
+    assertThat(replay).isEqualTo(first);
+    assertThat(decisions.preParseRejections).hasSize(2);
+    assertThat(decisions.preParseRejections)
+        .extracting(PreParseRejection::proposalId)
+        .containsOnly("p-1");
+    assertThat(decisions.preParseRejections)
+        .extracting(PreParseRejection::parserReasonCode)
+        .containsOnly("PROPOSAL_DIAGNOSES_INVALID");
   }
 
   @Test
@@ -300,6 +331,12 @@ class DiagnosticAssessmentServiceTests {
     private final List<ProposalGroundingRequest> appended = new ArrayList<>();
     private final List<ProposalGateResult> results = new ArrayList<>();
     private final List<DecisionCorrelation> correlations = new ArrayList<>();
+    private final List<PreParseRejection> preParseRejections = new ArrayList<>();
+
+    @Override
+    public void appendPreParseRejection(PreParseRejection rejection) {
+      preParseRejections.add(rejection);
+    }
 
     @Override
     public void appendDecision(

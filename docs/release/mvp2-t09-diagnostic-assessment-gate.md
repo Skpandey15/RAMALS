@@ -183,3 +183,57 @@ deliberately: that test exists so a new agent route cannot appear unnoticed, and
   the duplication is real and a single source would be better.
 * **No advisory persistence for an accepted diagnosis.** Deliberate, per the task: the decision is
   recorded, and consumption is deferred.
+
+## Code-review remediation — 2026-08-23
+
+**Remediation status: ACCEPTED.** Findings 1–3 are fixed and verified. Finding 4 is recorded as
+separate security debt and no rate-limiter code changed. M2-T10 was not started.
+
+### Finding disposition
+
+| Finding | Fix | Automated evidence |
+| --- | --- | --- |
+| 1 — malformed proposal had no audit row | `ProposalGateDecisionPort` now has a dedicated `PreParseRejection` contract made only from runtime/envelope metadata. `DiagnosticAssessmentService` persists it before returning `PROPOSAL_INVALID`; it never fabricates a `ProposalGroundingRequest`. V030 adds bounded `parser_reason_code` while the public reason remains `PROPOSAL_INVALID`. The existing `(proposal_id, policy_version)` uniqueness makes replay deterministic. | Service tests prove rejected outcome, stable parser/public reasons, all correlation IDs, and stable replay identity. PostgreSQL integration proves two appends produce one immutable row and that evidence/mastery row counts do not change. |
+| 2 — skill validation failed open | Skill-universe extraction now accepts only authoritative SKILL_GRAPH/MASTERY skill facts. An empty universe adds stable `SKILL_CONTEXT_MISSING`; diagnoses and recommendations therefore cannot pass membership validation when the context cannot establish a skill universe. | Gate tests cover known/unknown skills, remove/restore perturbation, and recommendations. Removing the guard made the focused perturbation test fail. |
+| 3 — STRONG counted unrelated facts | `countDistinctApplicableLearnerEvidence` counts distinct IDs only when authoritative and sourced from LEARNER_EVIDENCE or MASTERY. Explicit skill metadata must match the diagnosed skill. | Tests prove policy facts do not count, two permitted facts do count, other-skill facts do not count when linkage is available, and duplicate IDs count once. Broadening the source filter made the policy-fact protection test fail. |
+| 4 — rate limiter | Not changed in T09. Recorded as **TD-M2-SEC-01 — Rate-limit trust boundary and bounded state** in `docs/release/mvp2-technical-debt.md`. | Disposition verified by an empty diff for `RateLimitFilter` and `TokenBucketRateLimiter`. Status remains **open**. |
+
+### Verification results
+
+| Command | Result |
+| --- | --- |
+| `.\gradlew.bat :learning-platform:test --tests '*DiagnosticAssessmentServiceTests' --tests '*DiagnosticAssessmentProposalGateTests' --rerun-tasks` | PASS — 34 tests, 0 failures |
+| `.\gradlew.bat :learning-platform:check --rerun-tasks` | PASS — unit 528 (115 skipped), governance 141 (6 skipped), architecture 33, integration 116 (109 environment-gated skips); 0 failures |
+| isolated PostgreSQL: `.\gradlew.bat :learning-platform:integrationTest --tests '*GroundingPersistenceIntegrationTests' --rerun-tasks` | PASS — 1 test, 0 failures, 0 skipped; PostgreSQL 18 temporary database removed after the run |
+| targeted Python diagnostic, transport, MVP-1 verdict, and secret-hygiene suites | PASS — 79 tests, 0 failures; credential variable removed only from the child test process so no-credential tests exercise their intended state |
+| `scripts/ci/check-contract-compatibility.py` | PASS — backward compatible with frozen v1 |
+| `scripts/ci/generate-contract-models.py --check` | PASS — committed models match |
+| OpenAPI 3.1 validator | PASS |
+
+The forced `check` run includes `ProposalGroundingGateTests`, MVP-1
+`DiagnosticProposalGateTests`, diagnostic API/persistence suites, release governance, architecture,
+and Java secret-hygiene/security tests. The MVP-1 Java gate and Python verdict validator are
+unchanged. `GroundedContext` and the OpenAPI transport are unchanged.
+
+### Perturbation proof
+
+Each production guard was temporarily removed, its focused test was run with `--rerun-tasks`, and
+the production guard was restored before the final green run:
+
+| Removed guard | Expected failing proof |
+| --- | --- |
+| malformed pre-parse audit append | `aPayloadThatCannotBeReadAsTheContractIsRejectedRatherThanThrown` failed at the persisted-rejection assertion |
+| `SKILL_CONTEXT_MISSING` fail-closed addition | `removingAllAuthoritativeSkillFactsFailsClosedAndRestoringThemResumesNormalBehavior` failed |
+| LEARNER_EVIDENCE/MASTERY source restriction | `strongDoesNotCountUnrelatedAuthoritativePolicyFacts` failed because the required insufficiency reason disappeared |
+
+### Authority and remaining limitations
+
+The gate remains deterministic and side-effect free. The service writes only the immutable decision
+audit; it writes no mastery, progression, or evidence-ledger state. PostgreSQL proof compares
+authoritative row counts before and after a malformed decision.
+
+Current scalar LEARNER_EVIDENCE and MASTERY transport rows do not carry a skill code, so those facts
+remain applicable when no deterministic skill linkage is present. When an item explicitly carries
+`*_SKILL_CODE` metadata, mismatch is rejected from STRONG counting. Adding skill linkage to the
+transport would be an additive future grounding enhancement, not a prerequisite fabricated inside
+this remediation.

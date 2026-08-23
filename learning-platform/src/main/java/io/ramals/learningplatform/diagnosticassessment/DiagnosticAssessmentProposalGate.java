@@ -138,6 +138,10 @@ public final class DiagnosticAssessmentProposalGate {
     Set<String> knownSkills = skillCodes(context);
     Map<String, DiagnosticAssessmentProposal.Classification> seen = new LinkedHashMap<>();
 
+    if (knownSkills.isEmpty()) {
+      reasons.add(ProposalGateReason.SKILL_CONTEXT_MISSING);
+    }
+
     for (DiagnosticAssessmentProposal.Diagnosis diagnosis : proposal.diagnoses()) {
       if (!knownSkills.isEmpty() && !knownSkills.contains(diagnosis.skillCode())) {
         reasons.add(ProposalGateReason.SKILL_NOT_IN_CONTEXT);
@@ -149,7 +153,8 @@ public final class DiagnosticAssessmentProposalGate {
         reasons.add(ProposalGateReason.CLASSIFICATION_CONFLICT);
       }
       if (diagnosis.classification() == DiagnosticAssessmentProposal.Classification.STRONG
-          && authoritativeEvidenceCount(diagnosis, context) < STRONG_EVIDENCE_MINIMUM) {
+          && countDistinctApplicableLearnerEvidence(diagnosis, context)
+              < STRONG_EVIDENCE_MINIMUM) {
         reasons.add(ProposalGateReason.EVIDENCE_INSUFFICIENT_FOR_STRONG);
       }
       if (diagnosis.classification()
@@ -170,10 +175,8 @@ public final class DiagnosticAssessmentProposalGate {
   /**
    * Skills the context actually describes, or an empty set when it names none.
    *
-   * <p>Empty means "cannot answer", and the membership checks are skipped rather than failing every
-   * classification. A context carrying no skill-graph facts is a legitimate configuration, and
-   * rejecting every proposal against one would fail closed for a reason unrelated to the proposal.
-   * The evidence-membership rule still binds in that case, and it is the stronger of the two.
+   * <p>Empty means "cannot establish membership". The caller fails closed with
+   * {@link ProposalGateReason#SKILL_CONTEXT_MISSING}; it never treats absence as permission.
    */
   private static Set<String> skillCodes(GroundedContext context) {
     if (context == null || context.items() == null) {
@@ -184,6 +187,7 @@ public final class DiagnosticAssessmentProposalGate {
       boolean skillBearing =
           item.sourceType() == SourceType.SKILL_GRAPH || item.sourceType() == SourceType.MASTERY;
       if (skillBearing
+          && item.authority() == ContextAuthority.AUTHORITATIVE_FACT
           && item.factType() != null
           && item.factType().toUpperCase(Locale.ROOT).endsWith(SKILL_CODE_SUFFIX)
           && item.value() != null) {
@@ -193,17 +197,39 @@ public final class DiagnosticAssessmentProposalGate {
     return codes;
   }
 
-  private static long authoritativeEvidenceCount(
+  private static long countDistinctApplicableLearnerEvidence(
       DiagnosticAssessmentProposal.Diagnosis diagnosis, GroundedContext context) {
     if (context == null || context.items() == null) {
       return 0;
     }
     Map<String, GroundedContextItem> supplied = new java.util.HashMap<>();
-    context.items().forEach(item -> supplied.put(item.evidenceId(), item));
+    context.items().forEach(item -> supplied.putIfAbsent(item.evidenceId(), item));
     return diagnosis.evidenceIds().stream()
+        .distinct()
         .map(supplied::get)
-        .filter(item -> item != null && item.authority() == ContextAuthority.AUTHORITATIVE_FACT)
+        .filter(DiagnosticAssessmentProposalGate::isAuthoritativeLearnerPerformanceEvidence)
+        .filter(item -> appliesToSkillWhenKnown(item, diagnosis.skillCode()))
         .count();
+  }
+
+  private static boolean isAuthoritativeLearnerPerformanceEvidence(GroundedContextItem item) {
+    return item != null
+        && item.authority() == ContextAuthority.AUTHORITATIVE_FACT
+        && (item.sourceType() == SourceType.LEARNER_EVIDENCE
+            || item.sourceType() == SourceType.MASTERY);
+  }
+
+  /**
+   * An item without skill metadata remains usable because today's transport carries scalar facts
+   * whose learner-evidence and mastery rows do not expose skill code. When the fact explicitly names
+   * a skill, however, it must name the diagnosed one.
+   */
+  private static boolean appliesToSkillWhenKnown(GroundedContextItem item, String diagnosedSkill) {
+    if (item.factType() == null
+        || !item.factType().toUpperCase(Locale.ROOT).endsWith(SKILL_CODE_SUFFIX)) {
+      return true;
+    }
+    return item.value() != null && diagnosedSkill.equals(String.valueOf(item.value()));
   }
 
   private static ProposalGateResult rejected(
