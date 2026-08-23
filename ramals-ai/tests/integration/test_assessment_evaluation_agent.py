@@ -13,6 +13,8 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from ramals_ai.assessment_evaluation.agent import AssessmentEvaluationAgent
+from ramals_ai.assessment_evaluation.contracts import AssessmentEvaluationProposal
+from ramals_ai.assessment_evaluation.validation import validate
 from ramals_ai.config.settings import ModelRoute
 from ramals_ai.contracts.generated import (
     AssessmentEvaluationRequest,
@@ -31,6 +33,7 @@ CONTRACT = (
     / "mvp2"
     / "assessment-evaluation-proposal.v1.schema.json"
 )
+GOLDEN = CONTRACT.parents[1] / "golden"
 ANSWER = "answer-v7-evidence"
 ACCURACY_RUBRIC = "rubric-accuracy-v3"
 REASONING_RUBRIC = "rubric-reasoning-v3"
@@ -166,6 +169,39 @@ def test_f02_free_text_returns_a_structured_rubric_bound_proposal() -> None:
     schema = json.loads(CONTRACT.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     Draft202012Validator(schema).validate(envelope.proposal)
+
+
+def test_v1_optional_evidence_fixture_matches_schema_and_python_wire_model() -> None:
+    payload = json.loads(
+        (GOLDEN / "assessment-evaluation-proposal-v1-optional-evidence.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    schema = json.loads(CONTRACT.read_text(encoding="utf-8"))
+
+    Draft202012Validator(schema).validate(payload)
+    proposal = AssessmentEvaluationProposal.model_validate(payload)
+
+    assert proposal.evidenceIds == []
+    assert proposal.dimensions[0].evidenceIds == []
+    assert "EVALUATION_DIMENSION_EVIDENCE_INCOMPLETE" in validate(
+        json.dumps(payload),
+        request().evaluationContext,
+        GroundedContext.model_validate(request().groundedContext.model_dump(mode="json")),
+    )
+
+
+def test_v1_duplicate_evidence_fixture_is_rejected_by_schema_and_python_wire_model() -> None:
+    payload = json.loads(
+        (GOLDEN / "assessment-evaluation-proposal-v1-duplicate-evidence.invalid.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    schema = json.loads(CONTRACT.read_text(encoding="utf-8"))
+
+    assert list(Draft202012Validator(schema).iter_errors(payload))
+    with pytest.raises(ValidationError):
+        AssessmentEvaluationProposal.model_validate(payload)
 
 
 def test_f01_deterministically_scored_response_types_cannot_cross_this_contract() -> None:

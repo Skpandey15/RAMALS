@@ -25,7 +25,7 @@ class ArchitectureGuardrailTests {
     BASE + ".curriculum..", BASE + ".assessment..", BASE + ".evidence..",
     BASE + ".mastery..", BASE + ".recommendation..", BASE + ".learner..",
     BASE + ".learning..", BASE + ".security..", BASE + ".observability..",
-    BASE + ".ai.."
+    BASE + ".ai..", BASE + ".assessmentevaluation.."
   };
 
   private static final String[] DOMAIN_PACKAGES = {
@@ -60,6 +60,17 @@ class ArchitectureGuardrailTests {
       .that().resideInAnyPackage(BASE + ".ai..")
       .should().dependOnClassesThat().areAssignableTo(JdbcTemplate.class)
       .because("AI adapters must not acquire a database handle");
+
+  @ArchTest
+  static final ArchRule evaluationGateCannotReachAuthoritativeLearnerStateWriters = noClasses()
+      .that().resideInAnyPackage(BASE + ".assessmentevaluation..")
+      .should().dependOnClassesThat().haveFullyQualifiedName(BASE + ".evidence.EvidenceRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".evidence.EvidenceService")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".mastery.MasteryRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".mastery.MasteryService")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".assessment.AssessmentRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".assessment.DiagnosticSubmissionService")
+      .because("M2-T12 decisions authorize a later workflow but cannot write evidence or mastery");
 
   @ArchTest
   static final ArchRule controllersDoNotBypassApplicationServices = noClasses()

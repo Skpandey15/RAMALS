@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 
+from ramals_ai.assessment_evaluation.contracts import AssessmentEvaluationProposal
 from ramals_ai.contracts.generated import (
     AIProposalEnvelope,
     AIRequestEnvelope,
@@ -26,6 +28,13 @@ from ramals_ai.contracts.generated import (
 from ramals_ai.grounding.contracts import GroundedContext
 
 GOLDEN = Path(__file__).parents[3] / "contracts" / "golden"
+ASSESSMENT_EVALUATION_SCHEMA = (
+    GOLDEN.parent / "mvp2" / "assessment-evaluation-proposal.v1.schema.json"
+)
+ASSESSMENT_EVALUATION_FIXTURES = {
+    "assessment-evaluation-proposal-v1-optional-evidence.json",
+    "assessment-evaluation-proposal-v1-duplicate-evidence.invalid.json",
+}
 
 ROUND_TRIP_CASES: list[tuple[str, type[BaseModel]]] = [
     ("request-tutor-minimal.json", AIRequestEnvelope),
@@ -60,8 +69,28 @@ def test_fixture_round_trips(fixture: str, model: type[BaseModel]) -> None:
 def test_every_golden_fixture_is_exercised() -> None:
     """A fixture the Python side never loads could pin a shape only Java sees."""
     present = sorted(p.name for p in GOLDEN.glob("*.json"))
-    covered = sorted(fixture for fixture, _ in ROUND_TRIP_CASES)
+    covered = sorted({fixture for fixture, _ in ROUND_TRIP_CASES} | ASSESSMENT_EVALUATION_FIXTURES)
     assert present == covered
+
+
+def test_assessment_evaluation_optional_evidence_fixture_matches_schema_and_model() -> None:
+    payload = load("assessment-evaluation-proposal-v1-optional-evidence.json")
+    schema = json.loads(ASSESSMENT_EVALUATION_SCHEMA.read_text(encoding="utf-8"))
+
+    Draft202012Validator(schema).validate(payload)
+    parsed = AssessmentEvaluationProposal.model_validate(payload)
+
+    assert parsed.evidenceIds == []
+    assert parsed.dimensions[0].evidenceIds == []
+
+
+def test_assessment_evaluation_duplicate_evidence_fixture_fails_schema_and_model() -> None:
+    payload = load("assessment-evaluation-proposal-v1-duplicate-evidence.invalid.json")
+    schema = json.loads(ASSESSMENT_EVALUATION_SCHEMA.read_text(encoding="utf-8"))
+
+    assert list(Draft202012Validator(schema).iter_errors(payload))
+    with pytest.raises(ValueError, match="EVALUATION_EVIDENCE_IDS_NOT_UNIQUE"):
+        AssessmentEvaluationProposal.model_validate(payload)
 
 
 def test_decimal_precision_is_carried_as_a_string() -> None:

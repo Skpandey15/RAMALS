@@ -1,0 +1,18 @@
+{
+  "contractVersion": "1.0",
+  "proposalId": "proposal-1",
+  "requestId": "request-1",
+  "agentRunId": "run-1",
+  "answerVersion": "answer-v7",
+  "rubricVersion": "rubric-v3",
+  "dimensions": [
+    {
+      "dimensionId": "accuracy",
+      "score": 3,
+      "maxScore": 4,
+      "reason": "The answer is evaluated against the accuracy rubric."
+    }
+  ],
+  "feedback": "Explain quorum acknowledgement more precisely.",
+  "confidence": 0.85
+}

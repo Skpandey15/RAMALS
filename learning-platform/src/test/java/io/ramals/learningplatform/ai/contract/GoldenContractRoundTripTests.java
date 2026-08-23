@@ -139,7 +139,9 @@ class GoldenContractRoundTripTests {
         "request-tutor-cross-domain.json", "proposal-tutor.json",
         "proposal-assessment-evaluate.json", "capabilities.json",
         "problem-deadline-exceeded.json", "grounded-context-v1.json",
-        "request-assessment-evaluation.json");
+        "request-assessment-evaluation.json",
+        "assessment-evaluation-proposal-v1-optional-evidence.json",
+        "assessment-evaluation-proposal-v1-duplicate-evidence.invalid.json");
 
     try (var entries = Files.list(goldenDirectory())) {
       List<String> present = entries.map(path -> path.getFileName().toString())

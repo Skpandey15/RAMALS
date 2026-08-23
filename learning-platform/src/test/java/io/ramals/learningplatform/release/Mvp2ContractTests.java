@@ -72,4 +72,20 @@ class Mvp2ContractTests {
       }
     }
   }
+
+  @Test
+  @DisplayName("assessment evidence remains v1-compatible and is mandatory at the Spring gate")
+  void assessmentEvaluationSchemaPreservesFrozenOptionalEvidence() throws IOException {
+    String schema =
+        Files.readString(
+            CONTRACTS.resolve("assessment-evaluation-proposal.v1.schema.json"),
+            StandardCharsets.UTF_8);
+
+    assertThat(schema)
+        .contains(
+            "\"dimensions\", \"feedback\", \"confidence\"")
+        .doesNotContain(
+            "\"dimensions\", \"feedback\", \"evidenceIds\", \"confidence\"")
+        .contains("\"evidenceIds\": { \"type\": \"array\", \"maxItems\": 64");
+  }
 }

@@ -117,6 +117,28 @@ class MigrationScriptContractTests {
         .doesNotContain("hidden_reasoning");
   }
 
+  @Test
+  void assessmentEvaluationDecisionsAreTraceableBoundedAndReplaySafe() throws IOException {
+    String migration =
+        statements("/db/migration/V031__assessment_evaluation_decision.sql");
+
+    assertThat(migration)
+        .contains("CREATE TABLE ledger.assessment_evaluation_decision")
+        .contains("REFERENCES core.ai_execution(id) ON DELETE RESTRICT")
+        .contains("REFERENCES ledger.grounding_retrieval_record(context_id) ON DELETE RESTRICT")
+        .contains("CONSTRAINT uq_assessment_evaluation_request UNIQUE (request_id)")
+        .contains("trace_id VARCHAR(64)")
+        .doesNotContain("trace_id VARCHAR(64) NOT NULL")
+        .contains("trace_id IS NULL OR length(btrim(trace_id)) BETWEEN 1 AND 64")
+        .contains("outcome IN ('ACCEPTED', 'REJECTED', 'MANUAL_REVIEW')")
+        .contains("jsonb_array_length(dimension_results) <= 32")
+        .contains("decision_digest ~ '^[0-9a-f]{64}$'")
+        .contains("CREATE TRIGGER trg_assessment_evaluation_decision_append_only")
+        .doesNotContain("raw_prompt")
+        .doesNotContain("hidden_reasoning")
+        .doesNotContain("answer_text");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");
