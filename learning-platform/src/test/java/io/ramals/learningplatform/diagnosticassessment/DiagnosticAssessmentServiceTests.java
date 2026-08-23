@@ -232,7 +232,6 @@ class DiagnosticAssessmentServiceTests {
                   "AI_DEADLINE_EXCEEDED", "no time remained for diagnostic assessment");
             },
             gate,
-            decisions,
             executions,
             recordingWriter(),
             Clock.fixed(NOW, ZoneOffset.UTC));
@@ -255,7 +254,6 @@ class DiagnosticAssessmentServiceTests {
               return envelopeAccepting(request.groundedContext().contextId());
             },
             gate,
-            decisions,
             executions,
             recordingWriter(),
             Clock.fixed(NOW, ZoneOffset.UTC));
@@ -284,7 +282,6 @@ class DiagnosticAssessmentServiceTests {
               return envelopeAccepting();
             },
             gate,
-            decisions,
             executions,
             recordingWriter(),
             Clock.fixed(NOW, ZoneOffset.UTC));
@@ -303,7 +300,7 @@ class DiagnosticAssessmentServiceTests {
 
   private DiagnosticAssessmentService service(AiProposalEnvelope envelope) {
     return new DiagnosticAssessmentService(
-        retrieval(), (request, deadlineMillis) -> envelope, gate, decisions,
+        retrieval(), (request, deadlineMillis) -> envelope, gate,
         executions,
         recordingWriter(),
         Clock.fixed(NOW, ZoneOffset.UTC));

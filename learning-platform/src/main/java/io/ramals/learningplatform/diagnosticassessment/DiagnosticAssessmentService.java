@@ -9,7 +9,6 @@ import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.grounding.GroundedContext;
 import io.ramals.learningplatform.grounding.GroundedContextItem.SourceType;
 import io.ramals.learningplatform.grounding.GroundingRetrievalService;
-import io.ramals.learningplatform.grounding.ProposalGateDecisionPort;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort.DecisionCorrelation;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort.PreParseRejection;
 import io.ramals.learningplatform.grounding.ProposalGateReason;
@@ -60,7 +59,6 @@ public class DiagnosticAssessmentService {
   private final GroundingRetrievalService grounding;
   private final DiagnosticAssessmentPort agent;
   private final DiagnosticAssessmentProposalGate gate;
-  private final ProposalGateDecisionPort decisions;
   private final DiagnosticAssessmentExecutionRecorder executions;
   private final DiagnosticOutcomeWriter outcomes;
   private final Clock clock;
@@ -69,14 +67,12 @@ public class DiagnosticAssessmentService {
       GroundingRetrievalService grounding,
       DiagnosticAssessmentPort agent,
       DiagnosticAssessmentProposalGate gate,
-      ProposalGateDecisionPort decisions,
       DiagnosticAssessmentExecutionRecorder executions,
       DiagnosticOutcomeWriter outcomes,
       Clock clock) {
     this.grounding = grounding;
     this.agent = agent;
     this.gate = gate;
-    this.decisions = decisions;
     this.executions = executions;
     this.outcomes = outcomes;
     this.clock = clock;
