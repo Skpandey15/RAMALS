@@ -2,6 +2,7 @@ package io.ramals.learningplatform.execution;
 
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
+import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
 import io.ramals.learningplatform.ai.contract.Usage;
 import io.ramals.learningplatform.observability.UuidV7;
 import java.math.BigDecimal;
@@ -42,28 +43,52 @@ public class AiExecutionRepository {
   }
 
   public AiExecutionCommission commission(AiRequestEnvelope request, String agentType) {
-    String requestDigest = digest(request);
+    return commission(
+        request.requestId(),
+        request.interactionId(),
+        request.contractVersion(),
+        request,
+        agentType);
+  }
+
+  public AiExecutionCommission commissionDiagnosticAssessment(
+      DiagnosticAssessmentRequest request) {
+    return commission(
+        request.requestId(),
+        request.interactionId(),
+        request.contractVersion(),
+        request,
+        "DIAGNOSTIC");
+  }
+
+  private AiExecutionCommission commission(
+      String requestId,
+      String interactionId,
+      String contractVersion,
+      Object requestBody,
+      String agentType) {
+    String requestDigest = digest(requestBody);
     try {
       jdbc.update("""
           INSERT INTO core.ai_execution_event
             (id, request_id, interaction_id, agent_type, contract_version, event_type,
              request_digest, occurred_at)
           VALUES (?, ?, ?, ?, ?, 'STARTED', ?, CURRENT_TIMESTAMP)
-          """, UuidV7.generate(), request.requestId(), request.interactionId(), agentType,
-          request.contractVersion(), requestDigest);
+          """, UuidV7.generate(), requestId, interactionId, agentType,
+          contractVersion, requestDigest);
       return AiExecutionCommission.claimed();
     } catch (DuplicateKeyException duplicate) {
       ExecutionStart existing = jdbc.query("""
           SELECT request_digest
             FROM core.ai_execution_event
            WHERE request_id = ? AND event_type = 'STARTED'
-          """, (r, n) -> new ExecutionStart(r.getString("request_digest")), request.requestId())
+          """, (r, n) -> new ExecutionStart(r.getString("request_digest")), requestId)
           .stream().findFirst()
           .orElseThrow(() -> new IllegalStateException("AI execution commission was not readable"));
       if (!existing.requestDigest().equals(requestDigest)) {
         throw new AiExecutionConflictException("requestId was reused with a different request digest");
       }
-      return findByRequestId(request.requestId())
+      return findByRequestId(requestId)
           .map(AiExecutionCommission::existing)
           .orElseGet(AiExecutionCommission::inProgress);
     }
@@ -71,32 +96,83 @@ public class AiExecutionRepository {
 
   public AiExecution insertSuccess(AiRequestEnvelope request, AiProposalEnvelope proposal,
       Instant startedAt, Instant completedAt) {
-    Usage usage = proposal.usage();
-    String requestDigest = digest(request);
-    String proposalDigest = digest(proposal);
-    AiExecution execution = insert(request, proposal.agentType().name(), proposal.agentVersion(),
-        proposal.agentRunId(), proposal.promptTemplateId(), proposal.promptVersion(),
-        proposal.modelRoute(), proposal.resolvedProvider(), proposal.modelId(),
-        proposal.routeVersion(), traceId(request), "SUCCEEDED", null, requestDigest, proposalDigest, usage,
-        startedAt, completedAt);
-    appendCompletion(request, execution);
-    return execution;
+    return insertSuccess(metadata(request), request, proposal, startedAt, completedAt);
+  }
+
+  public AiExecution insertDiagnosticAssessmentSuccess(
+      DiagnosticAssessmentRequest request,
+      AiProposalEnvelope proposal,
+      Instant startedAt,
+      Instant completedAt) {
+    return insertSuccess(metadata(request), request, proposal, startedAt, completedAt);
   }
 
   public AiExecution insertFailure(AiRequestEnvelope request, String agentType, String errorCode,
       Instant startedAt, Instant completedAt) {
-    String requestDigest = digest(request);
+    return insertFailure(metadata(request), request, agentType, errorCode, startedAt, completedAt);
+  }
+
+  public AiExecution insertDiagnosticAssessmentFailure(
+      DiagnosticAssessmentRequest request,
+      String errorCode,
+      Instant startedAt,
+      Instant completedAt) {
+    return insertFailure(
+        metadata(request), request, "DIAGNOSTIC", errorCode, startedAt, completedAt);
+  }
+
+  private AiExecution insertSuccess(
+      RequestMetadata request,
+      Object requestBody,
+      AiProposalEnvelope proposal,
+      Instant startedAt,
+      Instant completedAt) {
+    Usage usage = proposal.usage();
+    String requestDigest = digest(requestBody);
+    String proposalDigest = digest(proposal);
+    AiExecution execution =
+        insert(
+            request,
+            proposal.agentType().name(),
+            proposal.agentVersion(),
+            proposal.agentRunId(),
+            proposal.promptTemplateId(),
+            proposal.promptVersion(),
+            proposal.modelRoute(),
+            proposal.resolvedProvider(),
+            proposal.modelId(),
+            proposal.routeVersion(),
+            traceId(request.interactionId()),
+            "SUCCEEDED",
+            null,
+            requestDigest,
+            proposalDigest,
+            usage,
+            startedAt,
+            completedAt);
+    appendCompletion(execution);
+    return execution;
+  }
+
+  private AiExecution insertFailure(
+      RequestMetadata request,
+      Object requestBody,
+      String agentType,
+      String errorCode,
+      Instant startedAt,
+      Instant completedAt) {
+    String requestDigest = digest(requestBody);
     // No proposal came back, so there is no run and no prompt to name. Left null rather
     // than filled with something plausible: a failure that claims a prompt produced it is
     // worse than one that admits it got nothing.
     AiExecution execution = insert(request, agentType,
-        null, null, null, null, null, null, null, null, traceId(request),
+        null, null, null, null, null, null, null, null, traceId(request.interactionId()),
         "FAILED", errorCode, requestDigest, null, null, startedAt, completedAt);
-    appendCompletion(request, execution);
+    appendCompletion(execution);
     return execution;
   }
 
-  private void appendCompletion(AiRequestEnvelope request, AiExecution execution) {
+  private void appendCompletion(AiExecution execution) {
     try {
       jdbc.update("""
           INSERT INTO core.ai_execution_event
@@ -120,7 +196,7 @@ public class AiExecutionRepository {
     }
   }
 
-  private AiExecution insert(AiRequestEnvelope request, String agentType, String agentVersion,
+  private AiExecution insert(RequestMetadata request, String agentType, String agentVersion,
       String agentRunId, String promptTemplateId, String promptVersion, String modelRoute,
       String resolvedProvider, String modelId, String routeVersion, String traceId,
       String status, String errorCode,
@@ -203,9 +279,19 @@ public class AiExecutionRepository {
       r.getObject("estimated_cost_usd", BigDecimal.class), (Integer) r.getObject("latency_ms"),
       instant(r, "started_at"), instant(r, "completed_at"));
 
-  private static String traceId(AiRequestEnvelope request) {
+  private static RequestMetadata metadata(AiRequestEnvelope request) {
+    return new RequestMetadata(
+        request.requestId(), request.interactionId(), request.contractVersion());
+  }
+
+  private static RequestMetadata metadata(DiagnosticAssessmentRequest request) {
+    return new RequestMetadata(
+        request.requestId(), request.interactionId(), request.contractVersion());
+  }
+
+  private static String traceId(String interactionId) {
     String traceId = MDC.get("traceId");
-    return traceId == null || traceId.isBlank() ? request.interactionId() : traceId;
+    return traceId == null || traceId.isBlank() ? interactionId : traceId;
   }
 
   private static Instant instant(ResultSet result, String column) throws SQLException {
@@ -214,6 +300,9 @@ public class AiExecutionRepository {
   }
 
   private record ExecutionStart(String requestDigest) {}
+
+  private record RequestMetadata(
+      String requestId, String interactionId, String contractVersion) {}
 
   private record TerminalEvent(String status, String requestDigest, String proposalDigest,
       String errorCode) {}

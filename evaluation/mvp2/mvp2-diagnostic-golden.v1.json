@@ -1,0 +1,30 @@
+{
+  "agent": "DIAGNOSTIC_ASSESSMENT",
+  "datasetVersion": "1.0",
+  "cases": [
+    {
+      "id": "weak-known-skill",
+      "evidenceIds": ["mastery-offsets", "attempt-offsets"],
+      "expectedClassifications": {"offset-management": "WEAK"},
+      "expectedNextSkills": ["offset-management"]
+    },
+    {
+      "id": "strong-stable-skill",
+      "evidenceIds": ["mastery-rebalancing", "attempt-rebalancing"],
+      "expectedClassifications": {"consumer-rebalancing": "STRONG"},
+      "expectedNextSkills": []
+    },
+    {
+      "id": "inconsistent-evidence",
+      "evidenceIds": ["attempt-correct", "attempt-incorrect"],
+      "expectedClassifications": {"partition-leadership": "INCONSISTENT"},
+      "expectedNextSkills": ["partition-leadership"]
+    },
+    {
+      "id": "cold-start",
+      "evidenceIds": ["curriculum-skill"],
+      "expectedClassifications": {"replication-factor": "INSUFFICIENT_EVIDENCE"},
+      "expectedNextSkills": []
+    }
+  ]
+}

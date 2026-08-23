@@ -3,8 +3,16 @@ package io.ramals.learningplatform.grounding;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.ai.contract.AgentType;
+import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
+import io.ramals.learningplatform.ai.contract.Constraints;
+import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
+import io.ramals.learningplatform.ai.contract.InteractionClass;
+import io.ramals.learningplatform.ai.contract.TrustLevel;
+import io.ramals.learningplatform.ai.contract.Usage;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
+import io.ramals.learningplatform.execution.AiExecutionRepository;
 import io.ramals.learningplatform.grounding.GroundedContextItem.SourceType;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.mastery.MasteryRepository;
@@ -20,6 +28,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeAll;
@@ -28,6 +37,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.slf4j.MDC;
 import tools.jackson.databind.json.JsonMapper;
 
 /** Real-PostgreSQL proof for D01, D02, D08, D09 and immutable gate/retrieval audit. */
@@ -130,6 +140,42 @@ class GroundingPersistenceIntegrationTests {
     assertThat(jdbc.queryForObject(
         "SELECT reason_codes->>0 FROM ledger.proposal_gate_decision WHERE proposal_id = ?",
         String.class, proposal.proposalId())).isEqualTo("ACCEPTED");
+
+    // E10: the retrieved context, execution and deterministic decision are reconstructable with
+    // the platform-owned request/run identities. Free-form model output is not part of this join.
+    DiagnosticAssessmentRequest diagnosticRequest = new DiagnosticAssessmentRequest(
+        "1.0", "interaction-e10", proposal.requestId(),
+        new Constraints(InteractionClass.INTERACTIVE_AI, 12_000, null, null, null), first);
+    AiProposalEnvelope diagnosticEnvelope = new AiProposalEnvelope(
+        "1.0", proposal.proposalId(), AgentType.DIAGNOSTIC, "diagnostic-v1",
+        proposal.agentRunId(), "DIAGNOSTIC_ASSESSMENT", "DIAGNOSTIC_ASSESSMENT_PROMPT_V1",
+        "ci-fake", "ci-fake", "ci-fake-deterministic-v1", "ROUTE_TABLE_V1",
+        TrustLevel.NON_AUTHORITATIVE, "0.9000", List.of(), Map.of("diagnoses", List.of()),
+        null, new Usage(10, 0, 5, "0.000000", 3));
+    AiExecutionRepository executions = new AiExecutionRepository(
+        jdbc, JsonMapper.builder().findAndAddModules().build());
+    MDC.put("traceId", "trace-e10");
+    try {
+      assertThat(executions.commissionDiagnosticAssessment(diagnosticRequest).dispatchAllowed())
+          .isTrue();
+      executions.insertDiagnosticAssessmentSuccess(
+          diagnosticRequest, diagnosticEnvelope, asOf, asOf.plusMillis(3));
+    } finally {
+      MDC.remove("traceId");
+    }
+    assertThat(jdbc.queryForMap("""
+        SELECT e.interaction_id, e.trace_id, e.request_id, e.agent_run_id, d.context_id
+          FROM core.ai_execution e
+          JOIN ledger.proposal_gate_decision d
+            ON d.request_id = e.request_id AND d.agent_run_id = e.agent_run_id
+          JOIN ledger.grounding_retrieval_record g ON g.context_id = d.context_id
+         WHERE e.request_id = ?
+        """, proposal.requestId()))
+        .containsEntry("interaction_id", "interaction-e10")
+        .containsEntry("trace_id", "trace-e10")
+        .containsEntry("request_id", proposal.requestId())
+        .containsEntry("agent_run_id", proposal.agentRunId())
+        .containsEntry("context_id", first.contextId());
 
     int evidenceRowsBefore =
         jdbc.queryForObject("SELECT count(*) FROM ledger.evidence", Integer.class);
