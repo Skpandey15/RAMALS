@@ -220,6 +220,57 @@ class Finding:
     statement: str
 
 
+# A named CHECK whose body is a membership test, e.g.
+#   CONSTRAINT ck_evidence_type CHECK (evidence_type IN ('DIAGNOSTIC', 'QUIZ'))
+# Read from the raw migration text rather than the neutralised copy, because neutralising blanks
+# string literals and the values are the whole point here.
+NAMED_IN_CHECK = re.compile(
+    r"CONSTRAINT\s+(?P<name>\w+)\s+CHECK\s*\(\s*(?P<column>[\w.]+)\s+IN\s*\((?P<values>[^)]*)\)",
+    re.IGNORECASE | re.DOTALL,
+)
+QUOTED_VALUE = re.compile(r"'([^']*)'")
+
+
+def membership_checks(text: str) -> dict[str, tuple[str, frozenset[str]]]:
+    """Every named ``CHECK (col IN (...))`` in one migration, by constraint name."""
+    found: dict[str, tuple[str, frozenset[str]]] = {}
+    for match in NAMED_IN_CHECK.finditer(text):
+        values = frozenset(QUOTED_VALUE.findall(match.group("values")))
+        if values:
+            found[match.group("name").lower()] = (match.group("column").lower(), values)
+    return found
+
+
+def widens_a_membership_check(
+    action: str,
+    here: dict[str, tuple[str, frozenset[str]]],
+    known: dict[str, tuple[str, frozenset[str]]],
+) -> bool:
+    """Whether this ADD CONSTRAINT only *widens* an existing membership check.
+
+    A rollback restores the previous image, and that image writes only values the old constraint
+    already allowed. If the new allowed set is a superset of the old one, every such row still
+    satisfies the new constraint, so the rollback hazard this rule exists to catch cannot occur.
+
+    Proved by comparing the two value sets, not asserted in a comment. Removing or renaming a value
+    is a narrowing and stays a finding, which is the case that actually breaks a rollback.
+    """
+    named = ADDED_CONSTRAINT_NAME.search(action)
+    if not named:
+        return False
+    name = named.group(1).lower()
+    previous = known.get(name)
+    current = here.get(name)
+    if previous is None or current is None:
+        return False
+    previous_column, previous_values = previous
+    current_column, current_values = current
+    return previous_column == current_column and previous_values <= current_values
+
+
+ADDED_CONSTRAINT_NAME = re.compile(r"\bADD\s+CONSTRAINT\s+(\w+)", re.IGNORECASE)
+
+
 def neutralise(text: str) -> list[str]:
     """Blanks out what must not be pattern-matched, keeping line numbers intact.
 
@@ -409,9 +460,13 @@ def exempt(
     return False
 
 
-def check_file(path: Path) -> tuple[list[Finding], list[str]]:
+def check_file(
+    path: Path, known_checks: dict[str, tuple[str, frozenset[str]]] | None = None
+) -> tuple[list[Finding], list[str]]:
     """Returns (findings, errors) for one migration."""
     text = path.read_text(encoding="utf-8")
+    known_checks = known_checks or {}
+    checks_here = membership_checks(text)
     declarations = declarations_by_line(text)
     statements = segment(neutralise(text))
 
@@ -429,6 +484,10 @@ def check_file(path: Path) -> tuple[list[Finding], list[str]]:
                 if (path.name, rule.name) in ACCEPTED_BEFORE_THIS_CHECK:
                     continue
                 if exempt(rule, statement, action, created, added_columns):
+                    continue
+                if rule.name == "add-check-or-unique" and widens_a_membership_check(
+                    action, checks_here, known_checks
+                ):
                     continue
 
                 declaration = declared_for(statement.start_line, declarations)
@@ -460,10 +519,14 @@ def main(argv: list[str]) -> int:
 
     findings: list[Finding] = []
     errors: list[str] = []
+    # Constraint definitions established by *earlier* migrations. A migration's own ADD is not its
+    # own precedent, so this is merged only after that file has been checked.
+    known_checks: dict[str, tuple[str, frozenset[str]]] = {}
     for path in migrations:
-        file_findings, file_errors = check_file(path)
+        file_findings, file_errors = check_file(path, known_checks)
         findings.extend(file_findings)
         errors.extend(file_errors)
+        known_checks.update(membership_checks(path.read_text(encoding="utf-8")))
 
     if findings or errors:
         print("Migrations that the previously released image cannot run against:\n")
