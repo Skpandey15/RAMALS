@@ -62,6 +62,7 @@ public class DiagnosticAssessmentService {
   private final DiagnosticAssessmentProposalGate gate;
   private final ProposalGateDecisionPort decisions;
   private final DiagnosticAssessmentExecutionRecorder executions;
+  private final DiagnosticOutcomeWriter outcomes;
   private final Clock clock;
 
   public DiagnosticAssessmentService(
@@ -70,12 +71,14 @@ public class DiagnosticAssessmentService {
       DiagnosticAssessmentProposalGate gate,
       ProposalGateDecisionPort decisions,
       DiagnosticAssessmentExecutionRecorder executions,
+      DiagnosticOutcomeWriter outcomes,
       Clock clock) {
     this.grounding = grounding;
     this.agent = agent;
     this.gate = gate;
     this.decisions = decisions;
     this.executions = executions;
+    this.outcomes = outcomes;
     this.clock = clock;
   }
 
@@ -124,23 +127,58 @@ public class DiagnosticAssessmentService {
       executions.recordFailure(request, failure.code(), startedAt, clock.instant());
       throw failure;
     }
-    executions.recordSuccess(request, envelope, startedAt, clock.instant());
+    Instant completedAt = clock.instant();
 
-    return decide(envelope, context, interactionId, traceId, requestId);
+    // The gate is a pure function of the proposal and the context, so it runs here, in memory, with
+    // no transaction open and nothing written yet.
+    Evaluation evaluation = evaluate(envelope, context, interactionId, traceId, requestId);
+
+    // Then one transaction for both rows. Recording the success first and the verdict second would
+    // leave a window where a process death produces a SUCCEEDED execution with no decision, and that
+    // state is unrecoverable: the ledger keeps a proposal digest, not the proposal.
+    outcomes.commitSuccess(request, envelope, startedAt, completedAt, evaluation.decision());
+
+    logDecision(evaluation, interactionId, traceId);
+    return evaluation.outcome();
+  }
+
+  /** Logged after the commit, so the record and the log line cannot disagree about what happened. */
+  private static void logDecision(Evaluation evaluation, String interactionId, String traceId) {
+    Outcome outcome = evaluation.outcome();
+    boolean malformed = evaluation.parserReasonCode() != null;
+    var event = malformed || !outcome.accepted() ? LOGGER.atWarn() : LOGGER.atInfo();
+    event
+        .addKeyValue("operation", "ai.diagnosticAssessment.gate")
+        .addKeyValue("outcome", outcome.accepted() ? "ACCEPTED" : "REJECTED")
+        .addKeyValue("reasonCodes", outcome.reasons().stream().map(Enum::name).toList())
+        .addKeyValue("parserReasonCode", evaluation.parserReasonCode())
+        .addKeyValue("proposalId", outcome.proposalId())
+        .addKeyValue("agentRunId", outcome.agentRunId())
+        .addKeyValue("contextId", outcome.contextId())
+        .addKeyValue("interactionId", interactionId)
+        .addKeyValue("traceId", traceId)
+        .log("diagnostic assessment gate decided");
   }
 
   /**
-   * Parses, gates and records one returned proposal.
+   * Parses and gates one returned proposal, writing nothing.
+   *
+   * <p>Pure by design. Everything this produces is handed to a single transaction afterwards, so
+   * that the execution success and its verdict share a fate; a version of this method that wrote as
+   * it went is what created the SUCCEEDED-with-no-decision state in the first place.
    *
    * <p>Transport failure and business rejection are kept distinct, because conflating them destroys
    * the only signal that separates "the platform is broken" from "the platform worked and said no".
-   * A call that never produced a proposal raises out of the client and writes no decision; a proposal
-   * that arrived and failed the rules is a successful system outcome with a reason code and a row.
+   * A call that never produced a proposal raises out of the client and never reaches here; a
+   * proposal that arrived and failed the rules is a successful system outcome with a reason code and
+   * a row.
    *
    * <p>A payload that cannot be read as the contract is a rejection, not an exception thrown away:
-   * something was returned, and the record should say what happened to it.
+   * something was returned, and the record should say what happened to it. It is persisted in the
+   * same transaction as the execution success, so a malformed proposal stays as auditable as a
+   * gated one.
    */
-  Outcome decide(
+  Evaluation evaluate(
       AiProposalEnvelope envelope,
       GroundedContext context,
       String interactionId,
@@ -156,7 +194,7 @@ public class DiagnosticAssessmentService {
               envelope.agentRunId(),
               context.contextId());
     } catch (DiagnosticAssessmentProposal.MalformedProposalException malformed) {
-      decisions.appendPreParseRejection(
+      PreParseRejection rejection =
           new PreParseRejection(
               envelope.proposalId(),
               requestId,
@@ -165,47 +203,40 @@ public class DiagnosticAssessmentService {
               ProposalType.DIAGNOSTIC,
               ProposalGateReason.PROPOSAL_INVALID,
               malformed.reasonCode(),
-              new DecisionCorrelation(interactionId, traceId)));
-      LOGGER
-          .atWarn()
-          .addKeyValue("operation", "ai.diagnosticAssessment.gate")
-          .addKeyValue("outcome", "REJECTED")
-          .addKeyValue("reasonCode", malformed.reasonCode())
-          .addKeyValue("proposalId", envelope.proposalId())
-          .addKeyValue("agentRunId", envelope.agentRunId())
-          .addKeyValue("interactionId", interactionId)
-          .log("diagnostic assessment proposal could not be read as its contract");
-      return new Outcome(
-          false,
-          List.of(ProposalGateReason.PROPOSAL_INVALID),
-          envelope.proposalId(),
-          envelope.agentRunId(),
-          context.contextId());
+              new DecisionCorrelation(interactionId, traceId));
+      return new Evaluation(
+          new DiagnosticOutcomeWriter.PendingDecision.PreParse(rejection),
+          new Outcome(
+              false,
+              List.of(ProposalGateReason.PROPOSAL_INVALID),
+              envelope.proposalId(),
+              envelope.agentRunId(),
+              context.contextId()),
+          malformed.reasonCode());
     }
 
     ProposalGateResult result = gate.evaluate(proposal, context, clock.instant());
-    decisions.appendDecision(
-        DiagnosticAssessmentProposalGate.asGroundingRequest(proposal),
-        result,
-        new DecisionCorrelation(interactionId, traceId));
-
-    LOGGER
-        .atInfo()
-        .addKeyValue("operation", "ai.diagnosticAssessment.gate")
-        .addKeyValue("outcome", result.accepted() ? "ACCEPTED" : "REJECTED")
-        .addKeyValue("reasonCodes", result.reasons().stream().map(Enum::name).toList())
-        .addKeyValue("proposalId", proposal.proposalId())
-        .addKeyValue("agentRunId", proposal.agentRunId())
-        .addKeyValue("contextId", proposal.contextId())
-        .addKeyValue("interactionId", interactionId)
-        .addKeyValue("traceId", traceId)
-        .log("diagnostic assessment gate decided");
-
-    return new Outcome(
-        result.accepted(),
-        result.reasons(),
-        proposal.proposalId(),
-        proposal.agentRunId(),
-        proposal.contextId());
+    return new Evaluation(
+        new DiagnosticOutcomeWriter.PendingDecision.Gated(
+            DiagnosticAssessmentProposalGate.asGroundingRequest(proposal),
+            result,
+            new DecisionCorrelation(interactionId, traceId)),
+        new Outcome(
+            result.accepted(),
+            result.reasons(),
+            proposal.proposalId(),
+            proposal.agentRunId(),
+            proposal.contextId()),
+        null);
   }
+
+  /**
+   * What the gate concluded, ready to persist and to report.
+   *
+   * @param parserReasonCode set only when the payload could not be read as the contract
+   */
+  record Evaluation(
+      DiagnosticOutcomeWriter.PendingDecision decision,
+      Outcome outcome,
+      String parserReasonCode) {}
 }

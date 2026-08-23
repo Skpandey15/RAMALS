@@ -273,9 +273,9 @@ crash-qualified.** The execution token added during remediation guarantees concu
 stale-worker safety. It does not guarantee recovery from process death: there is no lease, so a
 claim held by a dead JVM is never released.
 
-*Status: PARTIALLY IMPLEMENTED — ONE STATE OPEN, QUALIFICATION OPEN.* Revised down after a further
-review: the first implementation covered only one of five DIAGNOSE recovery states. See the
-recovery-state analysis at the end of this section.* The remediation described below has landed;
+*Status: IMPLEMENTED — QUALIFICATION OPEN.* Revised twice: down, when a review found the first
+implementation covered only one of five DIAGNOSE recovery states, and back up once state 4 was
+eliminated. See the recovery-state analysis and the state-4 elimination at the end of this section.* The remediation described below has landed;
 what remains is proving it under injected process death, which is M2-T15's. The prerequisite is not
 CLOSED until that qualification passes. Detail follows, reconciled after implementation.
 
@@ -412,7 +412,7 @@ must not become a loophole in.
 | 1 | No execution, no decision | no `STARTED` event | Dispatch normally. This is an ordinary first attempt. |
 | 2 | Commissioned, no terminal record, no decision | `STARTED` event, no `core.ai_execution` row | **Indeterminate** — the provider may or may not have been called and nothing can establish which. Attempt to close the commission as `AI_EXECUTION_ABANDONED`, then fail the step terminally. Never dispatch again, never guess a verdict. The close is a *conditional* write; see below for what happens when it loses. |
 | 3 | Execution `FAILED`, no decision | `ai_execution.status = 'FAILED'` | Adopt the recorded failure and fail terminally. Retrying is worse than useless: commissioning would refuse, and the run would spend its remaining attempts rediscovering a failure already on record, then report exhaustion instead of the reason that actually stopped it. |
-| 4 | Execution `SUCCEEDED`, no decision | `ai_execution.status = 'SUCCEEDED'` | **Not recoverable with today's persistence.** Fails terminally with its own code, `DIAGNOSIS_RESULT_UNRECOVERABLE`, so the state is countable rather than hidden inside a generic failure. See below. |
+| 4 | Execution `SUCCEEDED`, no decision | `ai_execution.status = 'SUCCEEDED'` | **Now unreachable through this path** — the execution success and its verdict commit atomically. Handling is retained for rows written before that change, failing terminally with `DIAGNOSIS_RESULT_UNRECOVERABLE`. See the elimination below. |
 | 5 | Gate decision exists | `ledger.proposal_gate_decision` by `request_id` | Adopt the verdict, accepted or rejected. |
 
 A step failure in states 2, 3 and 4 is *terminal* rather than retryable. `WorkflowAgentStep.Result`
@@ -499,3 +499,73 @@ a smaller residual and is recorded here rather than fixed silently.
 
 The prerequisite is **not CLOSED** and the activation gate continues to hold.
 
+### Prerequisite 3 — state 4 eliminated
+
+The proposed fix has landed. `DiagnosticAssessmentService` no longer records the execution success
+and then decides; it evaluates the gate in memory and commits both rows together:
+
+    commission (own transaction, before any call)
+      -> provider call (no transaction open)
+      -> gate evaluated in memory (pure; nothing written)
+      -> ONE transaction: ai_execution SUCCEEDED + proposal_gate_decision
+
+A `SUCCEEDED` diagnostic execution with no verdict can no longer be produced by this path. A crash
+before the commit now lands in **state 2** instead — commissioned, indeterminate, fail-closed, no
+duplicate dispatch. The model call is wasted, which is the honest price of at-most-once dispatch.
+
+**No model output is persisted for recovery.** That was the alternative, and it would have traded the
+execution ledger's data-minimisation property for a recovery property. Closing the window costs
+nothing and keeps the ledger holding digests.
+
+What is preserved, and asserted:
+
+- the provider call stays outside every transaction;
+- at-most-once dispatch is untouched — commissioning is unchanged and still commits alone, first;
+- accepted and rejected verdicts commit atomically alike, because a rejection is a successful
+  execution with an unfavourable outcome and both rows still belong;
+- a payload that could not be read as the contract still produces a durable pre-parse rejection, in
+  the same transaction, so a malformed proposal stays as auditable as a gated one;
+- MVP-1 diagnostic behaviour is untouched; this is the M2-T09 assessment path only.
+
+`DIAGNOSIS_RESULT_UNRECOVERABLE` and its handling are deliberately retained. Rows written before this
+change can still exist, and a reason code that silently disappears is worse than one that never
+fires.
+
+### The transaction is opened explicitly, and that is not a style choice
+
+The first implementation declared `@Transactional`. Its own PostgreSQL test then passed while
+proving nothing: a directly constructed instance has no Spring proxy, so no transaction was ever
+opened and the injected-failure case left a `SUCCEEDED` row behind exactly as before. The test caught
+it; the annotation had made the guarantee a property of how the object was obtained rather than of
+the object.
+
+It now opens the transaction through a `TransactionTemplate`, matching what
+`AiExecutionPersistenceService` already does for its independent writes.
+
+### Test evidence
+
+Against real PostgreSQL:
+
+| Scenario | Asserted |
+| --- | --- |
+| Accepted proposal | success row and decision both commit |
+| Rejected proposal | success row and decision both commit |
+| Malformed payload | success row and a durable pre-parse rejection both commit |
+| Injected failure while persisting the decision | neither row remains; the execution reverts to `COMMISSIONED` |
+| Crash after commit | the verdict is adopted on recovery, and the execution stays terminal so commissioning still refuses a redispatch |
+| Invariant sweep | no `SUCCEEDED` DIAGNOSTIC execution exists without a matching gate decision |
+
+Perturbing the boundary — moving the success write outside the transaction — fails the injected-
+failure test.
+
+### Status of prerequisite 3
+
+*Status: IMPLEMENTED — QUALIFICATION OPEN.*
+
+All five DIAGNOSE recovery states are now handled, and state 4 is unreachable through this path
+rather than merely reported. What remains is qualification: **none of this has been exercised by
+actually killing a process**. Every crash window is reasoned about, asserted against durable state,
+and perturbation-tested, but no test has yet terminated a JVM mid-step.
+
+M2-T15 owns that. Until injected process death passes at each of the four crash windows, prerequisite
+3 is **not CLOSED** and the activation gate continues to hold.
