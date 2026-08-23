@@ -394,9 +394,10 @@ PostgreSQL. It has **not** been qualified under injected process death at the fo
 above. Until M2-T15 does that, prerequisite 3 is not CLOSED and the activation gate still holds.
 
 A further review then found that the DIAGNOSE recovery above covered only one of five durable
-states. That analysis, and the state which remains open, follow.
+states. That analysis follows, together with the one state it could not recover -- which a later
+change eliminated.
 
-### Prerequisite 3 — DIAGNOSE recovery states, and the one that remains open
+### Prerequisite 3 — DIAGNOSE recovery states, and the one that remained open
 
 A further independent review found that the first recovery implementation covered only the last of
 five durable states. It handled *gate decision exists → adopt*, and fell through to redispatch for
@@ -563,8 +564,6 @@ Against real PostgreSQL:
 
 Perturbing the boundary — moving the success write outside the transaction — fails the injected-
 failure test.
-
-### Status of prerequisite 3
 
 ### Status of prerequisite 3
 
