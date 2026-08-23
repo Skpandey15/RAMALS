@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.orchestration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.mastery.MasteryRepository;
@@ -643,6 +644,269 @@ class LearningWorkflowConcurrencyIntegrationTests {
         "interaction-" + requestId,
         errorCode,
         "f".repeat(64));
+  }
+
+  // --- execution success and gate decision commit atomically -------------------------------------
+
+  @Test
+  void anAcceptedProposalCommitsTheSuccessRowAndItsDecisionTogether() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-atomic-accepted";
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("atomic-accepted").id();
+
+    commissionOnly(jdbc, requestId);
+    groundingRecord(jdbc, learnerId, requestId);
+    outcomeWriter(jdbc)
+        .commitSuccess(
+            diagnosticRequest(requestId),
+            diagnosticEnvelope(requestId),
+            Instant.now(),
+            Instant.now(),
+            gatedDecision(requestId, true));
+
+    assertThat(executionRepository(jdbc).findExecutionState(requestId).state())
+        .isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+    assertThat(decisionRepository(jdbc).findDecision(requestId, io.ramals.learningplatform.grounding.ProposalType.DIAGNOSTIC))
+        .isPresent();
+    assertThat(decisionRepository(jdbc).findDecision(requestId, io.ramals.learningplatform.grounding.ProposalType.DIAGNOSTIC)
+            .orElseThrow().accepted())
+        .isTrue();
+  }
+
+  @Test
+  void aRejectedProposalAlsoCommitsTheSuccessRowAndItsDecisionTogether() {
+    // A rejection is a successful execution with an unfavourable verdict. Both rows still belong.
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-atomic-rejected";
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("atomic-rejected").id();
+
+    commissionOnly(jdbc, requestId);
+    groundingRecord(jdbc, learnerId, requestId);
+    outcomeWriter(jdbc)
+        .commitSuccess(
+            diagnosticRequest(requestId),
+            diagnosticEnvelope(requestId),
+            Instant.now(),
+            Instant.now(),
+            gatedDecision(requestId, false));
+
+    assertThat(executionRepository(jdbc).findExecutionState(requestId).state())
+        .isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+    assertThat(decisionRepository(jdbc).findDecision(requestId, io.ramals.learningplatform.grounding.ProposalType.DIAGNOSTIC)
+            .orElseThrow().accepted())
+        .isFalse();
+  }
+
+  @Test
+  void aMalformedPayloadStillCommitsAnAuditableRejectionWithTheSuccessRow() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-atomic-malformed";
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("atomic-malformed").id();
+
+    commissionOnly(jdbc, requestId);
+    groundingRecord(jdbc, learnerId, requestId);
+    outcomeWriter(jdbc)
+        .commitSuccess(
+            diagnosticRequest(requestId),
+            diagnosticEnvelope(requestId),
+            Instant.now(),
+            Instant.now(),
+            new io.ramals.learningplatform.diagnosticassessment.DiagnosticOutcomeWriter.PendingDecision.PreParse(
+                new io.ramals.learningplatform.grounding.ProposalGateDecisionPort.PreParseRejection(
+                    "proposal-" + requestId,
+                    requestId,
+                    "run-" + requestId,
+                    "ctx-" + requestId,
+                    io.ramals.learningplatform.grounding.ProposalType.DIAGNOSTIC,
+                    io.ramals.learningplatform.grounding.ProposalGateReason.PROPOSAL_INVALID,
+                    "DIAGNOSTIC_PAYLOAD_INVALID",
+                    new io.ramals.learningplatform.grounding.ProposalGateDecisionPort.DecisionCorrelation(
+                        "interaction-" + requestId, "trace-" + requestId))));
+
+    assertThat(executionRepository(jdbc).findExecutionState(requestId).state())
+        .isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+    assertThat(decisionRepository(jdbc).findDecision(requestId, io.ramals.learningplatform.grounding.ProposalType.DIAGNOSTIC))
+        .as("a payload that could not be read is still an outcome worth auditing")
+        .isPresent();
+  }
+
+  @Test
+  void aFailureWhilePersistingTheDecisionLeavesNeitherRow() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-atomic-rollback";
+
+    commissionOnly(jdbc, requestId);
+    // No grounding_retrieval_record for this context, so the decision insert violates its foreign
+    // key. The execution row is written first inside the same transaction, so if the boundary were
+    // wrong it would survive the decision's failure.
+    assertThatThrownBy(
+            () ->
+                outcomeWriter(jdbc)
+                    .commitSuccess(
+                        diagnosticRequest(requestId),
+                        diagnosticEnvelope(requestId),
+                        Instant.now(),
+                        Instant.now(),
+                        gatedDecision(requestId, true)))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
+
+    assertThat(executionRepository(jdbc).findExecutionState(requestId).state())
+        .as("the success row must not survive a decision that failed to persist")
+        .isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.COMMISSIONED);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.proposal_gate_decision WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isZero();
+  }
+
+  @Test
+  void noDiagnosticSuccessRowCanExistWithoutItsGateDecision() {
+    // The invariant the whole change exists to establish, asserted over everything this suite wrote.
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-atomic-invariant";
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("atomic-invariant").id();
+
+    commissionOnly(jdbc, requestId);
+    groundingRecord(jdbc, learnerId, requestId);
+    outcomeWriter(jdbc)
+        .commitSuccess(
+            diagnosticRequest(requestId),
+            diagnosticEnvelope(requestId),
+            Instant.now(),
+            Instant.now(),
+            gatedDecision(requestId, true));
+
+    Integer orphans =
+        jdbc.queryForObject(
+            """
+            SELECT count(*)
+              FROM core.ai_execution execution
+             WHERE execution.agent_type = 'DIAGNOSTIC'
+               AND execution.status = 'SUCCEEDED'
+               AND execution.request_id LIKE 'wf-diag-atomic-%'
+               AND NOT EXISTS (
+                     SELECT 1 FROM ledger.proposal_gate_decision decision
+                      WHERE decision.request_id = execution.request_id
+                        AND decision.proposal_type = 'DIAGNOSTIC')
+            """,
+            Integer.class);
+    assertThat(orphans)
+        .as("state 4, a SUCCEEDED diagnostic execution with no verdict, must be unreachable")
+        .isZero();
+  }
+
+  @Test
+  void aCommittedDecisionIsAdoptedOnRecoveryWithoutRedispatch() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-atomic-adopt";
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("atomic-adopt").id();
+
+    commissionOnly(jdbc, requestId);
+    groundingRecord(jdbc, learnerId, requestId);
+    outcomeWriter(jdbc)
+        .commitSuccess(
+            diagnosticRequest(requestId),
+            diagnosticEnvelope(requestId),
+            Instant.now(),
+            Instant.now(),
+            gatedDecision(requestId, true));
+
+    // A worker that dies here and comes back finds the verdict, not an undecided success.
+    var recovered = decisionRepository(jdbc).findDecision(requestId, io.ramals.learningplatform.grounding.ProposalType.DIAGNOSTIC);
+    assertThat(recovered).isPresent();
+    assertThat(recovered.orElseThrow().accepted()).isTrue();
+    assertThat(executionRepository(jdbc).findExecutionState(requestId).state())
+        .as("the execution stays terminal, so commissioning still refuses a redispatch")
+        .isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+  }
+
+  private io.ramals.learningplatform.diagnosticassessment.DiagnosticOutcomeWriter outcomeWriter(JdbcTemplate jdbc) {
+    return new io.ramals.learningplatform.diagnosticassessment.TransactionalDiagnosticOutcomeWriter(
+        executionRepository(jdbc),
+        decisionRepository(jdbc),
+        new org.springframework.jdbc.datasource.DataSourceTransactionManager(
+            jdbc.getDataSource()));
+  }
+
+  private io.ramals.learningplatform.grounding.JdbcProposalGateDecisionRepository decisionRepository(JdbcTemplate jdbc) {
+    return new io.ramals.learningplatform.grounding.JdbcProposalGateDecisionRepository(jdbc);
+  }
+
+  private io.ramals.learningplatform.diagnosticassessment.DiagnosticOutcomeWriter.PendingDecision gatedDecision(String requestId, boolean accepted) {
+    return new io.ramals.learningplatform.diagnosticassessment.DiagnosticOutcomeWriter.PendingDecision.Gated(
+        new io.ramals.learningplatform.grounding.ProposalGroundingRequest(
+            "1.0",
+            "proposal-" + requestId,
+            requestId,
+            "run-" + requestId,
+            "ctx-" + requestId,
+            io.ramals.learningplatform.grounding.ProposalType.DIAGNOSTIC,
+            new java.math.BigDecimal("0.9000"),
+            java.util.List.of()),
+        new io.ramals.learningplatform.grounding.ProposalGateResult(
+            accepted,
+            // ck_proposal_gate_reasons requires a non-empty array: an accepted decision still says
+            // why, so the audit never has to infer the outcome from an absence.
+            accepted
+                ? java.util.List.of(io.ramals.learningplatform.grounding.ProposalGateReason.ACCEPTED)
+                : java.util.List.of(io.ramals.learningplatform.grounding.ProposalGateReason.PROPOSAL_INVALID),
+            java.util.Set.of()),
+        new io.ramals.learningplatform.grounding.ProposalGateDecisionPort.DecisionCorrelation(
+            "interaction-" + requestId, "trace-" + requestId));
+  }
+
+  private io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest diagnosticRequest(
+      String requestId) {
+    return new io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest(
+        "1.0",
+        "interaction-" + requestId,
+        requestId,
+        new io.ramals.learningplatform.ai.contract.Constraints(
+            io.ramals.learningplatform.ai.contract.InteractionClass.INTERACTIVE_AI,
+            12_000, null, null, null),
+        null);
+  }
+
+  private io.ramals.learningplatform.ai.contract.AiProposalEnvelope diagnosticEnvelope(
+      String requestId) {
+    return new io.ramals.learningplatform.ai.contract.AiProposalEnvelope(
+        "1.0",
+        "proposal-" + requestId,
+        io.ramals.learningplatform.ai.contract.AgentType.DIAGNOSTIC,
+        "DIAGNOSTIC_AGENT_V1",
+        "run-" + requestId,
+        "DIAGNOSE",
+        "DIAGNOSE_V1",
+        "diagnostic-default",
+        io.ramals.learningplatform.ai.contract.TrustLevel.NON_AUTHORITATIVE,
+        null,
+        List.of(),
+        java.util.Map.of(),
+        null,
+        null);
+  }
+
+  private void groundingRecord(JdbcTemplate jdbc, UUID learnerId, String requestId) {
+    jdbc.update(
+        """
+        INSERT INTO ledger.grounding_retrieval_record
+          (context_id, learner_id, retrieval_policy_version, as_of, expires_at, source_refs,
+           source_count)
+        VALUES (?, ?, 'PROPOSAL_GROUNDING_V1', CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP + INTERVAL '10 minutes', CAST(? AS jsonb), 1)
+        ON CONFLICT (context_id) DO NOTHING
+        """,
+        "ctx-" + requestId,
+        learnerId,
+        JSON_EVIDENCE);
   }
 
   private io.ramals.learningplatform.execution.AiExecutionRepository executionRepository(

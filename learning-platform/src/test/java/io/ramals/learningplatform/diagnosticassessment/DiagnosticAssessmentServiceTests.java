@@ -7,6 +7,8 @@ import io.ramals.learningplatform.ai.AiUnavailableException;
 import io.ramals.learningplatform.ai.DiagnosticAssessmentPort;
 import io.ramals.learningplatform.ai.contract.AgentType;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
+import io.ramals.learningplatform.ai.contract.InteractionClass;
+import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.grounding.AuthorizedGroundingFacts;
@@ -75,8 +77,8 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service = service(envelopeAccepting());
     GroundedContext context = DiagnosticAssessmentProposalGateTests.context();
 
-    var first = service.decide(envelopeAccepting(), context, "interaction-1", "trace-1", "r-1");
-    var second = service.decide(envelopeAccepting(), context, "interaction-1", "trace-1", "r-1");
+    var first = evaluateAndCommit(service, envelopeAccepting(), context, "interaction-1", "trace-1", "r-1");
+    var second = evaluateAndCommit(service, envelopeAccepting(), context, "interaction-1", "trace-1", "r-1");
 
     assertThat(first.accepted()).isTrue();
     assertThat(second).isEqualTo(first);
@@ -94,8 +96,8 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service = service(envelopeRejecting());
     GroundedContext context = DiagnosticAssessmentProposalGateTests.context();
 
-    var first = service.decide(envelopeRejecting(), context, "interaction-1", "trace-1", "r-1");
-    var second = service.decide(envelopeRejecting(), context, "interaction-1", "trace-1", "r-1");
+    var first = evaluateAndCommit(service, envelopeRejecting(), context, "interaction-1", "trace-1", "r-1");
+    var second = evaluateAndCommit(service, envelopeRejecting(), context, "interaction-1", "trace-1", "r-1");
 
     assertThat(first.accepted()).isFalse();
     assertThat(second.reasons()).isEqualTo(first.reasons());
@@ -107,7 +109,7 @@ class DiagnosticAssessmentServiceTests {
   void theDecisionCarriesTheCorrelationIdentityItWasMadeUnder() {
     DiagnosticAssessmentService service = service(envelopeAccepting());
 
-    service.decide(
+    evaluateAndCommit(service, 
         envelopeAccepting(),
         DiagnosticAssessmentProposalGateTests.context(),
         "interaction-1",
@@ -124,7 +126,7 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service = service(envelopeAccepting());
 
     var outcome =
-        service.decide(
+        evaluateAndCommit(service, 
             envelopeAccepting(),
             DiagnosticAssessmentProposalGateTests.context(),
             "interaction-1",
@@ -146,7 +148,7 @@ class DiagnosticAssessmentServiceTests {
     AiProposalEnvelope malformed = envelope(Map.of("diagnoses", "not-an-array"));
 
     var outcome =
-        service.decide(
+        evaluateAndCommit(service, 
             malformed, DiagnosticAssessmentProposalGateTests.context(), "interaction-1", "trace-1",
             "r-1");
 
@@ -171,8 +173,8 @@ class DiagnosticAssessmentServiceTests {
     AiProposalEnvelope malformed = envelope(Map.of("diagnoses", "not-an-array"));
     GroundedContext context = DiagnosticAssessmentProposalGateTests.context();
 
-    var first = service.decide(malformed, context, "interaction-1", "trace-1", "r-1");
-    var replay = service.decide(malformed, context, "interaction-1", "trace-1", "r-1");
+    var first = evaluateAndCommit(service, malformed, context, "interaction-1", "trace-1", "r-1");
+    var replay = evaluateAndCommit(service, malformed, context, "interaction-1", "trace-1", "r-1");
 
     assertThat(replay).isEqualTo(first);
     assertThat(decisions.preParseRejections).hasSize(2);
@@ -189,7 +191,7 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service = service(envelopeAccepting());
 
     var outcome =
-        service.decide(
+        evaluateAndCommit(service, 
             envelope(Map.of()), DiagnosticAssessmentProposalGateTests.context(), "interaction-1",
             "trace-1", "r-1");
 
@@ -211,7 +213,7 @@ class DiagnosticAssessmentServiceTests {
                         "evidenceIds", List.of("e-1")))));
 
     var outcome =
-        service.decide(
+        evaluateAndCommit(service, 
             unknown, DiagnosticAssessmentProposalGateTests.context(), "interaction-1", "trace-1",
             "r-1");
 
@@ -230,8 +232,8 @@ class DiagnosticAssessmentServiceTests {
                   "AI_DEADLINE_EXCEEDED", "no time remained for diagnostic assessment");
             },
             gate,
-            decisions,
             executions,
+            recordingWriter(),
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     assertThatThrownBy(() -> service.assess("subject-1", CURRICULUM, "r-1"))
@@ -252,8 +254,8 @@ class DiagnosticAssessmentServiceTests {
               return envelopeAccepting(request.groundedContext().contextId());
             },
             gate,
-            decisions,
             executions,
+            recordingWriter(),
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     service.assess("subject-1", CURRICULUM, "r-1");
@@ -280,8 +282,8 @@ class DiagnosticAssessmentServiceTests {
               return envelopeAccepting();
             },
             gate,
-            decisions,
             executions,
+            recordingWriter(),
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     assertThatThrownBy(() -> service.assess("subject-1", CURRICULUM, "r-1"))
@@ -298,9 +300,53 @@ class DiagnosticAssessmentServiceTests {
 
   private DiagnosticAssessmentService service(AiProposalEnvelope envelope) {
     return new DiagnosticAssessmentService(
-        retrieval(), (request, deadlineMillis) -> envelope, gate, decisions,
+        retrieval(), (request, deadlineMillis) -> envelope, gate,
         executions,
+        recordingWriter(),
         Clock.fixed(NOW, ZoneOffset.UTC));
+  }
+
+  /**
+   * Writes both rows through the same fakes production writes through.
+   *
+   * <p>Atomicity itself is a database property and is asserted against PostgreSQL; what this proves
+   * is that the service still hands both writes to one place.
+   */
+  private DiagnosticOutcomeWriter recordingWriter() {
+    return (request, envelope, startedAt, completedAt, decision) -> {
+      executions.recordSuccess(request, envelope, startedAt, completedAt);
+      switch (decision) {
+        case DiagnosticOutcomeWriter.PendingDecision.Gated gated ->
+            decisions.appendDecision(gated.proposal(), gated.result(), gated.correlation());
+        case DiagnosticOutcomeWriter.PendingDecision.PreParse preParse ->
+            decisions.appendPreParseRejection(preParse.rejection());
+      }
+    };
+  }
+
+  private static DiagnosticAssessmentRequest diagnosticRequest(
+      String requestId, String interactionId, GroundedContext context) {
+    return new DiagnosticAssessmentRequest(
+        DiagnosticAssessmentRequest.CONTRACT_VERSION,
+        interactionId,
+        requestId,
+        new Constraints(InteractionClass.INTERACTIVE_AI, 12_000, null, null, null),
+        context);
+  }
+
+  /** Mirrors the production sequence: evaluate in memory, then commit both rows together. */
+  private DiagnosticAssessmentService.Outcome evaluateAndCommit(
+      DiagnosticAssessmentService service,
+      AiProposalEnvelope envelope,
+      GroundedContext context,
+      String interactionId,
+      String traceId,
+      String requestId) {
+    var evaluation = service.evaluate(envelope, context, interactionId, traceId, requestId);
+    recordingWriter()
+        .commitSuccess(diagnosticRequest(requestId, interactionId, context), envelope, NOW, NOW,
+            evaluation.decision());
+    return evaluation.outcome();
   }
 
   /** A retrieval service over a fake port, so a learner reference is never caller-supplied. */
