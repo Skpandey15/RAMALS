@@ -9,7 +9,7 @@
 > **It is safe today because it is inert**, for three specific reasons:
 >
 > - `LearningWorkflowOrchestrator.trigger()` has no production caller;
-> - the advancer is feature-gated behind `ramals.orchestration.enabled`;
+> - production must explicitly set `ramals.orchestration.enabled` to `false` until activation;
 > - therefore no production workflow currently depends on abandoned-claim recovery.
 >
 > That is the entire basis on which the open durability gap is tolerable. It is not tolerable once
