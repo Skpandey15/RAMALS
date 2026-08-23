@@ -10,8 +10,10 @@ import io.ramals.learningplatform.grounding.GroundedContextItem.SourceType;
 import io.ramals.learningplatform.grounding.GroundingRetrievalService;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort.DecisionCorrelation;
+import io.ramals.learningplatform.grounding.ProposalGateDecisionPort.PreParseRejection;
 import io.ramals.learningplatform.grounding.ProposalGateReason;
 import io.ramals.learningplatform.grounding.ProposalGateResult;
+import io.ramals.learningplatform.grounding.ProposalType;
 import java.time.Clock;
 import java.util.List;
 import java.util.Set;
@@ -132,6 +134,16 @@ public class DiagnosticAssessmentService {
               envelope.agentRunId(),
               context.contextId());
     } catch (DiagnosticAssessmentProposal.MalformedProposalException malformed) {
+      decisions.appendPreParseRejection(
+          new PreParseRejection(
+              envelope.proposalId(),
+              requestId,
+              envelope.agentRunId(),
+              context.contextId(),
+              ProposalType.DIAGNOSTIC,
+              ProposalGateReason.PROPOSAL_INVALID,
+              malformed.reasonCode(),
+              new DecisionCorrelation(interactionId, traceId)));
       LOGGER
           .atWarn()
           .addKeyValue("operation", "ai.diagnosticAssessment.gate")

@@ -131,6 +131,53 @@ class GroundingPersistenceIntegrationTests {
         "SELECT reason_codes->>0 FROM ledger.proposal_gate_decision WHERE proposal_id = ?",
         String.class, proposal.proposalId())).isEqualTo("ACCEPTED");
 
+    int evidenceRowsBefore =
+        jdbc.queryForObject("SELECT count(*) FROM ledger.evidence", Integer.class);
+    int masteryRowsBefore =
+        jdbc.queryForObject("SELECT count(*) FROM ledger.mastery_snapshot", Integer.class);
+    ProposalGateDecisionPort.PreParseRejection malformed =
+        new ProposalGateDecisionPort.PreParseRejection(
+            "malformed-proposal-1",
+            "malformed-request-1",
+            "malformed-run-1",
+            first.contextId(),
+            ProposalType.DIAGNOSTIC,
+            ProposalGateReason.PROPOSAL_INVALID,
+            "PROPOSAL_DIAGNOSES_INVALID",
+            new ProposalGateDecisionPort.DecisionCorrelation("interaction-1", "trace-1"));
+    JdbcProposalGateDecisionRepository decisionRepository =
+        new JdbcProposalGateDecisionRepository(jdbc);
+
+    decisionRepository.appendPreParseRejection(malformed);
+    decisionRepository.appendPreParseRejection(malformed);
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.proposal_gate_decision WHERE proposal_id = ?",
+                Integer.class,
+                malformed.proposalId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                SELECT request_id, agent_run_id, context_id, accepted, reason_codes->>0 AS reason,
+                       parser_reason_code, interaction_id, trace_id
+                FROM ledger.proposal_gate_decision WHERE proposal_id = ?
+                """,
+                malformed.proposalId()))
+        .containsEntry("request_id", "malformed-request-1")
+        .containsEntry("agent_run_id", "malformed-run-1")
+        .containsEntry("context_id", first.contextId())
+        .containsEntry("accepted", false)
+        .containsEntry("reason", "PROPOSAL_INVALID")
+        .containsEntry("parser_reason_code", "PROPOSAL_DIAGNOSES_INVALID")
+        .containsEntry("interaction_id", "interaction-1")
+        .containsEntry("trace_id", "trace-1");
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM ledger.evidence", Integer.class))
+        .isEqualTo(evidenceRowsBefore);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM ledger.mastery_snapshot", Integer.class))
+        .isEqualTo(masteryRowsBefore);
+
     assertThatThrownBy(() -> jdbc.update(
         "UPDATE ledger.proposal_gate_decision SET accepted = false WHERE proposal_id = ?",
         proposal.proposalId())).isInstanceOf(DataAccessException.class);

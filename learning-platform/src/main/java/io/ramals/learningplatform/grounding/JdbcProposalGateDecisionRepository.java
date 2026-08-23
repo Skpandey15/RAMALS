@@ -37,4 +37,29 @@ public class JdbcProposalGateDecisionRepository implements ProposalGateDecisionP
         correlation == null ? null : correlation.interactionId(),
         correlation == null ? null : correlation.traceId());
   }
+
+  @Override
+  public void appendPreParseRejection(PreParseRejection rejection) {
+    DecisionCorrelation correlation = rejection.correlation();
+    jdbcTemplate.update(
+        """
+        INSERT INTO ledger.proposal_gate_decision
+          (id, proposal_id, request_id, agent_run_id, context_id, proposal_type, accepted,
+           reason_codes, referenced_evidence_ids, policy_version, interaction_id, trace_id,
+           parser_reason_code)
+        VALUES (?, ?, ?, ?, ?, ?, false, CAST(? AS jsonb), '[]'::jsonb, ?, ?, ?, ?)
+        ON CONFLICT (proposal_id, policy_version) DO NOTHING
+        """,
+        UuidV7.generate(),
+        rejection.proposalId(),
+        rejection.requestId(),
+        rejection.agentRunId(),
+        rejection.contextId(),
+        rejection.proposalType().name(),
+        JSON.writeValueAsString(List.of(rejection.publicReason().name())),
+        ProposalGroundingPolicy.VERSION,
+        correlation == null ? null : correlation.interactionId(),
+        correlation == null ? null : correlation.traceId(),
+        rejection.parserReasonCode());
+  }
 }

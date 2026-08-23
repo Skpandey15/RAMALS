@@ -146,6 +146,81 @@ class DiagnosticAssessmentProposalGateTests {
   }
 
   @Test
+  void strongDoesNotCountUnrelatedAuthoritativePolicyFacts() {
+    ProposalGateResult result =
+        gate.evaluate(
+            proposal("0.8000", List.of(diagnosis("offsets", "STRONG", "e-1", "p-1"))),
+            context(),
+            NOW);
+
+    assertThat(result.accepted()).isFalse();
+    assertThat(result.reasons()).contains(ProposalGateReason.EVIDENCE_INSUFFICIENT_FOR_STRONG);
+  }
+
+  @Test
+  void strongCountsTwoDistinctPermittedLearnerPerformanceFacts() {
+    ProposalGateResult result =
+        gate.evaluate(
+            proposal("0.8000", List.of(diagnosis("offsets", "STRONG", "e-1", "m-1"))),
+            context(),
+            NOW);
+
+    assertThat(result.accepted()).isTrue();
+  }
+
+  @Test
+  void strongDoesNotCountEvidenceExplicitlyLinkedToAnotherSkill() {
+    GroundedContext skillLinkedContext =
+        context(
+            item(
+                "other-e-1",
+                SourceType.LEARNER_EVIDENCE,
+                ContextAuthority.AUTHORITATIVE_FACT,
+                "other-skill"),
+            item(
+                "other-m-1",
+                SourceType.MASTERY,
+                ContextAuthority.AUTHORITATIVE_FACT,
+                "other-skill"));
+
+    ProposalGateResult result =
+        gate.evaluate(
+            proposal(
+                "0.8000",
+                List.of(diagnosis("offsets", "STRONG", "other-e-1", "other-m-1"))),
+            skillLinkedContext,
+            NOW);
+
+    assertThat(result.accepted()).isFalse();
+    assertThat(result.reasons()).contains(ProposalGateReason.EVIDENCE_INSUFFICIENT_FOR_STRONG);
+  }
+
+  @Test
+  void duplicateContextRowsForOneEvidenceIdCountOnlyOnceForStrong() {
+    GroundedContext duplicatedContext =
+        context(
+            item(
+                "e-duplicate",
+                SourceType.LEARNER_EVIDENCE,
+                ContextAuthority.AUTHORITATIVE_FACT,
+                null),
+            item(
+                "e-duplicate",
+                SourceType.MASTERY,
+                ContextAuthority.AUTHORITATIVE_FACT,
+                null));
+
+    ProposalGateResult result =
+        gate.evaluate(
+            proposal("0.8000", List.of(diagnosis("offsets", "STRONG", "e-duplicate"))),
+            duplicatedContext,
+            NOW);
+
+    assertThat(result.accepted()).isFalse();
+    assertThat(result.reasons()).contains(ProposalGateReason.EVIDENCE_INSUFFICIENT_FOR_STRONG);
+  }
+
+  @Test
   void e09_insufficientEvidenceAssertedWithNearCertaintyIsRejected() {
     ProposalGateResult result =
         gate.evaluate(
@@ -170,6 +245,45 @@ class DiagnosticAssessmentProposalGateTests {
 
     assertThat(result.accepted()).isFalse();
     assertThat(result.reasons()).contains(ProposalGateReason.SKILL_NOT_IN_CONTEXT);
+  }
+
+  @Test
+  void removingAllAuthoritativeSkillFactsFailsClosedAndRestoringThemResumesNormalBehavior() {
+    DiagnosticAssessmentProposal proposal =
+        proposal("0.8000", List.of(diagnosis("offsets", "WEAK", "e-1")));
+    GroundedContext original = context();
+    GroundedContext withoutSkillFacts =
+        contextFromItems(
+            original.items().stream()
+                .filter(item -> item.sourceType() != SourceType.SKILL_GRAPH)
+                .toList());
+
+    assertThat(gate.evaluate(proposal, original, NOW).accepted()).isTrue();
+    assertThat(gate.evaluate(proposal, withoutSkillFacts, NOW).reasons())
+        .contains(ProposalGateReason.SKILL_CONTEXT_MISSING);
+    assertThat(gate.evaluate(proposal, original, NOW).accepted()).isTrue();
+  }
+
+  @Test
+  void recommendationsAlsoFailClosedWhenAuthoritativeSkillContextIsMissing() {
+    DiagnosticAssessmentProposal proposal =
+        new DiagnosticAssessmentProposal(
+            DiagnosticAssessmentProposal.CONTRACT_VERSION,
+            "p-1",
+            "r-1",
+            "run-1",
+            CONTEXT_ID,
+            List.of(diagnosis("offsets", "WEAK", "e-1")),
+            List.of("offsets"),
+            new java.math.BigDecimal("0.8000"));
+    GroundedContext withoutSkillFacts =
+        contextFromItems(
+            context().items().stream()
+                .filter(item -> item.sourceType() != SourceType.SKILL_GRAPH)
+                .toList());
+
+    assertThat(gate.evaluate(proposal, withoutSkillFacts, NOW).reasons())
+        .contains(ProposalGateReason.SKILL_CONTEXT_MISSING);
   }
 
   @Test
@@ -306,6 +420,10 @@ class DiagnosticAssessmentProposalGateTests {
     items.add(item("p-1", SourceType.CURRICULUM_POLICY, ContextAuthority.AUTHORITATIVE_FACT, null));
     items.add(item("s-skill", SourceType.SKILL_GRAPH, ContextAuthority.AUTHORITATIVE_FACT, "offsets"));
     items.addAll(List.of(extra));
+    return contextFromItems(items);
+  }
+
+  private static GroundedContext contextFromItems(List<GroundedContextItem> items) {
     return new GroundedContext(
         GroundedContext.CONTRACT_VERSION,
         CONTEXT_ID,
