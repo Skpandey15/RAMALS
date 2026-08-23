@@ -5,11 +5,12 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 
 /** Subject-scoped, bounded read adapter over immutable M2-T12 evaluation decisions. */
@@ -59,22 +60,31 @@ public class AssessmentFeedbackRepository {
     if (raw == null || raw.isBlank()) {
       return List.of();
     }
+    StoredRubricResult[] stored;
     try {
-      StoredRubricResult[] stored = JSON.readValue(raw, StoredRubricResult[].class);
-      return Arrays.stream(stored)
-          .map(
-              result ->
-                  new RubricResult(
-                      result.dimensionId(),
-                      result.score(),
-                      result.maxScore(),
-                      result.reason()))
-          .toList();
-    } catch (RuntimeException invalidStoredProjection) {
-      // Stored proposal content is untrusted at the learner boundary. Fail closed without logging
-      // the raw JSON, which may contain rejected model content or learner data.
+      stored = JSON.readValue(raw, StoredRubricResult[].class);
+    } catch (JacksonException invalidStoredProjection) {
+      // Stored proposal content is untrusted at the learner boundary. Only a deserialization
+      // failure is absorbed here, and the raw JSON is never logged because it may carry rejected
+      // model content or learner data. A database availability or query failure is not caught, so
+      // it stays a failure instead of masquerading as an absent evaluation.
       return List.of();
     }
+    if (stored == null) {
+      return List.of();
+    }
+    List<RubricResult> results = new ArrayList<>(stored.length);
+    for (StoredRubricResult result : stored) {
+      if (result == null) {
+        // A null element deserializes cleanly but cannot be projected. Dropping it would present a
+        // silently incomplete rubric, so the whole decision fails closed to UNAVAILABLE.
+        return List.of();
+      }
+      results.add(
+          new RubricResult(
+              result.dimensionId(), result.score(), result.maxScore(), result.reason()));
+    }
+    return List.copyOf(results);
   }
 
   private static Instant instant(ResultSet result, String column) throws SQLException {
