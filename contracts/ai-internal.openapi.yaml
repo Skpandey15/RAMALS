@@ -227,6 +227,37 @@ paths:
         '503': { $ref: '#/components/responses/AiUnavailable' }
         '504': { $ref: '#/components/responses/DeadlineExceeded' }
 
+  /internal/v1/assessment-evaluation/propose:
+    post:
+      operationId: assessmentEvaluationPropose
+      tags: [agents]
+      summary: Propose rubric-bound evaluation of an AI-eligible learner response
+      description: >
+        M2-T11. This operation accepts only FREE_TEXT, DESIGN, or REASONING responses. MCQ,
+        TRUE_FALSE, NUMERIC, EXACT_MATCH, and executable responses have no representation on this
+        boundary and remain on Spring's deterministic scoring path. The response is a
+        NON_AUTHORITATIVE AssessmentEvaluationProposal; Spring's M2-T12 gate owns any score or
+        evidence effect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssessmentEvaluationRequest'
+      responses:
+        '200':
+          description: A non-authoritative, rubric-bound assessment evaluation proposal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProposalEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableProposal' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+        '504': { $ref: '#/components/responses/DeadlineExceeded' }
+
 components:
   securitySchemes:
     workloadIdentity:
@@ -651,6 +682,72 @@ components:
           maxLength: 64
           description: One transport attempt. New per retry.
         constraints: { $ref: '#/components/schemas/Constraints' }
+        groundedContext: { $ref: '#/components/schemas/GroundedContextEnvelope' }
+
+    AiEvaluatedResponseType:
+      type: string
+      enum: [FREE_TEXT, DESIGN, REASONING]
+      description: >
+        Response types for which semantic rubric evaluation is eligible. Deterministically scored
+        types are deliberately absent, so a caller cannot route them to AI by changing a flag.
+
+    AssessmentRubricDimension:
+      type: object
+      additionalProperties: false
+      required: [dimensionId, maxScore, criteria, evidenceId]
+      properties:
+        dimensionId: { type: string, minLength: 1, maxLength: 64 }
+        maxScore: { type: number, exclusiveMinimum: 0, maximum: 1000 }
+        criteria: { type: string, minLength: 1, maxLength: 1000 }
+        evidenceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Stable ID of the approved rubric fact in groundedContext.
+
+    AssessmentEvaluationContext:
+      type: object
+      additionalProperties: false
+      required: [responseType, answerVersion, rubricVersion, answerEvidenceId, answerText,
+                 rubricDimensions]
+      description: >
+        A bounded, versioned answer and approved rubric assembled by Spring. Its evidence IDs must
+        resolve to authoritative ASSESSMENT facts in groundedContext; the AI plane validates that
+        binding before dispatch.
+      properties:
+        responseType: { $ref: '#/components/schemas/AiEvaluatedResponseType' }
+        answerVersion: { type: string, minLength: 1, maxLength: 64 }
+        rubricVersion: { type: string, minLength: 1, maxLength: 64 }
+        answerEvidenceId: { type: string, minLength: 1, maxLength: 64 }
+        answerText: { type: string, minLength: 1, maxLength: 12000 }
+        rubricDimensions:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: { $ref: '#/components/schemas/AssessmentRubricDimension' }
+
+    AssessmentEvaluationRequest:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, interactionId, requestId, constraints, evaluationContext,
+                 groundedContext]
+      description: >
+        M2-T11 request with no natural learner identifier and no authority-bearing action. The
+        typed evaluation context is bound to the authorized grounded context by evidence IDs.
+      properties:
+        contractVersion: { $ref: '#/components/schemas/ContractVersion' }
+        interactionId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Logical learner action. Stable across safe retries.
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Stable logical idempotency identity for this evaluation.
+        constraints: { $ref: '#/components/schemas/Constraints' }
+        evaluationContext: { $ref: '#/components/schemas/AssessmentEvaluationContext' }
         groundedContext: { $ref: '#/components/schemas/GroundedContextEnvelope' }
 
     Capabilities:

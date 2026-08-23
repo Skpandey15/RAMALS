@@ -20,6 +20,7 @@ from ramals_ai.api.correlation import CorrelationMiddleware
 from ramals_ai.api.health import ServiceState, build_health_router
 from ramals_ai.api.internal import build_internal_router
 from ramals_ai.assessment.agent import AssessmentAgent
+from ramals_ai.assessment_evaluation.agent import AssessmentEvaluationAgent
 from ramals_ai.config.settings import ConfigurationError, ModelRoute, Settings, get_settings
 from ramals_ai.diagnostic.agent import DiagnosticAgent
 from ramals_ai.diagnostic_assessment.agent import DiagnosticAssessmentAgent
@@ -125,6 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "diagnostic_assessment": DiagnosticAssessmentAgent(gateway, prompts=prompts),
         "tutor": TutorAgent(gateway, prompts=prompts),
         "assessment": AssessmentAgent(gateway, prompts=prompts),
+        "assessment_evaluation": AssessmentEvaluationAgent(gateway, prompts=prompts),
         "adaptation": AdaptationAgent(gateway, prompts=prompts),
     }
     return app

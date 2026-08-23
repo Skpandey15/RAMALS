@@ -285,6 +285,67 @@ class DiagnosticAssessmentRequest(BaseModel):
     groundedContext: GroundedContextEnvelope
 
 
+class AiEvaluatedResponseType(StrEnum):
+    FREE_TEXT = 'FREE_TEXT'
+    DESIGN = 'DESIGN'
+    REASONING = 'REASONING'
+
+
+class AssessmentRubricDimension(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    dimensionId: Annotated[str, Field(max_length=64, min_length=1)]
+    maxScore: Annotated[float, Field(gt=0.0, le=1000.0)]
+    criteria: Annotated[str, Field(max_length=1000, min_length=1)]
+    evidenceId: Annotated[
+        str,
+        Field(
+            description='Stable ID of the approved rubric fact in groundedContext.',
+            max_length=64,
+            min_length=1,
+        ),
+    ]
+
+
+class AssessmentEvaluationContext(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    responseType: AiEvaluatedResponseType
+    answerVersion: Annotated[str, Field(max_length=64, min_length=1)]
+    rubricVersion: Annotated[str, Field(max_length=64, min_length=1)]
+    answerEvidenceId: Annotated[str, Field(max_length=64, min_length=1)]
+    answerText: Annotated[str, Field(max_length=12000, min_length=1)]
+    rubricDimensions: Annotated[list[AssessmentRubricDimension], Field(max_length=32, min_length=1)]
+
+
+class AssessmentEvaluationRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    contractVersion: ContractVersion
+    interactionId: Annotated[
+        str,
+        Field(
+            description='Logical learner action. Stable across safe retries.',
+            max_length=64,
+            min_length=1,
+        ),
+    ]
+    requestId: Annotated[
+        str,
+        Field(
+            description='Stable logical idempotency identity for this evaluation.',
+            max_length=64,
+            min_length=1,
+        ),
+    ]
+    constraints: Constraints
+    evaluationContext: AssessmentEvaluationContext
+    groundedContext: GroundedContextEnvelope
+
+
 class Capabilities(BaseModel):
     model_config = ConfigDict(
         extra='forbid',

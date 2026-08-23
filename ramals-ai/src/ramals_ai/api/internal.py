@@ -21,9 +21,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ramals_ai.adaptation.agent import AdaptationAgent
 from ramals_ai.assessment.agent import AssessmentAgent
+from ramals_ai.assessment_evaluation.agent import AssessmentEvaluationAgent
+from ramals_ai.assessment_evaluation.validation import require_evaluation_request
 from ramals_ai.contracts.generated import (
     AIProposalEnvelope,
     AIRequestEnvelope,
+    AssessmentEvaluationRequest,
     DiagnosticAssessmentRequest,
 )
 from ramals_ai.diagnostic.agent import DiagnosticAgent
@@ -184,6 +187,26 @@ def build_internal_router() -> APIRouter:
         agent: AssessmentAgent = request.app.state.agents["assessment"]
         return _run(agent.evaluate, envelope)
 
+    @router.post("/assessment-evaluation/propose", response_model=AIProposalEnvelope)
+    def assessment_evaluation_propose(
+        request: Request, payload: AssessmentEvaluationRequest
+    ) -> AIProposalEnvelope | JSONResponse:
+        """M2-T11 proposal-only rubric evaluation for AI-eligible response types."""
+        agent: AssessmentEvaluationAgent = request.app.state.agents["assessment_evaluation"]
+        try:
+            context = GroundedContext.model_validate(
+                payload.groundedContext.model_dump(mode="json")
+            )
+            require_evaluation_request(payload, context)
+        except ValueError as refused:
+            return _problem(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                _context_refusal_code(refused),
+                "The supplied evaluation context was refused.",
+            )
+        deadline = Deadline.in_ms(payload.constraints.deadlineMs)
+        return _execute(lambda: agent.propose(payload, context, deadline=deadline))
+
     @router.post("/adaptation/propose", response_model=AIProposalEnvelope)
     def adaptation_propose(
         request: Request, envelope: AIRequestEnvelope
@@ -277,6 +300,11 @@ def _grounding_code(refused: Exception) -> str:
     # require_grounding raises it bare. Both must yield the same code.
     found = re.search(r"GROUNDING_[A-Z_]{3,50}", str(refused))
     return found.group(0) if found else "GROUNDING_CONTRACT_INVALID"
+
+
+def _context_refusal_code(refused: Exception) -> str:
+    found = re.search(r"(?:GROUNDING|EVALUATION)_[A-Z_]{3,60}", str(refused))
+    return found.group(0) if found else "EVALUATION_CONTEXT_INVALID"
 
 
 class InvalidPolicyInputError(ValueError):
