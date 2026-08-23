@@ -17,6 +17,9 @@ import io.ramals.learningplatform.ai.contract.Usage;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationDecisionRecord;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionService;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationReplayConflictException;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentFeedbackRepository;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentFeedbackService;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentFeedbackStatus;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Decision;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DeterministicCheck;
@@ -381,6 +384,16 @@ class GroundingPersistenceIntegrationTests {
         .isEqualTo(evidenceBefore);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM ledger.mastery_snapshot", Integer.class))
         .isEqualTo(masteryBefore);
+
+    AssessmentFeedbackService feedbackService =
+        new AssessmentFeedbackService(new AssessmentFeedbackRepository(jdbc));
+    assertThat(feedbackService.latest("evaluation-gate-a").status())
+        .isEqualTo(AssessmentFeedbackStatus.EVALUATED);
+    assertThat(feedbackService.latest("evaluation-gate-a").approvedFeedback().feedback())
+        .isEqualTo("The answer is mostly accurate.");
+    new LearnerRepository(jdbc).provisionForSubject("evaluation-gate-b");
+    assertThat(feedbackService.latest("evaluation-gate-b").status())
+        .isEqualTo(AssessmentFeedbackStatus.UNAVAILABLE);
 
     Decision conflicting =
         new Decision(

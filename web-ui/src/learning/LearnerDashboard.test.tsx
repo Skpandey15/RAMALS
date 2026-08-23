@@ -11,6 +11,7 @@ vi.mock('./api', () => ({
   submitDiagnostic: vi.fn(),
   getMasteryMap: vi.fn(),
   getRecommendations: vi.fn(),
+  getAssessmentFeedback: vi.fn(),
 }));
 
 import { LearnerDashboard } from './LearnerDashboard';
@@ -68,6 +69,10 @@ const ATTEMPT = {
 describe('LearnerDashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getAssessmentFeedback).mockResolvedValue({
+      status: 'UNAVAILABLE',
+      approvedFeedback: null,
+    });
   });
 
   it('completes the diagnostic to mastery to recommendation slice', async () => {

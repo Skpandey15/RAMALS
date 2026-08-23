@@ -74,6 +74,33 @@ export interface Recommendations {
   readonly recommendations: readonly Recommendation[];
 }
 
+export type AssessmentFeedbackStatus =
+  | 'EVALUATED'
+  | 'REJECTED'
+  | 'MANUAL_REVIEW'
+  | 'UNAVAILABLE';
+
+export interface EvaluationRubricResult {
+  readonly dimensionId: string;
+  readonly score: number;
+  readonly maxScore: number;
+  readonly feedback: string;
+}
+
+export interface ApprovedEvaluationFeedback {
+  readonly answerVersion: string;
+  readonly rubricVersion: string;
+  readonly feedback: string;
+  readonly rubricResults: readonly EvaluationRubricResult[];
+  readonly nextLearningRationale: string;
+  readonly evaluatedAt: string;
+}
+
+export interface AssessmentFeedback {
+  readonly status: AssessmentFeedbackStatus;
+  readonly approvedFeedback: ApprovedEvaluationFeedback | null;
+}
+
 export interface ItemResponseInput {
   readonly itemId: string;
   readonly selectedOptions: readonly string[];
@@ -120,4 +147,11 @@ export function getMasteryMap(): Promise<MasteryMap> {
 
 export function getRecommendations(): Promise<Recommendations> {
   return apiRequest('/api/v1/me/recommendations', { method: 'GET' });
+}
+
+export function getAssessmentFeedback(signal?: AbortSignal): Promise<AssessmentFeedback> {
+  return apiRequest('/api/v1/me/assessment-evaluations/latest-feedback', {
+    method: 'GET',
+    signal,
+  });
 }

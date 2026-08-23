@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { DiagnosticPanel } from './DiagnosticPanel';
+import { EvaluationFeedbackPanel } from './EvaluationFeedbackPanel';
 import { MasteryMap } from './MasteryMap';
 import { RecommendationsPanel } from './RecommendationsPanel';
 import {
@@ -49,6 +50,7 @@ export function LearnerDashboard({ onLogout }: { onLogout: () => void }) {
       {error != null && <ErrorBanner error={error} />}
 
       <DiagnosticPanel onCompleted={() => void refresh()} />
+      <EvaluationFeedbackPanel />
       <MasteryMap skills={skills} />
       <RecommendationsPanel recommendations={recommendations} />
     </main>

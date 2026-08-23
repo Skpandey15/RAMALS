@@ -139,6 +139,16 @@ class MigrationScriptContractTests {
         .doesNotContain("answer_text");
   }
 
+  @Test
+  void assessmentFeedbackReadHasAnOwnedContextLatestDecisionIndex() throws IOException {
+    String migration =
+        statements("/db/migration/V032__assessment_feedback_read_index.sql");
+
+    assertThat(migration)
+        .contains("CREATE INDEX idx_assessment_evaluation_context_decided")
+        .contains("(context_id, decided_at DESC, id DESC)");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");

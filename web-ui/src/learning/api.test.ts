@@ -10,6 +10,7 @@ vi.mock('../auth/authClient', () => ({
 import { authenticatedFetch } from '../auth/authClient';
 import {
   getAttempt,
+  getAssessmentFeedback,
   getMasteryMap,
   getRecommendations,
   startDiagnostic,
@@ -77,6 +78,19 @@ describe('learning API client', () => {
     );
     await getAttempt('a1');
     expect(lastCall().url).toMatch(/\/api\/v1\/diagnostics\/KAFKA\/attempts\/a1$/);
+  });
+
+  it('reads the latest authorized feedback without issuing a command', async () => {
+    vi.mocked(authenticatedFetch).mockResolvedValue(
+      jsonResponse({ status: 'UNAVAILABLE', approvedFeedback: null }),
+    );
+
+    await getAssessmentFeedback();
+    const { url, init } = lastCall();
+
+    expect(url).toMatch(/\/api\/v1\/me\/assessment-evaluations\/latest-feedback$/);
+    expect(init.method).toBe('GET');
+    expect(init.body).toBeUndefined();
   });
 
   it('submits responses as JSON', async () => {
