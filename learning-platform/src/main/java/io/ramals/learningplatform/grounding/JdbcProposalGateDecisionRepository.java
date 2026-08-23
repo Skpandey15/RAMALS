@@ -39,6 +39,52 @@ public class JdbcProposalGateDecisionRepository implements ProposalGateDecisionP
   }
 
   @Override
+  public java.util.Optional<RecordedDecision> findDecision(
+      String requestId, ProposalType proposalType) {
+    if (requestId == null || requestId.isBlank() || proposalType == null) {
+      return java.util.Optional.empty();
+    }
+    return jdbcTemplate
+        .query(
+            """
+            SELECT request_id, proposal_id, agent_run_id, context_id, accepted, reason_codes
+              FROM ledger.proposal_gate_decision
+             WHERE request_id = ? AND proposal_type = ?
+             ORDER BY decided_at DESC, id DESC
+             LIMIT 1
+            """,
+            (result, row) ->
+                new RecordedDecision(
+                    result.getString("request_id"),
+                    result.getString("proposal_id"),
+                    result.getString("agent_run_id"),
+                    result.getString("context_id"),
+                    result.getBoolean("accepted"),
+                    reasonCodes(result.getString("reason_codes"))),
+            requestId,
+            proposalType.name())
+        .stream()
+        .findFirst();
+  }
+
+  /**
+   * Stored reason codes, or none.
+   *
+   * <p>Fails closed to an empty list rather than throwing: a recovering caller needs the accepted
+   * flag, and losing the audit prose must not cost it the verdict.
+   */
+  private static List<String> reasonCodes(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return List.of();
+    }
+    try {
+      return List.of(JSON.readValue(raw, String[].class));
+    } catch (tools.jackson.core.JacksonException unreadable) {
+      return List.of();
+    }
+  }
+
+  @Override
   public void appendPreParseRejection(PreParseRejection rejection) {
     DecisionCorrelation correlation = rejection.correlation();
     jdbcTemplate.update(

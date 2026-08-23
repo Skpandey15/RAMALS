@@ -50,12 +50,13 @@ class LearningWorkflowOrchestratorTests {
   private static final UUID EVIDENCE_ID = UUID.randomUUID();
   private static final UUID SNAPSHOT_ID = UUID.randomUUID();
 
-  private final InMemoryWorkflowStore store = new InMemoryWorkflowStore();
   private final EvidenceService evidence = mock(EvidenceService.class);
   private final MasteryService mastery = mock(MasteryService.class);
   private final RecordingDiagnostic diagnostic = new RecordingDiagnostic();
   private final RecordingAdaptation adaptation = new RecordingAdaptation();
   private final AtomicReference<Instant> now = new AtomicReference<>(T0);
+  private final RecordingUnitOfWork unitOfWork = new RecordingUnitOfWork();
+  private final InMemoryWorkflowStore store = new InMemoryWorkflowStore(() -> now.get());
 
   private LearningWorkflowOrchestrator orchestrator;
 
@@ -68,6 +69,7 @@ class LearningWorkflowOrchestratorTests {
             mastery,
             diagnostic,
             adaptation,
+            unitOfWork,
             movingClock());
     when(evidence.recordEvaluationEvidence(
             any(), any(), any(), any(), anyString(), anyString(), any(), anyString()))
@@ -331,7 +333,7 @@ class LearningWorkflowOrchestratorTests {
     Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
     var claim =
         store.claimStep(run.id(), Step.RECORD_EVALUATION_EVIDENCE,
-            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS).orElseThrow();
+            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE).orElseThrow();
 
     // The run is cancelled while that claim is notionally in flight; the terminal transition clears
     // the token, so the returning worker has nothing to update.
@@ -349,14 +351,47 @@ class LearningWorkflowOrchestratorTests {
 
     var first =
         store.claimStep(run.id(), Step.RECORD_EVALUATION_EVIDENCE,
-            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS);
+            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE);
     var second =
         store.claimStep(run.id(), Step.RECORD_EVALUATION_EVIDENCE,
-            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS);
+            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE);
 
     assertThat(first).isPresent();
     assertThat(second).isEmpty();
     assertThat(step(run.id(), Step.RECORD_EVALUATION_EVIDENCE).attemptCount()).isEqualTo(1);
+  }
+
+  @Test
+  void aLocalStepCommitsItsEffectInsideTheSameTransactionAsItsWorkflowMarker() {
+    when(evidence.recordEvaluationEvidence(
+            any(), any(), any(), any(), anyString(), anyString(), any(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              // Observed at the moment the effect runs: it must already be inside the unit of work
+              // that will also record the step completion, or a crash between them loses the link.
+              unitOfWork.observe("evidence");
+              return evidenceRow();
+            });
+
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+    orchestrator.advance(run.id());
+
+    assertThat(unitOfWork.ranInsideTransaction).contains("evidence");
+  }
+
+  @Test
+  void aRemoteStepNeverRunsInsideATransaction() {
+    // The rule that matters most in this file: a database connection held across a provider call is
+    // held for seconds. This asserts the orchestrator's branch, not a comment about it.
+    diagnostic.observer = () -> unitOfWork.observe("diagnose");
+
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+    drive(run.id());
+
+    assertThat(unitOfWork.ranOutsideTransaction)
+        .as("the diagnostic provider call must not hold a transaction")
+        .contains("diagnose");
+    assertThat(unitOfWork.ranInsideTransaction).doesNotContain("diagnose");
   }
 
   /** Drives the workflow until it is terminal, with a hard cap so a stuck run fails the test. */
@@ -404,15 +439,40 @@ class LearningWorkflowOrchestratorTests {
         "MASTERY_V1", "CONFIDENCE_V1", "interaction-1", T0);
   }
 
+  /** Reports whether work ran inside the transaction boundary, so tests can assert the branch. */
+  private static final class RecordingUnitOfWork implements WorkflowUnitOfWork {
+    private boolean open;
+    private final List<String> ranInsideTransaction = new ArrayList<>();
+    private final List<String> ranOutsideTransaction = new ArrayList<>();
+
+    @Override
+    public void inOneTransaction(Runnable writes) {
+      open = true;
+      try {
+        writes.run();
+      } finally {
+        open = false;
+      }
+    }
+
+    void observe(String what) {
+      (open ? ranInsideTransaction : ranOutsideTransaction).add(what);
+    }
+  }
+
   private static final class RecordingDiagnostic implements WorkflowAgentStep.Diagnostic {
     private WorkflowAgentStep.Result result =
         WorkflowAgentStep.Result.accepted("DIAGNOSIS_ACCEPTED", "req-diagnose");
     private int failuresBeforeSuccess;
     private int calls;
+    private Runnable observer;
 
     @Override
     public Result diagnose(Run run) {
       calls++;
+      if (observer != null) {
+        observer.run();
+      }
       if (failuresBeforeSuccess > 0) {
         failuresBeforeSuccess--;
         return Result.failed("DIAGNOSIS_UNAVAILABLE", null);
@@ -439,8 +499,11 @@ class LearningWorkflowOrchestratorTests {
     private final List<Run> runs = new ArrayList<>();
     private final List<StepRun> steps = new ArrayList<>();
 
-    private InMemoryWorkflowStore() {
+    private final java.util.function.Supplier<Instant> clock;
+
+    private InMemoryWorkflowStore(java.util.function.Supplier<Instant> clock) {
       super(null);
+      this.clock = clock;
     }
 
     int runCount() {
@@ -500,7 +563,7 @@ class LearningWorkflowOrchestratorTests {
     // state-machine scenarios stay fast, not so the claim can be proved here.
     @Override
     public java.util.Optional<LearningWorkflow.StepClaim> claimStep(
-        UUID runId, Step step, int maxAttempts) {
+        UUID runId, Step step, int maxAttempts, java.time.Duration lease) {
       Run run = findById(runId).orElse(null);
       if (run == null || run.status() != Status.RUNNING || run.currentStep() != step) {
         return java.util.Optional.empty();
@@ -511,17 +574,22 @@ class LearningWorkflowOrchestratorTests {
         steps.add(
             new StepRun(
                 UUID.randomUUID(), runId, step, StepStatus.RUNNING, 1, null, null, null, token,
-                T0, null));
+                clock.get(), T0, null));
         return java.util.Optional.of(new LearningWorkflow.StepClaim(runId, step, 1, token));
       }
-      if (existing.status() != StepStatus.PENDING || existing.attemptCount() >= maxAttempts) {
+      boolean leaseExpired =
+          existing.status() == StepStatus.RUNNING
+              && existing.claimedAt() != null
+              && !existing.claimedAt().plus(lease).isAfter(clock.get());
+      boolean claimable = existing.status() == StepStatus.PENDING || leaseExpired;
+      if (!claimable || existing.attemptCount() >= maxAttempts) {
         return java.util.Optional.empty();
       }
       int attempt = existing.attemptCount() + 1;
       replaceStep(
           new StepRun(
               existing.id(), runId, step, StepStatus.RUNNING, attempt, null, existing.requestId(),
-              existing.resultRef(), token, existing.startedAt(), null));
+              existing.resultRef(), token, clock.get(), existing.startedAt(), null));
       return java.util.Optional.of(new LearningWorkflow.StepClaim(runId, step, attempt, token));
     }
 
@@ -536,7 +604,7 @@ class LearningWorkflowOrchestratorTests {
       replaceStep(
           new StepRun(
               existing.id(), claim.runId(), claim.step(), status, existing.attemptCount(),
-              reasonCode, requestId, resultRef, null, existing.startedAt(), T0));
+              reasonCode, requestId, resultRef, null, existing.claimedAt(), existing.startedAt(), T0));
       return true;
     }
 
@@ -550,7 +618,7 @@ class LearningWorkflowOrchestratorTests {
           new StepRun(
               existing.id(), claim.runId(), claim.step(), StepStatus.PENDING,
               existing.attemptCount(), reasonCode, existing.requestId(), existing.resultRef(),
-              null, existing.startedAt(), null));
+              null, existing.claimedAt(), existing.startedAt(), null));
       return true;
     }
 
@@ -562,7 +630,7 @@ class LearningWorkflowOrchestratorTests {
       steps.add(
           new StepRun(
               UUID.randomUUID(), runId, step, StepStatus.SKIPPED, 0, reasonCode, null, null, null,
-              T0, T0));
+              null, T0, T0));
     }
 
     @Override
@@ -572,13 +640,14 @@ class LearningWorkflowOrchestratorTests {
       if (existing == null) {
         steps.add(
             new StepRun(
-                UUID.randomUUID(), runId, step, status, 0, reasonCode, null, null, null, T0, T0));
+                UUID.randomUUID(), runId, step, status, 0, reasonCode, null, null, null, null, T0, T0));
         return;
       }
       replaceStep(
           new StepRun(
               existing.id(), runId, step, status, existing.attemptCount(), reasonCode,
-              existing.requestId(), existing.resultRef(), null, existing.startedAt(), T0));
+              existing.requestId(), existing.resultRef(), null, existing.claimedAt(),
+              existing.startedAt(), T0));
     }
 
     @Override

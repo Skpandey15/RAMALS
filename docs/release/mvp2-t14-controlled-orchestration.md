@@ -273,7 +273,9 @@ crash-qualified.** The execution token added during remediation guarantees concu
 stale-worker safety. It does not guarantee recovery from process death: there is no lease, so a
 claim held by a dead JVM is never released.
 
-*Status: OPEN.* Detail follows.
+*Status: MECHANISM IMPLEMENTED — QUALIFICATION OPEN.* The remediation described below has landed;
+what remains is proving it under injected process death, which is M2-T15's. The prerequisite is not
+CLOSED until that qualification passes. Detail follows, reconciled after implementation.
 
 ### Prerequisite 3 — what the execution token does and does not guarantee
 
@@ -296,8 +298,12 @@ Not guaranteed: recovery from process death.
 
 ### Prerequisite 3 — current failure semantics
 
-> **Safe but not self-recovering. An abandoned RUNNING claim may remain stranded until the workflow
-> deadline.**
+> **Superseded by the implementation recorded at the end of this section.** The paragraphs below
+> describe the behaviour as it stood when this prerequisite was raised, and are kept because the
+> reasoning that drove the fix order depends on them.
+>
+> **As raised: safe but not self-recovering. An abandoned RUNNING claim may remain stranded until the
+> workflow deadline.**
 
 No duplicate authoritative effect is introduced by any of the four windows. The evidence write is
 idempotent on its lineage key; the adaptation hand-off is idempotent on the snapshot, decision and
@@ -352,4 +358,36 @@ converts today's **safe timeout degradation into duplicate authoritative effects
 
 P0 through P3 must therefore land in order. The lease is last because it is only safe once every step
 can be replayed without producing a second authoritative effect.
+
+### Prerequisite 3 — implementation, as landed
+
+P0 through P3 were implemented in that order and in a single change, because P3 is only safe once
+P0 to P2 exist and separate merges invite exactly the partial adoption the ordering exists to
+prevent. What changed:
+
+- **P0** — step completion and the run cursor or terminal transition commit together, closing the
+  window in which a step was COMPLETED while the run still pointed at it.
+- **P1** — for steps whose effect is a write to this same database, the effect and the claimed-step
+  completion commit as one unit through a named `WorkflowUnitOfWork` boundary. `Step` gained a
+  `remoteCall` property so the provider call is excluded by construction, and a test asserts the
+  diagnostic call runs with no transaction open rather than trusting a comment to keep it that way.
+- **P2** — `DIAGNOSE` looks up the gate decision recorded under its stable request identity and
+  adopts it before considering dispatch. At-most-once dispatch is unchanged: this adds a read, not a
+  second provider call.
+- **P3** — `claimStep` additionally accepts a RUNNING step whose `claimed_at` has passed
+  `CLAIM_LEASE` (one minute, against a twelve-second step deadline). Reclaim issues a new execution
+  token, so a lease set too short costs duplicated effort rather than a duplicated effect. The
+  exhausted-attempt check was widened to match, or a reclaimable step with no attempts left would
+  have stalled in place of the window being closed.
+
+No migration was required: `claimed_at` was already recorded by the earlier remediation.
+
+Each guard was perturbed and shown to fail the corresponding test: removing the recovery lookup
+fails three adoption tests, ignoring the lease fails three concurrency tests, wrapping the provider
+call in a transaction fails the no-transaction-across-a-call test, and separating a local effect from
+its marker fails the atomicity test.
+
+**What is still open.** The mechanism exists and is unit- and integration-tested against real
+PostgreSQL. It has **not** been qualified under injected process death at the four crash windows
+above. Until M2-T15 does that, prerequisite 3 is not CLOSED and the activation gate still holds.
 

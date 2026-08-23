@@ -10,6 +10,7 @@ import io.ramals.learningplatform.orchestration.LearningWorkflow.StepStatus;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -35,7 +36,7 @@ public class LearningWorkflowRepository {
   private static final String STEP_COLUMNS =
       """
       id, run_id, step_name, status, attempt_count, reason_code, request_id, result_ref,
-      execution_token, started_at, completed_at
+      execution_token, claimed_at, started_at, completed_at
       """;
 
   private final JdbcTemplate jdbc;
@@ -136,13 +137,19 @@ public class LearningWorkflowRepository {
    *
    * <p>One statement, so two workers polling the same run cannot both win. The claim is refused
    * unless the run is still RUNNING and still sitting on this exact step, and unless the step is
-   * either unseen or PENDING: a step another worker is RUNNING is never taken from it. The attempt
-   * ceiling is part of the same predicate, so a competing caller cannot spend an attempt that the
-   * winner is already using.
+   * either unseen, PENDING, or RUNNING under a claim whose lease has expired. The attempt ceiling is
+   * part of the same predicate, so a competing caller cannot spend an attempt that the winner is
+   * already using.
+   *
+   * <p>The lease is what makes a dead worker recoverable: a claim is otherwise held forever by a
+   * process that no longer exists, and the run reaches its deadline having done nothing. Reclaiming
+   * issues a new execution token, so the original worker -- if it is somehow still alive -- fails
+   * its completion against the same compare-and-set that rejects a cancelled one.
    *
    * <p>Commits before the caller does any remote work, and holds no transaction across it.
    */
-  public Optional<StepClaim> claimStep(UUID runId, Step step, int maxAttempts) {
+  public Optional<StepClaim> claimStep(
+      UUID runId, Step step, int maxAttempts, Duration lease) {
     UUID token = UUID.randomUUID();
     int claimed =
         jdbc.update(
@@ -163,7 +170,10 @@ public class LearningWorkflowRepository {
                   completed_at = NULL,
                   reason_code = NULL,
                   updated_at = CURRENT_TIMESTAMP
-             WHERE core.learning_workflow_step.status = 'PENDING'
+             WHERE (core.learning_workflow_step.status = 'PENDING'
+                    OR (core.learning_workflow_step.status = 'RUNNING'
+                        AND core.learning_workflow_step.claimed_at
+                            < CURRENT_TIMESTAMP - CAST(? AS interval)))
                AND core.learning_workflow_step.attempt_count < ?
             """,
             UuidV7.generate(),
@@ -172,6 +182,7 @@ public class LearningWorkflowRepository {
             token,
             runId,
             step.name(),
+            lease.toSeconds() + " seconds",
             maxAttempts);
     if (claimed == 0) {
       return Optional.empty();
@@ -347,6 +358,7 @@ public class LearningWorkflowRepository {
             result.getString("request_id"),
             result.getObject("result_ref", UUID.class),
             result.getObject("execution_token", UUID.class),
+            instant(result, "claimed_at"),
             instant(result, "started_at"),
             instant(result, "completed_at"));
   }

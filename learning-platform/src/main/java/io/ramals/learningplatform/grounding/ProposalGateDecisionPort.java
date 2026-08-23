@@ -22,6 +22,28 @@ public interface ProposalGateDecisionPort {
   void appendDecision(
       ProposalGroundingRequest proposal, ProposalGateResult result, DecisionCorrelation correlation);
 
+  /**
+   * The decision already recorded for a request identity, if there is one.
+   *
+   * <p>Exists for crash recovery, not for reads on the happy path. Dispatch is at-most-once: an
+   * execution commissions before the provider is called, so a worker that dies after the verdict was
+   * persisted cannot obtain it again by asking the model. It has to be able to look it up, or a
+   * successful diagnosis is thrown away.
+   *
+   * @param requestId the deterministic request identity the decision was recorded under
+   * @param proposalType narrows the lookup to one proposal family
+   */
+  java.util.Optional<RecordedDecision> findDecision(String requestId, ProposalType proposalType);
+
+  /** A durable gate outcome, reduced to what a recovering caller needs to resume from. */
+  record RecordedDecision(
+      String requestId,
+      String proposalId,
+      String agentRunId,
+      String contextId,
+      boolean accepted,
+      java.util.List<String> reasonCodes) {}
+
   /** M2-T07 callers that carry no correlation. Retained so their behaviour is unchanged. */
   default void appendDecision(ProposalGroundingRequest proposal, ProposalGateResult result) {
     appendDecision(proposal, result, DecisionCorrelation.absent());
