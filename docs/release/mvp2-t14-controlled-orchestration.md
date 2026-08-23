@@ -394,9 +394,10 @@ PostgreSQL. It has **not** been qualified under injected process death at the fo
 above. Until M2-T15 does that, prerequisite 3 is not CLOSED and the activation gate still holds.
 
 A further review then found that the DIAGNOSE recovery above covered only one of five durable
-states. That analysis, and the state which remains open, follow.
+states. That analysis follows, together with the one state it could not recover -- which a later
+change eliminated.
 
-### Prerequisite 3 — DIAGNOSE recovery states, and the one that remains open
+### Prerequisite 3 — DIAGNOSE recovery states, and the one that remained open
 
 A further independent review found that the first recovery implementation covered only the last of
 five durable states. It handled *gate decision exists → adopt*, and fell through to redispatch for
@@ -486,15 +487,21 @@ The absolute run deadline still uses the JVM clock. It is set and compared with 
 is self-consistent, and `finishRun` is guarded on RUNNING so only one instance can act on it. That is
 a smaller residual and is recorded here rather than fixed silently.
 
-### Status of prerequisite 3
+### Status of prerequisite 3, as it stood at this point
 
-*Status: PARTIALLY IMPLEMENTED — one state open, qualification open.*
+> **Superseded.** This was the position when state 4 was still open. The atomicity change proposed
+> above has since landed and eliminated it; the current status is
+> [at the end of this section](#status-of-prerequisite-3). Kept because the reasoning above -- why a
+> lease must come last, and why state 4 could not be recovered -- was written against it.
+
+*Status at the time: PARTIALLY IMPLEMENTED — one state open, qualification open.*
 
 - Abandoned-claim reclaim, effect/marker atomicity, and DIAGNOSE recovery states 1, 2, 3 and 5 are
   implemented and tested against real PostgreSQL, including the three crash points: after commission
   and before provider invocation; after provider success and before the gate decision; after the
   gate decision and before workflow adoption.
-- **State 4 remains open** pending the atomicity change proposed above.
+- **State 4 was open** at this point, pending the atomicity change proposed above. It is now
+  unreachable through this path; see the elimination below.
 - Nothing here has been qualified under injected process death. M2-T15 owns that.
 
 The prerequisite is **not CLOSED** and the activation gate continues to hold.
@@ -560,7 +567,8 @@ failure test.
 
 ### Status of prerequisite 3
 
-*Status: IMPLEMENTED — QUALIFICATION OPEN.*
+*Status: IMPLEMENTED — QUALIFICATION OPEN.* This is the current status; the earlier one above is
+marked superseded.
 
 All five DIAGNOSE recovery states are now handled, and state 4 is unreachable through this path
 rather than merely reported. What remains is qualification: **none of this has been exercised by
