@@ -74,8 +74,8 @@ class Mvp2ContractTests {
   }
 
   @Test
-  @DisplayName("assessment feedback evidence is mandatory at the Spring gate boundary")
-  void assessmentEvaluationSchemaRequiresFeedbackEvidence() throws IOException {
+  @DisplayName("assessment evidence remains v1-compatible and is mandatory at the Spring gate")
+  void assessmentEvaluationSchemaPreservesFrozenOptionalEvidence() throws IOException {
     String schema =
         Files.readString(
             CONTRACTS.resolve("assessment-evaluation-proposal.v1.schema.json"),
@@ -83,6 +83,8 @@ class Mvp2ContractTests {
 
     assertThat(schema)
         .contains(
+            "\"dimensions\", \"feedback\", \"confidence\"")
+        .doesNotContain(
             "\"dimensions\", \"feedback\", \"evidenceIds\", \"confidence\"")
         .contains("\"evidenceIds\": { \"type\": \"array\", \"maxItems\": 64");
   }

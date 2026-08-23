@@ -99,6 +99,9 @@ def validate(
 
     errors: list[str] = []
     configured = {dimension.dimensionId: dimension for dimension in evaluation.rubricDimensions}
+    proposed_identifiers = [dimension.dimensionId for dimension in proposal.dimensions]
+    if len(set(proposed_identifiers)) != len(proposed_identifiers):
+        errors.append("EVALUATION_DIMENSION_IDS_NOT_UNIQUE")
     proposed = {dimension.dimensionId: dimension for dimension in proposal.dimensions}
     if set(proposed) != set(configured):
         errors.append("EVALUATION_RUBRIC_DIMENSIONS_MISMATCH")
@@ -134,6 +137,7 @@ def _with_runtime_values(
     parsed: dict[str, Any], evaluation: AssessmentEvaluationContext
 ) -> dict[str, Any]:
     return {
+        "contractVersion": "1.0",
         "proposalId": "pending",
         "requestId": "pending",
         "agentRunId": "pending",

@@ -379,8 +379,7 @@ public final class EvaluationProposalGate {
           || !bounded(dimension.dimensionId())
           || dimension.reason() == null
           || dimension.reason().isBlank()
-          || dimension.reason().length() > 1_000
-          || dimension.evidenceIds().isEmpty()) {
+          || dimension.reason().length() > 1_000) {
         reasons.add(Reason.PROPOSAL_INVALID);
         continue;
       }
@@ -459,9 +458,9 @@ public final class EvaluationProposalGate {
     return item != null
         && item.sourceType() == source
         && item.authority() == ContextAuthority.AUTHORITATIVE_FACT
-        && sourceVersion.equals(item.sourceVersion())
-        && factType.equals(item.factType())
-        && value.equals(String.valueOf(item.value()));
+        && Objects.equals(sourceVersion, item.sourceVersion())
+        && Objects.equals(factType, item.factType())
+        && Objects.equals(value, String.valueOf(item.value()));
   }
 
   private static boolean bounded(String value) {
@@ -493,7 +492,9 @@ public final class EvaluationProposalGate {
           deterministicCheck);
     }
     Set<String> referenced = new HashSet<>(proposal.evidenceIds());
-    proposal.dimensions().forEach(dimension -> referenced.addAll(dimension.evidenceIds()));
+    proposal.dimensions().stream()
+        .filter(Objects::nonNull)
+        .forEach(dimension -> referenced.addAll(dimension.evidenceIds()));
     List<DimensionResult> dimensions =
         proposal.dimensions().stream()
             .filter(dimension -> dimension != null && bounded(dimension.dimensionId()))
@@ -513,8 +514,16 @@ public final class EvaluationProposalGate {
         referenced,
         dimensions,
         proposal.feedback(),
-        proposal.confidence(),
+        persistableConfidence(proposal.confidence()),
         deterministicCheck);
+  }
+
+  private static BigDecimal persistableConfidence(BigDecimal confidence) {
+    return confidence != null
+            && confidence.signum() >= 0
+            && confidence.compareTo(BigDecimal.ONE) <= 0
+        ? confidence
+        : null;
   }
 
   private static List<Reason> ordered(Set<Reason> reasons) {

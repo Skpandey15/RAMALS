@@ -84,7 +84,7 @@ public class AssessmentEvaluationDecisionService {
 
     String traceId = MDC.get("traceId");
     if (!bounded(traceId)) {
-      traceId = request.interactionId();
+      traceId = null;
     }
     decisions.append(
         new EvaluationDecisionRecord(

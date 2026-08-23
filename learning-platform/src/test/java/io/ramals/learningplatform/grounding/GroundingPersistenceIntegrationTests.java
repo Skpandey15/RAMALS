@@ -5,13 +5,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.ai.contract.AgentType;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
+import io.ramals.learningplatform.ai.contract.AiEvaluatedResponseType;
+import io.ramals.learningplatform.ai.contract.AssessmentEvaluationContext;
+import io.ramals.learningplatform.ai.contract.AssessmentEvaluationRequest;
+import io.ramals.learningplatform.ai.contract.AssessmentRubricDimension;
 import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
 import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.ai.contract.Usage;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationDecisionRecord;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionService;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationReplayConflictException;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Decision;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DeterministicCheck;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DimensionResult;
@@ -22,11 +28,13 @@ import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.execution.AiExecutionRepository;
 import io.ramals.learningplatform.grounding.GroundedContextItem.SourceType;
+import io.ramals.learningplatform.grounding.GroundedContextItem.ContextAuthority;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.mastery.MasteryRepository;
 import io.ramals.learningplatform.mastery.MasterySnapshotDraft;
 import io.ramals.learningplatform.mastery.MasteryStatus;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -311,6 +319,34 @@ class GroundingPersistenceIntegrationTests {
 
     repository.append(record);
     repository.append(record);
+    EvaluationDecisionRecord differentTraceReplay =
+        new EvaluationDecisionRecord(
+            record.proposalId(),
+            record.requestId(),
+            record.agentRunId(),
+            record.contextId(),
+            record.answerEvidenceId(),
+            record.answerVersion(),
+            record.rubricVersion(),
+            record.interactionId(),
+            "evaluation-trace-retry",
+            record.decision(),
+            record.parserReasonCode());
+    repository.append(differentTraceReplay);
+    EvaluationDecisionRecord differentInteractionReplay =
+        new EvaluationDecisionRecord(
+            record.proposalId(),
+            record.requestId(),
+            record.agentRunId(),
+            record.contextId(),
+            record.answerEvidenceId(),
+            record.answerVersion(),
+            record.rubricVersion(),
+            "evaluation-interaction-retry",
+            "evaluation-trace-retry-2",
+            record.decision(),
+            record.parserReasonCode());
+    repository.append(differentInteractionReplay);
 
     assertThat(
             jdbc.queryForObject(
@@ -370,6 +406,47 @@ class GroundingPersistenceIntegrationTests {
             null);
     assertThatThrownBy(() -> repository.append(conflictingReplay))
         .isInstanceOf(AssessmentEvaluationReplayConflictException.class);
+
+    String secondRequestId = "evaluation-request-2";
+    String secondAgentRunId = "evaluation-run-2";
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+           agent_run_id, prompt_template_id, prompt_version, model_route, status,
+           request_digest, proposal_digest, started_at, completed_at)
+        VALUES (?, ?, 'evaluation-interaction-2', 'ASSESSMENT', '1.0',
+                'ASSESSMENT_EVALUATION_AGENT_V1', ?, 'ASSESSMENT_RUBRIC_EVALUATE',
+                'ASSESSMENT_RUBRIC_EVALUATE_V1', 'ci-fake', 'SUCCEEDED', ?, ?,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        UUID.randomUUID(),
+        secondRequestId,
+        secondAgentRunId,
+        "c".repeat(64),
+        "d".repeat(64));
+    EvaluationDecisionRecord reusedProposalIdentity =
+        new EvaluationDecisionRecord(
+            record.proposalId(),
+            secondRequestId,
+            secondAgentRunId,
+            record.contextId(),
+            record.answerEvidenceId(),
+            record.answerVersion(),
+            record.rubricVersion(),
+            "evaluation-interaction-2",
+            "evaluation-trace-2",
+            record.decision(),
+            record.parserReasonCode());
+    assertThatThrownBy(() -> repository.append(reusedProposalIdentity))
+        .isInstanceOf(AssessmentEvaluationReplayConflictException.class)
+        .hasMessage("evaluation proposal identity was reused for a different request");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.assessment_evaluation_decision WHERE request_id = ?",
+                Integer.class,
+                secondRequestId))
+        .isZero();
     assertThatThrownBy(
             () ->
                 jdbc.update(
@@ -377,6 +454,162 @@ class GroundingPersistenceIntegrationTests {
                         + "WHERE request_id = ?",
                     requestId))
         .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void invalidConfidenceValuesCommitAsDurableRejections() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("evaluation-invalid-a").id();
+    String contextId = "evaluation-invalid-context";
+    String answerEvidenceId = "evaluation-invalid-answer";
+    String rubricEvidenceId = "evaluation-invalid-rubric";
+    Instant now = Instant.now();
+    jdbc.update(
+        """
+        INSERT INTO ledger.grounding_retrieval_record
+          (context_id, learner_id, retrieval_policy_version, as_of, expires_at,
+           source_refs, source_count)
+        VALUES (?, ?, 'EVALUATION_POLICY_V1', CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP + INTERVAL '10 minutes', CAST(? AS jsonb), 2)
+        """,
+        contextId,
+        learnerId,
+        "[\"evaluation-invalid-answer\",\"evaluation-invalid-rubric\"]");
+
+    GroundedContext grounded =
+        new GroundedContext(
+            GroundedContext.CONTRACT_VERSION,
+            contextId,
+            "opaque-evaluation-learner",
+            now,
+            now.plusSeconds(600),
+            EvaluationProposalGate.REQUEST_POLICY,
+            List.of(
+                new GroundedContextItem(
+                    answerEvidenceId,
+                    SourceType.ASSESSMENT,
+                    "answer-v1",
+                    ContextAuthority.AUTHORITATIVE_FACT,
+                    "ANSWER_VERSION",
+                    "answer-v1",
+                    now,
+                    null),
+                new GroundedContextItem(
+                    rubricEvidenceId,
+                    SourceType.ASSESSMENT,
+                    "rubric-v1",
+                    ContextAuthority.AUTHORITATIVE_FACT,
+                    "RUBRIC_DIMENSION",
+                    "accuracy",
+                    now,
+                    null)));
+    AssessmentEvaluationContext evaluation =
+        new AssessmentEvaluationContext(
+            AiEvaluatedResponseType.FREE_TEXT,
+            "answer-v1",
+            "rubric-v1",
+            answerEvidenceId,
+            "A bounded learner answer.",
+            List.of(
+                new AssessmentRubricDimension(
+                    "accuracy", new BigDecimal("4"), "Approved criterion.", rubricEvidenceId)));
+    AssessmentEvaluationDecisionService service =
+        new AssessmentEvaluationDecisionService(
+            new EvaluationProposalGate(
+                new GroundedContextValidator(JsonMapper.builder().findAndAddModules().build())),
+            new JdbcAssessmentEvaluationDecisionRepository(jdbc),
+            Clock.fixed(now, ZoneOffset.UTC));
+    List<Number> invalidValues =
+        List.of(new BigDecimal("-1"), new BigDecimal("1.5"), BigInteger.TEN.pow(1_000));
+
+    for (int index = 0; index < invalidValues.size(); index++) {
+      String requestId = "evaluation-invalid-request-" + index;
+      String proposalId = "evaluation-invalid-proposal-" + index;
+      String agentRunId = "evaluation-invalid-run-" + index;
+      String interactionId = "evaluation-invalid-interaction-" + index;
+      jdbc.update(
+          """
+          INSERT INTO core.ai_execution
+            (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+             agent_run_id, prompt_template_id, prompt_version, model_route, status,
+             request_digest, proposal_digest, started_at, completed_at)
+          VALUES (?, ?, ?, 'ASSESSMENT', '1.0', 'ASSESSMENT_EVALUATION_AGENT_V1', ?,
+                  'ASSESSMENT_RUBRIC_EVALUATE', 'ASSESSMENT_RUBRIC_EVALUATE_V1', 'ci-fake',
+                  'SUCCEEDED', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """,
+          UUID.randomUUID(),
+          requestId,
+          interactionId,
+          agentRunId,
+          Integer.toString(index).repeat(64),
+          Integer.toString(index + 3).repeat(64));
+      AssessmentEvaluationRequest request =
+          new AssessmentEvaluationRequest(
+              AssessmentEvaluationRequest.CONTRACT_VERSION,
+              interactionId,
+              requestId,
+              new Constraints(
+                  InteractionClass.ASSESSMENT_PROPOSAL,
+                  8_000,
+                  1_200,
+                  List.of(),
+                  EvaluationProposalGate.REQUEST_POLICY),
+              evaluation,
+              grounded);
+      Map<String, Object> payload =
+          Map.of(
+              "contractVersion", "1.0",
+              "proposalId", proposalId,
+              "requestId", requestId,
+              "agentRunId", agentRunId,
+              "answerVersion", "answer-v1",
+              "rubricVersion", "rubric-v1",
+              "dimensions",
+                  List.of(
+                      Map.of(
+                          "dimensionId", "accuracy",
+                          "score", 3,
+                          "maxScore", 4,
+                          "reason", "Grounded against the approved rubric.",
+                          "evidenceIds", List.of(answerEvidenceId, rubricEvidenceId))),
+              "feedback", "Explain the answer more precisely.",
+              "evidenceIds", List.of(answerEvidenceId),
+              "confidence", invalidValues.get(index));
+      AiProposalEnvelope envelope =
+          new AiProposalEnvelope(
+              "1.0",
+              proposalId,
+              AgentType.ASSESSMENT,
+              "ASSESSMENT_EVALUATION_AGENT_V1",
+              agentRunId,
+              "ASSESSMENT_RUBRIC_EVALUATE",
+              "ASSESSMENT_RUBRIC_EVALUATE_V1",
+              "ci-fake",
+              TrustLevel.NON_AUTHORITATIVE,
+              null,
+              List.of(),
+              payload,
+              null,
+              null);
+
+      MDC.remove("traceId");
+      Decision decision = service.decide(envelope, request, DeterministicCheck.notApplicable());
+
+      assertThat(decision.outcome()).isEqualTo(Outcome.REJECTED);
+      assertThat(decision.confidence()).isNull();
+      assertThat(
+              jdbc.queryForMap(
+                  """
+                  SELECT outcome, confidence, parser_reason_code, trace_id
+                    FROM ledger.assessment_evaluation_decision
+                   WHERE request_id = ?
+                  """,
+                  requestId))
+          .containsEntry("outcome", "REJECTED")
+          .containsEntry("confidence", null)
+          .containsEntry("parser_reason_code", "EVALUATION_CONFIDENCE_INVALID")
+          .containsEntry("trace_id", null);
+    }
   }
 
   private static Evidence appendEvidence(JdbcTemplate jdbc, UUID learnerId, String lineage) {

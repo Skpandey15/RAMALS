@@ -28,7 +28,7 @@ CREATE TABLE ledger.assessment_evaluation_decision (
   policy_version VARCHAR(64) NOT NULL,
   decision_digest CHAR(64) NOT NULL,
   interaction_id VARCHAR(64) NOT NULL,
-  trace_id VARCHAR(64) NOT NULL,
+  trace_id VARCHAR(64),
   decided_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT uq_assessment_evaluation_request UNIQUE (request_id),
   CONSTRAINT uq_assessment_evaluation_proposal_policy UNIQUE (proposal_id, policy_version),
@@ -63,7 +63,7 @@ CREATE TABLE ledger.assessment_evaluation_decision (
     AND length(btrim(answer_version)) BETWEEN 1 AND 64
     AND length(btrim(rubric_version)) BETWEEN 1 AND 64
     AND length(btrim(interaction_id)) BETWEEN 1 AND 64
-    AND length(btrim(trace_id)) BETWEEN 1 AND 64),
+    AND (trace_id IS NULL OR length(btrim(trace_id)) BETWEEN 1 AND 64)),
   CONSTRAINT ck_assessment_evaluation_codes CHECK (
     (deterministic_reason_code IS NULL
       OR deterministic_reason_code ~ '^[A-Z][A-Z0-9_]{0,63}$')
@@ -94,4 +94,6 @@ COMMENT ON COLUMN ledger.assessment_evaluation_decision.answer_evidence_id IS
 COMMENT ON COLUMN ledger.assessment_evaluation_decision.dimension_results IS
   'Bounded normalized rubric results with evidence identifiers; never hidden chain-of-thought';
 COMMENT ON COLUMN ledger.assessment_evaluation_decision.decision_digest IS
-  'SHA-256 of normalized decision content; detects conflicting reuse of a stable request identity';
+  'SHA-256 of semantic decision content; excludes mutable interaction and trace correlation';
+COMMENT ON COLUMN ledger.assessment_evaluation_decision.trace_id IS
+  'Actual distributed trace identifier when tracing is available; NULL rather than fabricated';

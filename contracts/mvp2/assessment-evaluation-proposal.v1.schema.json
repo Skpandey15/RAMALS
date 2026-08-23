@@ -4,7 +4,7 @@
   "title": "RAMALS MVP-2 AssessmentEvaluationProposal v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["contractVersion", "proposalId", "requestId", "agentRunId", "answerVersion", "rubricVersion", "dimensions", "feedback", "evidenceIds", "confidence"],
+  "required": ["contractVersion", "proposalId", "requestId", "agentRunId", "answerVersion", "rubricVersion", "dimensions", "feedback", "confidence"],
   "properties": {
     "contractVersion": { "const": "1.0" },
     "proposalId": { "$ref": "#/$defs/id" },

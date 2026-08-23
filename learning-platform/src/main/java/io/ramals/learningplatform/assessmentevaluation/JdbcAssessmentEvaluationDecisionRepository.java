@@ -50,7 +50,7 @@ public class JdbcAssessmentEvaluationDecisionRepository
            AND execution.agent_run_id = ?
            AND execution.agent_type = 'ASSESSMENT'
            AND execution.status = 'SUCCEEDED'
-        ON CONFLICT (request_id) DO NOTHING
+        ON CONFLICT DO NOTHING
         """,
         UuidV7.generate(),
         record.proposalId(),
@@ -89,10 +89,7 @@ public class JdbcAssessmentEvaluationDecisionRepository
                 record.requestId())
             .stream()
             .findFirst()
-            .orElseThrow(
-                () ->
-                    new IllegalStateException(
-                        "evaluation decision requires a matching successful ASSESSMENT ai_execution"));
+            .orElseGet(() -> conflictingProposalIdentity(record));
     if (!digest.equals(stored.digest())) {
       throw new AssessmentEvaluationReplayConflictException(
           "evaluation requestId was replayed with different decision content");
@@ -122,8 +119,6 @@ public class JdbcAssessmentEvaluationDecisionRepository
     canonical.put("answerEvidenceId", record.answerEvidenceId());
     canonical.put("answerVersion", record.answerVersion());
     canonical.put("rubricVersion", record.rubricVersion());
-    canonical.put("interactionId", record.interactionId());
-    canonical.put("traceId", record.traceId());
     canonical.put("outcome", record.decision().outcome().name());
     canonical.put("reasons", record.decision().reasons().stream().map(Enum::name).sorted().toList());
     canonical.put("evidenceIds", record.decision().referencedEvidenceIds().stream().sorted().toList());
@@ -158,13 +153,40 @@ public class JdbcAssessmentEvaluationDecisionRepository
         || !bounded(record.answerVersion())
         || !bounded(record.rubricVersion())
         || !bounded(record.interactionId())
-        || !bounded(record.traceId())) {
+        || !nullableBounded(record.traceId())) {
       throw new IllegalArgumentException("a complete, bounded evaluation decision is required");
     }
   }
 
+  private StoredDecision conflictingProposalIdentity(EvaluationDecisionRecord record) {
+    boolean proposalIdentityExists =
+        Boolean.TRUE.equals(
+            jdbc.query(
+                    """
+                    SELECT true
+                      FROM ledger.assessment_evaluation_decision
+                     WHERE proposal_id = ? AND policy_version = ?
+                    """,
+                    (result, row) -> true,
+                    record.proposalId(),
+                    EvaluationProposalGate.POLICY_VERSION)
+                .stream()
+                .findFirst()
+                .orElse(false));
+    if (proposalIdentityExists) {
+      throw new AssessmentEvaluationReplayConflictException(
+          "evaluation proposal identity was reused for a different request");
+    }
+    throw new IllegalStateException(
+        "evaluation decision requires a matching successful ASSESSMENT ai_execution");
+  }
+
   private static boolean bounded(String value) {
     return value != null && !value.isBlank() && value.length() <= 64;
+  }
+
+  private static boolean nullableBounded(String value) {
+    return value == null || bounded(value);
   }
 
   private record StoredDecision(String digest, String outcome) {}

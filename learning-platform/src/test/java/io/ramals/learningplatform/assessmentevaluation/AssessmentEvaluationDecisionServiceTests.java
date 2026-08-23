@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import tools.jackson.databind.json.JsonMapper;
 
 /** Service-boundary proof that every returned proposal becomes one traceable gate decision. */
@@ -97,6 +98,21 @@ class AssessmentEvaluationDecisionServiceTests {
       assertThat(record.decision().deterministicCheck().reasonCode())
           .isEqualTo("DETERMINISTIC_FACT_DISAGREES");
       assertThat(record.decision().allowsAuthoritativeEffect()).isFalse();
+    });
+  }
+
+  @Test
+  void unavailableTraceContextRemainsNullAndIsNotFabricatedFromInteractionIdentity() {
+    MDC.remove("traceId");
+
+    service.decide(
+        envelope(AssessmentEvaluationProposalTestsPayload.valid()),
+        request(),
+        DeterministicCheck.notApplicable());
+
+    assertThat(decisions.records).singleElement().satisfies(record -> {
+      assertThat(record.interactionId()).isEqualTo("interaction-1");
+      assertThat(record.traceId()).isNull();
     });
   }
 

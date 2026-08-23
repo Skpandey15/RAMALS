@@ -18,7 +18,9 @@ class RubricDimensionEvaluation(BaseModel):
     score: Annotated[float, Field(ge=0)]
     maxScore: Annotated[float, Field(gt=0)]  # noqa: N815
     reason: Annotated[str, Field(min_length=1, max_length=1000)]
-    evidenceIds: Annotated[list[Identifier], Field(min_length=1, max_length=32)]  # noqa: N815
+    evidenceIds: Annotated[list[Identifier], Field(max_length=32)] = Field(  # noqa: N815
+        default_factory=list
+    )
 
     @field_validator("evidenceIds")
     @classmethod
@@ -33,7 +35,7 @@ class AssessmentEvaluationProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    contractVersion: Literal["1.0"] = "1.0"  # noqa: N815
+    contractVersion: Literal["1.0"]  # noqa: N815
     proposalId: Identifier  # noqa: N815
     requestId: Identifier  # noqa: N815
     agentRunId: Identifier  # noqa: N815
@@ -41,18 +43,10 @@ class AssessmentEvaluationProposal(BaseModel):
     rubricVersion: Identifier  # noqa: N815
     dimensions: Annotated[list[RubricDimensionEvaluation], Field(min_length=1, max_length=32)]
     feedback: Annotated[str, Field(min_length=1, max_length=4000)]
-    evidenceIds: Annotated[list[Identifier], Field(min_length=1, max_length=64)]  # noqa: N815
+    evidenceIds: Annotated[list[Identifier], Field(max_length=64)] = Field(  # noqa: N815
+        default_factory=list
+    )
     confidence: Annotated[float, Field(ge=0, le=1)]
-
-    @field_validator("dimensions")
-    @classmethod
-    def reject_duplicate_dimensions(
-        cls, value: list[RubricDimensionEvaluation]
-    ) -> list[RubricDimensionEvaluation]:
-        identifiers = [dimension.dimensionId for dimension in value]
-        if len(set(identifiers)) != len(identifiers):
-            raise ValueError("EVALUATION_DIMENSION_IDS_NOT_UNIQUE")
-        return value
 
     @field_validator("evidenceIds")
     @classmethod

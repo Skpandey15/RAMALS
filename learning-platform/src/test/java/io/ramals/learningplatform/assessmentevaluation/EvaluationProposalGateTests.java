@@ -22,6 +22,10 @@ import io.ramals.learningplatform.grounding.GroundedContextItem.ContextAuthority
 import io.ramals.learningplatform.grounding.GroundedContextItem.SourceType;
 import io.ramals.learningplatform.grounding.GroundedContextValidator;
 import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -38,6 +42,7 @@ class EvaluationProposalGateTests {
   private static final String CONTEXT_ID = "evaluation-context-v7";
   private static final String ANSWER_EVIDENCE = "answer-v7-evidence";
   private static final String RUBRIC_EVIDENCE = "rubric-accuracy-v3";
+  private static final JsonMapper JSON = JsonMapper.builder().findAndAddModules().build();
 
   private final EvaluationProposalGate gate =
       new EvaluationProposalGate(
@@ -288,7 +293,128 @@ class EvaluationProposalGateTests {
                     .isEqualTo("EVALUATION_PAYLOAD_FIELDS_INVALID"));
   }
 
+  @Test
+  void frozenV1OptionalEvidenceFixtureIsAcceptedByTheParserThenRejectedByTheGate()
+      throws IOException {
+    AssessmentEvaluationProposal parsed =
+        AssessmentEvaluationProposal.parse(
+            fixture("assessment-evaluation-proposal-v1-optional-evidence.json"), identity());
+
+    assertThat(parsed.evidenceIds()).isEmpty();
+    assertThat(parsed.dimensions()).singleElement().satisfies(dimension ->
+        assertThat(dimension.evidenceIds()).isEmpty());
+    assertThat(gate.evaluate(parsed, request(context()), DeterministicCheck.notApplicable(), NOW))
+        .satisfies(decision -> {
+          assertThat(decision.outcome()).isEqualTo(Outcome.REJECTED);
+          assertThat(decision.reasons())
+              .contains(Reason.DIMENSION_EVIDENCE_INCOMPLETE, Reason.FEEDBACK_EVIDENCE_INCOMPLETE);
+        });
+  }
+
+  @Test
+  void duplicateEvidenceFixtureIsRejectedByTheJavaParser() throws IOException {
+    Map<String, Object> invalid =
+        fixture("assessment-evaluation-proposal-v1-duplicate-evidence.invalid.json");
+
+    assertThatThrownBy(() -> AssessmentEvaluationProposal.parse(invalid, identity()))
+        .isInstanceOfSatisfying(
+            MalformedProposalException.class,
+            failure ->
+                assertThat(failure.reasonCode())
+                    .isEqualTo("EVALUATION_FEEDBACK_EVIDENCE_INVALID"));
+  }
+
+  @Test
+  void explicitNullEvidenceDoesNotMasqueradeAsAnAbsentOptionalV1Field() {
+    Map<String, Object> payload = payload();
+    payload.put("evidenceIds", null);
+
+    assertThatThrownBy(() -> AssessmentEvaluationProposal.parse(payload, identity()))
+        .isInstanceOfSatisfying(
+            MalformedProposalException.class,
+            failure ->
+                assertThat(failure.reasonCode())
+                    .isEqualTo("EVALUATION_FEEDBACK_EVIDENCE_INVALID"));
+  }
+
+  @Test
+  void parserBoundsNumericInputBeforeBigDecimalConstruction() {
+    Map<String, Object> payload = payload();
+    payload.put("confidence", BigInteger.TEN.pow(1_000));
+
+    assertThatThrownBy(() -> AssessmentEvaluationProposal.parse(payload, identity()))
+        .isInstanceOfSatisfying(
+            MalformedProposalException.class,
+            failure ->
+                assertThat(failure.reasonCode()).isEqualTo("EVALUATION_CONFIDENCE_INVALID"));
+  }
+
+  @Test
+  void invalidConfidenceIsRejectedAndNormalizedForDurableAudit() {
+    for (String invalid : List.of("-1", "1.5", "1E+1000")) {
+      Decision decision =
+          gate.evaluate(
+              proposal("3", "4", invalid),
+              request(context()),
+              DeterministicCheck.notApplicable(),
+              NOW);
+
+      assertThat(decision.outcome()).as("confidence %s", invalid).isEqualTo(Outcome.REJECTED);
+      assertThat(decision.reasons()).contains(Reason.PROPOSAL_INVALID);
+      assertThat(decision.confidence()).isNull();
+    }
+  }
+
+  @Test
+  void malformedVersionStateIsRejectedWithoutThrowing() {
+    AssessmentEvaluationContext valid = evaluationContext();
+    AssessmentEvaluationContext missingAnswerVersion =
+        new AssessmentEvaluationContext(
+            valid.responseType(),
+            null,
+            valid.rubricVersion(),
+            valid.answerEvidenceId(),
+            valid.answerText(),
+            valid.rubricDimensions());
+    AssessmentEvaluationContext missingRubricVersion =
+        new AssessmentEvaluationContext(
+            valid.responseType(),
+            valid.answerVersion(),
+            null,
+            valid.answerEvidenceId(),
+            valid.answerText(),
+            valid.rubricDimensions());
+    List<GroundedContextItem> malformedItems = new ArrayList<>(context().items());
+    GroundedContextItem answer = malformedItems.getFirst();
+    malformedItems.set(
+        0,
+        new GroundedContextItem(
+            answer.evidenceId(),
+            answer.sourceType(),
+            null,
+            answer.authority(),
+            answer.factType(),
+            answer.value(),
+            answer.observedAt(),
+            answer.expiresAt()));
+
+    assertRejected(gate.evaluate(
+        proposal("3", "4", "0.85"), request(context(), missingAnswerVersion),
+        DeterministicCheck.notApplicable(), NOW));
+    assertRejected(gate.evaluate(
+        proposal("3", "4", "0.85"), request(context(), missingRubricVersion),
+        DeterministicCheck.notApplicable(), NOW));
+    assertRejected(gate.evaluate(
+        proposal("3", "4", "0.85"), request(contextFrom(malformedItems)),
+        DeterministicCheck.notApplicable(), NOW));
+  }
+
   static AssessmentEvaluationRequest request(GroundedContext context) {
+    return request(context, evaluationContext());
+  }
+
+  private static AssessmentEvaluationRequest request(
+      GroundedContext context, AssessmentEvaluationContext evaluation) {
     return new AssessmentEvaluationRequest(
         AssessmentEvaluationRequest.CONTRACT_VERSION,
         "interaction-1",
@@ -299,7 +425,7 @@ class EvaluationProposalGateTests {
             1_200,
             List.of(),
             EvaluationProposalGate.REQUEST_POLICY),
-        evaluationContext(),
+        evaluation,
         context);
   }
 
@@ -418,6 +544,17 @@ class EvaluationProposalGateTests {
     payload.put("evidenceIds", List.of(ANSWER_EVIDENCE));
     payload.put("confidence", 0.85);
     return payload;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> fixture(String filename) throws IOException {
+    Path path = Path.of("..", "contracts", "golden", filename);
+    return JSON.readValue(Files.readString(path), Map.class);
+  }
+
+  private static void assertRejected(Decision decision) {
+    assertThat(decision.outcome()).isEqualTo(Outcome.REJECTED);
+    assertThat(decision.allowsAuthoritativeEffect()).isFalse();
   }
 
   private static RuntimeIdentity identity() {

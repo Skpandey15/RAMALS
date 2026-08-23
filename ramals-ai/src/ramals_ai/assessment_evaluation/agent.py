@@ -139,6 +139,7 @@ class AssessmentEvaluationAgent:
         proposal = AssessmentEvaluationProposal.model_validate(
             {
                 **{key: value for key, value in parsed.items() if key not in _RUNTIME_OWNED},
+                "contractVersion": "1.0",
                 "proposalId": state.proposal_id,
                 "requestId": state.request_id,
                 "agentRunId": state.agent_run_id,

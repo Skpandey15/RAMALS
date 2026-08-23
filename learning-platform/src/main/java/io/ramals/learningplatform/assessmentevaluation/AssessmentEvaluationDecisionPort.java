@@ -6,10 +6,11 @@ import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.De
 public interface AssessmentEvaluationDecisionPort {
 
   /**
-   * Appends the decision or verifies that an idempotent replay is byte-for-byte equivalent.
+   * Appends the decision or verifies that an idempotent replay is semantically equivalent.
    *
    * <p>A request identity reused for different decision content is a conflict, never a silent
-   * no-op. Implementations must also require a matching successful ASSESSMENT ai_execution.
+   * no-op. Attempt-specific trace/correlation metadata is retained outside that semantic comparison.
+   * Implementations must also require a matching successful ASSESSMENT ai_execution.
    */
   void append(EvaluationDecisionRecord record);
 
