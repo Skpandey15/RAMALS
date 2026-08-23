@@ -10,6 +10,14 @@ import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
 import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.ai.contract.Usage;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationDecisionRecord;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationReplayConflictException;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Decision;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DeterministicCheck;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DimensionResult;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Outcome;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Reason;
+import io.ramals.learningplatform.assessmentevaluation.JdbcAssessmentEvaluationDecisionRepository;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.execution.AiExecutionRepository;
@@ -227,6 +235,148 @@ class GroundingPersistenceIntegrationTests {
     assertThatThrownBy(() -> jdbc.update(
         "UPDATE ledger.proposal_gate_decision SET accepted = false WHERE proposal_id = ?",
         proposal.proposalId())).isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void assessmentEvaluationDecisionLinksAnswerExecutionAndGateWithIdempotentReplay() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("evaluation-gate-a").id();
+    String requestId = "evaluation-request-1";
+    String proposalId = "evaluation-proposal-1";
+    String agentRunId = "evaluation-run-1";
+    String contextId = "evaluation-context-1";
+    UUID executionId = UUID.randomUUID();
+
+    jdbc.update(
+        """
+        INSERT INTO ledger.grounding_retrieval_record
+          (context_id, learner_id, retrieval_policy_version, as_of, expires_at,
+           source_refs, source_count)
+        VALUES (?, ?, 'EVALUATION_POLICY_V1', CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP + INTERVAL '10 minutes', CAST(? AS jsonb), 2)
+        """,
+        contextId,
+        learnerId,
+        "[\"answer-evidence-1\",\"rubric-evidence-1\"]");
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+           agent_run_id, prompt_template_id, prompt_version, model_route, status,
+           request_digest, proposal_digest, started_at, completed_at)
+        VALUES (?, ?, 'evaluation-interaction-1', 'ASSESSMENT', '1.0',
+                'ASSESSMENT_EVALUATION_AGENT_V1', ?, 'ASSESSMENT_RUBRIC_EVALUATE',
+                'ASSESSMENT_RUBRIC_EVALUATE_V1', 'ci-fake', 'SUCCEEDED', ?, ?,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        executionId,
+        requestId,
+        agentRunId,
+        "a".repeat(64),
+        "b".repeat(64));
+
+    int evidenceBefore = jdbc.queryForObject("SELECT count(*) FROM ledger.evidence", Integer.class);
+    int masteryBefore =
+        jdbc.queryForObject("SELECT count(*) FROM ledger.mastery_snapshot", Integer.class);
+    Decision accepted =
+        new Decision(
+            Outcome.ACCEPTED,
+            List.of(Reason.ACCEPTED),
+            Set.of("answer-evidence-1", "rubric-evidence-1"),
+            List.of(
+                new DimensionResult(
+                    "accuracy",
+                    new BigDecimal("3"),
+                    new BigDecimal("4"),
+                    "Grounded against the approved accuracy rubric.",
+                    Set.of("answer-evidence-1", "rubric-evidence-1"))),
+            "The answer is mostly accurate.",
+            new BigDecimal("0.8500"),
+            DeterministicCheck.notApplicable());
+    EvaluationDecisionRecord record =
+        new EvaluationDecisionRecord(
+            proposalId,
+            requestId,
+            agentRunId,
+            contextId,
+            "answer-evidence-1",
+            "answer-v1",
+            "rubric-v1",
+            "evaluation-interaction-1",
+            "evaluation-trace-1",
+            accepted,
+            null);
+    JdbcAssessmentEvaluationDecisionRepository repository =
+        new JdbcAssessmentEvaluationDecisionRepository(jdbc);
+
+    repository.append(record);
+    repository.append(record);
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.assessment_evaluation_decision WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                SELECT decision.request_id, decision.agent_run_id, decision.answer_evidence_id,
+                       decision.answer_version, decision.rubric_version, decision.outcome,
+                       decision.deterministic_check, execution.id AS execution_id,
+                       decision.context_id
+                  FROM ledger.assessment_evaluation_decision decision
+                  JOIN core.ai_execution execution ON execution.id = decision.ai_execution_id
+                  JOIN ledger.grounding_retrieval_record grounding
+                    ON grounding.context_id = decision.context_id
+                 WHERE decision.request_id = ?
+                """,
+                requestId))
+        .containsEntry("request_id", requestId)
+        .containsEntry("agent_run_id", agentRunId)
+        .containsEntry("answer_evidence_id", "answer-evidence-1")
+        .containsEntry("answer_version", "answer-v1")
+        .containsEntry("rubric_version", "rubric-v1")
+        .containsEntry("outcome", "ACCEPTED")
+        .containsEntry("deterministic_check", "NOT_APPLICABLE")
+        .containsEntry("execution_id", executionId)
+        .containsEntry("context_id", contextId);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM ledger.evidence", Integer.class))
+        .isEqualTo(evidenceBefore);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM ledger.mastery_snapshot", Integer.class))
+        .isEqualTo(masteryBefore);
+
+    Decision conflicting =
+        new Decision(
+            accepted.outcome(),
+            accepted.reasons(),
+            accepted.referencedEvidenceIds(),
+            accepted.dimensions(),
+            "Different feedback under the same request identity.",
+            accepted.confidence(),
+            accepted.deterministicCheck());
+    EvaluationDecisionRecord conflictingReplay =
+        new EvaluationDecisionRecord(
+            record.proposalId(),
+            record.requestId(),
+            record.agentRunId(),
+            record.contextId(),
+            record.answerEvidenceId(),
+            record.answerVersion(),
+            record.rubricVersion(),
+            record.interactionId(),
+            record.traceId(),
+            conflicting,
+            null);
+    assertThatThrownBy(() -> repository.append(conflictingReplay))
+        .isInstanceOf(AssessmentEvaluationReplayConflictException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "UPDATE ledger.assessment_evaluation_decision SET outcome = 'REJECTED' "
+                        + "WHERE request_id = ?",
+                    requestId))
+        .isInstanceOf(DataAccessException.class);
   }
 
   private static Evidence appendEvidence(JdbcTemplate jdbc, UUID learnerId, String lineage) {

@@ -40,6 +40,22 @@ public class GroundingConfiguration {
   }
 
   @Bean
+  io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate
+      evaluationProposalGate(GroundedContextValidator validator) {
+    return new io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate(validator);
+  }
+
+  @Bean
+  io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionService
+      assessmentEvaluationDecisionService(
+          io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate gate,
+          io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort
+              decisions) {
+    return new io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionService(
+        gate, decisions, Clock.systemUTC());
+  }
+
+  @Bean
   io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentService
       diagnosticAssessmentService(
           GroundingRetrievalService retrieval,

@@ -72,4 +72,18 @@ class Mvp2ContractTests {
       }
     }
   }
+
+  @Test
+  @DisplayName("assessment feedback evidence is mandatory at the Spring gate boundary")
+  void assessmentEvaluationSchemaRequiresFeedbackEvidence() throws IOException {
+    String schema =
+        Files.readString(
+            CONTRACTS.resolve("assessment-evaluation-proposal.v1.schema.json"),
+            StandardCharsets.UTF_8);
+
+    assertThat(schema)
+        .contains(
+            "\"dimensions\", \"feedback\", \"evidenceIds\", \"confidence\"")
+        .contains("\"evidenceIds\": { \"type\": \"array\", \"maxItems\": 64");
+  }
 }

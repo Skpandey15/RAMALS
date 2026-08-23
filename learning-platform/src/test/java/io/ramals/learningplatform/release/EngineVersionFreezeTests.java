@@ -4,7 +4,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
 import io.ramals.learningplatform.assessment.ScoredResponse;
+import io.ramals.learningplatform.ai.contract.AiEvaluatedResponseType;
+import io.ramals.learningplatform.ai.contract.AssessmentEvaluationContext;
+import io.ramals.learningplatform.ai.contract.AssessmentEvaluationRequest;
+import io.ramals.learningplatform.ai.contract.AssessmentRubricDimension;
+import io.ramals.learningplatform.ai.contract.Constraints;
+import io.ramals.learningplatform.ai.contract.InteractionClass;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationProposal;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationProposal.Dimension;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DeterministicCheck;
 import io.ramals.learningplatform.evidence.Evidence;
+import io.ramals.learningplatform.grounding.GroundedContext;
+import io.ramals.learningplatform.grounding.GroundedContextItem;
+import io.ramals.learningplatform.grounding.GroundedContextItem.ContextAuthority;
+import io.ramals.learningplatform.grounding.GroundedContextItem.SourceType;
+import io.ramals.learningplatform.grounding.GroundedContextValidator;
 import io.ramals.learningplatform.grounding.GroundingRetrievalPolicy;
 import io.ramals.learningplatform.grounding.ProposalGroundingPolicy;
 import io.ramals.learningplatform.grounding.ProposalType;
@@ -40,6 +55,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Freezes the deterministic control (MVP-1 entry criterion 5).
@@ -71,6 +87,7 @@ class EngineVersionFreezeTests {
     put(LearningSessionPolicy.POLICY_VERSION, EngineVersionFreezeTests::sessionPolicy);
     put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
     put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
+    put(EvaluationProposalGate.POLICY_VERSION, EngineVersionFreezeTests::evaluationProposalGate);
   }};
 
   /**
@@ -86,7 +103,8 @@ class EngineVersionFreezeTests {
       "DIAGNOSTIC_SCORING_V1", "ee904dc57a615550d732e50bfd51fec72011db0e5b9a53a6f54c2d1d0ceda305",
       "SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647",
       "GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad",
-      "PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a");
+      "PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a",
+      "EVALUATION_GATE_V1", "d0587299051f708dea7aa6d29e439b46f903d24b98d53c28dfc74a48bd00c0a3");
 
   @Test
   void everyVersionedEngineHasAFrozenVector() throws IOException {
@@ -252,6 +270,107 @@ class EngineVersionFreezeTests {
       out.append(type).append('|').append(policy.minimumConfidence(type)).append('|')
           .append(new TreeSet<>(policy.requiredSources(type))).append('|')
           .append(new TreeSet<>(policy.claimEvidenceSources(type))).append('\n');
+    }
+    return out.toString();
+  }
+
+  private static String evaluationProposalGate() {
+    Instant now = Instant.parse("2026-08-23T03:00:00Z");
+    GroundedContext context =
+        new GroundedContext(
+            GroundedContext.CONTRACT_VERSION,
+            "evaluation-context-v1",
+            "opaque-learner",
+            now,
+            now.plusSeconds(600),
+            EvaluationProposalGate.REQUEST_POLICY,
+            List.of(
+                new GroundedContextItem(
+                    "answer-evidence",
+                    SourceType.ASSESSMENT,
+                    "answer-v1",
+                    ContextAuthority.AUTHORITATIVE_FACT,
+                    "ANSWER_VERSION",
+                    "answer-v1",
+                    now,
+                    null),
+                new GroundedContextItem(
+                    "rubric-evidence",
+                    SourceType.ASSESSMENT,
+                    "rubric-v1",
+                    ContextAuthority.AUTHORITATIVE_FACT,
+                    "RUBRIC_DIMENSION",
+                    "accuracy",
+                    now,
+                    null)));
+    AssessmentEvaluationContext evaluation =
+        new AssessmentEvaluationContext(
+            AiEvaluatedResponseType.FREE_TEXT,
+            "answer-v1",
+            "rubric-v1",
+            "answer-evidence",
+            "A bounded answer.",
+            List.of(
+                new AssessmentRubricDimension(
+                    "accuracy", new BigDecimal("4"), "Approved criteria.", "rubric-evidence")));
+    AssessmentEvaluationRequest request =
+        new AssessmentEvaluationRequest(
+            AssessmentEvaluationRequest.CONTRACT_VERSION,
+            "interaction-v1",
+            "request-v1",
+            new Constraints(
+                InteractionClass.ASSESSMENT_PROPOSAL,
+                8_000,
+                1_200,
+                List.of(),
+                EvaluationProposalGate.REQUEST_POLICY),
+            evaluation,
+            context);
+    EvaluationProposalGate gate =
+        new EvaluationProposalGate(
+            new GroundedContextValidator(JsonMapper.builder().findAndAddModules().build()));
+    StringBuilder out = new StringBuilder();
+    for (String score : List.of("0", "4", "5")) {
+      for (String confidence : List.of("0.6900", "0.7000")) {
+        for (DeterministicCheck deterministic :
+            List.of(
+                DeterministicCheck.notApplicable(),
+                DeterministicCheck.agrees("DETERMINISTIC_AGREES"),
+                DeterministicCheck.conflicts("DETERMINISTIC_CONFLICT"))) {
+          AssessmentEvaluationProposal proposal =
+              new AssessmentEvaluationProposal(
+                  AssessmentEvaluationProposal.CONTRACT_VERSION,
+                  "proposal-v1",
+                  "request-v1",
+                  "run-v1",
+                  context.contextId(),
+                  evaluation.answerVersion(),
+                  evaluation.rubricVersion(),
+                  List.of(
+                      new Dimension(
+                          "accuracy",
+                          new BigDecimal(score),
+                          new BigDecimal("4"),
+                          "Grounded dimension feedback.",
+                          Set.of("answer-evidence", "rubric-evidence"))),
+                  "Grounded overall feedback.",
+                  Set.of("answer-evidence"),
+                  new BigDecimal(confidence));
+          var decision = gate.evaluate(proposal, request, deterministic, now);
+          out.append(score)
+              .append('|')
+              .append(confidence)
+              .append('|')
+              .append(deterministic.comparison())
+              .append('|')
+              .append(decision.outcome())
+              .append('|')
+              .append(decision.reasons())
+              .append('|')
+              .append(decision.allowsAuthoritativeEffect())
+              .append('\n');
+        }
+      }
     }
     return out.toString();
   }
