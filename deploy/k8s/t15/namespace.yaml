@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ramals-t15
+  labels:
+    ramals.io/qualification: m2-t15
+    # Keep the qualification namespace subject to the same baseline admission posture as a
+    # restricted deployment. Any exception must be explicit in the qualification evidence.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

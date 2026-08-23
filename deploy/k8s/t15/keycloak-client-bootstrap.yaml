@@ -1,0 +1,88 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-client-bootstrap
+  labels:
+    app.kubernetes.io/name: keycloak-client-bootstrap
+    ramals.io/qualification: m2-t15
+    ramals.io/qualification-helper: "true"
+spec:
+  backoffLimit: 8
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak-client-bootstrap
+        ramals.io/qualification: m2-t15
+        ramals.io/qualification-helper: "true"
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kcadm
+          image: qualification/keycloak:current-main
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              attempts=0
+              until /opt/keycloak/bin/kcadm.sh config credentials \
+                --server http://keycloak:8080 \
+                --realm master \
+                --user "$KEYCLOAK_ADMIN_USER" \
+                --password "$KEYCLOAK_ADMIN_PASSWORD"; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 30 ]; then
+                  echo "Keycloak admin endpoint did not become available" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+
+              client_id="$(/opt/keycloak/bin/kcadm.sh get clients -r ramals \
+                -q clientId=ramals-core-workload \
+                --fields id --format csv --noquotes | sed -n '1p')"
+              if [ -z "$client_id" ]; then
+                echo "ramals-core-workload client was not imported" >&2
+                exit 1
+              fi
+
+              # The realm deliberately omits this secret from source control. The value comes only
+              # from the qualification Secret and is never echoed or persisted by this Job.
+              /opt/keycloak/bin/kcadm.sh update "clients/$client_id" -r ramals \
+                -s "secret=$WORKLOAD_CLIENT_SECRET" >/dev/null
+              echo "Keycloak workload client secret bootstrapped"
+          env:
+            - name: KEYCLOAK_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ramals-t15-runtime
+                  key: keycloak-admin-user
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ramals-t15-runtime
+                  key: keycloak-admin-password
+            - name: WORKLOAD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ramals-t15-runtime
+                  key: workload-client-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]

@@ -1,0 +1,131 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: workload-identity-smoke
+  labels:
+    app.kubernetes.io/name: workload-identity-smoke
+    ramals.io/qualification: m2-t15
+    ramals.io/qualification-helper: "true"
+spec:
+  backoffLimit: 8
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: workload-identity-smoke
+        ramals.io/qualification: m2-t15
+        ramals.io/qualification-helper: "true"
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: workload-identity-smoke
+          image: qualification/ramals-ai:current-main
+          imagePullPolicy: IfNotPresent
+          command: [python, -c]
+          args:
+            - |
+              import base64
+              import json
+              import time
+              import urllib.error
+              import urllib.parse
+              import urllib.request
+              import uuid
+
+              token_url = "http://keycloak:8080/realms/ramals/protocol/openid-connect/token"
+              agent_url = "http://ramals-ai:8000/internal/v1/tutor/respond"
+              workload_client = "ramals-core-workload"
+              workload_secret = __import__("os").environ["WORKLOAD_CLIENT_SECRET"]
+
+              def call(url, *, data=None, headers=None, method=None):
+                  request = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+                  try:
+                      with urllib.request.urlopen(request, timeout=10) as response:
+                          return response.status, response.read()
+                  except urllib.error.HTTPError as error:
+                      return error.code, error.read()
+
+              token = None
+              for _ in range(30):
+                  status, raw = call(
+                      token_url,
+                      data=urllib.parse.urlencode({
+                          "grant_type": "client_credentials",
+                          "client_id": workload_client,
+                          "client_secret": workload_secret,
+                      }).encode(),
+                      headers={"Content-Type": "application/x-www-form-urlencoded"},
+                      method="POST",
+                  )
+                  if status == 200:
+                      token = json.loads(raw)["access_token"]
+                      break
+                  time.sleep(2)
+              if token is None:
+                  raise SystemExit("workload client could not obtain a token")
+
+              claims = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
+              audience = claims.get("aud", [])
+              audience = audience if isinstance(audience, list) else [audience]
+              assert "ramals-ai" in audience
+              assert claims.get("azp") == workload_client
+              assert str(claims.get("preferred_username", "")).startswith("service-account-")
+
+              status, _ = call(agent_url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+              assert status == 401, status
+
+              envelope = {
+                  "contractVersion": "1.0",
+                  "interactionId": str(uuid.uuid4()),
+                  "requestId": str(uuid.uuid4()),
+                  "learner": {"learnerRef": "t15-opaque-learner", "locale": "en-IN"},
+                  "learningContext": {
+                      "skillCode": "KAFKA_PARTITIONING",
+                      "masteryScore": "0.7200",
+                      "masteryStatus": "NEEDS_PRACTICE",
+                      "prerequisites": ["KAFKA_TOPIC"],
+                  },
+                  "constraints": {"interactionClass": "INTERACTIVE_AI", "deadlineMs": 8000},
+                  "requestedCapability": "EXPLAIN",
+              }
+              status, raw = call(
+                  agent_url,
+                  data=json.dumps(envelope).encode(),
+                  headers={
+                      "Content-Type": "application/json",
+                      "Authorization": "Bearer " + token,
+                  },
+                  method="POST",
+              )
+              # ci-fake intentionally returns a non-JSON completion. The application therefore
+              # reaches its bounded proposal validator and returns the documented 422; a 401 here
+              # would mean the workload token was not accepted.
+              assert status == 422, (status, raw[:200])
+              problem = json.loads(raw)
+              assert problem["code"] == "UNPROCESSABLE_PROPOSAL"
+              print("workload token claims, unauthenticated refusal, and authenticated route passed")
+          env:
+            - name: WORKLOAD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ramals-t15-runtime
+                  key: workload-client-secret
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]

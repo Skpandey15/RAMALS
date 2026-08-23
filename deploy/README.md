@@ -56,6 +56,20 @@ failed one by removing it from `held_versions` in the state file. Bounded retry 
 RAMALS_DESIRED_MANIFEST=deploy/desired-version.json ./deploy/deploy-controller.sh
 ```
 
+## M2-T15 qualification
+
+The qualification environment is separate from the Compose and pull-based deployment paths. It is
+an isolated k3d cluster with digest-pinned current-main artifacts:
+
+```powershell
+pwsh -File .\deploy\k8s\t15\bootstrap.ps1
+pwsh -File .\deploy\k8s\t15\smoke.ps1
+```
+
+This path does not replace Docker Compose, add production trigger wiring, or close T14 activation
+prerequisite #3. See [`k8s/t15/README.md`](k8s/t15/README.md) for topology, secret handling, and
+evidence rules.
+
 Exit codes: `0` reconciled/healthy · `1` transient failure exhausted · `2` desired version is held ·
 `3` deployed but failed health gates, rolled back and now held.
 
