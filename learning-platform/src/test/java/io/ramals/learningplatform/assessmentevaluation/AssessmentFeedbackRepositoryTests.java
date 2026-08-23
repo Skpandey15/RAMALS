@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.assessmentevaluation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -11,10 +12,15 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 class AssessmentFeedbackRepositoryTests {
+
+  private static final String VALID_RESULT =
+      "{\"dimensionId\":\"accuracy\",\"score\":2,\"maxScore\":4,"
+          + "\"reason\":\"Approved detail.\",\"evidenceIds\":[]}";
 
   @Test
   void projectsOnlyLearnerSafeRubricFieldsFromStoredDecisionJson() {
@@ -45,25 +51,51 @@ class AssessmentFeedbackRepositoryTests {
   }
 
   @Test
+  void aNullArrayElementIsProjectedAsEmptyInsteadOfThrowing() {
+    assertThat(AssessmentFeedbackRepository.rubricResults("null")).isEmpty();
+    assertThat(AssessmentFeedbackRepository.rubricResults("[null]")).isEmpty();
+    // A valid element beside a null one must not survive as a silently partial rubric.
+    assertThat(AssessmentFeedbackRepository.rubricResults("[" + VALID_RESULT + ",null]")).isEmpty();
+  }
+
+  @Test
   void malformedAndStructurallyInvalidStoredJsonFailClosedAsUnavailable() {
-    for (String stored : List.of("{not-json", "{\"dimensionId\":\"accuracy\"}")) {
-      AssessmentFeedbackRepository repository = mock(AssessmentFeedbackRepository.class);
-      when(repository.findLatestForSubject("learner-1"))
-          .thenReturn(
-              Optional.of(
-                  new AssessmentFeedbackReadModel(
-                      "ACCEPTED",
-                      "answer-v1",
-                      "rubric-v1",
-                      "Candidate feedback must not escape.",
-                      AssessmentFeedbackRepository.rubricResults(stored),
-                      Instant.parse("2026-08-23T00:00:00Z"))));
+    List<String> unpresentable =
+        List.of(
+            "{not-json",
+            "[" + VALID_RESULT,
+            "{\"dimensionId\":\"accuracy\"}",
+            "[\"accuracy\"]",
+            "[null]",
+            "[" + VALID_RESULT + ",null]",
+            "[{\"dimensionId\":\"accuracy\"}]",
+            "[{\"dimensionId\":\"accuracy\",\"score\":5,\"maxScore\":4,\"reason\":\"Over.\"}]");
 
-      AssessmentFeedback response = new AssessmentFeedbackService(repository).latest("learner-1");
+    for (String stored : unpresentable) {
+      AssessmentFeedback response =
+          new AssessmentFeedbackService(acceptedDecisionWith(stored)).latest("learner-1");
 
-      assertThat(response.status()).isEqualTo(AssessmentFeedbackStatus.UNAVAILABLE);
+      assertThat(response.status())
+          .as("stored dimension_results %s must fail closed", stored)
+          .isEqualTo(AssessmentFeedbackStatus.UNAVAILABLE);
       assertThat(response.approvedFeedback()).isNull();
     }
+  }
+
+  @Test
+  void aDatabaseFailureIsNotConvertedIntoAnUnavailableLearnerPayload() {
+    JdbcTemplate jdbc =
+        new JdbcTemplate(
+            new DriverManagerDataSource(
+                "jdbc:h2:mem:assessment-feedback-unreachable;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                "sa",
+                ""));
+    AssessmentFeedbackService service =
+        new AssessmentFeedbackService(new AssessmentFeedbackRepository(jdbc));
+
+    // The decision tables do not exist, so the read is a genuine query failure. Fail-closed
+    // projection must never absorb it and report an absent evaluation instead.
+    assertThatThrownBy(() -> service.latest("learner-1")).isInstanceOf(DataAccessException.class);
   }
 
   @Test
@@ -107,6 +139,21 @@ class AssessmentFeedbackRepositoryTests {
 
     assertThat(result).isPresent();
     assertThat(result.orElseThrow().feedback()).isEqualTo("Latest owned feedback.");
+  }
+
+  private static AssessmentFeedbackRepository acceptedDecisionWith(String storedRubricJson) {
+    AssessmentFeedbackRepository repository = mock(AssessmentFeedbackRepository.class);
+    when(repository.findLatestForSubject("learner-1"))
+        .thenReturn(
+            Optional.of(
+                new AssessmentFeedbackReadModel(
+                    "ACCEPTED",
+                    "answer-v1",
+                    "rubric-v1",
+                    "Candidate feedback must not escape.",
+                    AssessmentFeedbackRepository.rubricResults(storedRubricJson),
+                    Instant.parse("2026-08-23T00:00:00Z"))));
+    return repository;
   }
 
   private static void insertDecision(
