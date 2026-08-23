@@ -281,6 +281,44 @@ class LearningWorkflowConcurrencyIntegrationTests {
                 String.class,
                 adaptationRequestId))
         .isEqualTo("ADAPTATION");
+
+    // The third leg of the chain. Once the dispatcher runs this work it records an execution under
+    // the same request identity, so the whole path must join end to end:
+    //   learning_workflow_step -> agent_work_outbox -> ai_execution
+    seedDispatchedExecution(jdbc, adaptationRequestId);
+    Integer chained =
+        jdbc.queryForObject(
+            """
+            SELECT count(*)
+              FROM core.learning_workflow_step step
+              JOIN core.agent_work_outbox work ON work.request_id = step.request_id
+              JOIN core.ai_execution execution ON execution.request_id = work.request_id
+             WHERE step.run_id = ? AND step.request_id IS NOT NULL
+            """,
+            Integer.class,
+            run.id());
+    assertThat(chained)
+        .as("step -> outbox -> ai_execution must join end to end on one request identity")
+        .isEqualTo(1);
+  }
+
+  /** The execution row the M2-T03 dispatcher writes once it delivers the adaptation work. */
+  private void seedDispatchedExecution(JdbcTemplate jdbc, String requestId) {
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+           agent_run_id, prompt_template_id, prompt_version, model_route, status,
+           request_digest, proposal_digest, started_at, completed_at)
+        VALUES (?, ?, 'interaction-correlation', 'ADAPTATION', '1.0', 'ADAPTATION_AGENT_V1', ?,
+                'ADAPT', 'ADAPT_V1', 'ci-fake', 'SUCCEEDED', ?, ?, CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP)
+        """,
+        UUID.randomUUID(),
+        requestId,
+        "run-adapt-" + UUID.randomUUID(),
+        "d".repeat(64),
+        "e".repeat(64));
   }
 
   @Test

@@ -151,6 +151,16 @@ recommendation and outbox row still commit atomically.
 `AdaptationHandoffStep` returns that request id. The outbox derivation was not changed to match a
 workflow-local string; the workflow adopts the durable identity that already existed.
 
+The correlation test asserts the full chain, not just the first hop:
+
+    core.learning_workflow_step.request_id
+      -> core.agent_work_outbox.request_id
+      -> core.ai_execution.request_id
+
+joined in one statement and required to return exactly one row. Verified directly against the
+database as well as through the test: the correlated identity is the deterministic
+`ADAPTATION|<decisionRecordId>` UUID the outbox already used, not a workflow-local string.
+
 ## P2-1 — attempt counts describe real attempts
 
 `markSkipped` and `markCurrentStepTerminal` replace the former reuse of the claim helper as a
@@ -199,6 +209,7 @@ Every guard was perturbed and proven to bite, then restored:
 | ADAPT resolves `latestSnapshot()` again | `adaptationConsumesTheSnapshotThisWorkflowProduced…` and four others fail |
 | Skipped steps credited with one attempt | `aSkippedStepRecordsNoAttempt` and `aSkipAfterARejectedDiagnosis…` fail |
 | Completion and retry drop the token guard | both stale-worker tests fail |
+| `ai_execution` recorded under a synthetic identity | `theAdaptationStepRequestIdJoinsToTheDurableOutboxRow` fails |
 
 One attempted perturbation was a **no-op** and is reported as such: routing skipped steps back
 through `claimStep` changed nothing, because the claim predicate already refuses a step that is not
