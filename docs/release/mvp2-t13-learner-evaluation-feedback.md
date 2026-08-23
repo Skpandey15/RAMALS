@@ -72,19 +72,33 @@ authoritative; loading, empty, rejection, retry and failure states are explicit;
 not persisted in the browser; and negative, authorization, data-minimization and accessibility
 behavior is automated.
 
+## Post-merge adversarial review remediation
+
+The independent post-merge review found and remediated two M2-T13 defects without changing M2-T14:
+
+- **P1 refreshed-request cleanup:** effect teardown now dereferences `activeRequest.current` at
+  unmount time, so it aborts the controller installed by the latest refresh rather than only the
+  initial controller. The regression test mounts the panel, starts a pending refresh, unmounts it,
+  and proves that refreshed request's signal is aborted.
+- **P2 invalid stored rubric JSON:** the repository treats malformed or incompatible persisted
+  `dimension_results` as an empty projection. The existing presentation validation therefore
+  returns `UNAVAILABLE` with `approvedFeedback = null`. Regression cases cover malformed JSON and a
+  valid JSON object with the wrong top-level structure. Raw stored content is neither logged nor
+  copied into an exception or learner response.
+
 ## Verification evidence
 
 Local qualification on 2026-08-23:
 
 - focused Java assessment-feedback service, repository and API contract tests: `BUILD SUCCESSFUL`;
 - uncached serialized Java `clean check`, including architecture, governance and integration tasks:
-  `BUILD SUCCESSFUL` with all 11 tasks executed in 1m25s;
+  `BUILD SUCCESSFUL` with all 11 tasks executed in 1m32s;
 - real PostgreSQL 18.1 migration and assessment decision/read tests: `BUILD SUCCESSFUL`;
 - migration compatibility: all 32 migrations rollback-safe;
 - workflow trust policy: all eight workflows valid and SHA-pinned;
 - React dependency audit: zero vulnerabilities at the configured high-severity gate;
 - React lint: clean;
-- React unit/component suite: 46 passed with 88.08% statement coverage;
+- React unit/component suite: 47 passed;
 - React production TypeScript/Vite build: successful.
 
 Full Java, architecture, governance, integration and CI evidence is recorded on the M2-T13 pull

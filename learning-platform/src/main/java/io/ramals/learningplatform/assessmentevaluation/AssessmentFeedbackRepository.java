@@ -59,16 +59,22 @@ public class AssessmentFeedbackRepository {
     if (raw == null || raw.isBlank()) {
       return List.of();
     }
-    StoredRubricResult[] stored = JSON.readValue(raw, StoredRubricResult[].class);
-    return Arrays.stream(stored)
-        .map(
-            result ->
-                new RubricResult(
-                    result.dimensionId(),
-                    result.score(),
-                    result.maxScore(),
-                    result.reason()))
-        .toList();
+    try {
+      StoredRubricResult[] stored = JSON.readValue(raw, StoredRubricResult[].class);
+      return Arrays.stream(stored)
+          .map(
+              result ->
+                  new RubricResult(
+                      result.dimensionId(),
+                      result.score(),
+                      result.maxScore(),
+                      result.reason()))
+          .toList();
+    } catch (RuntimeException invalidStoredProjection) {
+      // Stored proposal content is untrusted at the learner boundary. Fail closed without logging
+      // the raw JSON, which may contain rejected model content or learner data.
+      return List.of();
+    }
   }
 
   private static Instant instant(ResultSet result, String column) throws SQLException {
