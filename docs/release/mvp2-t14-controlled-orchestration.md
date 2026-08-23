@@ -273,7 +273,9 @@ crash-qualified.** The execution token added during remediation guarantees concu
 stale-worker safety. It does not guarantee recovery from process death: there is no lease, so a
 claim held by a dead JVM is never released.
 
-*Status: MECHANISM IMPLEMENTED — QUALIFICATION OPEN.* The remediation described below has landed;
+*Status: PARTIALLY IMPLEMENTED — ONE STATE OPEN, QUALIFICATION OPEN.* Revised down after a further
+review: the first implementation covered only one of five DIAGNOSE recovery states. See the
+recovery-state analysis at the end of this section.* The remediation described below has landed;
 what remains is proving it under injected process death, which is M2-T15's. The prerequisite is not
 CLOSED until that qualification passes. Detail follows, reconciled after implementation.
 
@@ -390,4 +392,81 @@ its marker fails the atomicity test.
 **What is still open.** The mechanism exists and is unit- and integration-tested against real
 PostgreSQL. It has **not** been qualified under injected process death at the four crash windows
 above. Until M2-T15 does that, prerequisite 3 is not CLOSED and the activation gate still holds.
+
+A further review then found that the DIAGNOSE recovery above covered only one of five durable
+states. That analysis, and the state which remains open, follow.
+
+### Prerequisite 3 — DIAGNOSE recovery states, and the one that remains open
+
+A further independent review found that the first recovery implementation covered only the last of
+five durable states. It handled *gate decision exists → adopt*, and fell through to redispatch for
+everything else — including a request that had already been commissioned, where redispatch is
+refused by design and the workflow therefore burned its attempts against a wall.
+
+All five states under the run's stable DIAGNOSE request identity now have a deterministic answer.
+**None of them redispatches a commissioned request**: at-most-once dispatch is the property recovery
+must not become a loophole in.
+
+| # | Durable state | Detection | Recovery semantics |
+| --- | --- | --- | --- |
+| 1 | No execution, no decision | no `STARTED` event | Dispatch normally. This is an ordinary first attempt. |
+| 2 | Commissioned, no terminal record, no decision | `STARTED` event, no `core.ai_execution` row | **Indeterminate** — the provider may or may not have been called and nothing can establish which. Close the commission as `AI_EXECUTION_ABANDONED` so the ledger holds no unresolved commission, then fail the step terminally. Never dispatch again, never guess a verdict. |
+| 3 | Execution `FAILED`, no decision | `ai_execution.status = 'FAILED'` | Adopt the recorded failure and fail terminally. Retrying is worse than useless: commissioning would refuse, and the run would spend its remaining attempts rediscovering a failure already on record, then report exhaustion instead of the reason that actually stopped it. |
+| 4 | Execution `SUCCEEDED`, no decision | `ai_execution.status = 'SUCCEEDED'` | **Not recoverable with today's persistence.** Fails terminally with its own code, `DIAGNOSIS_RESULT_UNRECOVERABLE`, so the state is countable rather than hidden inside a generic failure. See below. |
+| 5 | Gate decision exists | `ledger.proposal_gate_decision` by `request_id` | Adopt the verdict, accepted or rejected. |
+
+A step failure in states 2, 3 and 4 is *terminal* rather than retryable. `WorkflowAgentStep.Result`
+gained that distinction: a result may now say not merely "no verdict" but "no verdict, and no further
+attempt can produce one", and the orchestrator ends the run under the step's own reason code rather
+than under a generic exhaustion.
+
+### Does `ai_execution` retain enough to re-gate a SUCCEEDED-but-undecided execution?
+
+**No.** The column is `proposal_digest CHAR(64)` — a SHA-256 of the proposal, not the proposal. That
+is deliberate: the execution ledger holds no model content, which is the same data-minimisation
+stance that keeps prompts and hidden reasoning out of it. Gating requires the proposal, and the
+proposal is gone.
+
+**The missing durable artifact is therefore the proposal payload itself.**
+
+**The smallest change is not to persist it.** Storing model output in the execution ledger to make
+state 4 recoverable would trade a data-minimisation property for a recovery property, and the same
+recovery is available without that trade:
+
+> **Proposed: commit the execution-success record and its gate decision atomically.**
+> `DiagnosticAssessmentService` currently calls `recordSuccess(...)` and then `decide(...)` in two
+> independent transactions, which is what creates the window. The gate is a pure function of the
+> proposal and the context, so it can be evaluated in memory *before* either write, and both rows
+> can then commit together. State 4 stops existing rather than becoming recoverable.
+>
+> A crash before that commit lands in state 2 instead — indeterminate, fail-closed, no duplicate
+> dispatch. The model call is wasted, which is the honest cost of at-most-once dispatch.
+
+This change is **not** included here. It moves transaction boundaries inside the M2-T09 diagnostic
+path, which deserves its own review rather than riding along with a recovery fix. Until it lands,
+state 4 is detected and reported, not recovered.
+
+### Lease and exhaustion now use the database clock
+
+`claimStep` compares `claimed_at` against `CURRENT_TIMESTAMP`. The exhausted-attempt check that
+follows a refused claim previously asked a JVM `Clock` the same question, so two instances with a few
+seconds of skew could disagree about whether a lease had expired and therefore about whether a run
+should be failed. Both now ask the database, through `claimableButExhausted`.
+
+The absolute run deadline still uses the JVM clock. It is set and compared with the same clock, so it
+is self-consistent, and `finishRun` is guarded on RUNNING so only one instance can act on it. That is
+a smaller residual and is recorded here rather than fixed silently.
+
+### Status of prerequisite 3
+
+*Status: PARTIALLY IMPLEMENTED — one state open, qualification open.*
+
+- Abandoned-claim reclaim, effect/marker atomicity, and DIAGNOSE recovery states 1, 2, 3 and 5 are
+  implemented and tested against real PostgreSQL, including the three crash points: after commission
+  and before provider invocation; after provider success and before the gate decision; after the
+  gate decision and before workflow adoption.
+- **State 4 remains open** pending the atomicity change proposed above.
+- Nothing here has been qualified under injected process death. M2-T15 owns that.
+
+The prerequisite is **not CLOSED** and the activation gate continues to hold.
 

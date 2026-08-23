@@ -42,6 +42,63 @@ public class AiExecutionRepository {
     return jdbc.query(SELECT + " WHERE request_id = ?", MAPPER, requestId).stream().findFirst();
   }
 
+  /**
+   * The durable state of one request identity: never commissioned, commissioned without a terminal
+   * record, or terminal. Read-only, and never makes a commissioned request dispatchable again.
+   */
+  public AiExecutionRecoveryPort.RecordedExecution findExecutionState(String requestId) {
+    if (requestId == null || requestId.isBlank()) {
+      return AiExecutionRecoveryPort.RecordedExecution.absent();
+    }
+    Optional<AiExecution> terminal = findByRequestId(requestId);
+    if (terminal.isPresent()) {
+      AiExecution execution = terminal.orElseThrow();
+      AiExecutionRecoveryPort.ExecutionState state =
+          "SUCCEEDED".equals(execution.status())
+              ? AiExecutionRecoveryPort.ExecutionState.SUCCEEDED
+              : AiExecutionRecoveryPort.ExecutionState.FAILED;
+      return new AiExecutionRecoveryPort.RecordedExecution(state, execution.errorCode());
+    }
+    Integer commissioned =
+        jdbc.queryForObject(
+            """
+            SELECT count(*) FROM core.ai_execution_event
+             WHERE request_id = ? AND event_type = 'STARTED'
+            """,
+            Integer.class,
+            requestId);
+    return commissioned != null && commissioned > 0
+        ? new AiExecutionRecoveryPort.RecordedExecution(
+            AiExecutionRecoveryPort.ExecutionState.COMMISSIONED, null)
+        : AiExecutionRecoveryPort.RecordedExecution.absent();
+  }
+
+  /**
+   * Writes a terminal failure for a commissioned execution whose worker never returned.
+   *
+   * <p>Guarded on there being no terminal row, so a late-arriving real outcome is never overwritten
+   * by an abandonment. The unique constraint on request_id makes the insert safe under a race.
+   */
+  public boolean closeAbandonedExecution(String requestId, String errorCode) {
+    Integer closed =
+        jdbc.update(
+            """
+            INSERT INTO core.ai_execution
+              (id, request_id, interaction_id, agent_type, contract_version, status, error_code,
+               request_digest, started_at, completed_at)
+            SELECT ?, event.request_id, event.interaction_id, event.agent_type,
+                   event.contract_version, 'FAILED', ?, event.request_digest,
+                   event.occurred_at, CURRENT_TIMESTAMP
+              FROM core.ai_execution_event event
+             WHERE event.request_id = ? AND event.event_type = 'STARTED'
+            ON CONFLICT (request_id) DO NOTHING
+            """,
+            UuidV7.generate(),
+            errorCode,
+            requestId);
+    return closed != null && closed > 0;
+  }
+
   public AiExecutionCommission commission(AiRequestEnvelope request, String agentType) {
     return commission(
         request.requestId(),

@@ -16,7 +16,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** Records AI execution metadata in an independent transaction. */
 @Service
 public class AiExecutionPersistenceService
-    implements AiExecutionRecorder, DiagnosticAssessmentExecutionRecorder {
+    implements AiExecutionRecorder, DiagnosticAssessmentExecutionRecorder, AiExecutionRecoveryPort {
   private static final Logger LOGGER = LoggerFactory.getLogger(AiExecutionPersistenceService.class);
 
   private final AiExecutionRepository repository;
@@ -44,6 +44,16 @@ public class AiExecutionPersistenceService
               "agentType", agentType));
       throw failure;
     }
+  }
+
+  @Override
+  public RecordedExecution findExecutionState(String requestId) {
+    return independent(() -> repository.findExecutionState(requestId));
+  }
+
+  @Override
+  public boolean closeAbandonedExecution(String requestId, String errorCode) {
+    return independent(() -> repository.closeAbandonedExecution(requestId, errorCode));
   }
 
   @Override

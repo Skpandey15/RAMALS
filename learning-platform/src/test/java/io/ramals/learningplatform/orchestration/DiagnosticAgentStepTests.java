@@ -11,6 +11,9 @@ import static org.mockito.Mockito.when;
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentService;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort.RecordedDecision;
+import io.ramals.learningplatform.execution.AiExecutionRecoveryPort;
+import io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState;
+import io.ramals.learningplatform.execution.AiExecutionRecoveryPort.RecordedExecution;
 import io.ramals.learningplatform.grounding.ProposalType;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Run;
@@ -39,8 +42,9 @@ class DiagnosticAgentStepTests {
   private final DiagnosticAssessmentService diagnostics = mock(DiagnosticAssessmentService.class);
   private final LearnerRepository learners = mock(LearnerRepository.class);
   private final ProposalGateDecisionPort decisions = mock(ProposalGateDecisionPort.class);
+  private final AiExecutionRecoveryPort executions = mock(AiExecutionRecoveryPort.class);
   private final DiagnosticAgentStep step =
-      new DiagnosticAgentStep(diagnostics, learners, decisions);
+      new DiagnosticAgentStep(diagnostics, learners, decisions, executions);
 
   @Test
   void anAlreadyRecordedAcceptanceIsAdoptedWithoutCallingTheModelAgain() {
@@ -74,6 +78,7 @@ class DiagnosticAgentStepTests {
   @Test
   void withNoRecordedDecisionTheAgentIsDispatchedNormally() {
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState(anyString())).thenReturn(RecordedExecution.absent());
     when(learners.findActiveSubjectById(LEARNER)).thenReturn(Optional.of("subject-1"));
     when(diagnostics.assess(anyString(), any(), anyString()))
         .thenReturn(
@@ -90,6 +95,7 @@ class DiagnosticAgentStepTests {
     // A fresh identity per attempt would make an already-durable verdict unfindable, which is the
     // whole failure this recovery exists to prevent.
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState(anyString())).thenReturn(RecordedExecution.absent());
     when(learners.findActiveSubjectById(LEARNER)).thenReturn(Optional.of("subject-1"));
     when(diagnostics.assess(anyString(), any(), anyString()))
         .thenReturn(
@@ -105,12 +111,78 @@ class DiagnosticAgentStepTests {
   @Test
   void anInactiveLearnerIsReportedAsAFailureRatherThanDecidedHere() {
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState(anyString())).thenReturn(RecordedExecution.absent());
     when(learners.findActiveSubjectById(LEARNER)).thenReturn(Optional.empty());
 
     WorkflowAgentStep.Result result = step.diagnose(run());
 
     assertThat(result.succeeded()).isFalse();
     assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_LEARNER_INACTIVE");
+    verify(diagnostics, never()).assess(anyString(), any(), anyString());
+  }
+
+  @Test
+  void state2_aCommissionedExecutionWithNoDecisionIsClosedAndNotRedispatched() {
+    // The provider may or may not have been called and nothing can establish which. Guessing either
+    // way is wrong; dispatching again would break at-most-once outright.
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null));
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.succeeded()).isFalse();
+    assertThat(result.retryable()).as("retrying would hit the same commissioning guard").isFalse();
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_EXECUTION_ABANDONED");
+    verify(diagnostics, never()).assess(anyString(), any(), anyString());
+    // The ledger must not keep an unresolved commission for ever.
+    verify(executions).closeAbandonedExecution("wf-diag-" + RUN_ID, "AI_EXECUTION_ABANDONED");
+  }
+
+  @Test
+  void state3_aFailedExecutionWithNoDecisionIsAdoptedRatherThanRetried() {
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.FAILED, "AI_TIMEOUT"));
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.succeeded()).isFalse();
+    assertThat(result.retryable()).isFalse();
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_EXECUTION_FAILED");
+    verify(diagnostics, never()).assess(anyString(), any(), anyString());
+    verify(executions, never()).closeAbandonedExecution(anyString(), anyString());
+  }
+
+  @Test
+  void state4_aSucceededExecutionWithNoDecisionIsReportedAsUnrecoverable() {
+    // core.ai_execution keeps a proposal digest, not the proposal, so there is nothing to re-gate.
+    // Its own reason code makes the state countable instead of hidden in a generic failure.
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.SUCCEEDED, null));
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.succeeded()).isFalse();
+    assertThat(result.retryable()).isFalse();
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_RESULT_UNRECOVERABLE");
+    verify(diagnostics, never()).assess(anyString(), any(), anyString());
+  }
+
+  @Test
+  void noRecoveryStateEverRedispatchesAnAlreadyCommissionedRequest() {
+    // The single property this whole state machine exists to preserve.
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    for (ExecutionState state :
+        new ExecutionState[] {
+          ExecutionState.COMMISSIONED, ExecutionState.FAILED, ExecutionState.SUCCEEDED
+        }) {
+      when(executions.findExecutionState(anyString()))
+          .thenReturn(new RecordedExecution(state, null));
+
+      step.diagnose(run());
+    }
     verify(diagnostics, never()).assess(anyString(), any(), anyString());
   }
 

@@ -14,7 +14,6 @@ import io.ramals.learningplatform.orchestration.LearningWorkflow.StepStatus;
 import io.ramals.learningplatform.orchestration.LearningWorkflowPolicy.Eligibility;
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
@@ -233,6 +232,12 @@ public class LearningWorkflowOrchestrator {
       return new StepOutcome(StepStatus.COMPLETED, null, null, resultRef, continuation);
     }
 
+    /** The step cannot succeed on any future attempt; the run ends here rather than retrying. */
+    static StepOutcome terminalFailure(WorkflowAgentStep.Result result) {
+      return new StepOutcome(
+          StepStatus.FAILED, result.reasonCode(), result.requestId(), null, Eligibility.ELIGIBLE);
+    }
+
     static StepOutcome agent(WorkflowAgentStep.Result result, Eligibility continuation) {
       return new StepOutcome(
           StepStatus.COMPLETED, result.reasonCode(), result.requestId(), null, continuation);
@@ -275,6 +280,12 @@ public class LearningWorkflowOrchestrator {
   private StepOutcome runDiagnosis(Run run) {
     WorkflowAgentStep.Result result = diagnostic.diagnose(run);
     if (!result.succeeded()) {
+      if (!result.retryable()) {
+        // The durable execution record already settles this. Retrying would spend the remaining
+        // attempts on a request commissioning will refuse, and end the run reporting exhaustion
+        // instead of the reason that actually stopped it.
+        return StepOutcome.terminalFailure(result);
+      }
       // No verdict was obtained, so this is a transport-shaped failure and worth another attempt.
       throw new WorkflowStepFailedException(result.reasonCode());
     }
@@ -314,6 +325,14 @@ public class LearningWorkflowOrchestrator {
             claim, outcome.status(), outcome.reasonCode(), outcome.requestId(), outcome.resultRef());
     if (!owned) {
       log("workflow.step.superseded", run, claim.step(), null);
+      return;
+    }
+
+    if (outcome.status() == StepStatus.FAILED) {
+      // A terminal step failure ends the run under the step's own reason, not a generic one.
+      skipRemaining(run, claim.step(), outcome.reasonCode());
+      runs.finishRun(run.id(), Status.FAILED, outcome.reasonCode());
+      log("workflow.failed", run, claim.step(), outcome.reasonCode());
       return;
     }
 
@@ -360,25 +379,13 @@ public class LearningWorkflowOrchestrator {
    * Whether a step is claimable in principle but has no attempts left.
    *
    * <p>The claim predicate cannot distinguish "someone else owns this" from "this is out of
-   * attempts", so the caller asks afterwards. A step abandoned under an expired lease counts here
-   * too: once the lease has run out nobody owns it, and if its attempts are spent the run has to end
-   * rather than sit until its deadline.
+   * attempts", so the caller asks afterwards -- and asks the database, which is the only way this
+   * answer stays consistent with the claim it follows. A JVM clock here would let two instances with
+   * clock skew disagree about whether a lease had expired.
    */
   private boolean attemptsExhausted(UUID runId, Step step) {
-    Instant now = clock.instant();
-    return runs.step(runId, step)
-        .filter(current -> claimable(current, now))
-        .filter(current -> !LearningWorkflowPolicy.mayRetry(current.attemptCount()))
-        .isPresent();
-  }
-
-  private static boolean claimable(StepRun step, Instant now) {
-    if (step.status() == StepStatus.PENDING) {
-      return true;
-    }
-    return step.status() == StepStatus.RUNNING
-        && step.claimedAt() != null
-        && !step.claimedAt().plus(LearningWorkflowPolicy.CLAIM_LEASE).isAfter(now);
+    return runs.claimableButExhausted(
+        runId, step, LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE);
   }
 
   private void failExhausted(Run run, Step step) {

@@ -241,6 +241,35 @@ public class LearningWorkflowRepository {
   }
 
   /**
+   * Whether a step is claimable in principle but has spent its attempts.
+   *
+   * <p>Evaluated by the database, deliberately. The claim predicate compares {@code claimed_at}
+   * against {@code CURRENT_TIMESTAMP}; asking a JVM clock the same question invites two instances
+   * with a few seconds of skew to disagree about whether a lease has expired, and then to disagree
+   * about whether a run should be failed. One clock decides both.
+   */
+  public boolean claimableButExhausted(UUID runId, Step step, int maxAttempts, Duration lease) {
+    Integer matches =
+        jdbc.queryForObject(
+            """
+            SELECT count(*)
+              FROM core.learning_workflow_step
+             WHERE run_id = ?
+               AND step_name = ?
+               AND attempt_count >= ?
+               AND (status = 'PENDING'
+                    OR (status = 'RUNNING'
+                        AND claimed_at < CURRENT_TIMESTAMP - CAST(? AS interval)))
+            """,
+            Integer.class,
+            runId,
+            step.name(),
+            maxAttempts,
+            lease.toSeconds() + " seconds");
+    return matches != null && matches > 0;
+  }
+
+  /**
    * Records a step that policy decided never to run.
    *
    * <p>Attempt count stays zero, because no attempt was made. Inserting rather than claiming is the
