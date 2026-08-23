@@ -261,6 +261,104 @@ class LearningWorkflowOrchestratorTests {
     assertThat(store.findById(healthy.id()).orElseThrow().status()).isEqualTo(Status.TIMED_OUT);
   }
 
+  @Test
+  void aSkippedStepRecordsNoAttempt() {
+    when(mastery.recompute(any(), any(), any(), anyString()))
+        .thenReturn(snapshot(MasteryStatus.MASTERED));
+
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.9500"));
+    drive(run.id());
+
+    // A step that policy declined never ran, so crediting it with an attempt would make the audit
+    // describe work that did not happen.
+    assertThat(step(run.id(), Step.DIAGNOSE).attemptCount()).isZero();
+    assertThat(step(run.id(), Step.ADAPT).attemptCount()).isZero();
+    assertThat(step(run.id(), Step.RECOMPUTE_MASTERY).attemptCount()).isEqualTo(1);
+  }
+
+  @Test
+  void aSkipAfterARejectedDiagnosisRecordsNoAttemptForAdaptation() {
+    diagnostic.result = WorkflowAgentStep.Result.rejected("DIAGNOSIS_PROPOSAL_REJECTED", "req-d");
+
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+    drive(run.id());
+
+    assertThat(step(run.id(), Step.ADAPT).status()).isEqualTo(StepStatus.SKIPPED);
+    assertThat(step(run.id(), Step.ADAPT).attemptCount()).isZero();
+    assertThat(step(run.id(), Step.DIAGNOSE).attemptCount()).isEqualTo(1);
+  }
+
+  @Test
+  void aTimeoutBeforeAnyStepRanFabricatesNoAttempt() {
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+    now.set(T0.plus(LearningWorkflowPolicy.RUN_DEADLINE).plus(Duration.ofSeconds(1)));
+
+    orchestrator.advance(run.id());
+
+    StepRun first = step(run.id(), Step.RECORD_EVALUATION_EVIDENCE);
+    assertThat(first.status()).isEqualTo(StepStatus.TIMED_OUT);
+    assertThat(first.attemptCount()).isZero();
+  }
+
+  @Test
+  void cancellationDuringARealAttemptKeepsTheAttemptCountItHad() {
+    // One real attempt is spent failing, then the run is cancelled while still on that step.
+    diagnostic.failuresBeforeSuccess = 1;
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+    drive(run.id(), 3);
+    assertThat(step(run.id(), Step.DIAGNOSE).attemptCount()).isEqualTo(1);
+
+    orchestrator.cancel(run.id(), "CANCELLED_BY_OPERATOR");
+
+    StepRun diagnose = step(run.id(), Step.DIAGNOSE);
+    assertThat(diagnose.status()).isEqualTo(StepStatus.CANCELLED);
+    assertThat(diagnose.attemptCount()).isEqualTo(1);
+  }
+
+  @Test
+  void adaptationConsumesTheSnapshotThisWorkflowProducedNotWhicheverIsLatest() {
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+    drive(run.id());
+
+    // The id handed to adaptation is the one the recompute step recorded, so the audit trail and
+    // the recommendation are computed from the same state.
+    assertThat(adaptation.snapshotSeen).isEqualTo(SNAPSHOT_ID);
+    assertThat(step(run.id(), Step.RECOMPUTE_MASTERY).resultRef()).isEqualTo(SNAPSHOT_ID);
+  }
+
+  @Test
+  void aWorkerThatLosesItsClaimCannotCompleteTheStep() {
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+    var claim =
+        store.claimStep(run.id(), Step.RECORD_EVALUATION_EVIDENCE,
+            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS).orElseThrow();
+
+    // The run is cancelled while that claim is notionally in flight; the terminal transition clears
+    // the token, so the returning worker has nothing to update.
+    orchestrator.cancel(run.id(), "CANCELLED_BY_OPERATOR");
+
+    assertThat(store.finishClaimedStep(claim, StepStatus.COMPLETED, null, null, null)).isFalse();
+    assertThat(store.findById(run.id()).orElseThrow().status()).isEqualTo(Status.CANCELLED);
+    assertThat(step(run.id(), Step.RECORD_EVALUATION_EVIDENCE).status())
+        .isEqualTo(StepStatus.CANCELLED);
+  }
+
+  @Test
+  void aSecondCallerCannotClaimAStepAnotherWorkerIsRunning() {
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+
+    var first =
+        store.claimStep(run.id(), Step.RECORD_EVALUATION_EVIDENCE,
+            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS);
+    var second =
+        store.claimStep(run.id(), Step.RECORD_EVALUATION_EVIDENCE,
+            LearningWorkflowPolicy.MAX_STEP_ATTEMPTS);
+
+    assertThat(first).isPresent();
+    assertThat(second).isEmpty();
+    assertThat(step(run.id(), Step.RECORD_EVALUATION_EVIDENCE).attemptCount()).isEqualTo(1);
+  }
+
   /** Drives the workflow until it is terminal, with a hard cap so a stuck run fails the test. */
   private Run drive(UUID runId) {
     return drive(runId, 20);
@@ -325,11 +423,13 @@ class LearningWorkflowOrchestratorTests {
 
   private static final class RecordingAdaptation implements WorkflowAgentStep.Adaptation {
     private int calls;
+    private UUID snapshotSeen;
 
     @Override
-    public Result adapt(Run run) {
+    public Result adapt(Run run, UUID masterySnapshotId) {
       calls++;
-      return Result.accepted("ADAPTATION_WORK_ENQUEUED", "req-adapt");
+      snapshotSeen = masterySnapshotId;
+      return Result.accepted("ADAPTATION_WORK_ENQUEUED", "outbox-request-1");
     }
   }
 
@@ -395,46 +495,90 @@ class LearningWorkflowOrchestratorTests {
       return steps(runId).stream().filter(candidate -> candidate.step() == step).findFirst();
     }
 
+    // Mirrors claimStep's SQL predicate exactly. The authority for these semantics is
+    // LearningWorkflowConcurrencyIntegrationTests against real PostgreSQL; this copy exists so the
+    // state-machine scenarios stay fast, not so the claim can be proved here.
     @Override
-    public void beginStep(UUID runId, Step step) {
-      step(runId, step)
-          .ifPresentOrElse(
-              existing ->
-                  replaceStep(
-                      new StepRun(
-                          existing.id(), runId, step, StepStatus.RUNNING,
-                          existing.attemptCount() + 1, existing.reasonCode(), existing.requestId(),
-                          existing.resultRef(), existing.startedAt(), null)),
-              () ->
-                  steps.add(
-                      new StepRun(
-                          UUID.randomUUID(), runId, step, StepStatus.RUNNING, 1, null, null, null,
-                          T0, null)));
+    public java.util.Optional<LearningWorkflow.StepClaim> claimStep(
+        UUID runId, Step step, int maxAttempts) {
+      Run run = findById(runId).orElse(null);
+      if (run == null || run.status() != Status.RUNNING || run.currentStep() != step) {
+        return java.util.Optional.empty();
+      }
+      StepRun existing = step(runId, step).orElse(null);
+      UUID token = UUID.randomUUID();
+      if (existing == null) {
+        steps.add(
+            new StepRun(
+                UUID.randomUUID(), runId, step, StepStatus.RUNNING, 1, null, null, null, token,
+                T0, null));
+        return java.util.Optional.of(new LearningWorkflow.StepClaim(runId, step, 1, token));
+      }
+      if (existing.status() != StepStatus.PENDING || existing.attemptCount() >= maxAttempts) {
+        return java.util.Optional.empty();
+      }
+      int attempt = existing.attemptCount() + 1;
+      replaceStep(
+          new StepRun(
+              existing.id(), runId, step, StepStatus.RUNNING, attempt, null, existing.requestId(),
+              existing.resultRef(), token, existing.startedAt(), null));
+      return java.util.Optional.of(new LearningWorkflow.StepClaim(runId, step, attempt, token));
     }
 
     @Override
-    public void finishStep(
-        UUID runId, Step step, StepStatus status, String reasonCode, String requestId,
+    public boolean finishClaimedStep(
+        LearningWorkflow.StepClaim claim, StepStatus status, String reasonCode, String requestId,
         UUID resultRef) {
-      step(runId, step)
-          .ifPresent(
-              existing ->
-                  replaceStep(
-                      new StepRun(
-                          existing.id(), runId, step, status, existing.attemptCount(), reasonCode,
-                          requestId, resultRef, existing.startedAt(), T0)));
+      StepRun existing = step(claim.runId(), claim.step()).orElse(null);
+      if (existing == null || !claim.executionToken().equals(existing.executionToken())) {
+        return false;
+      }
+      replaceStep(
+          new StepRun(
+              existing.id(), claim.runId(), claim.step(), status, existing.attemptCount(),
+              reasonCode, requestId, resultRef, null, existing.startedAt(), T0));
+      return true;
     }
 
     @Override
-    public void retryStep(UUID runId, Step step, String reasonCode) {
-      step(runId, step)
-          .ifPresent(
-              existing ->
-                  replaceStep(
-                      new StepRun(
-                          existing.id(), runId, step, StepStatus.PENDING, existing.attemptCount(),
-                          reasonCode, existing.requestId(), existing.resultRef(),
-                          existing.startedAt(), null)));
+    public boolean retryClaimedStep(LearningWorkflow.StepClaim claim, String reasonCode) {
+      StepRun existing = step(claim.runId(), claim.step()).orElse(null);
+      if (existing == null || !claim.executionToken().equals(existing.executionToken())) {
+        return false;
+      }
+      replaceStep(
+          new StepRun(
+              existing.id(), claim.runId(), claim.step(), StepStatus.PENDING,
+              existing.attemptCount(), reasonCode, existing.requestId(), existing.resultRef(),
+              null, existing.startedAt(), null));
+      return true;
+    }
+
+    @Override
+    public void markSkipped(UUID runId, Step step, String reasonCode) {
+      if (step(runId, step).isPresent()) {
+        return;
+      }
+      steps.add(
+          new StepRun(
+              UUID.randomUUID(), runId, step, StepStatus.SKIPPED, 0, reasonCode, null, null, null,
+              T0, T0));
+    }
+
+    @Override
+    public void markCurrentStepTerminal(
+        UUID runId, Step step, StepStatus status, String reasonCode) {
+      StepRun existing = step(runId, step).orElse(null);
+      if (existing == null) {
+        steps.add(
+            new StepRun(
+                UUID.randomUUID(), runId, step, status, 0, reasonCode, null, null, null, T0, T0));
+        return;
+      }
+      replaceStep(
+          new StepRun(
+              existing.id(), runId, step, status, existing.attemptCount(), reasonCode,
+              existing.requestId(), existing.resultRef(), null, existing.startedAt(), T0));
     }
 
     @Override

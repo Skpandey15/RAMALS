@@ -112,6 +112,15 @@ public final class LearningWorkflow {
       Instant startedAt,
       Instant completedAt) {}
 
+  /**
+   * Proof that one worker, and only one, owns an in-flight attempt of a step.
+   *
+   * <p>Held across the remote call and presented again to finish it. A worker whose run was
+   * cancelled or timed out meanwhile no longer matches, so its completion is refused rather than
+   * overwriting the terminal state that replaced it.
+   */
+  public record StepClaim(UUID runId, Step step, int attemptCount, UUID executionToken) {}
+
   /** One separately observable, retryable and attributable step of a run. */
   public record StepRun(
       UUID id,
@@ -122,6 +131,7 @@ public final class LearningWorkflow {
       String reasonCode,
       String requestId,
       UUID resultRef,
+      UUID executionToken,
       Instant startedAt,
       Instant completedAt) {}
 }

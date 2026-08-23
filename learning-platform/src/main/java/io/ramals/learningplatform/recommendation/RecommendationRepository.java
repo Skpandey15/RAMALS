@@ -79,7 +79,7 @@ public class RecommendationRepository {
    * ID and source uniqueness constraint make a repeated recompute return the existing work rather
    * than create another logical dispatch.
    */
-  public UUID appendAdaptationWork(DecisionRecord decision) {
+  public AdaptationWork appendAdaptationWork(DecisionRecord decision) {
     UUID workId = UuidV7.generate();
     String requestId = deterministicId("ADAPTATION|" + decision.id());
     String groundedContextId = deterministicId("GROUNDED_CONTEXT|" + decision.id());
@@ -102,9 +102,19 @@ public class RecommendationRepository {
         JSON.writeValueAsString(payload), java.sql.Timestamp.from(createdAt),
         java.sql.Timestamp.from(createdAt));
 
-    return jdbcTemplate.queryForObject(
+    UUID durableWorkId = jdbcTemplate.queryForObject(
         "SELECT id FROM core.agent_work_outbox WHERE request_id = ?", UUID.class, requestId);
+    return new AdaptationWork(durableWorkId, requestId);
   }
+
+  /**
+   * The durable identity of one enqueued adaptation.
+   *
+   * <p>Returned rather than recomputed by callers. The request id is derived from the decision
+   * record, and a caller that rebuilt it independently would be one refactor away from recording a
+   * correlation id that joins to nothing.
+   */
+  public record AdaptationWork(UUID workId, String requestId) {}
 
   public Optional<DecisionRecord> findDecisionBySnapshot(UUID snapshotId) {
     return jdbcTemplate.query(DECISION_SELECT + " WHERE source_snapshot_id = ?", DECISION_MAPPER,

@@ -5,6 +5,7 @@ import io.ramals.learningplatform.learner.LearnerService;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
@@ -36,7 +37,7 @@ public class RecommendationService {
   }
 
   @Transactional
-  public LearningRecommendation recommend(
+  public RecommendationResult recommend(
       MasterySnapshot snapshot, String interactionId, String traceId) {
     RecommendationDecision decision = policy.decide(snapshot);
     BusinessEventLogger.info(LOGGER, "recommendation.decided", "Learning recommendation decided",
@@ -56,7 +57,8 @@ public class RecommendationService {
         snapshot, decision, RecommendationPolicy.POLICY_VERSION, interactionId, traceId);
     LearningRecommendation recommendation = repository.appendRecommendation(
         snapshot, decision, decisionRecord.id());
-    repository.appendAdaptationWork(decisionRecord);
+    RecommendationRepository.AdaptationWork adaptationWork =
+        repository.appendAdaptationWork(decisionRecord);
     BusinessEventLogger.info(LOGGER, "recommendation.persisted",
         "Learning recommendation persisted",
         Map.of(
@@ -71,8 +73,22 @@ public class RecommendationService {
     // The durable dispatcher owns delivery. No remote call or volatile event is part of this
     // transaction; commit makes the work recoverable and a worker claims it afterwards.
 
-    return recommendation;
+    return new RecommendationResult(
+        recommendation, decisionRecord.id(), adaptationWork.workId(), adaptationWork.requestId());
   }
+
+  /**
+   * One recommendation and the durable adaptation work it enqueued, in the same transaction.
+   *
+   * <p>The adaptation request id is surfaced so a caller can record what it actually handed to the
+   * outbox. Correlation that is reconstructed rather than reported is correlation that silently
+   * stops joining.
+   */
+  public record RecommendationResult(
+      LearningRecommendation recommendation,
+      UUID decisionRecordId,
+      UUID adaptationWorkId,
+      String adaptationRequestId) {}
 
   @Transactional(readOnly = true)
   public List<LearningRecommendation> currentRecommendations(String subject) {

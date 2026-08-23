@@ -44,8 +44,14 @@ public interface WorkflowAgentStep {
     Result diagnose(Run run);
   }
 
-  /** Hands the recomputed state to the adaptation path. */
+  /**
+   * Hands the recomputed state to the adaptation path.
+   *
+   * <p>The snapshot is passed in rather than looked up, so adaptation consumes the exact state this
+   * workflow produced. A step that fetched "the latest" would silently adopt a snapshot written by
+   * an unrelated learner event between the two steps.
+   */
   interface Adaptation extends WorkflowAgentStep {
-    Result adapt(Run run);
+    Result adapt(Run run, java.util.UUID masterySnapshotId);
   }
 }

@@ -4,6 +4,8 @@ import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.mastery.MasteryService;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Run;
 import io.ramals.learningplatform.recommendation.RecommendationService;
+import java.util.Objects;
+import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**
@@ -30,22 +32,36 @@ public class AdaptationHandoffStep implements WorkflowAgentStep.Adaptation {
   }
 
   @Override
-  public Result adapt(Run run) {
-    MasterySnapshot snapshot =
-        mastery
-            .latestSnapshot(run.learnerId(), run.skillId(), run.curriculumVersionId())
-            .orElse(null);
+  public Result adapt(Run run, UUID masterySnapshotId) {
+    MasterySnapshot snapshot = mastery.snapshotById(masterySnapshotId).orElse(null);
     if (snapshot == null) {
-      // The preceding step wrote one, so its absence means the run is resuming against state that
-      // moved underneath it. Reported as a failure rather than assumed away.
+      // The recompute step recorded this id, so its absence means the lineage is broken. Failing
+      // is the safe answer: substituting whatever snapshot is current would compute the learner's
+      // next step from state this workflow never evaluated.
       return Result.failed("ADAPTATION_SNAPSHOT_ABSENT", null);
     }
-    recommendations.recommend(snapshot, run.interactionId(), run.traceId());
-    return Result.accepted("ADAPTATION_WORK_ENQUEUED", requestId(run));
+    if (!ownedByRun(snapshot, run)) {
+      return Result.failed("ADAPTATION_SNAPSHOT_FOREIGN", null);
+    }
+    // The real, durable identity of the enqueued work -- not a workflow-local string. This is what
+    // makes learning_workflow_step.request_id join to core.agent_work_outbox.request_id and, later,
+    // to the ai_execution the dispatcher records for it.
+    return Result.accepted(
+        "ADAPTATION_WORK_ENQUEUED",
+        recommendations
+            .recommend(snapshot, run.interactionId(), run.traceId())
+            .adaptationRequestId());
   }
 
-  /** Derived from the run so a retried hand-off correlates to the same step, not a new one. */
-  static String requestId(Run run) {
-    return "wf-adapt-" + run.id();
+  /**
+   * Whether the snapshot really belongs to this run.
+   *
+   * <p>Cheap, and it turns a lineage bug into a refusal instead of an adaptation computed for the
+   * wrong learner or skill.
+   */
+  private static boolean ownedByRun(MasterySnapshot snapshot, Run run) {
+    return Objects.equals(snapshot.learnerId(), run.learnerId())
+        && Objects.equals(snapshot.skillId(), run.skillId())
+        && Objects.equals(snapshot.curriculumVersionId(), run.curriculumVersionId());
   }
 }

@@ -1,0 +1,495 @@
+package io.ramals.learningplatform.orchestration;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import io.ramals.learningplatform.learner.LearnerRepository;
+import io.ramals.learningplatform.mastery.MasteryRepository;
+import io.ramals.learningplatform.mastery.MasterySnapshot;
+import io.ramals.learningplatform.mastery.MasterySnapshotDraft;
+import io.ramals.learningplatform.mastery.MasteryStatus;
+import io.ramals.learningplatform.orchestration.LearningWorkflow.Run;
+import io.ramals.learningplatform.orchestration.LearningWorkflow.Status;
+import io.ramals.learningplatform.orchestration.LearningWorkflow.Step;
+import io.ramals.learningplatform.orchestration.LearningWorkflow.StepClaim;
+import io.ramals.learningplatform.orchestration.LearningWorkflow.StepRun;
+import io.ramals.learningplatform.orchestration.LearningWorkflow.StepStatus;
+import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+/**
+ * Real-PostgreSQL proof for the M2-T14 step claim (G04-G08 concurrency semantics).
+ *
+ * <p>This file is the authority for the claim. The orchestrator's unit tests use an in-memory store
+ * that mirrors these predicates, and a mirror is exactly the kind of thing that can quietly stop
+ * matching. Atomicity, uniqueness and compare-and-set are properties of the database, so they are
+ * asserted against one.
+ */
+@EnabledIfEnvironmentVariable(named = "RAMALS_TEST_POSTGRES_URL", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "RAMALS_TEST_POSTGRES_ALLOW_RESET", matches = "(?i)true")
+class LearningWorkflowConcurrencyIntegrationTests {
+
+  private static final String MIGRATION_USER = "ramals_core_migration";
+  private static final String MIGRATION_PASSWORD = "m0-t05-migration-test";
+  private static final String RUNTIME_USER = "ramals_core_runtime";
+  private static final String RUNTIME_PASSWORD = "m0-t05-runtime-test";
+  private static final UUID CURRICULUM = UUID.fromString("01900000-0000-7000-8000-000000000002");
+  private static final UUID SKILL = UUID.fromString("01900000-0000-7000-8000-000000000101");
+  private static final UUID ASSESSMENT = UUID.fromString("01900000-0000-7000-8000-000000000402");
+  private static String databaseUrl;
+
+  @BeforeAll
+  static void migrate() throws SQLException {
+    databaseUrl = required("RAMALS_TEST_POSTGRES_URL");
+    String adminUser = required("RAMALS_TEST_POSTGRES_ADMIN_USER");
+    try (Connection connection =
+            DriverManager.getConnection(
+                databaseUrl, adminUser, required("RAMALS_TEST_POSTGRES_ADMIN_PASSWORD"));
+        Statement statement = connection.createStatement()) {
+      String database = statement.enquoteIdentifier(currentDatabase(statement), true);
+      String admin = statement.enquoteIdentifier(adminUser, true);
+      statement.execute(
+          """
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ramals_core_migration') THEN
+              CREATE ROLE ramals_core_migration LOGIN PASSWORD 'm0-t05-migration-test';
+            ELSE ALTER ROLE ramals_core_migration WITH LOGIN PASSWORD 'm0-t05-migration-test';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ramals_core_runtime') THEN
+              CREATE ROLE ramals_core_runtime LOGIN PASSWORD 'm0-t05-runtime-test';
+            ELSE ALTER ROLE ramals_core_runtime WITH LOGIN PASSWORD 'm0-t05-runtime-test';
+            END IF;
+          END $$
+          """);
+      statement.execute("ALTER DATABASE " + database + " OWNER TO " + admin);
+      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit CASCADE");
+      statement.execute("ALTER DATABASE " + database + " OWNER TO " + MIGRATION_USER);
+      statement.execute("REVOKE CONNECT ON DATABASE " + database + " FROM PUBLIC");
+      statement.execute(
+          "GRANT CONNECT ON DATABASE " + database + " TO " + MIGRATION_USER + ", " + RUNTIME_USER);
+    }
+    org.flywaydb.core.Flyway.configure()
+        .dataSource(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD)
+        .locations("classpath:db/migration")
+        .defaultSchema("core")
+        .schemas("core", "ledger", "audit")
+        .createSchemas(true)
+        .cleanDisabled(true)
+        .load()
+        .migrate();
+  }
+
+  @Test
+  void twoWorkersRacingForTheSameStepProduceExactlyOneClaim() throws Exception {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "claim-race");
+
+    // Two independent connections, released together, so the race is real rather than sequential.
+    List<Optional<StepClaim>> outcomes =
+        race(
+            () -> new LearningWorkflowRepository(runtimeJdbc())
+                .claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS),
+            () -> new LearningWorkflowRepository(runtimeJdbc())
+                .claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS));
+
+    assertThat(outcomes.stream().filter(Optional::isPresent).count())
+        .as("exactly one worker may own a step")
+        .isEqualTo(1);
+    StepRun step = runs.step(run.id(), Step.first()).orElseThrow();
+    assertThat(step.status()).isEqualTo(StepStatus.RUNNING);
+    assertThat(step.attemptCount())
+        .as("a losing caller must not spend an attempt")
+        .isEqualTo(1);
+  }
+
+  @Test
+  void aStaleWorkerCannotCompleteAStepAfterTheRunWasCancelled() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "stale-cancel");
+
+    StepClaim claim =
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+            .orElseThrow();
+    // The remote call is notionally in flight here.
+    runs.finishRun(run.id(), Status.CANCELLED, "CANCELLED_BY_OPERATOR");
+    runs.markCurrentStepTerminal(
+        run.id(), Step.first(), StepStatus.CANCELLED, "CANCELLED_BY_OPERATOR");
+
+    assertThat(runs.finishClaimedStep(claim, StepStatus.COMPLETED, null, "req", null)).isFalse();
+    assertThat(runs.retryClaimedStep(claim, "STEP_EXECUTION_FAILED")).isFalse();
+    assertThat(runs.findById(run.id()).orElseThrow().status()).isEqualTo(Status.CANCELLED);
+    assertThat(runs.step(run.id(), Step.first()).orElseThrow().status())
+        .isEqualTo(StepStatus.CANCELLED);
+  }
+
+  @Test
+  void aStaleWorkerCannotCompleteAStepAfterTheRunTimedOut() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "stale-timeout");
+
+    StepClaim claim =
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+            .orElseThrow();
+    runs.finishRun(run.id(), Status.TIMED_OUT, "RUN_DEADLINE_EXCEEDED");
+    runs.markCurrentStepTerminal(
+        run.id(), Step.first(), StepStatus.TIMED_OUT, "RUN_DEADLINE_EXCEEDED");
+
+    assertThat(runs.finishClaimedStep(claim, StepStatus.COMPLETED, null, "req", null)).isFalse();
+    assertThat(runs.findById(run.id()).orElseThrow().status()).isEqualTo(Status.TIMED_OUT);
+    assertThat(runs.step(run.id(), Step.first()).orElseThrow().status())
+        .isEqualTo(StepStatus.TIMED_OUT);
+  }
+
+  @Test
+  void attemptCountRisesOncePerSuccessfulClaimAndStaysBounded() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "bounded-retry");
+
+    for (int attempt = 1; attempt <= LearningWorkflowPolicy.MAX_STEP_ATTEMPTS; attempt++) {
+      StepClaim claim =
+          runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+              .orElseThrow();
+      assertThat(claim.attemptCount()).isEqualTo(attempt);
+      // A competing caller during the same attempt must not increment anything.
+      assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS))
+          .isEmpty();
+      assertThat(runs.retryClaimedStep(claim, "STEP_EXECUTION_FAILED")).isTrue();
+    }
+
+    assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS))
+        .as("the ceiling is part of the claim predicate")
+        .isEmpty();
+    assertThat(runs.step(run.id(), Step.first()).orElseThrow().attemptCount())
+        .isEqualTo(LearningWorkflowPolicy.MAX_STEP_ATTEMPTS);
+  }
+
+  @Test
+  void aClaimIsRefusedOnceTheRunHasMovedToAnotherStep() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "cursor-moved");
+
+    runs.advanceTo(run.id(), Step.RECOMPUTE_MASTERY);
+
+    assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS))
+        .as("a worker holding a stale cursor must not start an earlier step")
+        .isEmpty();
+  }
+
+  @Test
+  void aSkippedStepIsRecordedWithNoAttemptAndNeverOverwritesARealOutcome() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "skip-audit");
+
+    runs.markSkipped(run.id(), Step.DIAGNOSE, "DIAGNOSIS_NOT_REQUIRED");
+    StepRun skipped = runs.step(run.id(), Step.DIAGNOSE).orElseThrow();
+    assertThat(skipped.status()).isEqualTo(StepStatus.SKIPPED);
+    assertThat(skipped.attemptCount()).isZero();
+    assertThat(skipped.executionToken()).isNull();
+
+    // A real outcome already present must survive a later skip attempt.
+    StepClaim claim =
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+            .orElseThrow();
+    runs.finishClaimedStep(claim, StepStatus.COMPLETED, null, null, null);
+    runs.markSkipped(run.id(), Step.first(), "DIAGNOSIS_NOT_REQUIRED");
+
+    StepRun real = runs.step(run.id(), Step.first()).orElseThrow();
+    assertThat(real.status()).isEqualTo(StepStatus.COMPLETED);
+    assertThat(real.attemptCount()).isEqualTo(1);
+  }
+
+  @Test
+  void cancellingAClaimedStepKeepsItsRealAttemptCount() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "cancel-attempts");
+
+    StepClaim first =
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+            .orElseThrow();
+    runs.retryClaimedStep(first, "STEP_EXECUTION_FAILED");
+    runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS).orElseThrow();
+
+    runs.markCurrentStepTerminal(
+        run.id(), Step.first(), StepStatus.CANCELLED, "CANCELLED_BY_OPERATOR");
+
+    assertThat(runs.step(run.id(), Step.first()).orElseThrow().attemptCount())
+        .as("cancellation must not manufacture or erase an attempt")
+        .isEqualTo(2);
+  }
+
+  @Test
+  void theAdaptationStepRequestIdJoinsToTheDurableOutboxRow() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("wf-correlation").id();
+    Run run = startRun(jdbc, runs, "correlation", learnerId);
+
+    // Stand in for the recommendation transaction: one decision record and the adaptation work it
+    // enqueues, with the request id the repository actually derives.
+    MasterySnapshot snapshot = insertSnapshot(jdbc, learnerId);
+    UUID decisionId = insertDecisionRecord(jdbc, learnerId, snapshot);
+    String adaptationRequestId =
+        new io.ramals.learningplatform.recommendation.RecommendationRepository(jdbc)
+            .appendAdaptationWork(decisionRecord(jdbc, decisionId))
+            .requestId();
+
+    StepClaim claim =
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+            .orElseThrow();
+    runs.finishClaimedStep(claim, StepStatus.COMPLETED, null, adaptationRequestId, null);
+
+    // The assertion the review asked for: a real join, not a non-blank check.
+    Integer joined =
+        jdbc.queryForObject(
+            """
+            SELECT count(*)
+              FROM core.learning_workflow_step step
+              JOIN core.agent_work_outbox work ON work.request_id = step.request_id
+             WHERE step.run_id = ? AND step.request_id IS NOT NULL
+            """,
+            Integer.class,
+            run.id());
+    assertThat(joined).as("workflow step must join to exactly one durable work row").isEqualTo(1);
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT agent_type FROM core.agent_work_outbox WHERE request_id = ?",
+                String.class,
+                adaptationRequestId))
+        .isEqualTo("ADAPTATION");
+  }
+
+  @Test
+  void theRecomputeResultRefIdentifiesTheExactSnapshotEvenWhenANewerOneExists() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    MasteryRepository mastery = new MasteryRepository(jdbc);
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("wf-lineage").id();
+    Run run = startRun(jdbc, runs, "lineage", learnerId);
+
+    MasterySnapshot produced = insertSnapshot(jdbc, learnerId);
+    StepClaim claim =
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+            .orElseThrow();
+    runs.finishClaimedStep(claim, StepStatus.COMPLETED, null, null, produced.id());
+
+    // An unrelated learner event lands and becomes the newest snapshot.
+    MasterySnapshot newer = insertSnapshot(jdbc, learnerId);
+    assertThat(newer.id()).isNotEqualTo(produced.id());
+    assertThat(mastery.findLatestSnapshot(learnerId, SKILL, CURRICULUM).orElseThrow().id())
+        .isEqualTo(newer.id());
+
+    UUID recorded = runs.step(run.id(), Step.first()).orElseThrow().resultRef();
+    assertThat(recorded)
+        .as("the workflow must consume the snapshot it produced, not whatever is newest")
+        .isEqualTo(produced.id());
+    assertThat(mastery.findById(recorded)).isPresent();
+  }
+
+  private Run startRun(JdbcTemplate jdbc, LearningWorkflowRepository runs, String key) {
+    return startRun(jdbc, runs, key, new LearnerRepository(jdbc).provisionForSubject(key).id());
+  }
+
+  private Run startRun(
+      JdbcTemplate jdbc, LearningWorkflowRepository runs, String key, UUID learnerId) {
+    String requestId = "eval-" + key;
+    seedEvaluationDecision(jdbc, learnerId, requestId);
+    return runs.startOrGet(
+        "EVALUATION_TO_ADAPTATION:" + requestId,
+        learnerId,
+        SKILL,
+        CURRICULUM,
+        seedAttempt(jdbc, learnerId),
+        ASSESSMENT,
+        new BigDecimal("0.6000"),
+        requestId,
+        "interaction-" + key,
+        "trace-" + key,
+        Instant.now().plusSeconds(600));
+  }
+
+  /** The run's FK parents: a grounding record, a successful execution, and a gate decision. */
+  private void seedEvaluationDecision(JdbcTemplate jdbc, UUID learnerId, String requestId) {
+    String contextId = "ctx-" + requestId;
+    jdbc.update(
+        """
+        INSERT INTO ledger.grounding_retrieval_record
+          (context_id, learner_id, retrieval_policy_version, as_of, expires_at, source_refs,
+           source_count)
+        VALUES (?, ?, 'EVALUATION_POLICY_V1', CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP + INTERVAL '10 minutes', CAST(? AS jsonb), 1)
+        """,
+        contextId,
+        learnerId,
+        "[\"answer-evidence\"]");
+    UUID executionId = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+           agent_run_id, prompt_template_id, prompt_version, model_route, status,
+           request_digest, proposal_digest, started_at, completed_at)
+        VALUES (?, ?, ?, 'ASSESSMENT', '1.0', 'ASSESSMENT_EVALUATION_AGENT_V1', ?,
+                'ASSESSMENT_RUBRIC_EVALUATE', 'ASSESSMENT_RUBRIC_EVALUATE_V1', 'ci-fake',
+                'SUCCEEDED', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        executionId,
+        requestId,
+        "interaction-" + requestId,
+        "run-" + requestId,
+        "a".repeat(64),
+        "b".repeat(64));
+    jdbc.update(
+        """
+        INSERT INTO ledger.assessment_evaluation_decision
+          (id, proposal_id, request_id, agent_run_id, ai_execution_id, context_id,
+           answer_evidence_id, answer_version, rubric_version, outcome, reason_codes,
+           referenced_evidence_ids, dimension_results, feedback, confidence, deterministic_check,
+           policy_version, decision_digest, interaction_id, trace_id)
+        VALUES (?, ?, ?, ?, ?, ?, 'answer-evidence', 'answer-v1', 'rubric-v1', 'ACCEPTED',
+                CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), 'Feedback.', 0.85,
+                'NOT_APPLICABLE', 'EVALUATION_GATE_V1', ?, ?, ?)
+        """,
+        UUID.randomUUID(),
+        "proposal-" + requestId,
+        requestId,
+        "run-" + requestId,
+        executionId,
+        contextId,
+        "[\"ACCEPTED\"]",
+        "[\"answer-evidence\"]",
+        // An ACCEPTED decision must carry rubric results; ck_assessment_evaluation_parsed_result
+        // refuses an empty array, which is the M2-T12 constraint doing its job.
+        "[{\"dimensionId\":\"accuracy\",\"score\":3,\"maxScore\":4}]",
+        "c".repeat(64),
+        "interaction-" + requestId,
+        "trace-" + requestId);
+  }
+
+  private UUID seedAttempt(JdbcTemplate jdbc, UUID learnerId) {
+    UUID attemptId = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_attempt
+          (id, learner_id, assessment_version_id, status, idempotency_key)
+        VALUES (?, ?, ?, 'COMPLETED', ?)
+        """,
+        attemptId,
+        learnerId,
+        ASSESSMENT,
+        "wf-" + attemptId);
+    return attemptId;
+  }
+
+  private MasterySnapshot insertSnapshot(JdbcTemplate jdbc, UUID learnerId) {
+    MasteryRepository mastery = new MasteryRepository(jdbc);
+    mastery.ensureAggregate(learnerId, SKILL, CURRICULUM);
+    int next = mastery.lockAggregateVersion(learnerId, SKILL, CURRICULUM) + 1;
+    MasterySnapshot snapshot =
+        mastery.insertSnapshot(
+            new MasterySnapshotDraft(
+                learnerId, SKILL, CURRICULUM, next, new BigDecimal("0.6000"),
+                MasteryStatus.NEEDS_PRACTICE, new BigDecimal("0.8000"), new BigDecimal("0.7000"),
+                new BigDecimal("0.7000"), 3, 5, "WEIGHTED_MASTERY_V1", "EVIDENCE_CONFIDENCE_V1",
+                "interaction-lineage"));
+    mastery.advanceAggregateVersion(learnerId, SKILL, CURRICULUM, next);
+    return snapshot;
+  }
+
+  private UUID insertDecisionRecord(JdbcTemplate jdbc, UUID learnerId, MasterySnapshot snapshot) {
+    UUID decisionId = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO ledger.decision_record
+          (id, learner_id, skill_id, curriculum_version_id, decision_type, recommended_action,
+           reason_code, mastery_status, policy_decision, source_snapshot_id, aggregate_version,
+           mastery_score, evidence_confidence, mastery_threshold, confidence_threshold,
+           evidence_count, items_considered, mastery_algorithm_version,
+           confidence_algorithm_version, policy_version, interaction_id, trace_id)
+        VALUES (?, ?, ?, ?, 'RECOMMENDATION', 'PRACTICE', 'BELOW_THRESHOLD', 'NEEDS_PRACTICE',
+                'PRACTICE', ?, ?, 0.6000, 0.7000, 0.8000, 0.7000, 3, 5, 'WEIGHTED_MASTERY_V1',
+                'EVIDENCE_CONFIDENCE_V1', 'RECOMMENDATION_POLICY_V1', ?, ?)
+        """,
+        decisionId,
+        learnerId,
+        SKILL,
+        CURRICULUM,
+        snapshot.id(),
+        snapshot.aggregateVersion(),
+        "interaction-correlation",
+        "trace-correlation");
+    return decisionId;
+  }
+
+  private io.ramals.learningplatform.recommendation.DecisionRecord decisionRecord(
+      JdbcTemplate jdbc, UUID decisionId) {
+    return new io.ramals.learningplatform.recommendation.RecommendationRepository(jdbc)
+        .findDecisionById(decisionId)
+        .orElseThrow();
+  }
+
+  private static <T> List<T> race(Callable<T> first, Callable<T> second) throws Exception {
+    ExecutorService pool = Executors.newFixedThreadPool(2);
+    try {
+      CyclicBarrier gate = new CyclicBarrier(2);
+      Future<T> a = pool.submit(barrier(gate, first));
+      Future<T> b = pool.submit(barrier(gate, second));
+      return List.of(a.get(), b.get());
+    } finally {
+      pool.shutdownNow();
+    }
+  }
+
+  private static <T> Callable<T> barrier(CyclicBarrier gate, Callable<T> work) {
+    return () -> {
+      gate.await();
+      return work.call();
+    };
+  }
+
+  private static JdbcTemplate runtimeJdbc() {
+    return new JdbcTemplate(
+        new DriverManagerDataSource(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD));
+  }
+
+  private static String required(String name) {
+    String value = System.getenv(name);
+    if (value == null || value.isBlank()) {
+      throw new IllegalStateException(name + " must be set for PostgreSQL integration tests");
+    }
+    return value;
+  }
+
+  private static String currentDatabase(Statement statement) throws SQLException {
+    try (ResultSet result = statement.executeQuery("SELECT current_database()")) {
+      if (!result.next()) {
+        throw new SQLException("PostgreSQL did not return current_database()");
+      }
+      return result.getString(1);
+    }
+  }
+}
