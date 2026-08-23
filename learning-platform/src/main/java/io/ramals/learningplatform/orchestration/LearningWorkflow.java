@@ -25,26 +25,41 @@ public final class LearningWorkflow {
    * evidence ledger half-written.
    */
   public enum Step {
-    RECORD_EVALUATION_EVIDENCE(0, false),
-    RECOMPUTE_MASTERY(1, false),
-    DIAGNOSE(2, true),
-    ADAPT(3, true);
+    RECORD_EVALUATION_EVIDENCE(0, false, false),
+    RECOMPUTE_MASTERY(1, false, false),
+    DIAGNOSE(2, true, true),
+    // ADAPT carries a request identity but makes no provider call of its own: it hands work to the
+    // outbox and the dispatcher calls the model later. That distinction decides whether the step may
+    // be executed inside a transaction, so it is a property rather than a comment.
+    ADAPT(3, true, false);
 
     private final int index;
     private final boolean invokesAgent;
+    private final boolean remoteCall;
 
-    Step(int index, boolean invokesAgent) {
+    Step(int index, boolean invokesAgent, boolean remoteCall) {
       this.index = index;
       this.invokesAgent = invokesAgent;
+      this.remoteCall = remoteCall;
     }
 
     public int index() {
       return index;
     }
 
-    /** Whether this step calls the AI plane, and therefore carries a request identity. */
+    /** Whether this step carries a request identity that correlates to the AI execution ledger. */
     public boolean invokesAgent() {
       return invokesAgent;
+    }
+
+    /**
+     * Whether executing this step blocks on a model or provider.
+     *
+     * <p>A step that does must never run inside a transaction; a step that does not may commit its
+     * effect together with its workflow marker, which is what closes the crash window between them.
+     */
+    public boolean remoteCall() {
+      return remoteCall;
     }
 
     public static Step first() {
@@ -132,6 +147,7 @@ public final class LearningWorkflow {
       String requestId,
       UUID resultRef,
       UUID executionToken,
+      Instant claimedAt,
       Instant startedAt,
       Instant completedAt) {}
 }

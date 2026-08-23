@@ -24,6 +24,23 @@ public final class LearningWorkflowPolicy {
   public static final int MAX_STEP_ATTEMPTS = 3;
 
   /**
+   * How long a claim may go unheard from before another worker may take the step.
+   *
+   * <p>Must exceed the longest step execution deadline, which is the diagnostic provider call at 12
+   * seconds. Sized well above it: reclaiming a step whose worker is merely slow wastes a model call,
+   * and the cost of waiting is only latency on a path that already tolerates a five-minute run.
+   *
+   * <p>A lease that is too short degrades safely rather than dangerously. Reclaiming issues a new
+   * execution token, so the original worker's completion no longer matches and is rejected by the
+   * same compare-and-set that rejects a cancelled worker's. The result is duplicated effort, not a
+   * duplicated authoritative effect.
+   *
+   * <p>This bound is only sound because every step is replay-safe. Reclaiming a step that appended
+   * an authoritative row without recording that it had would produce a second one.
+   */
+  public static final Duration CLAIM_LEASE = Duration.ofMinutes(1);
+
+  /**
    * Absolute wall-clock budget for one run. It is the outermost of the bounds: even if every step
    * is individually within its attempt ceiling, a composition that has been running for this long
    * is not going to produce a useful adaptation for the learner who submitted the answer.

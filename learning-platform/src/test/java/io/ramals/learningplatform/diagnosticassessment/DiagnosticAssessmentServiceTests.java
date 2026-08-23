@@ -366,6 +366,14 @@ class DiagnosticAssessmentServiceTests {
 
   /** Records what the service asked to persist, without a database. */
   private static final class RecordingDecisions implements ProposalGateDecisionPort {
+
+    @Override
+    public java.util.Optional<RecordedDecision> findDecision(
+        String requestId, io.ramals.learningplatform.grounding.ProposalType proposalType) {
+      // These tests exercise first-run behaviour, where no prior decision exists.
+      return java.util.Optional.empty();
+    }
+
     private final List<ProposalGroundingRequest> appended = new ArrayList<>();
     private final List<ProposalGateResult> results = new ArrayList<>();
     private final List<DecisionCorrelation> correlations = new ArrayList<>();

@@ -14,6 +14,7 @@ import io.ramals.learningplatform.orchestration.LearningWorkflow.StepStatus;
 import io.ramals.learningplatform.orchestration.LearningWorkflowPolicy.Eligibility;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
@@ -55,6 +56,7 @@ public class LearningWorkflowOrchestrator {
   private final MasteryService mastery;
   private final WorkflowAgentStep.Diagnostic diagnostic;
   private final WorkflowAgentStep.Adaptation adaptation;
+  private final WorkflowUnitOfWork unitOfWork;
   private final Clock clock;
 
   public LearningWorkflowOrchestrator(
@@ -63,12 +65,14 @@ public class LearningWorkflowOrchestrator {
       MasteryService mastery,
       WorkflowAgentStep.Diagnostic diagnostic,
       WorkflowAgentStep.Adaptation adaptation,
+      WorkflowUnitOfWork unitOfWork,
       Clock clock) {
     this.runs = runs;
     this.evidence = evidence;
     this.mastery = mastery;
     this.diagnostic = diagnostic;
     this.adaptation = adaptation;
+    this.unitOfWork = unitOfWork;
     this.clock = clock;
   }
 
@@ -152,7 +156,8 @@ public class LearningWorkflowOrchestrator {
     }
 
     Optional<StepClaim> claimed =
-        runs.claimStep(runId, step, LearningWorkflowPolicy.MAX_STEP_ATTEMPTS);
+        runs.claimStep(
+            runId, step, LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE);
     if (claimed.isEmpty()) {
       // Either another worker owns this step, or the run moved on, or the attempts are spent.
       // Only the last of those is this caller's business to conclude.
@@ -164,7 +169,18 @@ public class LearningWorkflowOrchestrator {
 
     StepClaim claim = claimed.orElseThrow();
     try {
-      apply(run, claim, execute(run, step));
+      if (step.remoteCall()) {
+        // The provider call runs with no transaction open -- a connection held across it would be
+        // held for seconds. Its outcome and the workflow transition then commit together, which
+        // still closes the marker/cursor window even though the effect itself cannot join them.
+        StepOutcome outcome = execute(run, step);
+        unitOfWork.inOneTransaction(() -> apply(run, claim, outcome));
+      } else {
+        // Effect, step completion and cursor advance commit as one. A process that dies here leaves
+        // either all of it or none of it, so the workflow can never lose sight of an authoritative
+        // write it already made.
+        unitOfWork.inOneTransaction(() -> apply(run, claim, execute(run, step)));
+      }
     } catch (RuntimeException failure) {
       LOGGER
           .atWarn()
@@ -340,12 +356,29 @@ public class LearningWorkflowOrchestrator {
     }
   }
 
-  /** Whether a step is PENDING with no attempts left, which the claim predicate cannot express. */
+  /**
+   * Whether a step is claimable in principle but has no attempts left.
+   *
+   * <p>The claim predicate cannot distinguish "someone else owns this" from "this is out of
+   * attempts", so the caller asks afterwards. A step abandoned under an expired lease counts here
+   * too: once the lease has run out nobody owns it, and if its attempts are spent the run has to end
+   * rather than sit until its deadline.
+   */
   private boolean attemptsExhausted(UUID runId, Step step) {
+    Instant now = clock.instant();
     return runs.step(runId, step)
-        .filter(current -> current.status() == StepStatus.PENDING)
+        .filter(current -> claimable(current, now))
         .filter(current -> !LearningWorkflowPolicy.mayRetry(current.attemptCount()))
         .isPresent();
+  }
+
+  private static boolean claimable(StepRun step, Instant now) {
+    if (step.status() == StepStatus.PENDING) {
+      return true;
+    }
+    return step.status() == StepStatus.RUNNING
+        && step.claimedAt() != null
+        && !step.claimedAt().plus(LearningWorkflowPolicy.CLAIM_LEASE).isAfter(now);
   }
 
   private void failExhausted(Run run, Step step) {

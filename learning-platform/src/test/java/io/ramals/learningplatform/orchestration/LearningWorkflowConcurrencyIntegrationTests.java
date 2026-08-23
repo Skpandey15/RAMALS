@@ -106,9 +106,9 @@ class LearningWorkflowConcurrencyIntegrationTests {
     List<Optional<StepClaim>> outcomes =
         race(
             () -> new LearningWorkflowRepository(runtimeJdbc())
-                .claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS),
+                .claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE),
             () -> new LearningWorkflowRepository(runtimeJdbc())
-                .claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS));
+                .claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE));
 
     assertThat(outcomes.stream().filter(Optional::isPresent).count())
         .as("exactly one worker may own a step")
@@ -127,7 +127,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
     Run run = startRun(jdbc, runs, "stale-cancel");
 
     StepClaim claim =
-        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE)
             .orElseThrow();
     // The remote call is notionally in flight here.
     runs.finishRun(run.id(), Status.CANCELLED, "CANCELLED_BY_OPERATOR");
@@ -148,7 +148,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
     Run run = startRun(jdbc, runs, "stale-timeout");
 
     StepClaim claim =
-        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE)
             .orElseThrow();
     runs.finishRun(run.id(), Status.TIMED_OUT, "RUN_DEADLINE_EXCEEDED");
     runs.markCurrentStepTerminal(
@@ -168,16 +168,16 @@ class LearningWorkflowConcurrencyIntegrationTests {
 
     for (int attempt = 1; attempt <= LearningWorkflowPolicy.MAX_STEP_ATTEMPTS; attempt++) {
       StepClaim claim =
-          runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+          runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE)
               .orElseThrow();
       assertThat(claim.attemptCount()).isEqualTo(attempt);
       // A competing caller during the same attempt must not increment anything.
-      assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS))
+      assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE))
           .isEmpty();
       assertThat(runs.retryClaimedStep(claim, "STEP_EXECUTION_FAILED")).isTrue();
     }
 
-    assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS))
+    assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE))
         .as("the ceiling is part of the claim predicate")
         .isEmpty();
     assertThat(runs.step(run.id(), Step.first()).orElseThrow().attemptCount())
@@ -192,7 +192,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
 
     runs.advanceTo(run.id(), Step.RECOMPUTE_MASTERY);
 
-    assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS))
+    assertThat(runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE))
         .as("a worker holding a stale cursor must not start an earlier step")
         .isEmpty();
   }
@@ -211,7 +211,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
 
     // A real outcome already present must survive a later skip attempt.
     StepClaim claim =
-        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE)
             .orElseThrow();
     runs.finishClaimedStep(claim, StepStatus.COMPLETED, null, null, null);
     runs.markSkipped(run.id(), Step.first(), "DIAGNOSIS_NOT_REQUIRED");
@@ -228,10 +228,10 @@ class LearningWorkflowConcurrencyIntegrationTests {
     Run run = startRun(jdbc, runs, "cancel-attempts");
 
     StepClaim first =
-        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE)
             .orElseThrow();
     runs.retryClaimedStep(first, "STEP_EXECUTION_FAILED");
-    runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS).orElseThrow();
+    runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE).orElseThrow();
 
     runs.markCurrentStepTerminal(
         run.id(), Step.first(), StepStatus.CANCELLED, "CANCELLED_BY_OPERATOR");
@@ -258,7 +258,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
             .requestId();
 
     StepClaim claim =
-        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE)
             .orElseThrow();
     runs.finishClaimedStep(claim, StepStatus.COMPLETED, null, adaptationRequestId, null);
 
@@ -331,7 +331,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
 
     MasterySnapshot produced = insertSnapshot(jdbc, learnerId);
     StepClaim claim =
-        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS)
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS, LearningWorkflowPolicy.CLAIM_LEASE)
             .orElseThrow();
     runs.finishClaimedStep(claim, StepStatus.COMPLETED, null, null, produced.id());
 
@@ -346,6 +346,90 @@ class LearningWorkflowConcurrencyIntegrationTests {
         .as("the workflow must consume the snapshot it produced, not whatever is newest")
         .isEqualTo(produced.id());
     assertThat(mastery.findById(recorded)).isPresent();
+  }
+
+  @Test
+  void anAbandonedClaimIsReclaimableOnlyAfterItsLeaseExpires() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "abandoned-claim");
+
+    // A worker claims the step and its process dies: the token is never cleared and no completion
+    // ever arrives.
+    StepClaim abandoned =
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                LearningWorkflowPolicy.CLAIM_LEASE)
+            .orElseThrow();
+
+    // While the lease holds, nobody may take it. This is the guarantee that stops a slow worker
+    // from having its step stolen and a model called twice.
+    assertThat(
+            runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                LearningWorkflowPolicy.CLAIM_LEASE))
+        .as("a live lease is not reclaimable")
+        .isEmpty();
+
+    // Once it expires, another instance takes over. Expressed as a zero lease rather than by
+    // sleeping: the predicate is a comparison against claimed_at, so this exercises the same SQL.
+    StepClaim reclaimed =
+        runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                java.time.Duration.ZERO)
+            .orElseThrow();
+
+    assertThat(reclaimed.executionToken()).isNotEqualTo(abandoned.executionToken());
+    assertThat(reclaimed.attemptCount())
+        .as("reclaim spends exactly one further attempt")
+        .isEqualTo(2);
+    // The dead worker, were it somehow alive, loses to the same compare-and-set that rejects a
+    // cancelled one.
+    assertThat(runs.finishClaimedStep(abandoned, StepStatus.COMPLETED, null, "stale", null))
+        .as("the superseded claim cannot complete the step")
+        .isFalse();
+    assertThat(runs.finishClaimedStep(reclaimed, StepStatus.COMPLETED, null, null, null)).isTrue();
+  }
+
+  @Test
+  void reclaimStaysBoundedByTheAttemptCeiling() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "abandoned-bounded");
+
+    // Every attempt is abandoned rather than failed, so recovery is the only thing spending them.
+    for (int attempt = 1; attempt <= LearningWorkflowPolicy.MAX_STEP_ATTEMPTS; attempt++) {
+      assertThat(
+              runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                  java.time.Duration.ZERO))
+          .as("attempt %s", attempt)
+          .isPresent();
+    }
+
+    assertThat(
+            runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                java.time.Duration.ZERO))
+        .as("an abandoned claim cannot be recovered indefinitely")
+        .isEmpty();
+    assertThat(runs.step(run.id(), Step.first()).orElseThrow().attemptCount())
+        .isEqualTo(LearningWorkflowPolicy.MAX_STEP_ATTEMPTS);
+  }
+
+  @Test
+  void aCancelledRunIsNotReclaimableEvenAfterTheLeaseExpires() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "abandoned-cancelled");
+
+    runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+            LearningWorkflowPolicy.CLAIM_LEASE)
+        .orElseThrow();
+    runs.finishRun(run.id(), Status.CANCELLED, "CANCELLED_BY_OPERATOR");
+    runs.markCurrentStepTerminal(
+        run.id(), Step.first(), StepStatus.CANCELLED, "CANCELLED_BY_OPERATOR");
+
+    assertThat(
+            runs.claimStep(run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                java.time.Duration.ZERO))
+        .as("recovery must not resurrect a run an operator ended")
+        .isEmpty();
   }
 
   private Run startRun(JdbcTemplate jdbc, LearningWorkflowRepository runs, String key) {
