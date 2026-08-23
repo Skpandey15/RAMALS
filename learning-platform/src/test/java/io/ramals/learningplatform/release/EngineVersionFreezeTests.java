@@ -21,6 +21,9 @@ import io.ramals.learningplatform.grounding.GroundedContextItem.ContextAuthority
 import io.ramals.learningplatform.grounding.GroundedContextItem.SourceType;
 import io.ramals.learningplatform.grounding.GroundedContextValidator;
 import io.ramals.learningplatform.grounding.GroundingRetrievalPolicy;
+import io.ramals.learningplatform.mastery.MasteryStatus;
+import io.ramals.learningplatform.orchestration.LearningWorkflow.Step;
+import io.ramals.learningplatform.orchestration.LearningWorkflowPolicy;
 import io.ramals.learningplatform.grounding.ProposalGroundingPolicy;
 import io.ramals.learningplatform.grounding.ProposalType;
 import io.ramals.learningplatform.learning.LearningSessionCommand;
@@ -88,23 +91,25 @@ class EngineVersionFreezeTests {
     put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
     put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
     put(EvaluationProposalGate.POLICY_VERSION, EngineVersionFreezeTests::evaluationProposalGate);
+    put(LearningWorkflowPolicy.POLICY_VERSION, EngineVersionFreezeTests::learningWorkflowPolicy);
   }};
 
   /**
    * SHA-256 over each engine's canonical output. Recorded when the control was frozen at
    * `v0.1.0-rc2`; see docs/release/mvp1-entry-plan.md §A2.
    */
-  private static final Map<String, String> FROZEN = Map.of(
-      "WEIGHTED_MASTERY_V1", "454b1443c92c1f1cca254e5141abf0a1750b92b2b7a0e430d12cd2f0503c7879",
-      "EVIDENCE_CONFIDENCE_V1", "b98317c7dc259b63cd5fd9a7022f7adaf8c34a7154a1485b8dd5b93fc95fac7e",
-      "MASTERY_STATUS_POLICY_V1", "5c57bb23ac7af54267a6b5c0f8ad629608523774088db75570a7bbdb83a84de7",
-      "PROGRESSION_POLICY_V1", "08c765033f9a773c4603bc1760ede707cceaac1399937552a831beafbe1fb203",
-      "RECOMMENDATION_POLICY_V1", "e048de44798cd9632934901b8354d5b50b036f8045cc66efcd6f229a24cdb212",
-      "DIAGNOSTIC_SCORING_V1", "ee904dc57a615550d732e50bfd51fec72011db0e5b9a53a6f54c2d1d0ceda305",
-      "SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647",
-      "GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad",
-      "PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a",
-      "EVALUATION_GATE_V1", "d0587299051f708dea7aa6d29e439b46f903d24b98d53c28dfc74a48bd00c0a3");
+  private static final Map<String, String> FROZEN = Map.ofEntries(
+      Map.entry("WEIGHTED_MASTERY_V1", "454b1443c92c1f1cca254e5141abf0a1750b92b2b7a0e430d12cd2f0503c7879"),
+      Map.entry("EVIDENCE_CONFIDENCE_V1", "b98317c7dc259b63cd5fd9a7022f7adaf8c34a7154a1485b8dd5b93fc95fac7e"),
+      Map.entry("MASTERY_STATUS_POLICY_V1", "5c57bb23ac7af54267a6b5c0f8ad629608523774088db75570a7bbdb83a84de7"),
+      Map.entry("PROGRESSION_POLICY_V1", "08c765033f9a773c4603bc1760ede707cceaac1399937552a831beafbe1fb203"),
+      Map.entry("RECOMMENDATION_POLICY_V1", "e048de44798cd9632934901b8354d5b50b036f8045cc66efcd6f229a24cdb212"),
+      Map.entry("DIAGNOSTIC_SCORING_V1", "ee904dc57a615550d732e50bfd51fec72011db0e5b9a53a6f54c2d1d0ceda305"),
+      Map.entry("SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647"),
+      Map.entry("GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad"),
+      Map.entry("PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a"),
+      Map.entry("EVALUATION_GATE_V1", "d0587299051f708dea7aa6d29e439b46f903d24b98d53c28dfc74a48bd00c0a3"),
+      Map.entry("WORKFLOW_POLICY_V1", "7842607b4cad8420bab8aceabe300eaa6236deb59cd5c6954df736c8d24ad1e9"));
 
   @Test
   void everyVersionedEngineHasAFrozenVector() throws IOException {
@@ -372,6 +377,41 @@ class EngineVersionFreezeTests {
         }
       }
     }
+    return out.toString();
+  }
+
+  private static String learningWorkflowPolicy() {
+    StringBuilder out = new StringBuilder();
+    for (EvaluationProposalGate.Outcome outcome : EvaluationProposalGate.Outcome.values()) {
+      for (String score : List.of("-0.0001", "0", "0.6000", "1", "1.0001")) {
+        var eligibility =
+            LearningWorkflowPolicy.evaluationEligible(outcome, new BigDecimal(score));
+        out.append("evaluation|").append(outcome).append('|').append(score).append('|')
+            .append(eligibility.eligible()).append('|').append(eligibility.reasonCode())
+            .append('\n');
+      }
+    }
+    for (MasteryStatus status : MasteryStatus.values()) {
+      var eligibility = LearningWorkflowPolicy.diagnosisEligible(status);
+      out.append("diagnosis|").append(status).append('|').append(eligibility.eligible())
+          .append('|').append(eligibility.reasonCode()).append('\n');
+    }
+    for (boolean accepted : List.of(true, false)) {
+      var eligibility = LearningWorkflowPolicy.adaptationEligible(accepted);
+      out.append("adaptation|").append(accepted).append('|').append(eligibility.eligible())
+          .append('|').append(eligibility.reasonCode()).append('\n');
+    }
+    for (int attempt = 0; attempt <= LearningWorkflowPolicy.MAX_STEP_ATTEMPTS + 1; attempt++) {
+      out.append("retry|").append(attempt).append('|')
+          .append(LearningWorkflowPolicy.mayRetry(attempt)).append('\n');
+    }
+    for (Step step : Step.values()) {
+      out.append("step|").append(step).append('|').append(step.index()).append('|')
+          .append(step.invokesAgent()).append('|')
+          .append(LearningWorkflowPolicy.next(step).map(Enum::name).orElse("END")).append('\n');
+    }
+    out.append("deadlineSeconds|").append(LearningWorkflowPolicy.RUN_DEADLINE.toSeconds())
+        .append('\n');
     return out.toString();
   }
 

@@ -37,6 +37,17 @@ run_on() { # run_on <sql-body>
   echo "$?"
 }
 
+run_on_pair() { # run_on_pair <earlier-sql> <later-sql>
+  rm -rf "${WORK}/migrations"
+  mkdir -p "${WORK}/migrations"
+  printf '%s
+' "$1" > "${WORK}/migrations/V800__earlier.sql"
+  printf '%s
+' "$2" > "${WORK}/migrations/V900__fixture.sql"
+  "${PYTHON}" "${CHECK}" "${WORK}/migrations" > "${WORK}/out" 2>&1
+  echo "$?"
+}
+
 # -- what a compatible migration looks like --------------------------------------------------------
 
 status="$(run_on 'ALTER TABLE core.thing ADD COLUMN note VARCHAR(64);')"
@@ -257,6 +268,42 @@ status="$(run_on '-- expand-contract: CONTRACT of V018, nothing deployable reads
 ALTER TABLE core.thing
   DROP COLUMN note;')"
 check "a declaration above a multiline statement is honoured" "0" "${status}"
+
+# -- widening an existing membership CHECK ---------------------------------------------------------
+#
+# Adding a value to a CHECK (col IN (...)) cannot refuse anything the previous image writes, because
+# that image only ever writes values the old constraint already allowed. The checker proves this by
+# comparing the two value sets against the migration that established the constraint -- it is not a
+# declaration somebody has to be trusted about. Narrowing stays a finding, which is the case that
+# actually breaks a rollback.
+
+base_kind="CREATE TABLE ledger.thing (
+  id UUID PRIMARY KEY,
+  kind VARCHAR(16) NOT NULL,
+  CONSTRAINT ck_thing_kind CHECK (kind IN ('A', 'B', 'C'))
+);"
+
+status="$(run_on_pair "${base_kind}" "ALTER TABLE ledger.thing DROP CONSTRAINT ck_thing_kind;
+ALTER TABLE ledger.thing ADD CONSTRAINT ck_thing_kind CHECK (kind IN ('A', 'B', 'C', 'D'));")"
+check "widening a membership CHECK is allowed" "0" "${status}"
+
+status="$(run_on_pair "${base_kind}" "ALTER TABLE ledger.thing DROP CONSTRAINT ck_thing_kind;
+ALTER TABLE ledger.thing ADD CONSTRAINT ck_thing_kind CHECK (kind IN ('A', 'B'));")"
+check "narrowing a membership CHECK is refused" "1" "${status}"
+
+# Same number of values, one swapped: a count comparison would pass this and it must not.
+status="$(run_on_pair "${base_kind}" "ALTER TABLE ledger.thing DROP CONSTRAINT ck_thing_kind;
+ALTER TABLE ledger.thing ADD CONSTRAINT ck_thing_kind CHECK (kind IN ('A', 'B', 'Z'));")"
+check "swapping a value in a membership CHECK is refused" "1" "${status}"
+
+# Widened, but now constraining a different column: nothing is proved about the old column.
+status="$(run_on_pair "${base_kind}" "ALTER TABLE ledger.thing DROP CONSTRAINT ck_thing_kind;
+ALTER TABLE ledger.thing ADD CONSTRAINT ck_thing_kind CHECK (other IN ('A', 'B', 'C', 'D'));")"
+check "a widened CHECK on a different column is refused" "1" "${status}"
+
+# A constraint with no precedent has nothing to be a widening of.
+status="$(run_on_pair "${base_kind}" "ALTER TABLE ledger.thing ADD CONSTRAINT ck_thing_other CHECK (kind IN ('A', 'B'));")"
+check "a brand-new membership CHECK is still refused" "1" "${status}"
 
 # -- the checker must not pass by finding nothing ---------------------------------------------------
 

@@ -159,7 +159,7 @@ class RecommendationPersistenceIntegrationTests {
 
   private LearningRecommendation recommendInTx(MasterySnapshot snapshot) {
     return transactionTemplate.execute(status ->
-        recommendationService.recommend(snapshot, INTERACTION_ID, ""));
+        recommendationService.recommend(snapshot, INTERACTION_ID, "").recommendation());
   }
 
   @Test
@@ -292,7 +292,7 @@ class RecommendationPersistenceIntegrationTests {
     MasterySnapshot snapshot = recomputeWithEvidence("rec-outbox-rollback", "0.6000");
 
     transactionTemplate.executeWithoutResult(status -> {
-      recommendationService.recommend(snapshot, INTERACTION_ID, "");
+      recommendationService.recommend(snapshot, INTERACTION_ID, "").recommendation();
       status.setRollbackOnly();
     });
 

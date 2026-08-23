@@ -41,6 +41,18 @@ public class LearnerRepository {
         LEARNER_MAPPER, subject).stream().findFirst();
   }
 
+  /**
+   * Resolves the active learner's opaque subject from its id.
+   *
+   * <p>Restricted to ACTIVE learners on purpose. A deactivated learner must not have work resumed
+   * on their behalf by a background workflow that started before they were deactivated.
+   */
+  public Optional<String> findActiveSubjectById(UUID learnerId) {
+    return jdbcTemplate.query(
+        "SELECT subject FROM core.learner WHERE id = ? AND status = 'ACTIVE'",
+        (result, row) -> result.getString("subject"), learnerId).stream().findFirst();
+  }
+
   public Optional<UUID> findActiveDomainId(String domainCode) {
     try {
       return Optional.ofNullable(jdbcTemplate.queryForObject(

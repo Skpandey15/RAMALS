@@ -62,6 +62,28 @@ public class EvidenceRepository {
   }
 
   /**
+   * Appends evidence derived from an accepted M2-T12 rubric evaluation. Idempotent on the lineage
+   * key, so a replayed workflow trigger reuses the original row rather than crediting the learner
+   * twice for one answer.
+   */
+  public Evidence appendEvaluationEvidence(
+      UUID learnerId, UUID skillId, UUID sourceAttemptId, UUID sourceAssessmentVersionId,
+      String scoringVersion, String lineageKey, BigDecimal observedScore, BigDecimal normalizedScore,
+      int itemsAnswered, int itemsCorrect, String interactionId) {
+    jdbcTemplate.update("""
+        INSERT INTO ledger.evidence
+          (id, learner_id, skill_id, evidence_type, source_type, source_attempt_id,
+           source_assessment_version_id, scoring_version, lineage_key, observed_score,
+           normalized_score, items_answered, items_correct, interaction_id)
+        VALUES (?, ?, ?, 'EVALUATION', 'ASSESSMENT_ATTEMPT', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (lineage_key) DO NOTHING
+        """, UuidV7.generate(), learnerId, skillId, sourceAttemptId, sourceAssessmentVersionId,
+        scoringVersion, lineageKey, observedScore, normalizedScore, itemsAnswered, itemsCorrect,
+        interactionId);
+    return requireByLineage(lineageKey);
+  }
+
+  /**
    * Appends an adjustment that supersedes prior evidence without rewriting it. Idempotent on the
    * lineage key so a retried correction does not stack duplicates.
    */

@@ -149,6 +149,37 @@ class MigrationScriptContractTests {
         .contains("(context_id, decided_at DESC, id DESC)");
   }
 
+  @Test
+  void controlledOrchestrationIsBoundedCorrelatedAndDeterministicallyTerminal() throws IOException {
+    String migration = statements("/db/migration/V033__controlled_orchestration.sql");
+
+    assertThat(migration)
+        .contains("CREATE TABLE core.learning_workflow_run")
+        .contains("CREATE TABLE core.learning_workflow_step")
+        // A duplicate trigger must collapse rather than fan out (G05).
+        .contains("CONSTRAINT uq_learning_workflow_trigger UNIQUE (trigger_key)")
+        .contains("CONSTRAINT uq_learning_workflow_evaluation UNIQUE (evaluation_request_id)")
+        // One row per step per run is what bounds the composition structurally (G06).
+        .contains("CONSTRAINT uq_learning_workflow_step_name UNIQUE (run_id, step_name)")
+        // The claim: a live token and a RUNNING step are the same fact, so a terminal transition
+        // that clears the token also refuses the in-flight worker's completion.
+        .contains("(status = 'RUNNING') = (execution_token IS NOT NULL)")
+        .contains("(attempt_count = 0) = (claimed_at IS NULL)")
+        // ON CONFLICT infers one index; a second unique constraint on the same fact would raise
+        // instead of being handled when two workers race.
+        .doesNotContain("uq_learning_workflow_step_index")
+        .contains("CHECK (step_index BETWEEN 0 AND 3)")
+        .contains("CHECK (attempt_count BETWEEN 0 AND 32)")
+        // Every terminal state names its reason, so a stop is never a silent absence (G02, G03).
+        .contains("CONSTRAINT ck_learning_workflow_terminal")
+        .contains("'RUNNING', 'COMPLETED', 'STOPPED', 'CANCELLED', 'TIMED_OUT', 'FAILED'")
+        // Correlation to the execution ledger and the outbox (G08).
+        .contains("idx_learning_workflow_step_request")
+        .doesNotContain("raw_prompt")
+        .doesNotContain("hidden_reasoning")
+        .doesNotContain("checkpoint");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");

@@ -29,7 +29,7 @@ public class MasteryService {
   private static final Logger LOGGER = LoggerFactory.getLogger(MasteryService.class);
 
   private static final Set<String> OBSERVATION_TYPES =
-      Set.of("DIAGNOSTIC", "QUIZ", "PRACTICE", "SCENARIO");
+      Set.of("DIAGNOSTIC", "QUIZ", "PRACTICE", "SCENARIO", "EVALUATION");
 
   private final MasteryRepository masteryRepository;
   private final EvidenceRepository evidenceRepository;
@@ -100,6 +100,17 @@ public class MasteryService {
     return new ConfidenceInputs(
         uniqueScoredItems, config.requiredEvidenceCount(), 0, config.requiredObjectives(),
         ageDays, normalizedScores);
+  }
+
+  /**
+   * Reads one snapshot by identity.
+   *
+   * <p>Exists so a caller that already knows which snapshot it produced can consume that one rather
+   * than whatever is newest, which is not the same thing once a second learner event lands.
+   */
+  @Transactional(readOnly = true)
+  public Optional<MasterySnapshot> snapshotById(UUID snapshotId) {
+    return masteryRepository.findById(snapshotId);
   }
 
   @Transactional(readOnly = true)
