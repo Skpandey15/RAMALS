@@ -4,9 +4,5 @@
 ALTER TABLE ledger.proposal_gate_decision
   ADD COLUMN parser_reason_code VARCHAR(64);
 
-ALTER TABLE ledger.proposal_gate_decision
-  ADD CONSTRAINT ck_proposal_gate_parser_reason CHECK (
-    parser_reason_code IS NULL OR length(btrim(parser_reason_code)) BETWEEN 1 AND 64);
-
 COMMENT ON COLUMN ledger.proposal_gate_decision.parser_reason_code IS
   'Stable parser reason for a pre-parse rejection; never raw model content or provider secrets';
