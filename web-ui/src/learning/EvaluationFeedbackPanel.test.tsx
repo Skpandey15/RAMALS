@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RamalsApiError } from '../platform/apiClient';
 
@@ -74,5 +74,24 @@ describe('EvaluationFeedbackPanel', () => {
 
     expect(await screen.findByText(APPROVED.approvedFeedback.feedback)).toBeInTheDocument();
     expect(getAssessmentFeedback).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts the currently active refreshed request when unmounted', async () => {
+    let refreshedSignal: AbortSignal | undefined;
+    vi.mocked(getAssessmentFeedback)
+      .mockResolvedValueOnce({ status: 'UNAVAILABLE', approvedFeedback: null })
+      .mockImplementationOnce((signal) => {
+        refreshedSignal = signal;
+        return new Promise(() => undefined);
+      });
+    const { unmount } = render(<EvaluationFeedbackPanel />);
+
+    await screen.findByText(/no approved evaluation feedback/i);
+    fireEvent.click(screen.getByRole('button', { name: /refresh feedback/i }));
+    await waitFor(() => expect(refreshedSignal).toBeDefined());
+
+    unmount();
+
+    expect(refreshedSignal?.aborted).toBe(true);
   });
 });

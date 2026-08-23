@@ -91,7 +91,7 @@ export function EvaluationFeedbackPanel() {
           setState({ kind: 'failed', error });
         }
       });
-    return () => controller.abort();
+    return () => activeRequest.current?.abort();
   }, []);
 
   return (

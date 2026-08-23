@@ -1,9 +1,14 @@
 package io.ramals.learningplatform.assessmentevaluation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -37,6 +42,28 @@ class AssessmentFeedbackRepositoryTests {
   void absentStoredRubricContentMapsToAnEmptyProjection() {
     assertThat(AssessmentFeedbackRepository.rubricResults(null)).isEmpty();
     assertThat(AssessmentFeedbackRepository.rubricResults(" ")).isEmpty();
+  }
+
+  @Test
+  void malformedAndStructurallyInvalidStoredJsonFailClosedAsUnavailable() {
+    for (String stored : List.of("{not-json", "{\"dimensionId\":\"accuracy\"}")) {
+      AssessmentFeedbackRepository repository = mock(AssessmentFeedbackRepository.class);
+      when(repository.findLatestForSubject("learner-1"))
+          .thenReturn(
+              Optional.of(
+                  new AssessmentFeedbackReadModel(
+                      "ACCEPTED",
+                      "answer-v1",
+                      "rubric-v1",
+                      "Candidate feedback must not escape.",
+                      AssessmentFeedbackRepository.rubricResults(stored),
+                      Instant.parse("2026-08-23T00:00:00Z"))));
+
+      AssessmentFeedback response = new AssessmentFeedbackService(repository).latest("learner-1");
+
+      assertThat(response.status()).isEqualTo(AssessmentFeedbackStatus.UNAVAILABLE);
+      assertThat(response.approvedFeedback()).isNull();
+    }
   }
 
   @Test
