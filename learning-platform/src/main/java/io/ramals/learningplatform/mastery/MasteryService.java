@@ -29,7 +29,7 @@ public class MasteryService {
   private static final Logger LOGGER = LoggerFactory.getLogger(MasteryService.class);
 
   private static final Set<String> OBSERVATION_TYPES =
-      Set.of("DIAGNOSTIC", "QUIZ", "PRACTICE", "SCENARIO");
+      Set.of("DIAGNOSTIC", "QUIZ", "PRACTICE", "SCENARIO", "EVALUATION");
 
   private final MasteryRepository masteryRepository;
   private final EvidenceRepository evidenceRepository;

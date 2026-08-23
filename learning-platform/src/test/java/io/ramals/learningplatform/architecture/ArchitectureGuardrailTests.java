@@ -25,7 +25,7 @@ class ArchitectureGuardrailTests {
     BASE + ".curriculum..", BASE + ".assessment..", BASE + ".evidence..",
     BASE + ".mastery..", BASE + ".recommendation..", BASE + ".learner..",
     BASE + ".learning..", BASE + ".security..", BASE + ".observability..",
-    BASE + ".ai..", BASE + ".assessmentevaluation.."
+    BASE + ".ai..", BASE + ".assessmentevaluation..", BASE + ".orchestration.."
   };
 
   private static final String[] DOMAIN_PACKAGES = {
@@ -71,6 +71,25 @@ class ArchitectureGuardrailTests {
       .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".assessment.AssessmentRepository")
       .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".assessment.DiagnosticSubmissionService")
       .because("M2-T12 decisions authorize a later workflow but cannot write evidence or mastery");
+
+  @ArchTest
+  static final ArchRule agentAdaptersCannotDriveTheControlledWorkflow = noClasses()
+      .that().resideInAnyPackage(BASE + ".ai..", BASE + ".assessmentevaluation..",
+          BASE + ".diagnosticassessment..")
+      .should().dependOnClassesThat().resideInAnyPackage(BASE + ".orchestration..")
+      .because("M2-T14 composition is driven by deterministic services; an agent adapter that could "
+          + "start or advance a workflow is the unbounded agent-to-agent loop the task forbids");
+
+  @ArchTest
+  static final ArchRule theWorkflowReachesAgentsOnlyThroughItsOwnPorts = noClasses()
+      .that().resideInAnyPackage(BASE + ".orchestration..")
+      .should().dependOnClassesThat().haveFullyQualifiedName(BASE + ".ai.RamalsAiAdaptationClient")
+      .orShould().dependOnClassesThat()
+          .haveFullyQualifiedName(BASE + ".ai.RamalsAiDiagnosticAssessmentClient")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".ai.RamalsAiAssessmentClient")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".ai.RamalsAiTutorClient")
+      .because("steps call the AI plane through WorkflowAgentStep, so the state machine stays "
+          + "testable without a model and the plane stays behind an interface the core owns");
 
   @ArchTest
   static final ArchRule controllersDoNotBypassApplicationServices = noClasses()

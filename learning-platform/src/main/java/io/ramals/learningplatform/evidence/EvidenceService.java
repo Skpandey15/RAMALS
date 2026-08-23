@@ -59,6 +59,49 @@ public class EvidenceService {
   }
 
   /**
+   * Records one evidence row for an accepted rubric evaluation (M2-T14).
+   *
+   * <p>The lineage key is the gated evaluation's request identity, so a replayed workflow trigger
+   * collapses onto the original row. That is the only thing standing between an at-least-once
+   * orchestration trigger and a learner whose mastery climbs every time a message is redelivered.
+   *
+   * <p>The caller supplies the skill and attempt because they are Spring-owned facts about what was
+   * assessed. Nothing here is read from the proposal: the gate decided the evaluation was
+   * acceptable, it did not get to decide whose evidence it becomes.
+   */
+  @Transactional
+  public Evidence recordEvaluationEvidence(
+      UUID learnerId,
+      UUID skillId,
+      UUID attemptId,
+      UUID assessmentVersionId,
+      String evaluationRequestId,
+      String scoringVersion,
+      BigDecimal normalizedScore,
+      String interactionId) {
+    String provenance = requireInteractionId(interactionId);
+    if (evaluationRequestId == null || evaluationRequestId.isBlank()) {
+      throw new IllegalArgumentException("Evaluation evidence requires its gated request identity.");
+    }
+    if (normalizedScore == null
+        || normalizedScore.signum() < 0
+        || normalizedScore.compareTo(BigDecimal.ONE) > 0) {
+      throw new IllegalArgumentException("Evaluation evidence requires a normalized score in [0,1].");
+    }
+    String lineageKey = "EVALUATION_DECISION:" + evaluationRequestId + ":SKILL:" + skillId;
+    Evidence evidence = repository.appendEvaluationEvidence(
+        learnerId, skillId, attemptId, assessmentVersionId, scoringVersion, lineageKey,
+        // One answer was scored, and "correct" is not a meaningful binary for a rubric: the whole
+        // signal lives in the normalized score. Claiming a correct item here would inflate the
+        // confidence calculator's item counts with a judgement the rubric never made.
+        normalizedScore, normalizedScore, 1, 0, provenance);
+    BusinessEventLogger.info(LOGGER, "evidence.recorded", "Evaluation evidence recorded",
+        Map.of("entityType", "EVIDENCE", "entityId", evidence.id(),
+            "evaluationRequestId", evaluationRequestId, "outcome", "SUCCESS"));
+    return evidence;
+  }
+
+  /**
    * Appends adjustment evidence that supersedes {@code originalEvidenceId}. Idempotent per
    * (original, reasonKey), so a retried correction reuses the same adjustment.
    */

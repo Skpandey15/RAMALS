@@ -149,6 +149,30 @@ class MigrationScriptContractTests {
         .contains("(context_id, decided_at DESC, id DESC)");
   }
 
+  @Test
+  void controlledOrchestrationIsBoundedCorrelatedAndDeterministicallyTerminal() throws IOException {
+    String migration = statements("/db/migration/V033__controlled_orchestration.sql");
+
+    assertThat(migration)
+        .contains("CREATE TABLE ledger.learning_workflow_run")
+        .contains("CREATE TABLE ledger.learning_workflow_step")
+        // A duplicate trigger must collapse rather than fan out (G05).
+        .contains("CONSTRAINT uq_learning_workflow_trigger UNIQUE (trigger_key)")
+        .contains("CONSTRAINT uq_learning_workflow_evaluation UNIQUE (evaluation_request_id)")
+        // One row per step per run is what bounds the composition structurally (G06).
+        .contains("CONSTRAINT uq_learning_workflow_step_name UNIQUE (run_id, step_name)")
+        .contains("CHECK (step_index BETWEEN 0 AND 3)")
+        .contains("CHECK (attempt_count BETWEEN 0 AND 32)")
+        // Every terminal state names its reason, so a stop is never a silent absence (G02, G03).
+        .contains("CONSTRAINT ck_learning_workflow_terminal")
+        .contains("'RUNNING', 'COMPLETED', 'STOPPED', 'CANCELLED', 'TIMED_OUT', 'FAILED'")
+        // Correlation to the execution ledger and the outbox (G08).
+        .contains("idx_learning_workflow_step_request")
+        .doesNotContain("raw_prompt")
+        .doesNotContain("hidden_reasoning")
+        .doesNotContain("checkpoint");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");
