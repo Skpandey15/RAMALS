@@ -231,6 +231,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
         prompt_versions={
             PromptTemplateId.ASSESSMENT_ITEM: "ASSESSMENT_PROMPT_V1",
             PromptTemplateId.ASSESSMENT_EVALUATE: "ASSESSMENT_PROMPT_V1",
+            PromptTemplateId.ASSESSMENT_RUBRIC_EVALUATE: "ASSESSMENT_EVALUATION_PROMPT_V1",
         },
         max_input_tokens=12000,
         max_output_tokens=1400,
@@ -267,6 +268,7 @@ _V1_ROUTES: tuple[RouteConfig, ...] = (
             PromptTemplateId.DIAGNOSTIC_ROOT_CAUSE: "DIAGNOSTIC_PROMPT_V1",
             PromptTemplateId.ASSESSMENT_ITEM: "ASSESSMENT_PROMPT_V1",
             PromptTemplateId.ASSESSMENT_EVALUATE: "ASSESSMENT_PROMPT_V1",
+            PromptTemplateId.ASSESSMENT_RUBRIC_EVALUATE: "ASSESSMENT_EVALUATION_PROMPT_V1",
             PromptTemplateId.ADAPTATION_PLAN: "ADAPTATION_PROMPT_V1",
             PromptTemplateId.DIAGNOSTIC_ASSESSMENT: "DIAGNOSTIC_ASSESSMENT_PROMPT_V1",
         },

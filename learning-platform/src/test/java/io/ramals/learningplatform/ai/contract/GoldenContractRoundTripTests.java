@@ -90,6 +90,11 @@ class GoldenContractRoundTripTests {
   }
 
   @Test
+  void assessmentEvaluationRequestSurvivesRoundTrip() throws IOException {
+    assertRoundTrip("request-assessment-evaluation.json", AssessmentEvaluationRequest.class);
+  }
+
+  @Test
   void fullRequestDeserializesToTheExpectedValues() throws IOException {
     AiRequestEnvelope envelope =
         MAPPER.readValue(read("request-tutor-full.json"), AiRequestEnvelope.class);
@@ -133,7 +138,8 @@ class GoldenContractRoundTripTests {
         "request-tutor-minimal.json", "request-tutor-full.json",
         "request-tutor-cross-domain.json", "proposal-tutor.json",
         "proposal-assessment-evaluate.json", "capabilities.json",
-        "problem-deadline-exceeded.json", "grounded-context-v1.json");
+        "problem-deadline-exceeded.json", "grounded-context-v1.json",
+        "request-assessment-evaluation.json");
 
     try (var entries = Files.list(goldenDirectory())) {
       List<String> present = entries.map(path -> path.getFileName().toString())

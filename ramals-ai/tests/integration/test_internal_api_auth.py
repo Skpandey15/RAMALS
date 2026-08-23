@@ -130,6 +130,7 @@ AGENT_ROUTES = (
     "/internal/v1/diagnostic-assessment/propose",
     "/internal/v1/assessment/propose",
     "/internal/v1/assessment/evaluate",
+    "/internal/v1/assessment-evaluation/propose",
     "/internal/v1/adaptation/propose",
 )
 
@@ -139,7 +140,7 @@ def shipped_client() -> Iterator[TestClient]:
     """The application as deployed: no probe route mounted on top of it.
 
     The ``client`` fixture above builds the app and then includes a *second* copy of
-    ``build_internal_router()`` to hang a probe route on. That extra copy also serves the five agent
+    ``build_internal_router()`` to hang a probe route on. That extra copy also serves every agent
     routes, so a test using it passes whether or not ``create_app`` wires the router at all --
     verified by deleting ``app.include_router(build_internal_router())`` from ``main.py``, after
     which every test in this file still passed. The tests below therefore use an untouched app.

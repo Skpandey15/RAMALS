@@ -1,0 +1,55 @@
+{
+  "contractVersion": "1.0",
+  "interactionId": "01a02918-c19f-772e-95e8-fa78432e663b",
+  "requestId": "01a02918-c19f-772e-95e8-fa78432e663c",
+  "constraints": {
+    "interactionClass": "ASSESSMENT_PROPOSAL",
+    "deadlineMs": 8000,
+    "maxOutputTokens": 1200,
+    "allowedTools": [],
+    "policyVersion": "EVALUATION_POLICY_V1"
+  },
+  "evaluationContext": {
+    "responseType": "FREE_TEXT",
+    "answerVersion": "answer-v7",
+    "rubricVersion": "rubric-v3",
+    "answerEvidenceId": "answer-v7-evidence",
+    "answerText": "Replication maintains copies; a quorum prevents stale writes.",
+    "rubricDimensions": [
+      {
+        "dimensionId": "accuracy",
+        "maxScore": 4,
+        "criteria": "Technical claims about replication are correct.",
+        "evidenceId": "rubric-accuracy-v3"
+      }
+    ]
+  },
+  "groundedContext": {
+    "contractVersion": "1.0",
+    "contextId": "evaluation-context-v7",
+    "learnerRef": "opaque-learner-ref",
+    "asOf": "2026-08-23T02:00:00Z",
+    "expiresAt": "2026-08-23T02:10:00Z",
+    "retrievalPolicyVersion": "EVALUATION_POLICY_V1",
+    "items": [
+      {
+        "evidenceId": "answer-v7-evidence",
+        "sourceType": "ASSESSMENT",
+        "sourceVersion": "answer-v7",
+        "authority": "AUTHORITATIVE_FACT",
+        "factType": "ANSWER_VERSION",
+        "value": "answer-v7",
+        "observedAt": "2026-08-23T02:00:00Z"
+      },
+      {
+        "evidenceId": "rubric-accuracy-v3",
+        "sourceType": "ASSESSMENT",
+        "sourceVersion": "rubric-v3",
+        "authority": "AUTHORITATIVE_FACT",
+        "factType": "RUBRIC_DIMENSION",
+        "value": "accuracy",
+        "observedAt": "2026-08-23T02:00:00Z"
+      }
+    ]
+  }
+}

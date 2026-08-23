@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from ramals_ai.contracts.generated import (
     AIProposalEnvelope,
     AIRequestEnvelope,
+    AssessmentEvaluationRequest,
     Capabilities,
     Problem,
 )
@@ -38,6 +39,7 @@ ROUND_TRIP_CASES: list[tuple[str, type[BaseModel]]] = [
     ("capabilities.json", Capabilities),
     ("problem-deadline-exceeded.json", Problem),
     ("grounded-context-v1.json", GroundedContext),
+    ("request-assessment-evaluation.json", AssessmentEvaluationRequest),
 ]
 
 
