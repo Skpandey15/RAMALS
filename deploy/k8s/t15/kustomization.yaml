@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# M2-T15 qualification only. This is intentionally separate from deploy/compose.deploy.yml and
+# carries no production trigger or activation wiring.
+namespace: ramals-t15
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - postgres.yaml
+  - keycloak.yaml
+  - keycloak-client-bootstrap.yaml
+  - workload-identity-smoke.yaml
+  - learning-platform.yaml
+  - ramals-ai.yaml
+  - web-ui.yaml
+
+# These are manifest-list digests of the artifacts built from current main for this qualification
+# run. Kustomize emits image@sha256:... references; tags are used only as transformer keys and never
+# reach the cluster.
+images:
+  - name: qualification/learning-platform:current-main
+    newName: k3d-ramals-t15-registry:5000/ramals-learning-platform
+    digest: sha256:2fa272a9ea07fae6d8dd0f06dffc4664b0812a9091e778417b0abeee0f39feb8
+  - name: qualification/ramals-ai:current-main
+    newName: k3d-ramals-t15-registry:5000/ramals-ai
+    digest: sha256:10fbbe736ac7f5589315f589eddf124986689fb749c9896a9fc787f8d64f6186
+  - name: qualification/web-ui:current-main
+    newName: k3d-ramals-t15-registry:5000/ramals-web-ui
+    digest: sha256:5bdb18e747d2a7cbe0029cd677fc91f71da31bd2c386f92bccbe099170f2e337
+  - name: qualification/postgres:current-main
+    newName: k3d-ramals-t15-registry:5000/ramals-postgres
+    digest: sha256:f2e582060a6a0cbf5eecd729f472fe54d39702f382f0d72fde5194cee2c1914e
+  - name: qualification/keycloak:current-main
+    newName: k3d-ramals-t15-registry:5000/ramals-keycloak
+    digest: sha256:4b0cd25275f7676e1bd9da419b97c25b2c480934cc442781b8bcd4d2bb16258f

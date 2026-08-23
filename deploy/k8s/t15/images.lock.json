@@ -1,0 +1,40 @@
+{
+  "$comment": "M2-T15.1 qualification artifacts built from current main. These are local-registry manifest-list digests, not mutable tags and not production release approval.",
+  "qualification": "m2-t15.1",
+  "sourceCommit": "cd1e36fd9e8f16fef1720a383acbd64d564ebabe",
+  "registry": "k3d-ramals-t15-registry:5000",
+  "supportingImages": {
+    "busybox": {
+      "repository": "ramals-t15-busybox",
+      "digest": "sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-t15-busybox@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f"
+    }
+  },
+  "images": {
+    "learning-platform": {
+      "repository": "ramals-learning-platform",
+      "digest": "sha256:2fa272a9ea07fae6d8dd0f06dffc4664b0812a9091e778417b0abeee0f39feb8",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-learning-platform@sha256:2fa272a9ea07fae6d8dd0f06dffc4664b0812a9091e778417b0abeee0f39feb8"
+    },
+    "ramals-ai": {
+      "repository": "ramals-ai",
+      "digest": "sha256:10fbbe736ac7f5589315f589eddf124986689fb749c9896a9fc787f8d64f6186",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-ai@sha256:10fbbe736ac7f5589315f589eddf124986689fb749c9896a9fc787f8d64f6186"
+    },
+    "web-ui": {
+      "repository": "ramals-web-ui",
+      "digest": "sha256:5bdb18e747d2a7cbe0029cd677fc91f71da31bd2c386f92bccbe099170f2e337",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-web-ui@sha256:5bdb18e747d2a7cbe0029cd677fc91f71da31bd2c386f92bccbe099170f2e337"
+    },
+    "postgres": {
+      "repository": "ramals-postgres",
+      "digest": "sha256:f2e582060a6a0cbf5eecd729f472fe54d39702f382f0d72fde5194cee2c1914e",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-postgres@sha256:f2e582060a6a0cbf5eecd729f472fe54d39702f382f0d72fde5194cee2c1914e"
+    },
+    "keycloak": {
+      "repository": "ramals-keycloak",
+      "digest": "sha256:4b0cd25275f7676e1bd9da419b97c25b2c480934cc442781b8bcd4d2bb16258f",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-keycloak@sha256:4b0cd25275f7676e1bd9da419b97c25b2c480934cc442781b8bcd4d2bb16258f"
+    }
+  }
+}
