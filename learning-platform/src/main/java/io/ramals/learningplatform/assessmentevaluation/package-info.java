@@ -1,2 +1,2 @@
-/** Deterministic, replay-safe acceptance of non-authoritative rubric-evaluation proposals. */
+/** Deterministic acceptance and authorized learner presentation of rubric-evaluation proposals. */
 package io.ramals.learningplatform.assessmentevaluation;

@@ -110,8 +110,44 @@ legend {
   border-collapse: collapse;
 }
 
+.panel-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.panel-heading-row h2 {
+  margin: 0;
+}
+
+.secondary-button {
+  border: 1px solid #315c91;
+  background: #ffffff;
+  color: #234b7c;
+}
+
+.secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.rubric-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.rubric-table caption {
+  text-align: left;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+
 .mastery-table th,
-.mastery-table td {
+.mastery-table td,
+.rubric-table th,
+.rubric-table td {
   text-align: left;
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid #eaf0f7;

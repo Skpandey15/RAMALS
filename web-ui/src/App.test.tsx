@@ -14,6 +14,10 @@ vi.mock('./learning/api', () => ({
   submitDiagnostic: vi.fn(),
   getMasteryMap: vi.fn().mockResolvedValue({ domainCode: 'KAFKA', versionCode: 'v1', skills: [] }),
   getRecommendations: vi.fn().mockResolvedValue({ recommendations: [] }),
+  getAssessmentFeedback: vi.fn().mockResolvedValue({
+    status: 'UNAVAILABLE',
+    approvedFeedback: null,
+  }),
 }));
 
 import { App } from './App';
