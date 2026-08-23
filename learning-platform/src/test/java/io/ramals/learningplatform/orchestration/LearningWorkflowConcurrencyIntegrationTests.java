@@ -432,6 +432,290 @@ class LearningWorkflowConcurrencyIntegrationTests {
         .isEmpty();
   }
 
+  // Java text blocks: JSON quotes need no escaping, which keeps these fixtures readable.
+  private static final String JSON_EVIDENCE =
+      """
+      ["e1"]
+      """;
+  private static final String JSON_ACCEPTED =
+      """
+      ["ACCEPTED"]
+      """;
+
+  // --- DIAGNOSE recovery states, against the real execution ledger -------------------------------
+
+  @Test
+  void crashAfterCommissionBeforeProviderInvocationIsIndeterminateAndClosedNotRedispatched() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    var executions = executionRepository(jdbc);
+    String requestId = "wf-diag-crash-commission";
+
+    // Exactly the durable state a JVM death between the commission commit and the provider call
+    // leaves behind: a STARTED event and nothing else.
+    commissionOnly(jdbc, requestId);
+
+    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.COMMISSIONED);
+
+    // Recovery closes it so the ledger holds no unresolved commission, and the request stays
+    // undispatchable: the terminal row is what commissioning refuses against next time.
+    assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED")).isTrue();
+    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.FAILED);
+    assertThat(executions.findExecutionState(requestId).errorCode())
+        .isEqualTo("AI_EXECUTION_ABANDONED");
+
+    // Closing twice must neither overwrite nor duplicate.
+    assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED")).isFalse();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void crashAfterProviderSuccessButBeforeTheGateDecisionIsDetectedAsUnrecoverable() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    var executions = executionRepository(jdbc);
+    String requestId = "wf-diag-crash-success";
+
+    commissionOnly(jdbc, requestId);
+    succeededExecution(jdbc, requestId);
+
+    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.proposal_gate_decision WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .as("this is the state the proposed fix must eliminate: a success with no verdict")
+        .isZero();
+
+    // The proposal itself is not retained, only its digest, which is why the state cannot be
+    // re-gated and has to be reported rather than silently retried.
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT proposal_digest FROM core.ai_execution WHERE request_id = ?",
+                String.class,
+                requestId))
+        .as("a digest is all there is; it cannot reconstruct a proposal")
+        .hasSize(64);
+
+    // An abandonment must never overwrite a real success.
+    assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED")).isFalse();
+    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+  }
+
+  @Test
+  void crashAfterTheGateDecisionButBeforeWorkflowAdoptionRecoversTheVerdict() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-crash-decision";
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject("diag-adopt").id();
+
+    commissionOnly(jdbc, requestId);
+    succeededExecution(jdbc, requestId);
+    gateDecision(jdbc, learnerId, requestId, true);
+
+    var decisions =
+        new io.ramals.learningplatform.grounding.JdbcProposalGateDecisionRepository(jdbc);
+    var recovered =
+        decisions.findDecision(
+            requestId, io.ramals.learningplatform.grounding.ProposalType.DIAGNOSTIC);
+
+    assertThat(recovered).isPresent();
+    assertThat(recovered.orElseThrow().accepted())
+        .as("a verdict already recorded must survive the worker that obtained it")
+        .isTrue();
+    assertThat(recovered.orElseThrow().requestId()).isEqualTo(requestId);
+  }
+
+  @Test
+  void anExhaustedStepIsJudgedByTheDatabaseClockThatTheClaimPredicateUses() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "db-clock");
+
+    for (int attempt = 1; attempt <= LearningWorkflowPolicy.MAX_STEP_ATTEMPTS; attempt++) {
+      runs.claimStep(
+              run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+              java.time.Duration.ZERO)
+          .orElseThrow();
+    }
+
+    // Same predicate, same clock: whatever the claim refuses, this must call exhausted.
+    assertThat(
+            runs.claimStep(
+                run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                java.time.Duration.ZERO))
+        .isEmpty();
+    assertThat(
+            runs.claimableButExhausted(
+                run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                java.time.Duration.ZERO))
+        .isTrue();
+    // Under a live lease the step is owned, not exhausted, however many attempts it has spent.
+    assertThat(
+            runs.claimableButExhausted(
+                run.id(), Step.first(), LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                java.time.Duration.ofHours(1)))
+        .isFalse();
+  }
+
+  @Test
+  void aRealSuccessCommittedDuringTheRaceIsNeitherOverwrittenNorMisreported() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    var executions = executionRepository(jdbc);
+    String requestId = "wf-diag-race-success";
+
+    // The recovery worker observes COMMISSIONED...
+    commissionOnly(jdbc, requestId);
+    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.COMMISSIONED);
+
+    // ...and the original worker commits its real outcome before the close lands.
+    succeededExecution(jdbc, requestId);
+
+    assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED"))
+        .as("the conditional write must lose, and say so")
+        .isFalse();
+    assertThat(executions.findExecutionState(requestId).state())
+        .as("the real outcome stands")
+        .isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+    assertThat(executions.findExecutionState(requestId).errorCode()).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void aRealFailureCommittedDuringTheRaceKeepsItsOwnErrorCode() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    var executions = executionRepository(jdbc);
+    String requestId = "wf-diag-race-failure";
+
+    commissionOnly(jdbc, requestId);
+    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.COMMISSIONED);
+    failedExecution(jdbc, requestId, "AI_TIMEOUT");
+
+    assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED")).isFalse();
+    assertThat(executions.findExecutionState(requestId).errorCode())
+        .as("a real provider failure must not be relabelled as an abandonment")
+        .isEqualTo("AI_TIMEOUT");
+  }
+
+  @Test
+  void twoRecoveryWorkersRacingToCloseTheSameCommissionProduceOneTerminalRow() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-race-peers";
+    commissionOnly(jdbc, requestId);
+
+    List<Boolean> outcomes =
+        List.of(
+            executionRepository(runtimeJdbc())
+                .closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED"),
+            executionRepository(runtimeJdbc())
+                .closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED"));
+
+    assertThat(outcomes.stream().filter(Boolean::booleanValue).count())
+        .as("exactly one worker may close a commission")
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+  }
+
+  private void failedExecution(JdbcTemplate jdbc, String requestId, String errorCode) {
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, status, error_code,
+           request_digest, started_at, completed_at)
+        VALUES (?, ?, ?, 'DIAGNOSTIC', '1.0', 'FAILED', ?, ?, CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP)
+        """,
+        UUID.randomUUID(),
+        requestId,
+        "interaction-" + requestId,
+        errorCode,
+        "f".repeat(64));
+  }
+
+  private io.ramals.learningplatform.execution.AiExecutionRepository executionRepository(
+      JdbcTemplate jdbc) {
+    return new io.ramals.learningplatform.execution.AiExecutionRepository(
+        jdbc, tools.jackson.databind.json.JsonMapper.builder().build());
+  }
+
+  /** The STARTED event a commission commits before any provider call. */
+  private void commissionOnly(JdbcTemplate jdbc, String requestId) {
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution_event
+          (id, request_id, interaction_id, agent_type, contract_version, event_type,
+           request_digest, occurred_at)
+        VALUES (?, ?, ?, 'DIAGNOSTIC', '1.0', 'STARTED', ?, CURRENT_TIMESTAMP)
+        """,
+        UUID.randomUUID(),
+        requestId,
+        "interaction-" + requestId,
+        "f".repeat(64));
+  }
+
+  private void succeededExecution(JdbcTemplate jdbc, String requestId) {
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+           agent_run_id, prompt_template_id, prompt_version, model_route, status,
+           request_digest, proposal_digest, started_at, completed_at)
+        VALUES (?, ?, ?, 'DIAGNOSTIC', '1.0', 'DIAGNOSTIC_AGENT_V1', ?, 'DIAGNOSE', 'DIAGNOSE_V1',
+                'ci-fake', 'SUCCEEDED', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        UUID.randomUUID(),
+        requestId,
+        "interaction-" + requestId,
+        "run-" + requestId,
+        "f".repeat(64),
+        "a".repeat(64));
+  }
+
+  private void gateDecision(JdbcTemplate jdbc, UUID learnerId, String requestId, boolean accepted) {
+    String contextId = "ctx-" + requestId;
+    jdbc.update(
+        """
+        INSERT INTO ledger.grounding_retrieval_record
+          (context_id, learner_id, retrieval_policy_version, as_of, expires_at, source_refs,
+           source_count)
+        VALUES (?, ?, 'PROPOSAL_GROUNDING_V1', CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP + INTERVAL '10 minutes', CAST(? AS jsonb), 1)
+        """,
+        contextId,
+        learnerId,
+        JSON_EVIDENCE);
+    jdbc.update(
+        """
+        INSERT INTO ledger.proposal_gate_decision
+          (id, proposal_id, request_id, agent_run_id, context_id, proposal_type, accepted,
+           reason_codes, referenced_evidence_ids, policy_version, interaction_id, trace_id)
+        VALUES (?, ?, ?, ?, ?, 'DIAGNOSTIC', ?, CAST(? AS jsonb), CAST('[]' AS jsonb),
+                'PROPOSAL_GROUNDING_V1', ?, ?)
+        """,
+        UUID.randomUUID(),
+        "proposal-" + requestId,
+        requestId,
+        "run-" + requestId,
+        contextId,
+        accepted,
+        JSON_ACCEPTED,
+        "interaction-" + requestId,
+        "trace-" + requestId);
+  }
+
   private Run startRun(JdbcTemplate jdbc, LearningWorkflowRepository runs, String key) {
     return startRun(jdbc, runs, key, new LearnerRepository(jdbc).provisionForSubject(key).id());
   }
