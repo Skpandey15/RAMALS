@@ -600,16 +600,24 @@ function Run-SelfTests {
   $candidateBTree = (Invoke-Checked "git" @("rev-parse", "--verify", "$candidateB^{tree}")).Trim().ToLowerInvariant()
   $originMainCommit = Resolve-GitCommit "origin/main"
   $sameCandidateRef = if ($originMainCommit -eq $candidateA) { "origin/main" } else { $candidateA }
-  $descendantCandidateRef = if ($originMainCommit -ne $candidateA -and
-      (Test-CommitReachable $candidateA $originMainCommit)) { "origin/main" } else { $candidateB }
+  $originMainIsDescendant = $originMainCommit -ne $candidateA -and
+    (Test-CommitReachable $candidateA $originMainCommit)
+  $descendantCandidateRef = if ($originMainIsDescendant) { "origin/main" } else { $candidateB }
 
   $provenanceFixture = New-DriftFixture "provenance-reachability" $Lock
   try {
     [void]$tests.Add((Run-ExpectedGatePass "candidate-a-ref-a" $provenanceFixture.Root $provenanceFixture.Lock `
         (Join-Path $selfRoot "candidate-a-ref-a") `
         -CandidateCommit $candidateA -CandidateRef $sameCandidateRef))
-    [void]$tests.Add((Run-ExpectedGatePass "candidate-a-ref-descendant-b" $provenanceFixture.Root $provenanceFixture.Lock `
-        (Join-Path $selfRoot "candidate-a-ref-descendant-b") `
+    $descendantTestName = if ($originMainIsDescendant) {
+      "post-merge-lock-candidate-a-origin-main-descendant-b"
+    } else {
+      "candidate-a-ref-descendant-b"
+    }
+    $descendantManifestRoot = if ($originMainIsDescendant) { $ManifestRoot } else { $provenanceFixture.Root }
+    $descendantLockPath = if ($originMainIsDescendant) { $LockPath } else { $provenanceFixture.Lock }
+    [void]$tests.Add((Run-ExpectedGatePass $descendantTestName $descendantManifestRoot $descendantLockPath `
+        (Join-Path $selfRoot $descendantTestName) `
         -CandidateCommit $candidateA -CandidateRef $descendantCandidateRef))
   } finally {
     Remove-Item -LiteralPath $provenanceFixture.Root -Recurse -Force -ErrorAction SilentlyContinue

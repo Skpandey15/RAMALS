@@ -36,7 +36,7 @@ function Invoke-Checked {
 }
 
 if ([string]::IsNullOrWhiteSpace($Commit)) {
-  $Commit = (git rev-parse --verify origin/main).Trim()
+  throw "Commit is required: supply the explicitly reviewed candidate SHA; origin/main is only an ApprovedRef for qualification provenance"
 }
 $Commit = (Invoke-Checked "git" @("rev-parse", "--verify", "$Commit^{commit}")).Trim().ToLowerInvariant()
 if ($Commit -notmatch '^[0-9a-f]{40}$') {
