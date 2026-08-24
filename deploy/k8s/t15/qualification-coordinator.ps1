@@ -35,6 +35,30 @@ Invoke-Checked "kubectl" @("config", "use-context", "k3d-$ClusterName")
 $podName = "t15-pg-lock-coordinator"
 
 if ($Action -eq "stop") {
+  $podIp = ""
+  $podJson = (& kubectl get pod $podName -n $Namespace --ignore-not-found=true -o json 2>$null) -join "`n"
+  if (-not [string]::IsNullOrWhiteSpace($podJson)) {
+    try {
+      $podIp = [string](($podJson | ConvertFrom-Json).status.podIP)
+    } catch {
+      throw "could not read the qualification coordinator pod IP"
+    }
+  }
+  if ($podIp -notmatch '^[0-9a-fA-F:.]+$') {
+    $podIp = ""
+  }
+  if (-not [string]::IsNullOrWhiteSpace($podIp)) {
+    # Pod deletion can leave a sleeping PostgreSQL backend until TCP failure detection. Terminate
+    # only the current helper pod's own session first, so a stopped barrier cannot retain a lock or
+    # block the next qualification run. The query shape is qualification-helper specific and never
+    # reads application data or credentials.
+    $terminate = 'psql --set=ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" -X -P pager=off -c "SELECT pid, pg_terminate_backend(pid) AS terminated FROM pg_stat_activity WHERE client_addr = ''@@POD_IP@@'' AND query ILIKE ''%pg_sleep(86400)%'';"'
+    $terminate = $terminate.Replace("@@POD_IP@@", $podIp)
+    Invoke-Checked "kubectl" @(
+      "exec", "statefulset/postgres", "-n", $Namespace, "--",
+      "sh", "-ec", $terminate
+    )
+  }
   Invoke-Checked "kubectl" @("delete", "pod", $podName, "-n", $Namespace, "--ignore-not-found=true")
   Write-Host "Stopped the qualification lock coordinator; any held transaction lock is released"
   exit 0

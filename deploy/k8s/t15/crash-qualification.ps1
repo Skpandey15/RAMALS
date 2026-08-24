@@ -17,13 +17,26 @@ param(
   [string]$Scenario = "all",
   [string]$ClusterName = "t15",
   [string]$Namespace = "ramals-t15",
-  [string]$EvidenceRoot = ""
+  [string]$EvidenceRoot = "",
+  [string]$LockPath = "",
+  [string]$ManifestRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 $scriptRoot = (Resolve-Path $PSScriptRoot).Path
 $repositoryRoot = (Resolve-Path (Join-Path $scriptRoot "..\..\..")).Path
 Set-Location $repositoryRoot
+. (Join-Path $scriptRoot "contention-proof.ps1")
+$qualificationManifestRoot = if ([string]::IsNullOrWhiteSpace($ManifestRoot)) {
+  $scriptRoot
+} else {
+  (Resolve-Path $ManifestRoot).Path
+}
+$qualificationLockPath = if ([string]::IsNullOrWhiteSpace($LockPath)) {
+  Join-Path $qualificationManifestRoot "images.lock.json"
+} else {
+  (Resolve-Path $LockPath).Path
+}
 
 if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
   $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
@@ -68,8 +81,12 @@ function Invoke-Psql {
 
 function Invoke-PsqlAt {
   param([Parameter(Mandatory = $true)][string]$Sql)
+  # kubectl exec multiplexes stderr with the command stream in some k3d/websocket paths. Keep
+  # that diagnostic channel out of the pipe-delimited PostgreSQL result: a transport warning is
+  # not a claim row and must never be accepted as qualification evidence. The process exit code
+  # remains authoritative, so an actual psql/kubectl failure still fails the qualification run.
   $output = $Sql | & kubectl exec -i postgres-0 -n $Namespace -- sh -ec `
-    'psql --set=ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" -X -A -t -F "|"' 2>&1
+    'psql --set=ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" -X -A -t -F "|"' 2>$null
   if ($LASTEXITCODE -ne 0) {
     throw "in-cluster PostgreSQL scalar command failed with exit code $LASTEXITCODE`n$($output -join "`n")"
   }
@@ -104,8 +121,8 @@ function Invoke-CandidateIntegrityGate {
     -ApprovedRef $ApprovedRef `
     -ClusterName $ClusterName `
     -Namespace $Namespace `
-    -ManifestRoot $scriptRoot `
-    -LockPath (Join-Path $scriptRoot "images.lock.json") `
+    -ManifestRoot $qualificationManifestRoot `
+    -LockPath $qualificationLockPath `
     -EvidenceDirectory $EvidenceRoot 2>&1
   $output | Set-Content -LiteralPath (Join-Path $EvidenceRoot "candidate-integrity-gate.log") -Encoding utf8
   if ($LASTEXITCODE -ne 0) {
@@ -136,6 +153,7 @@ function New-ScenarioFixture {
     RunId = $runId
     LearnerId = ([guid]::NewGuid()).ToString()
     AttemptId = ([guid]::NewGuid()).ToString()
+    ContentionStepId = ([guid]::NewGuid()).ToString()
     EvaluationExecutionId = ([guid]::NewGuid()).ToString()
     EvaluationDecisionId = ([guid]::NewGuid()).ToString()
     EvaluationStartedEventId = ([guid]::NewGuid()).ToString()
@@ -156,7 +174,22 @@ function New-ScenarioFixture {
 }
 
 function Seed-ScenarioFixture {
-  param([Parameter(Mandatory = $true)]$Fixture)
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [bool]$PrecreateContentionStep = $false
+  )
+  $contentionStep = if ($PrecreateContentionStep) {
+    @"
+
+INSERT INTO core.learning_workflow_step
+  (id, run_id, step_name, step_index, status, attempt_count, execution_token, claimed_at)
+VALUES
+  ('$($Fixture.ContentionStepId)', '$($Fixture.RunId)', 'RECORD_EVALUATION_EVIDENCE', 0,
+   'PENDING', 0, NULL, NULL);
+"@
+  } else {
+    ""
+  }
   $sql = @"
 BEGIN;
 INSERT INTO core.learner (id, subject, status)
@@ -226,6 +259,7 @@ VALUES
    '$($Fixture.CurriculumVersionId)', '$($Fixture.AttemptId)', '$($Fixture.AssessmentVersionId)',
    0.4000, '$($Fixture.EvaluationRequestId)', 'RUNNING', 'RECORD_EVALUATION_EVIDENCE',
    '$($Fixture.InteractionId)', '$($Fixture.TraceId)', CURRENT_TIMESTAMP + INTERVAL '10 minutes');
+$contentionStep
 COMMIT;
 "@
   [void](Invoke-Psql $sql)
@@ -255,7 +289,14 @@ function Get-PodName {
 function Wait-NoPods {
   param([Parameter(Mandatory = $true)][string]$Label)
   for ($i = 0; $i -lt 90; $i++) {
-    if (@(Get-PodNames $Label).Count -eq 0) {
+    $selector = "app.kubernetes.io/name=$Label"
+    $allPods = Invoke-Kubectl @(
+      "get", "pods", "-n", $Namespace, "-l", $selector, "--no-headers",
+      "-o", "custom-columns=NAME:.metadata.name"
+    )
+    $podNames = @($allPods -split "`r?`n" | ForEach-Object { $_.Trim() } |
+      Where-Object { $_ -match "^[A-Za-z0-9][A-Za-z0-9.-]*$" })
+    if ($podNames.Count -eq 0) {
       return
     }
     Start-Sleep -Milliseconds 500
@@ -484,6 +525,193 @@ function Get-PodUid {
   return (Invoke-Kubectl @("get", "pod", $Pod, "-n", $Namespace, "-o", "jsonpath={.metadata.uid}")).Trim()
 }
 
+function Get-BackendPodIdentities {
+  $podList = Invoke-KubectlJson @(
+    "get", "pods", "-n", $Namespace,
+    "-l", "app.kubernetes.io/name=learning-platform",
+    "--field-selector", "status.phase=Running"
+  )
+  return @(
+    foreach ($item in @($podList.items)) {
+      if ($item.status.phase -ne "Running") {
+        continue
+      }
+      [pscustomobject]@{
+        podName = [string]$item.metadata.name
+        podUid = [string]$item.metadata.uid
+        podIp = [string]$item.status.podIP
+      }
+    }
+  )
+}
+
+function Start-ContentionRowBarrier {
+  param([Parameter(Mandatory = $true)][string]$StepId)
+  $coordinatorPath = Join-Path $scriptRoot "qualification-coordinator.ps1"
+  $output = & pwsh -NoProfile -File $coordinatorPath `
+    -Action start `
+    -ClusterName $ClusterName `
+    -Namespace $Namespace `
+    -Table "core.learning_workflow_step" `
+    -RowId $StepId 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "could not start contention row barrier: $($output -join "`n")"
+  }
+
+  $end = (Get-Date).ToUniversalTime().AddSeconds(60)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $barrierBackendPid = Get-Scalar @"
+SELECT pid::text
+  FROM pg_stat_activity
+ WHERE datname = current_database()
+   AND pid <> pg_backend_pid()
+   AND query ILIKE '%core.learning_workflow_step%'
+   AND query ILIKE '%$StepId%'
+   AND query ILIKE '%pg_sleep(86400)%'
+ ORDER BY pid
+ LIMIT 1;
+"@
+    if (-not [string]::IsNullOrWhiteSpace($barrierBackendPid)) {
+      return [pscustomobject]@{
+        podName = "t15-pg-lock-coordinator"
+        pid = $barrierBackendPid
+        rowId = $StepId
+        startedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+        observedAtUtc = ""
+        waiterSessions = @()
+        preState = ""
+        releasedAtUtc = ""
+      }
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  throw "contention row barrier did not expose its PostgreSQL session for step $StepId"
+}
+
+function Stop-ContentionRowBarrier {
+  $coordinatorPath = Join-Path $scriptRoot "qualification-coordinator.ps1"
+  $output = & pwsh -NoProfile -File $coordinatorPath `
+    -Action stop `
+    -ClusterName $ClusterName `
+    -Namespace $Namespace 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "could not stop contention row barrier: $($output -join "`n")"
+  }
+}
+
+function Get-ContentionClaimWaiters {
+  param([Parameter(Mandatory = $true)][string]$BarrierPid)
+  if ($BarrierPid -notmatch '^[0-9]+$') {
+    throw "invalid contention barrier PostgreSQL PID '$BarrierPid'"
+  }
+  $raw = Invoke-PsqlAt @"
+WITH RECURSIVE claim_sessions AS (
+  SELECT a.pid, a.client_addr, a.wait_event_type, a.wait_event, a.query_start, a.query
+    FROM pg_stat_activity a
+   WHERE a.datname = current_database()
+     AND a.usename = 'ramals_core_runtime'
+     AND a.state = 'active'
+     AND a.query ILIKE '%INSERT INTO core.learning_workflow_step%'
+     AND a.query ILIKE '%ON CONFLICT%'
+     AND a.wait_event_type = 'Lock'
+), lock_chain (claimant_pid, blocker_pid) AS (
+  SELECT c.pid, blocker.pid
+    FROM claim_sessions c
+    CROSS JOIN LATERAL unnest(pg_blocking_pids(c.pid)) AS blocker(pid)
+  UNION
+  SELECT chain.claimant_pid, blocker.pid
+    FROM lock_chain chain
+    CROSS JOIN LATERAL unnest(pg_blocking_pids(chain.blocker_pid)) AS blocker(pid)
+)
+SELECT a.pid::text || '|' ||
+       COALESCE(a.client_addr::text, '') || '|' ||
+       COALESCE(a.wait_event_type, '') || '|' ||
+       COALESCE(a.wait_event, '') || '|' ||
+       COALESCE(to_char(a.query_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), '') || '|' ||
+       COALESCE(pg_blocking_pids(a.pid)::text, '') || '|' ||
+       regexp_replace(COALESCE(a.query, ''), '[[:space:]]+', ' ', 'g')
+  FROM claim_sessions a
+ WHERE EXISTS (
+         SELECT 1 FROM lock_chain chain
+          WHERE chain.claimant_pid = a.pid AND chain.blocker_pid = $BarrierPid)
+ ORDER BY a.pid;
+"@
+  $identities = @(Get-BackendPodIdentities)
+  $waiters = [System.Collections.Generic.List[object]]::new()
+  foreach ($line in @($raw -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+    $parts = ([string]$line).Trim() -split '\|', 7
+    if ($parts.Count -lt 7) {
+      throw "could not parse PostgreSQL contention waiter row: $line"
+    }
+    $clientIp = ([string]$parts[1]).Split('/')[0]
+    $identity = @($identities | Where-Object { $_.podIp -eq $clientIp }) | Select-Object -First 1
+    if ($null -eq $identity) {
+      throw "could not map claim session client IP '$($parts[1])' to a running backend pod"
+    }
+    [void]$waiters.Add([pscustomobject]@{
+        podUid = $identity.podUid
+        podName = $identity.podName
+        backendPid = $parts[0]
+        clientIp = $clientIp
+        waitEventType = $parts[2]
+        waitEvent = $parts[3]
+        observedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+        blockingPids = $parts[5]
+        claimSql = $parts[6]
+      })
+  }
+  return @($waiters)
+}
+
+function Wait-ContentionClaimSessions {
+  param(
+    [Parameter(Mandatory = $true)][string]$BarrierPid,
+    [int]$TimeoutSeconds = 120
+  )
+  $seen = @{}
+  $observerLog = Join-Path $EvidenceRoot "contention-observer.log"
+  "startedAtUtc=$((Get-Date).ToUniversalTime().ToString('o'))|barrierPid=$BarrierPid" |
+    Set-Content -LiteralPath $observerLog -Encoding utf8
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $observedWaiters = @(Get-ContentionClaimWaiters $BarrierPid)
+    $observedPods = @($observedWaiters | ForEach-Object { [string]$_.podUid } | Sort-Object -Unique)
+    "observedAtUtc=$((Get-Date).ToUniversalTime().ToString('o'))|waiters=$($observedWaiters.Count)|pods=$($observedPods.Count)|pids=$(@($observedWaiters | ForEach-Object { [string]$_.backendPid } | Sort-Object -Unique) -join ',')" |
+      Add-Content -LiteralPath $observerLog -Encoding utf8
+    foreach ($waiter in $observedWaiters) {
+      $key = "$($waiter.podUid)|$($waiter.backendPid)"
+      if (-not $seen.ContainsKey($key)) {
+        $seen[$key] = $waiter
+      }
+    }
+    $sessions = @($seen.Values)
+    $podUids = @($sessions | ForEach-Object { [string]$_.podUid } | Sort-Object -Unique)
+    if ($sessions.Count -eq 2 -and $podUids.Count -eq 2) {
+      return $sessions
+    }
+    if ($sessions.Count -gt 2 -or $podUids.Count -gt 2) {
+      throw "contention barrier observed more than two distinct claim sessions or pods; sessions=$($sessions.Count), pods=$($podUids.Count)"
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  throw "contention barrier did not observe two distinct backend claim sessions; sessions=$($seen.Count), pods=$(@($seen.Values | ForEach-Object { $_.podUid } | Sort-Object -Unique).Count)"
+}
+
+function Wait-ContentionClaimSessionsGone {
+  param(
+    [Parameter(Mandatory = $true)][string]$BarrierPid,
+    [int]$TimeoutSeconds = 60
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    if (@(Get-ContentionClaimWaiters $BarrierPid).Count -eq 0) {
+      return
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  throw "contention claim sessions did not leave the qualification barrier"
+}
+
 function Wait-ReplacementPod {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
@@ -517,6 +745,28 @@ SELECT jsonb_build_object(
   'adaptationOutbox', COALESCE((SELECT jsonb_agg(to_jsonb(w) ORDER BY w.created_at, w.id) FROM core.agent_work_outbox w WHERE w.interaction_id = '$($Fixture.InteractionId)'), '[]'::jsonb),
   'aiExecutions', COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.started_at, x.id) FROM core.ai_execution x WHERE x.interaction_id = '$($Fixture.InteractionId)'), '[]'::jsonb),
   'aiEvents', COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.occurred_at, e.id) FROM core.ai_execution_event e WHERE e.interaction_id = '$($Fixture.InteractionId)'), '[]'::jsonb)
+)::text;
+"@
+}
+
+function Get-ContentionDbProof {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)][string]$StepName
+  )
+  return Get-Scalar @"
+SELECT jsonb_build_object(
+  'runId', '$($Fixture.RunId)',
+  'step', '$StepName',
+  'workflowCursor', (SELECT current_step FROM core.learning_workflow_run WHERE id = '$($Fixture.RunId)'),
+  'stepStatus', (SELECT status FROM core.learning_workflow_step WHERE run_id = '$($Fixture.RunId)' AND step_name = '$StepName'),
+  'attemptCount', (SELECT attempt_count FROM core.learning_workflow_step WHERE run_id = '$($Fixture.RunId)' AND step_name = '$StepName'),
+  'executionToken', (SELECT execution_token FROM core.learning_workflow_step WHERE run_id = '$($Fixture.RunId)' AND step_name = '$StepName'),
+  'authoritativeEvidenceCount', (SELECT COUNT(*) FROM ledger.evidence WHERE lineage_key = 'EVALUATION_DECISION:$($Fixture.EvaluationRequestId):SKILL:$($Fixture.SkillId)'),
+  'masterySnapshotCount', (SELECT COUNT(*) FROM ledger.mastery_snapshot WHERE learner_id = '$($Fixture.LearnerId)' AND skill_id = '$($Fixture.SkillId)' AND curriculum_version_id = '$($Fixture.CurriculumVersionId)'),
+  'masteryVersions', COALESCE((SELECT string_agg(aggregate_version::text, ',' ORDER BY aggregate_version) FROM ledger.mastery_snapshot WHERE learner_id = '$($Fixture.LearnerId)' AND skill_id = '$($Fixture.SkillId)' AND curriculum_version_id = '$($Fixture.CurriculumVersionId)'), ''),
+  'diagnosticExecutionCount', (SELECT COUNT(*) FROM core.ai_execution WHERE request_id = '$($Fixture.DiagnosticRequestId)'),
+  'adaptationOutboxCount', (SELECT COUNT(*) FROM core.agent_work_outbox WHERE interaction_id = '$($Fixture.InteractionId)')
 )::text;
 "@
 }
@@ -558,10 +808,20 @@ function Get-ScopedKubernetesEvents {
     [Parameter(Mandatory = $true)]$Crash,
     [Parameter(Mandatory = $true)]$Fixture
   )
-  $uids = @($Crash.PodUid, $Crash.ReplacementPodUid) |
+  $competingUids = if ($null -eq $Crash.CompetingPods) {
+    @()
+  } else {
+    @($Crash.CompetingPods | ForEach-Object { $_.podUid })
+  }
+  $uids = @($Crash.PodUid, $Crash.ReplacementPodUid) + $competingUids |
     Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
     Select-Object -Unique
-  $names = @($Crash.Pod, $Crash.ReplacementPod) |
+  $competingNames = if ($null -eq $Crash.CompetingPods) {
+    @()
+  } else {
+    @($Crash.CompetingPods | ForEach-Object { $_.podName })
+  }
+  $names = @($Crash.Pod, $Crash.ReplacementPod) + $competingNames |
     Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
     Select-Object -Unique
   $items = [System.Collections.Generic.List[object]]::new()
@@ -786,78 +1046,123 @@ function Invoke-Contention {
   $targetStep = "RECORD_EVALUATION_EVIDENCE"
   Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
   Wait-DeploymentReady "learning-platform" 0 "learning-platform"
-  # The previous five-second window was shorter than the log/snapshot round trip. It allowed the
-  # fixture to advance and made a later sequential boundary look like replica contention. Keep the
-  # existing fixed qualification barrier, but give the operator enough time to prove the live claim.
+  # The row is pre-created as PENDING so the qualification coordinator can hold its row lock. Both
+  # application replicas then have to enter the same atomic claim statement and wait on that lock;
+  # healthy pod count or a later successful boundary is not accepted as contention evidence.
   Set-BackendFault $true "WORKFLOW_AFTER_CLAIM" $Fixture.RunId "" 30000
-  Wait-DeploymentReady "learning-platform" 2 "learning-platform"
-  $boundaryPod = Wait-WorkflowBoundary "WORKFLOW_AFTER_CLAIM" $Fixture.RunId
-  $claim = Get-StepClaim $Fixture.RunId $targetStep
-  if ([string]::IsNullOrWhiteSpace($claim.Token) -or
-      $claim.Status -ne "RUNNING" -or $claim.AttemptCount -ne "1") {
-    throw "contention boundary did not capture a live attempt-1 claim: token='$($claim.Token)' status='$($claim.Status)' attempt='$($claim.AttemptCount)'"
-  }
-  $backendPodsAtClaim = @(
-    foreach ($pod in @(Get-PodNames "learning-platform")) {
-      [pscustomobject]@{
-        Name = [string]$pod
-        Uid = Get-PodUid $pod
+  Seed-ScenarioFixture $Fixture $true
+  $barrier = $null
+  $barrierActive = $false
+  try {
+    $barrier = Start-ContentionRowBarrier $Fixture.ContentionStepId
+    $barrierActive = $true
+    # Do not expose the seeded run to an application worker until the lock-owning session is
+    # visible. Otherwise one replica could claim before the deterministic contention boundary.
+    Wait-DeploymentReady "learning-platform" 2 "learning-platform"
+    $waiters = @(Wait-ContentionClaimSessions $barrier.pid)
+    $preState = Get-ScenarioDbSnapshot $Fixture
+    $preStateObject = $preState | ConvertFrom-Json
+    $preStep = @($preStateObject.steps | Where-Object { $_.step_name -eq $targetStep }) | Select-Object -First 1
+    if ($null -eq $preStep -or
+        $preStateObject.workflow.current_step -ne $targetStep -or
+        $preStep.status -ne "PENDING" -or
+        $preStep.attempt_count -ne 0 -or
+        -not [string]::IsNullOrWhiteSpace([string]$preStep.execution_token)) {
+      throw "contention PostgreSQL pre-state did not preserve the locked pending target step"
+    }
+    $barrier.observedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+    $barrier.waiterSessions = @($waiters)
+    $barrier.preState = "pre-state.json"
+
+    Stop-ContentionRowBarrier
+    $barrierActive = $false
+    $barrier.releasedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+    Wait-ContentionClaimSessionsGone $barrier.pid
+
+    $boundaryPod = Wait-WorkflowBoundary "WORKFLOW_AFTER_CLAIM" $Fixture.RunId
+    $winnerPodUid = Get-PodUid $boundaryPod
+    $claim = Get-StepClaim $Fixture.RunId $targetStep
+    if ([string]::IsNullOrWhiteSpace($claim.Token) -or
+        $claim.Status -ne "RUNNING" -or $claim.AttemptCount -ne "1") {
+      throw "contention boundary did not capture a live attempt-1 claim: token='$($claim.Token)' status='$($claim.Status)' attempt='$($claim.AttemptCount)'"
+    }
+    $stateAtBoundary = Get-WorkflowState $Fixture.RunId
+    if ($stateAtBoundary.CurrentStep -ne $targetStep -or
+        $stateAtBoundary.StepStatus -ne "RUNNING" -or
+        $stateAtBoundary.ExecutionToken -ne $claim.Token -or
+        $stateAtBoundary.AttemptCount -ne "1") {
+      throw "contention boundary moved past the captured claim: cursor='$($stateAtBoundary.CurrentStep)' stepStatus='$($stateAtBoundary.StepStatus)' token='$($stateAtBoundary.ExecutionToken)' attempt='$($stateAtBoundary.AttemptCount)'"
+    }
+    $boundaryCursor = Format-CursorObservation $stateAtBoundary
+    $postClaimProof = Get-ContentionDbProof $Fixture $targetStep
+    $claimAttempts = @(New-ContentionClaimAttemptEvidence `
+        $waiters $Fixture.RunId $targetStep $winnerPodUid $claim.Token)
+    $preLogs = Get-SafePodLogText $boundaryPod $Fixture
+
+    # Let the winning worker leave its fixed qualification pause and complete before changing the
+    # deployment environment; changing env would otherwise roll the owner while it is paused.
+    $terminal = Wait-WorkflowTerminal $Fixture.RunId
+    Wait-DeploymentReady "learning-platform" 0 "learning-platform"
+    Set-BackendFault $false "" "" "" 120000
+    Wait-DeploymentReady "learning-platform" 2 "learning-platform"
+    $postState = Get-ScenarioDbSnapshot $Fixture
+    $finalProof = Get-ContentionDbProof $Fixture $targetStep
+    $competingPods = @(
+      $waiters |
+        Sort-Object podUid -Unique |
+        ForEach-Object {
+          [pscustomobject]@{
+            Name = [string]$_.podName
+            Uid = [string]$_.podUid
+            podName = [string]$_.podName
+            podUid = [string]$_.podUid
+            podIp = [string]$_.clientIp
+          }
+        }
+    )
+    [pscustomobject]@{
+      Pod = $boundaryPod
+      PodUid = $winnerPodUid
+      ReplacementPod = ""
+      ReplacementPodUid = ""
+      DeletedObservedAtUtc = ""
+      Deletion = $null
+      PreState = $preState
+      PostState = $postState
+      PreDeletionLogs = $preLogs
+      Perturbation = [ordered]@{
+        type = "two-replica-workflow-contention"
+        boundary = "WORKFLOW_AFTER_CLAIM"
+        targetStep = $targetStep
+        lock = "qualification-only PostgreSQL SELECT FOR UPDATE on the pre-created step row"
+        lockRowId = $Fixture.ContentionStepId
+        barrierPid = $barrier.pid
+        ownerPod = $boundaryPod
+        ownerPodUid = $winnerPodUid
+        competingReplicas = 2
+        observedClaimSessions = 2
+        claimCas = "one WON, one LOST"
+      }
+      OldToken = $claim.Token
+      OldAttempt = $claim.AttemptCount
+      CompetingPods = $competingPods
+      ClaimAttempts = $claimAttempts
+      ClaimBarrier = $barrier
+      PostClaimProof = $postClaimProof
+      FinalClaimProof = $finalProof
+      Terminal = $terminal
+      CursorHistory = @($boundaryCursor) + @($terminal.History)
+      StaleOutboxId = ""
+      StaleOutboxOwner = ""
+    }
+  } finally {
+    if ($barrierActive) {
+      try {
+        Stop-ContentionRowBarrier
+      } catch {
+        Write-Warning "could not release contention row barrier: $($_.Exception.Message)"
       }
     }
-  )
-  if ($backendPodsAtClaim.Count -ne 2) {
-    throw "contention boundary observed $($backendPodsAtClaim.Count) running backend replicas; expected 2"
-  }
-  $stateAtBoundary = Get-WorkflowState $Fixture.RunId
-  if ($stateAtBoundary.CurrentStep -ne $targetStep -or
-      $stateAtBoundary.StepStatus -ne "RUNNING" -or
-      $stateAtBoundary.ExecutionToken -ne $claim.Token -or
-      $stateAtBoundary.AttemptCount -ne "1") {
-    throw "contention boundary moved past the captured claim: cursor='$($stateAtBoundary.CurrentStep)' stepStatus='$($stateAtBoundary.StepStatus)' token='$($stateAtBoundary.ExecutionToken)' attempt='$($stateAtBoundary.AttemptCount)'"
-  }
-  $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
-  $preState = Get-ScenarioDbSnapshot $Fixture
-  $preStateObject = $preState | ConvertFrom-Json
-  $preStep = @($preStateObject.steps | Where-Object { $_.step_name -eq $targetStep }) | Select-Object -First 1
-  if ($null -eq $preStep -or
-      $preStateObject.workflow.current_step -ne $targetStep -or
-      $preStep.status -ne "RUNNING" -or
-      $preStep.execution_token -ne $claim.Token -or
-      $preStep.attempt_count -ne 1) {
-    throw "contention PostgreSQL pre-state did not preserve the live authoritative claim"
-  }
-  $preLogs = Get-SafePodLogText $boundaryPod $Fixture
-  $podUid = Get-PodUid $boundaryPod
-  $terminal = Wait-WorkflowTerminal $Fixture.RunId
-  Wait-DeploymentReady "learning-platform" 0 "learning-platform"
-  Set-BackendFault $false "" "" "" 120000
-  Wait-DeploymentReady "learning-platform" 2 "learning-platform"
-  $postState = Get-ScenarioDbSnapshot $Fixture
-  [pscustomobject]@{
-    Pod = $boundaryPod
-    PodUid = $podUid
-    ReplacementPod = ""
-    ReplacementPodUid = ""
-    DeletedObservedAtUtc = ""
-    Deletion = $null
-    PreState = $preState
-    PostState = $postState
-    PreDeletionLogs = $preLogs
-    Perturbation = [ordered]@{
-      type = "two-replica-workflow-contention"
-      boundary = "WORKFLOW_AFTER_CLAIM"
-      targetStep = "RECORD_EVALUATION_EVIDENCE"
-      ownerPod = $boundaryPod
-      ownerPodUid = $podUid
-      competingReplicas = 2
-    }
-    OldToken = $claim.Token
-    OldAttempt = $claim.AttemptCount
-    CompetingPods = $backendPodsAtClaim
-    Terminal = $terminal
-    CursorHistory = @($boundaryCursor) + @($terminal.History)
-    StaleOutboxId = ""
-    StaleOutboxOwner = ""
   }
 }
 
@@ -1038,6 +1343,33 @@ FROM run;
   }
 }
 
+function Assert-ContentionProof {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)]$Crash
+  )
+  [void](Assert-ContentionClaimAttemptEvidence `
+      $Crash.ClaimAttempts $Fixture.RunId "RECORD_EVALUATION_EVIDENCE" $Crash.PodUid $Crash.OldToken)
+
+  $after = ([string]$Crash.PostClaimProof) | ConvertFrom-Json
+  Assert-Equal "contention after-claim run" ([string]$after.runId) $Fixture.RunId
+  Assert-Equal "contention after-claim step" ([string]$after.step) "RECORD_EVALUATION_EVIDENCE"
+  Assert-Equal "contention after-claim status" ([string]$after.stepStatus) "RUNNING"
+  Assert-Equal "contention after-claim attempt" ([string]$after.attemptCount) "1"
+  Assert-Equal "contention after-claim token" ([string]$after.executionToken) $Crash.OldToken
+  Assert-Equal "contention after-claim evidence" ([string]$after.authoritativeEvidenceCount) "0"
+  Assert-Equal "contention after-claim mastery" ([string]$after.masterySnapshotCount) "0"
+
+  $final = ([string]$Crash.FinalClaimProof) | ConvertFrom-Json
+  Assert-Equal "contention final run" ([string]$final.runId) $Fixture.RunId
+  Assert-Equal "contention final step" ([string]$final.step) "RECORD_EVALUATION_EVIDENCE"
+  Assert-Equal "contention final attempt" ([string]$final.attemptCount) "1"
+  Assert-Equal "contention final evidence" ([string]$final.authoritativeEvidenceCount) "1"
+  Assert-Equal "contention final mastery" ([string]$final.masterySnapshotCount) "1"
+  Assert-Equal "contention final diagnostic execution" ([string]$final.diagnosticExecutionCount) "1"
+  Assert-Equal "contention final adaptation outbox" ([string]$final.adaptationOutboxCount) "1"
+}
+
 function Assert-CursorHistory {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -1110,6 +1442,14 @@ function Capture-ScenarioEvidence {
   Write-StateJson (Join-Path $directory "pre-state.json") ([string]$Crash.PreState)
   Write-StateJson (Join-Path $directory "post-state.json") ([string]$Crash.PostState)
   $Crash.PreDeletionLogs | Out-File -LiteralPath (Join-Path $directory "deleted-pod-correlation.log") -Encoding utf8
+  if ($null -ne $Crash.ClaimAttempts) {
+    @($Crash.ClaimAttempts) | ConvertTo-Json -Depth 30 |
+      Set-Content -LiteralPath (Join-Path $directory "claim-attempts.json") -Encoding utf8
+    $Crash.ClaimBarrier | ConvertTo-Json -Depth 40 |
+      Set-Content -LiteralPath (Join-Path $directory "claim-barrier.json") -Encoding utf8
+    Write-StateJson (Join-Path $directory "postgres-claim-after.json") ([string]$Crash.PostClaimProof)
+    Write-StateJson (Join-Path $directory "postgres-claim-final.json") ([string]$Crash.FinalClaimProof)
+  }
 
   $correlations = [ordered]@{
     requestId = $Fixture.EvaluationRequestId
@@ -1168,6 +1508,16 @@ function Capture-ScenarioEvidence {
       staleWorkflowCas = $Assertions.StaleWorkflowCas
       staleOutboxCas = $Assertions.StaleOutboxCas
     }
+    claimAttempts = if ($null -eq $Crash.ClaimAttempts) { @() } else { @($Crash.ClaimAttempts) }
+    claimInstrumentation = if ($null -eq $Crash.ClaimAttempts) {
+      $null
+    } else {
+      [ordered]@{
+        barrier = "claim-barrier.json"
+        postgresAfterClaim = "postgres-claim-after.json"
+        postgresFinal = "postgres-claim-final.json"
+      }
+    }
     workflowCursor = [ordered]@{
       history = "cursor-history.log"
       final = $Crash.Terminal.State
@@ -1210,6 +1560,15 @@ function Run-Scenario {
     claim = "reclaimable with bounded attempt count"
     workflowCursor = "monotonic"
     provenance = "requestId/interactionId/traceId/decisionId/AI provenance reconstructable"
+  }
+  if ($Name -eq "contention") {
+    $expectedInvariant.contentionClaimProof = [ordered]@{
+      distinctBackendPodUids = 2
+      distinctPostgresClaimSessions = 2
+      claimCasWon = 1
+      claimCasLost = 1
+      authoritativeExecutionTokens = 1
+    }
   }
 
   switch ($Name) {
@@ -1294,10 +1653,6 @@ function Run-Scenario {
       $crash = Invoke-AdaptationCommissionCrash $fixture
     }
     "contention" {
-      Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
-      Wait-DeploymentReady "learning-platform" 0 "learning-platform"
-      Set-BackendFault $true "WORKFLOW_AFTER_CLAIM" $fixture.RunId "" 5000
-      Seed-ScenarioFixture $fixture
       $targetStep = "RECORD_EVALUATION_EVIDENCE"
       $expectedTargetAttempt = 1
       $crash = Invoke-Contention $fixture
@@ -1306,6 +1661,9 @@ function Run-Scenario {
 
   $assertions = Assert-Scenario $fixture $Name $targetStep $expectedTargetAttempt `
     $expectedFailure $expectedAdaptation $expectedAdaptationAbandoned $crash
+  if ($Name -eq "contention") {
+    Assert-ContentionProof $fixture $crash
+  }
   $history = @($crash.CursorHistory)
   if ($history.Count -eq 0) {
     $history = @($crash.Terminal.History)

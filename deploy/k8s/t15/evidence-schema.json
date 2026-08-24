@@ -134,6 +134,72 @@
         }
       }
     },
+    "contentionClaimAttempt": {
+      "type": "object",
+      "required": [
+        "podUid",
+        "runId",
+        "step",
+        "claimAttempt",
+        "result"
+      ],
+      "properties": {
+        "podUid": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "podName": {
+          "type": "string"
+        },
+        "runId": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "step": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "claimAttempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "result": {
+          "enum": ["WON", "LOST"]
+        },
+        "executionToken": {
+          "type": ["string", "null"]
+        },
+        "backendPid": {
+          "type": "string"
+        },
+        "clientIp": {
+          "type": "string"
+        },
+        "observedAtUtc": {
+          "type": "string"
+        },
+        "waitEventType": {
+          "type": "string"
+        },
+        "waitEvent": {
+          "type": "string"
+        },
+        "claimSql": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "WON"
+              }
+            }
+          },
+          "then": {
+            "required": ["executionToken"]
+          }
+        }
+      ]
+    },
     "candidateIntegrity": {
       "type": "object",
       "required": [
@@ -390,6 +456,15 @@
             }
           }
         },
+        "claimAttempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contentionClaimAttempt"
+          }
+        },
+        "claimInstrumentation": {
+          "type": ["object", "null"]
+        },
         "workflowCursor": {
           "type": "object",
           "required": ["history", "final"],
@@ -441,7 +516,30 @@
         "observedInvariant": {
           "type": "object"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "scenarioId": {
+                "const": "contention"
+              }
+            }
+          },
+          "then": {
+            "required": ["claimAttempts", "claimInstrumentation"],
+            "properties": {
+              "claimAttempts": {
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "claimInstrumentation": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }
