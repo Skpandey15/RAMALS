@@ -260,14 +260,65 @@ parameters. That was adequate for a component with no caller and inadequate the 
 a caller could restate the outcome and assert an acceptance the gate never gave. It now accepts only
 the evaluation request identity and reads the frozen decision projection.
 
-*Status: CLOSED — implemented by the authoritative trigger and V034 target binding below.*
+*Status: CLOSED — after the PostgreSQL authority proof recorded below; implemented by the
+authoritative trigger and V034 target binding.*
 
 **2. A deterministic, versioned rubric → normalized evaluation-evidence policy must be defined and
 tested** before an evaluation may affect authoritative mastery. Before this prerequisite was closed,
 the score was supplied by the caller and only range-checked. Evidence that feeds mastery now uses
 the frozen `EVALUATION_SCORE_POLICY_V1` derivation, covered by `EngineVersionFreezeTests`.
 
-*Status: CLOSED — implemented by the frozen `EVALUATION_SCORE_POLICY_V1` below.*
+*Status: CLOSED — after the PostgreSQL persistence proof recorded below; implemented by the frozen
+`EVALUATION_SCORE_POLICY_V1` below.*
+
+### Prerequisites 1/2 — adversarial authority proof
+
+The target binding is now proven at the persistence boundary, not just by caller discipline. For a
+target-bearing decision, both Java and V034 use existence semantics. The authoritative predicate is
+the same in each layer:
+
+```sql
+JOIN core.assessment_response answer_response
+  ON answer_response.id::text = NEW.answer_evidence_id
+ AND answer_response.attempt_id = attempt.id
+JOIN core.assessment_item_version answer_item
+  ON answer_item.id = answer_response.item_version_id
+ AND answer_item.assessment_version_id = NEW.assessment_version_id
+ AND answer_item.skill_id = NEW.skill_id
+```
+
+The surrounding joins bind `attempt` to `NEW.learner_id` and `NEW.assessment_version_id`, bind the
+assessment version and skill version to `NEW.curriculum_version_id`, and require the grounding row
+for `NEW.context_id` and learner to contain the exact
+`ASSESSMENT:<answer_evidence_id>:<answer_version>` source reference. The target-item join is an
+`EXISTS` witness only; it does not require one assessment item per skill. Consequently, the
+persisted `EvaluationTarget.attemptId` is the owning attempt of the evaluated immutable response,
+not merely any structurally valid sibling attempt.
+
+`GroundingPersistenceIntegrationTests.targetValidationUsesExistenceAndBindsAnswerToItsOwningAttempt`
+is the PostgreSQL regression. It creates two items for the same skill, two attempts for the same
+learner and assessment version, and an evaluated response on attempt A. A target for A persists and
+the persisted decision is joined back to that response's owning attempt. A target for sibling
+attempt B is rejected by the Java repository, then rejected again by V034 through a direct SQL
+insert that bypasses the Java guard; the direct path leaves no decision row. This is the required
+two-attempt adversarial case, and the duplicate-skill assertion proves the old `count(*) = 1`
+false-negative is gone.
+
+The V034 early return for an all-null target and score projection remains unchanged, so rows written
+by the rollback image remain insertable. Any new target-bearing row must satisfy the response,
+attempt, item, version, skill, grounding, and frozen score-policy predicates. `EvaluationTrigger`
+remains request-ID-only and no production caller was added.
+
+Both protections were deliberately perturbed and restored against PostgreSQL:
+
+| Perturbation | Observed failure |
+| --- | --- |
+| Java `EXISTS` changed back to `count(*) = 1` | The valid two-items/one-skill persistence regression failed. |
+| Java response-to-attempt join removed | The Java cross-attempt assertion failed because the invalid target was no longer rejected at the Java boundary. |
+| V034 response-to-attempt join removed | The direct SQL cross-attempt insert succeeded, so the test's required zero-row assertion failed. |
+
+The guarded implementation was restored before the final PostgreSQL runs. Only after those runs
+passed were prerequisites 1 and 2 recorded as CLOSED.
 
 **3. Abandoned-claim recovery and effect→workflow-marker atomicity must be implemented and
 crash-qualified.** The execution token added during remediation guarantees concurrency and

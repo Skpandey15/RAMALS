@@ -7,6 +7,12 @@
 -- therefore permits an all-null legacy row, while enforcing completeness and parentage whenever the
 -- new application supplies target or score metadata. The application boundary refuses to trigger a
 -- workflow from a legacy accepted row that has no frozen target.
+--
+-- For a target-bearing row, answer_evidence_id is the textual identity of the immutable
+-- core.assessment_response row that was evaluated. The response-to-attempt and response-to-item
+-- joins below are the authority proof: a structurally valid attempt cannot be substituted for the
+-- attempt that owns the evaluated answer. The grounded context must also contain that exact answer
+-- source identity, using JdbcGroundingRetrievalRepository's canonical source-ref format.
 
 ALTER TABLE ledger.assessment_evaluation_decision
   ADD COLUMN learner_id UUID REFERENCES core.learner(id) ON DELETE RESTRICT,
@@ -63,17 +69,26 @@ BEGIN
         ON attempt.id = NEW.attempt_id
        AND attempt.learner_id = NEW.learner_id
        AND attempt.assessment_version_id = NEW.assessment_version_id
+      JOIN core.assessment_response answer_response
+        ON answer_response.id::text = NEW.answer_evidence_id
+       AND answer_response.attempt_id = attempt.id
+      JOIN core.assessment_item_version answer_item
+        ON answer_item.id = answer_response.item_version_id
+       AND answer_item.assessment_version_id = NEW.assessment_version_id
+       AND answer_item.skill_id = NEW.skill_id
+      JOIN core.assessment_item_version target_item
+        ON target_item.assessment_version_id = NEW.assessment_version_id
+       AND target_item.skill_id = NEW.skill_id
       JOIN core.assessment_version assessment_version
         ON assessment_version.id = NEW.assessment_version_id
        AND assessment_version.curriculum_version_id = NEW.curriculum_version_id
-      JOIN core.assessment_item_version assessment_item
-        ON assessment_item.assessment_version_id = NEW.assessment_version_id
-       AND assessment_item.skill_id = NEW.skill_id
       JOIN core.skill_version skill_version
         ON skill_version.skill_id = NEW.skill_id
        AND skill_version.curriculum_version_id = NEW.curriculum_version_id
      WHERE grounding.context_id = NEW.context_id
        AND grounding.learner_id = NEW.learner_id
+       AND grounding.source_refs @> jsonb_build_array(
+             'ASSESSMENT:' || NEW.answer_evidence_id || ':' || NEW.answer_version)
   ) THEN
     RAISE EXCEPTION 'assessment evaluation target does not match authoritative facts'
       USING ERRCODE = '23514';

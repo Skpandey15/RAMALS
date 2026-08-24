@@ -74,6 +74,8 @@ class GroundingPersistenceIntegrationTests {
       UUID.fromString("01900000-0000-7000-8000-000000000101");
   private static final UUID ASSESSMENT =
       UUID.fromString("01900000-0000-7000-8000-000000000402");
+  private static final UUID ASSESSMENT_ITEM =
+      UUID.fromString("01900000-0000-7000-8000-000000000411");
   private static String databaseUrl;
 
   @BeforeAll
@@ -259,6 +261,7 @@ class GroundingPersistenceIntegrationTests {
     String contextId = "evaluation-context-1";
     UUID executionId = UUID.randomUUID();
     UUID attemptId = UUID.randomUUID();
+    UUID answerResponseId = UUID.randomUUID();
 
     jdbc.update(
         """
@@ -270,7 +273,8 @@ class GroundingPersistenceIntegrationTests {
         """,
         contextId,
         learnerId,
-        "[\"answer-evidence-1\",\"rubric-evidence-1\"]");
+        "[\"ASSESSMENT:" + answerResponseId + ":answer-v1\","
+            + "\"ASSESSMENT:rubric-evidence-1:rubric-v1\"]");
     jdbc.update(
         """
         INSERT INTO core.ai_execution
@@ -291,12 +295,24 @@ class GroundingPersistenceIntegrationTests {
         """
         INSERT INTO core.assessment_attempt
           (id, learner_id, assessment_version_id, status, idempotency_key)
-        VALUES (?, ?, ?, 'COMPLETED', ?)
+        VALUES (?, ?, ?, 'IN_PROGRESS', ?)
         """,
         attemptId,
         learnerId,
         ASSESSMENT,
         "evaluation-gate-" + attemptId);
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_response
+          (id, attempt_id, item_version_id, response_jsonb, is_correct)
+        VALUES (?, ?, ?, '{"answer":"B"}'::jsonb, true)
+        """,
+        answerResponseId,
+        attemptId,
+        ASSESSMENT_ITEM);
+    jdbc.update(
+        "UPDATE core.assessment_attempt SET status = 'COMPLETED' WHERE id = ?",
+        attemptId);
 
     int evidenceBefore = jdbc.queryForObject("SELECT count(*) FROM ledger.evidence", Integer.class);
     int masteryBefore =
@@ -305,14 +321,14 @@ class GroundingPersistenceIntegrationTests {
         new Decision(
             Outcome.ACCEPTED,
             List.of(Reason.ACCEPTED),
-            Set.of("answer-evidence-1", "rubric-evidence-1"),
+            Set.of(answerResponseId.toString(), "rubric-evidence-1"),
             List.of(
                 new DimensionResult(
                     "accuracy",
                     new BigDecimal("3"),
                     new BigDecimal("4"),
                     "Grounded against the approved accuracy rubric.",
-                    Set.of("answer-evidence-1", "rubric-evidence-1"))),
+                    Set.of(answerResponseId.toString(), "rubric-evidence-1"))),
             "The answer is mostly accurate.",
             new BigDecimal("0.8500"),
             DeterministicCheck.notApplicable());
@@ -322,7 +338,7 @@ class GroundingPersistenceIntegrationTests {
             requestId,
             agentRunId,
             contextId,
-            "answer-evidence-1",
+            answerResponseId.toString(),
             "answer-v1",
             "rubric-v1",
             "evaluation-interaction-1",
@@ -391,7 +407,7 @@ class GroundingPersistenceIntegrationTests {
                 requestId))
         .containsEntry("request_id", requestId)
         .containsEntry("agent_run_id", agentRunId)
-        .containsEntry("answer_evidence_id", "answer-evidence-1")
+        .containsEntry("answer_evidence_id", answerResponseId.toString())
         .containsEntry("answer_version", "answer-v1")
         .containsEntry("rubric_version", "rubric-v1")
         .containsEntry("outcome", "ACCEPTED")
@@ -656,7 +672,138 @@ class GroundingPersistenceIntegrationTests {
             jdbc.queryForObject(
                 "SELECT count(*) FROM ledger.assessment_evaluation_decision WHERE request_id = ?",
                 Integer.class,
-                mismatchedRequest))
+        mismatchedRequest))
+        .isZero();
+  }
+
+  @Test
+  void targetValidationUsesExistenceAndBindsAnswerToItsOwningAttempt() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    UUID learnerId = new LearnerRepository(jdbc).provisionForSubject(
+        "evaluation-target-authority").id();
+    AssessmentTargetFixture assessment = assessmentWithTwoItemsForSkill(jdbc);
+    AttemptResponseFixture attemptA = completedAttemptWithResponse(
+        jdbc, learnerId, assessment.assessmentVersionId(), assessment.firstItemId(), "target-a");
+    AttemptResponseFixture attemptB = completedAttemptWithResponse(
+        jdbc, learnerId, assessment.assessmentVersionId(), assessment.secondItemId(), "target-b");
+    String answerVersion = "answer-v1";
+    String contextId = "evaluation-target-authority-context";
+    insertGroundingRecord(jdbc, contextId, learnerId, attemptA.responseId(), answerVersion);
+
+    String requestA = "evaluation-target-authority-a";
+    String runA = "evaluation-target-authority-run-a";
+    UUID executionA = insertAssessmentExecution(jdbc, requestA, runA,
+        "evaluation-target-authority-interaction-a");
+    String answerEvidenceId = attemptA.responseId().toString();
+    Decision accepted =
+        new Decision(
+            Outcome.ACCEPTED,
+            List.of(Reason.ACCEPTED),
+            Set.of(answerEvidenceId),
+            List.of(
+                new DimensionResult(
+                    "accuracy",
+                    new BigDecimal("3"),
+                    new BigDecimal("4"),
+                    "Grounded against the answer.",
+                    Set.of(answerEvidenceId))),
+            "The answer is mostly accurate.",
+            new BigDecimal("0.8500"),
+            DeterministicCheck.notApplicable());
+    EvaluationTarget targetA = new EvaluationTarget(
+        learnerId, SKILL, CURRICULUM, attemptA.attemptId(), assessment.assessmentVersionId());
+    EvaluationDecisionRecord recordA =
+        new EvaluationDecisionRecord(
+            "evaluation-target-authority-proposal-a",
+            requestA,
+            runA,
+            contextId,
+            answerEvidenceId,
+            answerVersion,
+            "rubric-v1",
+            "evaluation-target-authority-interaction-a",
+            "evaluation-target-authority-trace-a",
+            accepted,
+            null,
+            targetA);
+    JdbcAssessmentEvaluationDecisionRepository repository =
+        new JdbcAssessmentEvaluationDecisionRepository(jdbc);
+
+    // Two assessment items deliberately share SKILL. The old Java count(*) query saw two matches;
+    // the existence query must accept the one valid target.
+    assertThat(jdbc.queryForObject(
+        "SELECT count(*) FROM core.assessment_item_version "
+            + "WHERE assessment_version_id = ? AND skill_id = ?",
+        Integer.class,
+        assessment.assessmentVersionId(),
+        SKILL)).isEqualTo(2);
+    repository.append(recordA);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                SELECT decision.attempt_id AS decision_attempt_id,
+                       decision.answer_evidence_id,
+                       answer_response.id AS answer_response_id,
+                       answer_response.attempt_id AS answer_attempt_id
+                  FROM ledger.assessment_evaluation_decision decision
+                  JOIN core.assessment_response answer_response
+                    ON answer_response.id::text = decision.answer_evidence_id
+                 WHERE decision.request_id = ?
+                """,
+                requestA))
+        .containsEntry("decision_attempt_id", attemptA.attemptId())
+        .containsEntry("answer_evidence_id", answerEvidenceId)
+        .containsEntry("answer_response_id", attemptA.responseId())
+        .containsEntry("answer_attempt_id", attemptA.attemptId());
+
+    String requestB = "evaluation-target-authority-b";
+    String runB = "evaluation-target-authority-run-b";
+    insertAssessmentExecution(jdbc, requestB, runB,
+        "evaluation-target-authority-interaction-b");
+    EvaluationDecisionRecord wrongJavaTarget =
+        new EvaluationDecisionRecord(
+            "evaluation-target-authority-proposal-b",
+            requestB,
+            runB,
+            contextId,
+            answerEvidenceId,
+            answerVersion,
+            "rubric-v1",
+            "evaluation-target-authority-interaction-b",
+            "evaluation-target-authority-trace-b",
+            accepted,
+            null,
+            new EvaluationTarget(
+                learnerId, SKILL, CURRICULUM, attemptB.attemptId(), assessment.assessmentVersionId()));
+    assertThatThrownBy(() -> repository.append(wrongJavaTarget))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("evaluation target does not match authoritative assessment facts");
+
+    // Bypass the Java repository guard: V034 must reject the same cross-attempt substitution at the
+    // database boundary. Attempt B is a valid sibling attempt and has its own response; only the
+    // answer response A / target attempt B pairing is invalid.
+    String requestC = "evaluation-target-authority-c";
+    String runC = "evaluation-target-authority-run-c";
+    UUID executionC = insertAssessmentExecution(jdbc, requestC, runC,
+        "evaluation-target-authority-interaction-c");
+    assertThatThrownBy(
+            () ->
+                insertAcceptedDecisionDirect(
+                    jdbc,
+                    requestC,
+                    runC,
+                    executionC,
+                    contextId,
+                    answerEvidenceId,
+                    learnerId,
+                    attemptB.attemptId(),
+                    assessment.assessmentVersionId()))
+        .isInstanceOf(DataAccessException.class);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.assessment_evaluation_decision WHERE request_id = ?",
+                Integer.class,
+                requestC))
         .isZero();
   }
 
@@ -815,6 +962,180 @@ class GroundingPersistenceIntegrationTests {
           .containsEntry("trace_id", null);
     }
   }
+
+  private static AssessmentTargetFixture assessmentWithTwoItemsForSkill(JdbcTemplate jdbc) {
+    UUID assessmentVersionId = UUID.randomUUID();
+    UUID assessmentId =
+        jdbc.queryForObject(
+            "SELECT assessment_id FROM core.assessment_version WHERE id = ?",
+            UUID.class,
+            ASSESSMENT);
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_version
+          (id, assessment_id, curriculum_version_id, version_code)
+        VALUES (?, ?, ?, ?)
+        """,
+        assessmentVersionId,
+        assessmentId,
+        CURRICULUM,
+        "m2-t14-" + assessmentVersionId.toString().substring(0, 8));
+    UUID firstItemId = UUID.randomUUID();
+    UUID secondItemId = UUID.randomUUID();
+    insertVerifiedAssessmentItem(jdbc, assessmentVersionId, firstItemId,
+        "M2_T14_SAME_SKILL_A", 1);
+    insertVerifiedAssessmentItem(jdbc, assessmentVersionId, secondItemId,
+        "M2_T14_SAME_SKILL_B", 2);
+    jdbc.update(
+        "UPDATE core.assessment_version SET status = 'PUBLISHED' WHERE id = ?",
+        assessmentVersionId);
+    return new AssessmentTargetFixture(assessmentVersionId, firstItemId, secondItemId);
+  }
+
+  private static void insertVerifiedAssessmentItem(
+      JdbcTemplate jdbc,
+      UUID assessmentVersionId,
+      UUID itemId,
+      String itemCode,
+      int displayOrder) {
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_item_version
+          (id, assessment_version_id, skill_id, item_code, item_type, stem,
+           options_jsonb, answer_key_jsonb, difficulty, display_order,
+           trust_state, verified_by, verified_at)
+        VALUES (?, ?, ?, ?, 'SINGLE_CHOICE', 'Which answer is correct?',
+                '[{"id":"A","text":"First"},{"id":"B","text":"Second"}]'::jsonb,
+                '{"correct":["B"]}'::jsonb, 'FOUNDATIONAL', ?,
+                'VERIFIED_CONTENT', 'm2-t14-postgres-test', CURRENT_TIMESTAMP)
+        """,
+        itemId,
+        assessmentVersionId,
+        SKILL,
+        itemCode,
+        displayOrder);
+  }
+
+  private static AttemptResponseFixture completedAttemptWithResponse(
+      JdbcTemplate jdbc,
+      UUID learnerId,
+      UUID assessmentVersionId,
+      UUID itemId,
+      String label) {
+    UUID attemptId = UUID.randomUUID();
+    UUID responseId = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_attempt
+          (id, learner_id, assessment_version_id, status, idempotency_key)
+        VALUES (?, ?, ?, 'IN_PROGRESS', ?)
+        """,
+        attemptId,
+        learnerId,
+        assessmentVersionId,
+        "m2-t14-" + label + "-" + attemptId);
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_response
+          (id, attempt_id, item_version_id, response_jsonb, is_correct)
+        VALUES (?, ?, ?, '{"answer":"B"}'::jsonb, true)
+        """,
+        responseId,
+        attemptId,
+        itemId);
+    jdbc.update(
+        "UPDATE core.assessment_attempt SET status = 'COMPLETED' WHERE id = ?",
+        attemptId);
+    return new AttemptResponseFixture(attemptId, responseId);
+  }
+
+  private static void insertGroundingRecord(
+      JdbcTemplate jdbc, String contextId, UUID learnerId, UUID answerResponseId,
+      String answerVersion) {
+    jdbc.update(
+        """
+        INSERT INTO ledger.grounding_retrieval_record
+          (context_id, learner_id, retrieval_policy_version, as_of, expires_at,
+           source_refs, source_count)
+        VALUES (?, ?, 'EVALUATION_POLICY_V1', CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP + INTERVAL '10 minutes', CAST(? AS jsonb), 1)
+        """,
+        contextId,
+        learnerId,
+        "[\"ASSESSMENT:" + answerResponseId + ":" + answerVersion + "\"]");
+  }
+
+  private static UUID insertAssessmentExecution(
+      JdbcTemplate jdbc, String requestId, String agentRunId, String interactionId) {
+    UUID executionId = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+           agent_run_id, prompt_template_id, prompt_version, model_route, status,
+           request_digest, proposal_digest, started_at, completed_at)
+        VALUES (?, ?, ?, 'ASSESSMENT', '1.0', 'ASSESSMENT_EVALUATION_AGENT_V1', ?,
+                'ASSESSMENT_RUBRIC_EVALUATE', 'ASSESSMENT_RUBRIC_EVALUATE_V1', 'ci-fake',
+                'SUCCEEDED', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        executionId,
+        requestId,
+        interactionId,
+        agentRunId,
+        "a".repeat(64),
+        "b".repeat(64));
+    return executionId;
+  }
+
+  private static void insertAcceptedDecisionDirect(
+      JdbcTemplate jdbc,
+      String requestId,
+      String agentRunId,
+      UUID executionId,
+      String contextId,
+      String answerEvidenceId,
+      UUID learnerId,
+      UUID attemptId,
+      UUID assessmentVersionId) {
+    jdbc.update(
+        """
+        INSERT INTO ledger.assessment_evaluation_decision
+          (id, proposal_id, request_id, agent_run_id, ai_execution_id, context_id,
+           answer_evidence_id, answer_version, rubric_version, outcome, reason_codes,
+           referenced_evidence_ids, dimension_results, feedback, confidence, deterministic_check,
+           policy_version, decision_digest, interaction_id, trace_id,
+           learner_id, skill_id, curriculum_version_id, attempt_id, assessment_version_id,
+           normalized_score, score_policy_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'answer-v1', 'rubric-v1', 'ACCEPTED',
+                CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), 'Feedback.', 0.85,
+                'NOT_APPLICABLE', 'EVALUATION_GATE_V1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        UUID.randomUUID(),
+        "p-" + requestId,
+        requestId,
+        agentRunId,
+        executionId,
+        contextId,
+        answerEvidenceId,
+        "[\"ACCEPTED\"]",
+        "[\"" + answerEvidenceId + "\"]",
+        "[{\"dimensionId\":\"accuracy\",\"score\":3,\"maxScore\":4}]",
+        "c".repeat(64),
+        "interaction-" + requestId,
+        "trace-" + requestId,
+        learnerId,
+        SKILL,
+        CURRICULUM,
+        attemptId,
+        assessmentVersionId,
+        new BigDecimal("0.7500"),
+        "EVALUATION_SCORE_POLICY_V1");
+  }
+
+  private record AssessmentTargetFixture(
+      UUID assessmentVersionId, UUID firstItemId, UUID secondItemId) {}
+
+  private record AttemptResponseFixture(UUID attemptId, UUID responseId) {}
 
   private static Evidence appendEvidence(JdbcTemplate jdbc, UUID learnerId, String lineage) {
     UUID attempt = UUID.randomUUID();

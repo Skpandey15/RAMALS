@@ -197,10 +197,16 @@ class MigrationScriptContractTests {
         .contains("EVALUATION_SCORE_POLICY_V1")
         .contains("grounding.learner_id = NEW.learner_id")
         .contains("attempt.assessment_version_id = NEW.assessment_version_id")
+        .contains("answer_response.id::text = NEW.answer_evidence_id")
+        .contains("answer_response.attempt_id = attempt.id")
+        .contains("answer_item.id = answer_response.item_version_id")
+        .contains("answer_item.assessment_version_id = NEW.assessment_version_id")
+        .contains("answer_item.skill_id = NEW.skill_id")
+        .contains("target_item.assessment_version_id = NEW.assessment_version_id")
+        .contains("target_item.skill_id = NEW.skill_id")
         .contains("assessment_version.curriculum_version_id = NEW.curriculum_version_id")
-        .contains("assessment_item.assessment_version_id = NEW.assessment_version_id")
-        .contains("assessment_item.skill_id = NEW.skill_id")
         .contains("skill_version.curriculum_version_id = NEW.curriculum_version_id")
+        .contains("grounding.source_refs @> jsonb_build_array")
         .doesNotContain("UPDATE ledger.assessment_evaluation_decision");
   }
 

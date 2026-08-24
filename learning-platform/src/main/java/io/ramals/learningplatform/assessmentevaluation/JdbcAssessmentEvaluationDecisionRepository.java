@@ -235,43 +235,61 @@ public class JdbcAssessmentEvaluationDecisionRepository
 
   private void requireTargetMatchesAuthoritativeFacts(EvaluationDecisionRecord record) {
     EvaluationTarget target = record.target();
-    Integer matches =
+    Boolean matches =
         jdbc.queryForObject(
             """
-            SELECT count(*)
-              FROM ledger.grounding_retrieval_record grounding
-              JOIN core.assessment_attempt attempt
-                ON attempt.id = ?
-               AND attempt.learner_id = ?
-               AND attempt.assessment_version_id = ?
-              JOIN core.assessment_version assessment_version
-                ON assessment_version.id = ?
-               AND assessment_version.curriculum_version_id = ?
-              JOIN core.assessment_item_version assessment_item
-                ON assessment_item.assessment_version_id = ?
-               AND assessment_item.skill_id = ?
-              JOIN core.skill_version skill_version
-                ON skill_version.skill_id = ?
-               AND skill_version.curriculum_version_id = ?
-             WHERE grounding.context_id = ?
-               AND grounding.learner_id = ?
+            SELECT EXISTS (
+              SELECT 1
+                FROM ledger.grounding_retrieval_record grounding
+                JOIN core.assessment_attempt attempt
+                  ON attempt.id = ?
+                 AND attempt.learner_id = ?
+                 AND attempt.assessment_version_id = ?
+                JOIN core.assessment_response answer_response
+                  ON answer_response.id::text = ?
+                 AND answer_response.attempt_id = attempt.id
+                JOIN core.assessment_item_version answer_item
+                  ON answer_item.id = answer_response.item_version_id
+                 AND answer_item.assessment_version_id = ?
+                 AND answer_item.skill_id = ?
+                JOIN core.assessment_item_version target_item
+                  ON target_item.assessment_version_id = ?
+                 AND target_item.skill_id = ?
+                JOIN core.assessment_version assessment_version
+                  ON assessment_version.id = ?
+                 AND assessment_version.curriculum_version_id = ?
+                JOIN core.skill_version skill_version
+                  ON skill_version.skill_id = ?
+                 AND skill_version.curriculum_version_id = ?
+               WHERE grounding.context_id = ?
+                 AND grounding.learner_id = ?
+                 AND grounding.source_refs @> jsonb_build_array(?)
+            )
             """,
-            Integer.class,
+            Boolean.class,
             target.attemptId(),
             target.learnerId(),
             target.assessmentVersionId(),
-            target.assessmentVersionId(),
-            target.curriculumVersionId(),
+            record.answerEvidenceId(),
             target.assessmentVersionId(),
             target.skillId(),
+            target.assessmentVersionId(),
+            target.skillId(),
+            target.assessmentVersionId(),
+            target.curriculumVersionId(),
             target.skillId(),
             target.curriculumVersionId(),
             record.contextId(),
-            target.learnerId());
-    if (matches == null || matches != 1) {
+            target.learnerId(),
+            assessmentAnswerSourceRef(record));
+    if (!Boolean.TRUE.equals(matches)) {
       throw new IllegalArgumentException(
           "evaluation target does not match authoritative assessment facts");
     }
+  }
+
+  private static String assessmentAnswerSourceRef(EvaluationDecisionRecord record) {
+    return "ASSESSMENT:" + record.answerEvidenceId() + ":" + record.answerVersion();
   }
 
   private static AcceptedEvaluationDecision acceptedDecision(ResultSet result, int row)

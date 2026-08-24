@@ -54,6 +54,8 @@ class LearningWorkflowConcurrencyIntegrationTests {
   private static final UUID CURRICULUM = UUID.fromString("01900000-0000-7000-8000-000000000002");
   private static final UUID SKILL = UUID.fromString("01900000-0000-7000-8000-000000000101");
   private static final UUID ASSESSMENT = UUID.fromString("01900000-0000-7000-8000-000000000402");
+  private static final UUID ASSESSMENT_ITEM =
+      UUID.fromString("01900000-0000-7000-8000-000000000411");
   private static String databaseUrl;
 
   @BeforeAll
@@ -1007,6 +1009,11 @@ class LearningWorkflowConcurrencyIntegrationTests {
   private void seedEvaluationDecision(
       JdbcTemplate jdbc, UUID learnerId, String requestId, UUID attemptId) {
     String contextId = "ctx-" + requestId;
+    String answerEvidenceId =
+        jdbc.queryForObject(
+            "SELECT id::text FROM core.assessment_response WHERE attempt_id = ?",
+            String.class,
+            attemptId);
     jdbc.update(
         """
         INSERT INTO ledger.grounding_retrieval_record
@@ -1017,7 +1024,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
         """,
         contextId,
         learnerId,
-        "[\"answer-evidence\"]");
+        "[\"ASSESSMENT:" + answerEvidenceId + ":answer-v1\"]");
     UUID executionId = UUID.randomUUID();
     jdbc.update(
         """
@@ -1044,7 +1051,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
            policy_version, decision_digest, interaction_id, trace_id,
            learner_id, skill_id, curriculum_version_id, attempt_id, assessment_version_id,
            normalized_score, score_policy_version)
-        VALUES (?, ?, ?, ?, ?, ?, 'answer-evidence', 'answer-v1', 'rubric-v1', 'ACCEPTED',
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'answer-v1', 'rubric-v1', 'ACCEPTED',
                 CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), 'Feedback.', 0.85,
                 'NOT_APPLICABLE', 'EVALUATION_GATE_V1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
@@ -1054,8 +1061,9 @@ class LearningWorkflowConcurrencyIntegrationTests {
         "run-" + requestId,
         executionId,
         contextId,
+        answerEvidenceId,
         "[\"ACCEPTED\"]",
-        "[\"answer-evidence\"]",
+        "[\"" + answerEvidenceId + "\"]",
         // An ACCEPTED decision must carry rubric results; ck_assessment_evaluation_parsed_result
         // refuses an empty array, which is the M2-T12 constraint doing its job.
         "[{\"dimensionId\":\"accuracy\",\"score\":3,\"maxScore\":4}]",
@@ -1077,12 +1085,24 @@ class LearningWorkflowConcurrencyIntegrationTests {
         """
         INSERT INTO core.assessment_attempt
           (id, learner_id, assessment_version_id, status, idempotency_key)
-        VALUES (?, ?, ?, 'COMPLETED', ?)
+        VALUES (?, ?, ?, 'IN_PROGRESS', ?)
         """,
         attemptId,
         learnerId,
         ASSESSMENT,
         "wf-" + attemptId);
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_response
+          (id, attempt_id, item_version_id, response_jsonb, is_correct)
+        VALUES (?, ?, ?, '{"answer":"B"}'::jsonb, true)
+        """,
+        UUID.randomUUID(),
+        attemptId,
+        ASSESSMENT_ITEM);
+    jdbc.update(
+        "UPDATE core.assessment_attempt SET status = 'COMPLETED' WHERE id = ?",
+        attemptId);
     return attemptId;
   }
 
