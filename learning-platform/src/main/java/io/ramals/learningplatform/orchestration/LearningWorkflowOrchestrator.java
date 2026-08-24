@@ -12,6 +12,7 @@ import io.ramals.learningplatform.orchestration.LearningWorkflow.StepClaim;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.StepRun;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.StepStatus;
 import io.ramals.learningplatform.orchestration.LearningWorkflowPolicy.Eligibility;
+import io.ramals.learningplatform.qualification.QualificationFault;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.Locale;
@@ -167,6 +168,10 @@ public class LearningWorkflowOrchestrator {
     }
 
     StepClaim claim = claimed.orElseThrow();
+    QualificationFault.pause(
+        QualificationFault.Window.WORKFLOW_AFTER_CLAIM,
+        claim.runId().toString(),
+        null);
     try {
       if (step.remoteCall()) {
         // The provider call runs with no transaction open -- a connection held across it would be
@@ -178,7 +183,12 @@ public class LearningWorkflowOrchestrator {
         // Effect, step completion and cursor advance commit as one. A process that dies here leaves
         // either all of it or none of it, so the workflow can never lose sight of an authoritative
         // write it already made.
-        unitOfWork.inOneTransaction(() -> apply(run, claim, execute(run, step)));
+        unitOfWork.inOneTransaction(
+            () -> {
+              StepOutcome outcome = execute(run, step);
+              QualificationFault.pause(effectWindow(step), run.id().toString(), null);
+              apply(run, claim, outcome);
+            });
       }
     } catch (RuntimeException failure) {
       LOGGER
@@ -193,6 +203,15 @@ public class LearningWorkflowOrchestrator {
       releaseAfterFailure(run, claim);
     }
     return reload(runId);
+  }
+
+  private static QualificationFault.Window effectWindow(Step step) {
+    return switch (step) {
+      case RECORD_EVALUATION_EVIDENCE -> QualificationFault.Window.WORKFLOW_AFTER_EVIDENCE_EFFECT;
+      case RECOMPUTE_MASTERY -> QualificationFault.Window.WORKFLOW_AFTER_MASTERY_EFFECT;
+      case ADAPT -> QualificationFault.Window.WORKFLOW_AFTER_ADAPTATION_HANDOFF;
+      case DIAGNOSE -> throw new IllegalArgumentException("DIAGNOSE is a remote step");
+    };
   }
 
   /** Operator cancellation (G07). A cancelled run keeps whatever authoritative state it wrote. */

@@ -139,7 +139,12 @@ def _adapter_for(settings: Settings) -> ProviderAdapter:
     gateway path a provider call takes -- without a credential and without a bill.
     """
     if settings.model_route is ModelRoute.CI_FAKE:
-        return FakeProvider()
+        return FakeProvider(
+            qualification_fixtures=settings.qualification_fixtures,
+            qualification_provider_pause_enabled=settings.qualification_provider_pause_enabled,
+            qualification_provider_pause_request_id=settings.qualification_provider_pause_request_id,
+            qualification_provider_pause_ms=settings.qualification_provider_pause_ms,
+        )
 
     provider = LiteLLMProvider(api_key=settings.provider_api_key)
     # Checked at startup for the same reason the credential is (see Settings): a live route whose

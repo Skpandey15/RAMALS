@@ -84,18 +84,39 @@ public class AiExecutionRepository {
         jdbc.update(
             """
             INSERT INTO core.ai_execution
-              (id, request_id, interaction_id, agent_type, contract_version, status, error_code,
-               request_digest, started_at, completed_at)
+            (id, request_id, interaction_id, agent_type, contract_version, status, error_code,
+             request_digest, trace_id, started_at, completed_at)
             SELECT ?, event.request_id, event.interaction_id, event.agent_type,
-                   event.contract_version, 'FAILED', ?, event.request_digest,
+                   event.contract_version, 'FAILED', ?, event.request_digest, ?,
                    event.occurred_at, CURRENT_TIMESTAMP
               FROM core.ai_execution_event event
              WHERE event.request_id = ? AND event.event_type = 'STARTED'
-            ON CONFLICT (request_id) DO NOTHING
-            """,
+             ON CONFLICT (request_id) DO NOTHING
+             """,
             UuidV7.generate(),
             errorCode,
+            currentTraceId(),
             requestId);
+    if (closed != null && closed > 0) {
+      // Recovery is also part of the append-only lifecycle stream. Without this event a
+      // commissioned request would look terminal in ai_execution but would have no terminal event,
+      // making a real pod-death reconstruction internally inconsistent.
+      jdbc.update(
+          """
+          INSERT INTO core.ai_execution_event
+            (id, request_id, interaction_id, agent_type, contract_version, event_type,
+             error_code, request_digest, proposal_digest, occurred_at, started_at, completed_at)
+          SELECT ?, execution.request_id, execution.interaction_id, execution.agent_type,
+                 execution.contract_version, 'FAILED', execution.error_code,
+                 execution.request_digest, execution.proposal_digest, CURRENT_TIMESTAMP,
+                 execution.started_at, execution.completed_at
+            FROM core.ai_execution execution
+           WHERE execution.request_id = ? AND execution.status = 'FAILED'
+          ON CONFLICT (request_id, event_type) DO NOTHING
+          """,
+          UuidV7.generate(),
+          requestId);
+    }
     return closed != null && closed > 0;
   }
 
@@ -125,30 +146,41 @@ public class AiExecutionRepository {
       Object requestBody,
       String agentType) {
     String requestDigest = digest(requestBody);
-    try {
-      jdbc.update("""
-          INSERT INTO core.ai_execution_event
-            (id, request_id, interaction_id, agent_type, contract_version, event_type,
-             request_digest, occurred_at)
-          VALUES (?, ?, ?, ?, ?, 'STARTED', ?, CURRENT_TIMESTAMP)
-          """, UuidV7.generate(), requestId, interactionId, agentType,
-          contractVersion, requestDigest);
+    // ON CONFLICT is intentional rather than catching DuplicateKeyException. A duplicate-key
+    // error aborts the current PostgreSQL transaction; querying the existing STARTED event from
+    // that same transaction would then fail with SQLSTATE 25P02 under a real two-replica race.
+    int inserted = jdbc.update("""
+        INSERT INTO core.ai_execution_event
+          (id, request_id, interaction_id, agent_type, contract_version, event_type,
+           request_digest, occurred_at)
+        VALUES (?, ?, ?, ?, ?, 'STARTED', ?, CURRENT_TIMESTAMP)
+        ON CONFLICT (request_id, event_type) DO NOTHING
+        """, UuidV7.generate(), requestId, interactionId, agentType,
+        contractVersion, requestDigest);
+    if (inserted > 0) {
       return AiExecutionCommission.claimed();
-    } catch (DuplicateKeyException duplicate) {
-      ExecutionStart existing = jdbc.query("""
-          SELECT request_digest
-            FROM core.ai_execution_event
-           WHERE request_id = ? AND event_type = 'STARTED'
-          """, (r, n) -> new ExecutionStart(r.getString("request_digest")), requestId)
-          .stream().findFirst()
-          .orElseThrow(() -> new IllegalStateException("AI execution commission was not readable"));
-      if (!existing.requestDigest().equals(requestDigest)) {
-        throw new AiExecutionConflictException("requestId was reused with a different request digest");
-      }
-      return findByRequestId(requestId)
-          .map(AiExecutionCommission::existing)
-          .orElseGet(AiExecutionCommission::inProgress);
     }
+    // The existing-event read is deliberately kept after the conflict has been handled by
+    // PostgreSQL, so both the winner and the loser of the unique-key race observe the same
+    // durable commission state.
+    return existingCommission(requestId, requestDigest);
+  }
+
+  private AiExecutionCommission existingCommission(
+      String requestId, String requestDigest) {
+    ExecutionStart existing = jdbc.query("""
+        SELECT request_digest
+          FROM core.ai_execution_event
+         WHERE request_id = ? AND event_type = 'STARTED'
+        """, (r, n) -> new ExecutionStart(r.getString("request_digest")), requestId)
+        .stream().findFirst()
+        .orElseThrow(() -> new IllegalStateException("AI execution commission was not readable"));
+    if (!existing.requestDigest().equals(requestDigest)) {
+      throw new AiExecutionConflictException("requestId was reused with a different request digest");
+    }
+    return findByRequestId(requestId)
+        .map(AiExecutionCommission::existing)
+        .orElseGet(AiExecutionCommission::inProgress);
   }
 
   public AiExecution insertSuccess(AiRequestEnvelope request, AiProposalEnvelope proposal,
@@ -349,6 +381,12 @@ public class AiExecutionRepository {
   private static String traceId(String interactionId) {
     String traceId = MDC.get("traceId");
     return traceId == null || traceId.isBlank() ? interactionId : traceId;
+  }
+
+  /** Returns the actual distributed trace when recovery runs inside a correlated workflow pass. */
+  private static String currentTraceId() {
+    String traceId = MDC.get("traceId");
+    return traceId == null || traceId.isBlank() ? null : traceId;
   }
 
   private static Instant instant(ResultSet result, String column) throws SQLException {

@@ -22,10 +22,10 @@ resources:
 images:
   - name: qualification/learning-platform:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-learning-platform
-    digest: sha256:2fa272a9ea07fae6d8dd0f06dffc4664b0812a9091e778417b0abeee0f39feb8
+    digest: sha256:2c37abd7973ea62085700e5588fdd70bc783e991f808a25cea0363b6c1e3e0df
   - name: qualification/ramals-ai:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-ai
-    digest: sha256:10fbbe736ac7f5589315f589eddf124986689fb749c9896a9fc787f8d64f6186
+    digest: sha256:9af2b6ab6eb1ebe60df9b05ff754cdab43cd8a3835945b6b99b699026c9ed3f6
   - name: qualification/web-ui:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-web-ui
     digest: sha256:5bdb18e747d2a7cbe0029cd677fc91f71da31bd2c386f92bccbe099170f2e337

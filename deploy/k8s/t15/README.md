@@ -1,4 +1,4 @@
-# M2-T15.1 k3d qualification foundation
+# M2-T15.1/T15.2 k3d qualification environment
 
 This directory is the isolated Kubernetes qualification environment for M2-T15. It is not a
 production deployment and it does not activate a production trigger. Docker Compose remains the
@@ -78,10 +78,42 @@ image IDs, rollout output, events, and health responses under `evidence/<UTC-sta
 Evidence directories are ignored by Git. Do not copy Secret objects or decoded Secret data into
 evidence.
 
-The first T15 gate is still the T14 crash qualification. This foundation smoke is not that gate and
-does not close T14 activation prerequisite #3. The crash gate must still kill real processes/pods at
-the claim/effect/marker/cursor boundaries and verify the durable invariants before performance or
-security qualification begins.
+The foundation smoke is separate from the T14 crash gate. The real crash gate is recorded below and
+must remain separate from performance or security qualification.
+
+## M2-T15.2 real crash/pod-death qualification — PASS
+
+On 2026-08-24, `crash-qualification.ps1 -Scenario all` ran the ordered matrix against the
+digest-pinned topology. The final clean run is recorded in
+[`evidence/m2-t15.2-20260824T062227Z/SUMMARY.tsv`](evidence/m2-t15.2-20260824T062227Z/SUMMARY.tsv).
+The tested backend and AI image pins were respectively
+`sha256:2c37abd7973ea62085700e5588fdd70bc783e991f808a25cea0363b6c1e3e0df` and
+`sha256:9af2b6ab6eb1ebe60df9b05ff754cdab43cd8a3835945b6b99b699026c9ed3f6`.
+
+| Scenario | Fault boundary | Result |
+| --- | --- | --- |
+| `after-claim` | backend pod after workflow claim | `COMPLETED`; evidence step reclaimed at attempt 2 |
+| `after-evidence-effect` | backend pod after evidence effect | `COMPLETED`; evidence lineage remains single, attempt 2 |
+| `after-mastery-effect` | backend pod after mastery effect | `COMPLETED`; one snapshot at aggregate version 1, attempt 2 |
+| `diagnostic-commission` | backend pod after diagnostic commission | fail-closed `FAILED`; one commission, no duplicate dispatch |
+| `diagnostic-provider` | AI pod during diagnostic provider execution | fail-closed `FAILED`; one provider boundary/commission |
+| `diagnostic-outcome-commit` | backend pod after atomic execution + gate commit | `COMPLETED`; diagnostic step reclaimed at attempt 2 |
+| `adaptation-handoff` | backend pod around adaptation outbox handoff | `COMPLETED`; one outbox row, adaptation attempt 2 |
+| `adaptation-commission` | backend pod after adaptation commission | `COMPLETED`; outbox terminal abandonment at attempt 2, one failed execution |
+| `contention` | two backend replicas contend for one workflow | `COMPLETED`; one winner, all step attempts 1 |
+
+Every scenario asserted one evaluation evidence lineage, one mastery snapshot, monotonic aggregate
+version, one diagnostic execution with one `STARTED` and one terminal event, no duplicate adaptation
+outbox or execution, stale workflow-token rejection, and complete request/interaction/trace/provenance
+reconstruction. Cursor history includes the boundary observation and the recovered terminal state;
+the harness rejects any backwards step index. Stale outbox lease CAS also returned zero where an
+outbox lease was exercised.
+
+The qualification exposed and then closed a real PostgreSQL commission replay race: duplicate-key handling
+previously queried an aborted transaction (`25P02`) under concurrent adaptation recovery. Commission
+now uses `ON CONFLICT DO NOTHING` before reading the existing event, and the final rerun passed.
+The final namespace posture is two ready backend replicas, two ready AI replicas, zero pending or
+claimed outbox rows, and qualification faults disabled.
 
 ## Qualification-only fault coordination
 

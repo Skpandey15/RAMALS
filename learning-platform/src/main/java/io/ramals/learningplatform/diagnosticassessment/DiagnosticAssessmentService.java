@@ -15,6 +15,7 @@ import io.ramals.learningplatform.grounding.ProposalGateReason;
 import io.ramals.learningplatform.grounding.ProposalGateResult;
 import io.ramals.learningplatform.grounding.ProposalType;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
+import io.ramals.learningplatform.qualification.QualificationFault;
 import io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder;
 import java.time.Clock;
 import java.time.Instant;
@@ -114,6 +115,10 @@ public class DiagnosticAssessmentService {
           "AI_EXECUTION_ALREADY_COMMISSIONED",
           "This diagnostic assessment request has already been commissioned.");
     }
+    QualificationFault.pause(
+        QualificationFault.Window.WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION,
+        null,
+        requestId);
 
     Instant startedAt = clock.instant();
     AiProposalEnvelope envelope;
@@ -133,6 +138,10 @@ public class DiagnosticAssessmentService {
     // leave a window where a process death produces a SUCCEEDED execution with no decision, and that
     // state is unrecoverable: the ledger keeps a proposal digest, not the proposal.
     outcomes.commitSuccess(request, envelope, startedAt, completedAt, evaluation.decision());
+    QualificationFault.pause(
+        QualificationFault.Window.WORKFLOW_AFTER_DIAGNOSTIC_OUTCOME_COMMIT,
+        null,
+        requestId);
 
     logDecision(evaluation, interactionId, traceId);
     return evaluation.outcome();
