@@ -1,5 +1,7 @@
 [CmdletBinding()]
 param(
+  [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ApprovedCommit,
+  [string]$ApprovedRef = "origin/main",
   [ValidateSet(
     "all",
     "after-claim",
@@ -30,6 +32,7 @@ if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
 New-Item -ItemType Directory -Path $EvidenceRoot -Force | Out-Null
 
 $script:Summary = [System.Collections.Generic.List[string]]::new()
+$script:CandidateIdentity = $null
 $script:StepIndexes = @{
   "" = -1
   "RECORD_EVALUATION_EVIDENCE" = 0
@@ -45,6 +48,12 @@ function Invoke-Kubectl {
     throw "kubectl $($Arguments -join ' ') failed with exit code $LASTEXITCODE`n$($output -join "`n")"
   }
   return ($output -join "`n")
+}
+
+function Invoke-KubectlJson {
+  param([Parameter(Mandatory = $true)][string[]]$Arguments)
+  $text = Invoke-Kubectl ($Arguments + @("-o", "json"))
+  return $text | ConvertFrom-Json
 }
 
 function Invoke-Psql {
@@ -86,6 +95,31 @@ function Assert-Equal {
   if ($Actual -ne $Expected) {
     throw "$Label expected '$Expected' but was '$Actual'"
   }
+}
+
+function Invoke-CandidateIntegrityGate {
+  $gatePath = Join-Path $scriptRoot "candidate-integrity.ps1"
+  $output = & pwsh -NoProfile -File $gatePath `
+    -ApprovedCommit $ApprovedCommit `
+    -ApprovedRef $ApprovedRef `
+    -ClusterName $ClusterName `
+    -Namespace $Namespace `
+    -ManifestRoot $scriptRoot `
+    -LockPath (Join-Path $scriptRoot "images.lock.json") `
+    -EvidenceDirectory $EvidenceRoot 2>&1
+  $output | Set-Content -LiteralPath (Join-Path $EvidenceRoot "candidate-integrity-gate.log") -Encoding utf8
+  if ($LASTEXITCODE -ne 0) {
+    throw "candidate-integrity gate failed with exit code $LASTEXITCODE"
+  }
+  $resultPath = Join-Path $EvidenceRoot "candidate-integrity.json"
+  if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+    throw "candidate-integrity gate did not produce $resultPath"
+  }
+  $script:CandidateIdentity = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+  if ($script:CandidateIdentity.result -ne "PASS") {
+    throw "candidate-integrity gate result was '$($script:CandidateIdentity.result)'"
+  }
+  return $script:CandidateIdentity
 }
 
 function New-QualificationUuid7 {
@@ -450,12 +484,129 @@ function Get-PodUid {
   return (Invoke-Kubectl @("get", "pod", $Pod, "-n", $Namespace, "-o", "jsonpath={.metadata.uid}")).Trim()
 }
 
+function Wait-ReplacementPod {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string]$OldPodUid,
+    [int]$TimeoutSeconds = 180
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    foreach ($pod in @(Get-PodNames $Label)) {
+      $uid = Get-PodUid $pod
+      if ($uid -ne $OldPodUid) {
+        return [pscustomobject]@{ Name = $pod; Uid = $uid }
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  throw "no replacement pod appeared for $Label after deleting pod UID $OldPodUid"
+}
+
+function Get-ScenarioDbSnapshot {
+  param([Parameter(Mandatory = $true)]$Fixture)
+  return Get-Scalar @"
+SELECT jsonb_build_object(
+  'workflow', COALESCE((SELECT to_jsonb(r) FROM core.learning_workflow_run r WHERE r.id = '$($Fixture.RunId)'), '{}'::jsonb),
+  'steps', COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.step_index) FROM core.learning_workflow_step s WHERE s.run_id = '$($Fixture.RunId)'), '[]'::jsonb),
+  'evidence', COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.recorded_at, e.id) FROM ledger.evidence e WHERE e.learner_id = '$($Fixture.LearnerId)' AND e.interaction_id = '$($Fixture.InteractionId)'), '[]'::jsonb),
+  'mastery', COALESCE((SELECT jsonb_agg(to_jsonb(m) ORDER BY m.aggregate_version, m.id) FROM ledger.mastery_snapshot m WHERE m.learner_id = '$($Fixture.LearnerId)' AND m.skill_id = '$($Fixture.SkillId)' AND m.curriculum_version_id = '$($Fixture.CurriculumVersionId)'), '[]'::jsonb),
+  'evaluationDecision', COALESCE((SELECT to_jsonb(d) FROM ledger.assessment_evaluation_decision d WHERE d.request_id = '$($Fixture.EvaluationRequestId)'), '{}'::jsonb),
+  'diagnosticGate', COALESCE((SELECT jsonb_agg(to_jsonb(d) ORDER BY d.id) FROM ledger.proposal_gate_decision d WHERE d.request_id = '$($Fixture.DiagnosticRequestId)'), '[]'::jsonb),
+  'recommendationDecision', COALESCE((SELECT jsonb_agg(to_jsonb(d) ORDER BY d.decided_at, d.id) FROM ledger.decision_record d WHERE d.learner_id = '$($Fixture.LearnerId)' AND d.interaction_id = '$($Fixture.InteractionId)'), '[]'::jsonb),
+  'adaptationOutbox', COALESCE((SELECT jsonb_agg(to_jsonb(w) ORDER BY w.created_at, w.id) FROM core.agent_work_outbox w WHERE w.interaction_id = '$($Fixture.InteractionId)'), '[]'::jsonb),
+  'aiExecutions', COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.started_at, x.id) FROM core.ai_execution x WHERE x.interaction_id = '$($Fixture.InteractionId)'), '[]'::jsonb),
+  'aiEvents', COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.occurred_at, e.id) FROM core.ai_execution_event e WHERE e.interaction_id = '$($Fixture.InteractionId)'), '[]'::jsonb)
+)::text;
+"@
+}
+
+function Get-SafePodLogText {
+  param(
+    [Parameter(Mandatory = $true)][string]$Pod,
+    [Parameter(Mandatory = $true)]$Fixture,
+    [int]$SinceMinutes = 30
+  )
+  $logs = & kubectl logs $Pod -n $Namespace --since="${SinceMinutes}m" 2>&1
+  $ids = @(
+    $Fixture.RunId,
+    $Fixture.EvaluationRequestId,
+    $Fixture.DiagnosticRequestId,
+    $Fixture.InteractionId,
+    $Fixture.TraceId
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+  $safeLines = @($logs | Where-Object {
+      $line = [string]$_
+      $qualificationLine = $line -match '(?i)qualification (crash|provider) boundary|workflow\.step|workflow\.completed|workflow\.failed|ai_execution|superseded'
+      $correlatedLine = $false
+      foreach ($id in $ids) {
+        if ($line.Contains([string]$id)) {
+          $correlatedLine = $true
+          break
+        }
+      }
+      $qualificationLine -and $correlatedLine
+    })
+  if ($safeLines.Count -eq 0) {
+    return "No allow-listed correlation log lines captured for this pod."
+  }
+  return ($safeLines -join "`n")
+}
+
+function Get-ScopedKubernetesEvents {
+  param(
+    [Parameter(Mandatory = $true)]$Crash,
+    [Parameter(Mandatory = $true)]$Fixture
+  )
+  $uids = @($Crash.PodUid, $Crash.ReplacementPodUid) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+    Select-Object -Unique
+  $names = @($Crash.Pod, $Crash.ReplacementPod) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+    Select-Object -Unique
+  $items = [System.Collections.Generic.List[object]]::new()
+  foreach ($uid in $uids) {
+    try {
+      $eventList = Invoke-KubectlJson @(
+        "get", "events", "-n", $Namespace,
+        "--field-selector", "involvedObject.uid=$uid"
+      )
+      foreach ($item in @($eventList.items)) {
+        [void]$items.Add($item)
+      }
+    } catch {
+      # Event retention is not guaranteed. Preserve the scoped query failure in the evidence.
+      [void]$items.Add([ordered]@{ queryError = $_.Exception.Message; uid = $uid })
+    }
+  }
+  return [ordered]@{
+    scope = [ordered]@{
+      podUids = @($uids)
+      podNames = @($names)
+      correlationIds = [ordered]@{
+        runId = $Fixture.RunId
+        interactionId = $Fixture.InteractionId
+        traceId = $Fixture.TraceId
+        requestIds = @($Fixture.EvaluationRequestId, $Fixture.DiagnosticRequestId)
+      }
+    }
+    items = @($items | Sort-Object -Property eventTime, lastTimestamp)
+  }
+}
+
 function Force-DeletePod {
   param([Parameter(Mandatory = $true)][string]$Pod)
-  [void](Invoke-Kubectl @(
+  $requestedAt = (Get-Date).ToUniversalTime().ToString("o")
+  $commandOutput = Invoke-Kubectl @(
       "delete", "pod", $Pod, "-n", $Namespace,
       "--grace-period=0", "--force", "--wait=false"
-    ))
+    )
+  [pscustomobject]@{
+    operation = "kubectl delete pod --grace-period=0 --force --wait=false"
+    pod = $Pod
+    requestedAtUtc = $requestedAt
+    commandOutput = $commandOutput
+  }
 }
 
 function Invoke-BackendCrash {
@@ -470,16 +621,38 @@ function Invoke-BackendCrash {
     throw "boundary $Window was logged without a live claim token"
   }
   $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
+  $preState = Get-ScenarioDbSnapshot $Fixture
+  $preLogs = Get-SafePodLogText $boundaryPod $Fixture
   $podUid = Get-PodUid $boundaryPod
-  Force-DeletePod $boundaryPod
+  $deletion = Force-DeletePod $boundaryPod
   Wait-DeploymentReady "learning-platform" 0 "learning-platform"
+  $deletedObservedAt = (Get-Date).ToUniversalTime().ToString("o")
   Set-BackendFault $false "" "" "" 120000
   Expire-WorkflowClaim $Fixture.RunId $StepName
   Wait-DeploymentReady "learning-platform" 1 "learning-platform"
+  $replacement = Wait-ReplacementPod "learning-platform" $podUid
   $terminal = Wait-WorkflowTerminal $Fixture.RunId
+  $postState = Get-ScenarioDbSnapshot $Fixture
   [pscustomobject]@{
     Pod = $boundaryPod
     PodUid = $podUid
+    ReplacementPod = $replacement.Name
+    ReplacementPodUid = $replacement.Uid
+    DeletedObservedAtUtc = $deletedObservedAt
+    Deletion = $deletion
+    PreState = $preState
+    PostState = $postState
+    PreDeletionLogs = $preLogs
+    Perturbation = [ordered]@{
+      type = "backend-pod-death"
+      boundary = $Window
+      targetStep = $StepName
+      deletedPod = $boundaryPod
+      deletedPodUid = $podUid
+      command = $deletion.operation
+      requestedAtUtc = $deletion.requestedAtUtc
+      deletedObservedAtUtc = $deletedObservedAt
+    }
     OldToken = $claim.Token
     OldAttempt = $claim.AttemptCount
     Terminal = $terminal
@@ -503,15 +676,37 @@ function Invoke-DiagnosticProviderCrash {
     throw "provider boundary was logged without a live diagnostic claim token"
   }
   $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
+  $preState = Get-ScenarioDbSnapshot $Fixture
+  $preLogs = Get-SafePodLogText $providerPod $Fixture
   $podUid = Get-PodUid $providerPod
-  Force-DeletePod $providerPod
+  $deletion = Force-DeletePod $providerPod
   Wait-DeploymentReady "ramals-ai" 0 "ramals-ai"
+  $deletedObservedAt = (Get-Date).ToUniversalTime().ToString("o")
   Set-AiQualification $true $false "" 120000
   Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
+  $replacement = Wait-ReplacementPod "ramals-ai" $podUid
   $terminal = Wait-WorkflowTerminal $Fixture.RunId
+  $postState = Get-ScenarioDbSnapshot $Fixture
   [pscustomobject]@{
     Pod = $providerPod
     PodUid = $podUid
+    ReplacementPod = $replacement.Name
+    ReplacementPodUid = $replacement.Uid
+    DeletedObservedAtUtc = $deletedObservedAt
+    Deletion = $deletion
+    PreState = $preState
+    PostState = $postState
+    PreDeletionLogs = $preLogs
+    Perturbation = [ordered]@{
+      type = "ai-pod-death"
+      boundary = "DIAGNOSTIC_PROVIDER_EXECUTION"
+      targetRequestId = $Fixture.DiagnosticRequestId
+      deletedPod = $providerPod
+      deletedPodUid = $podUid
+      command = $deletion.operation
+      requestedAtUtc = $deletion.requestedAtUtc
+      deletedObservedAtUtc = $deletedObservedAt
+    }
     OldToken = $claim.Token
     OldAttempt = $claim.AttemptCount
     Terminal = $terminal
@@ -537,12 +732,16 @@ function Invoke-AdaptationCommissionCrash {
   $boundaryPod = Wait-WorkflowBoundary "ADAPTATION_AFTER_COMMISSION" "" ""
   $work = Get-ClaimedOutboxForInteraction $Fixture.InteractionId
   $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
+  $preState = Get-ScenarioDbSnapshot $Fixture
+  $preLogs = Get-SafePodLogText $boundaryPod $Fixture
   $podUid = Get-PodUid $boundaryPod
-  Force-DeletePod $boundaryPod
+  $deletion = Force-DeletePod $boundaryPod
   Wait-DeploymentReady "learning-platform" 0 "learning-platform"
+  $deletedObservedAt = (Get-Date).ToUniversalTime().ToString("o")
   Set-BackendFault $false "" "" "" 120000
   Expire-OutboxLease $work.Id
   Wait-DeploymentReady "learning-platform" 1 "learning-platform"
+  $replacement = Wait-ReplacementPod "learning-platform" $podUid
   $terminal = Wait-WorkflowTerminal $Fixture.RunId
   $outboxEnd = Get-Scalar "SELECT status FROM core.agent_work_outbox WHERE id = '$($work.Id)';"
   $end = (Get-Date).ToUniversalTime().AddSeconds(120)
@@ -551,9 +750,27 @@ function Invoke-AdaptationCommissionCrash {
     $outboxEnd = Get-Scalar "SELECT status FROM core.agent_work_outbox WHERE id = '$($work.Id)';"
   }
   Assert-Equal "adaptation commission outbox terminal state" $outboxEnd "TERMINAL"
+  $postState = Get-ScenarioDbSnapshot $Fixture
   [pscustomobject]@{
     Pod = $boundaryPod
     PodUid = $podUid
+    ReplacementPod = $replacement.Name
+    ReplacementPodUid = $replacement.Uid
+    DeletedObservedAtUtc = $deletedObservedAt
+    Deletion = $deletion
+    PreState = $preState
+    PostState = $postState
+    PreDeletionLogs = $preLogs
+    Perturbation = [ordered]@{
+      type = "backend-pod-death"
+      boundary = "ADAPTATION_AFTER_COMMISSION"
+      targetRequestId = $work.RequestId
+      deletedPod = $boundaryPod
+      deletedPodUid = $podUid
+      command = $deletion.operation
+      requestedAtUtc = $deletion.requestedAtUtc
+      deletedObservedAtUtc = $deletedObservedAt
+    }
     OldToken = ""
     OldAttempt = ""
     Terminal = $terminal
@@ -573,14 +790,32 @@ function Invoke-Contention {
   $boundaryPod = Wait-WorkflowBoundary "WORKFLOW_AFTER_CLAIM" $Fixture.RunId
   $claim = Get-StepClaim $Fixture.RunId "RECORD_EVALUATION_EVIDENCE"
   $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
+  $preState = Get-ScenarioDbSnapshot $Fixture
+  $preLogs = Get-SafePodLogText $boundaryPod $Fixture
   $podUid = Get-PodUid $boundaryPod
   $terminal = Wait-WorkflowTerminal $Fixture.RunId
   Wait-DeploymentReady "learning-platform" 0 "learning-platform"
   Set-BackendFault $false "" "" "" 120000
   Wait-DeploymentReady "learning-platform" 2 "learning-platform"
+  $postState = Get-ScenarioDbSnapshot $Fixture
   [pscustomobject]@{
     Pod = $boundaryPod
     PodUid = $podUid
+    ReplacementPod = ""
+    ReplacementPodUid = ""
+    DeletedObservedAtUtc = ""
+    Deletion = $null
+    PreState = $preState
+    PostState = $postState
+    PreDeletionLogs = $preLogs
+    Perturbation = [ordered]@{
+      type = "two-replica-workflow-contention"
+      boundary = "WORKFLOW_AFTER_CLAIM"
+      targetStep = "RECORD_EVALUATION_EVIDENCE"
+      ownerPod = $boundaryPod
+      ownerPodUid = $podUid
+      competingReplicas = 2
+    }
     OldToken = $claim.Token
     OldAttempt = $claim.AttemptCount
     Terminal = $terminal
@@ -799,7 +1034,8 @@ function Capture-ScenarioEvidence {
     [Parameter(Mandatory = $true)][string]$Name,
     [Parameter(Mandatory = $true)]$Crash,
     [Parameter(Mandatory = $true)][string[]]$History,
-    [Parameter(Mandatory = $true)]$Assertions
+    [Parameter(Mandatory = $true)]$Assertions,
+    [Parameter(Mandatory = $true)]$ExpectedInvariant
   )
   $directory = Join-Path $EvidenceRoot $Name
   New-Item -ItemType Directory -Path $directory -Force | Out-Null
@@ -814,46 +1050,99 @@ function Capture-ScenarioEvidence {
       [Parameter(Mandatory = $true)][string]$Pod,
       [Parameter(Mandatory = $true)][string]$Path
     )
-    # Qualification evidence needs boundary/correlation lines, not arbitrary application output.
-    # Keeping the allow-list here prevents a provider credential accidentally reaching an artifact.
-    $safeLines = @(& kubectl logs $Pod -n $Namespace --since=30m 2>&1 |
-      Where-Object {
-        $_ -match '(?i)(qualification (crash|provider) boundary|interactionId|traceId|requestId|workflow|ai_execution|pod.*(kill|delet))'
-      })
-    if ($safeLines.Count -eq 0) {
-      'No allow-listed qualification/correlation log lines captured.' |
-        Out-File -LiteralPath $Path -Encoding utf8
-      return
-    }
-    $safeLines | Out-File -LiteralPath $Path -Encoding utf8
+    (Get-SafePodLogText $Pod $Fixture) | Out-File -LiteralPath $Path -Encoding utf8
   }
 
-  $stateSql = @"
-SELECT 'workflow' AS section, r.* FROM core.learning_workflow_run r WHERE r.id = '$($Fixture.RunId)';
-SELECT 'steps' AS section, s.* FROM core.learning_workflow_step s WHERE s.run_id = '$($Fixture.RunId)' ORDER BY s.step_index;
-SELECT 'evidence' AS section, e.* FROM ledger.evidence e WHERE e.learner_id = '$($Fixture.LearnerId)' ORDER BY e.recorded_at, e.id;
-SELECT 'mastery' AS section, m.* FROM ledger.mastery_snapshot m WHERE m.learner_id = '$($Fixture.LearnerId)' ORDER BY m.aggregate_version;
-SELECT 'assessment-evaluation' AS section, d.* FROM ledger.assessment_evaluation_decision d WHERE d.request_id = '$($Fixture.EvaluationRequestId)';
-SELECT 'diagnostic-gate' AS section, d.* FROM ledger.proposal_gate_decision d WHERE d.request_id = '$($Fixture.DiagnosticRequestId)';
-SELECT 'recommendation-decision' AS section, d.* FROM ledger.decision_record d WHERE d.learner_id = '$($Fixture.LearnerId)' ORDER BY d.decided_at, d.id;
-SELECT 'recommendation' AS section, r.* FROM core.learning_recommendation r WHERE r.learner_id = '$($Fixture.LearnerId)' ORDER BY r.created_at, r.id;
-SELECT 'adaptation-outbox' AS section, w.* FROM core.agent_work_outbox w WHERE w.interaction_id = '$($Fixture.InteractionId)' ORDER BY w.created_at, w.id;
-SELECT 'ai-execution' AS section, x.* FROM core.ai_execution x WHERE x.interaction_id = '$($Fixture.InteractionId)' ORDER BY x.started_at, x.id;
-SELECT 'ai-events' AS section, e.* FROM core.ai_execution_event e WHERE e.interaction_id = '$($Fixture.InteractionId)' ORDER BY e.occurred_at, e.id;
-SELECT 'grounding-contexts' AS section, g.* FROM ledger.grounding_retrieval_record g WHERE g.learner_id = '$($Fixture.LearnerId)' ORDER BY g.recorded_at, g.context_id;
-"@
-  (Invoke-Psql $stateSql) | Out-File -LiteralPath (Join-Path $directory "durable-state.txt") -Encoding utf8
+  function Write-StateJson {
+    param(
+      [Parameter(Mandatory = $true)][string]$Path,
+      [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Raw
+    )
+    try {
+      $Raw | ConvertFrom-Json | ConvertTo-Json -Depth 40 |
+        Set-Content -LiteralPath $Path -Encoding utf8
+    } catch {
+      [ordered]@{ raw = $Raw; parseError = $_.Exception.Message } |
+        ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding utf8
+    }
+  }
+
+  if ($null -ne $script:CandidateIdentity) {
+    $script:CandidateIdentity.candidate | ConvertTo-Json -Depth 40 |
+      Set-Content -LiteralPath (Join-Path $directory "candidate.json") -Encoding utf8
+  }
+  Write-StateJson (Join-Path $directory "pre-state.json") ([string]$Crash.PreState)
+  Write-StateJson (Join-Path $directory "post-state.json") ([string]$Crash.PostState)
+  $Crash.PreDeletionLogs | Out-File -LiteralPath (Join-Path $directory "deleted-pod-correlation.log") -Encoding utf8
+
+  $correlations = [ordered]@{
+    requestId = $Fixture.EvaluationRequestId
+    diagnosticRequestId = $Fixture.DiagnosticRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+    evaluationDecisionId = $Fixture.EvaluationDecisionId
+    aiExecutionIds = @($Fixture.EvaluationExecutionId)
+    runId = $Fixture.RunId
+  }
+  $correlations | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "correlation.json") -Encoding utf8
+
+  $events = Get-ScopedKubernetesEvents $Crash $Fixture
+  $events | ConvertTo-Json -Depth 40 |
+    Set-Content -LiteralPath (Join-Path $directory "events.json") -Encoding utf8
 
   $pods = Invoke-Kubectl @("get", "pods", "-n", $Namespace, "-o", "wide")
   $pods | Out-File -LiteralPath (Join-Path $directory "pods.txt") -Encoding utf8
-  $events = Invoke-Kubectl @("get", "events", "-n", $Namespace, "--sort-by=.lastTimestamp")
-  $events | Out-File -LiteralPath (Join-Path $directory "events.txt") -Encoding utf8
   foreach ($pod in @(Get-PodNames "learning-platform")) {
     Save-SafePodLog $pod (Join-Path $directory "backend-$pod.log")
   }
   foreach ($pod in @(Get-PodNames "ramals-ai")) {
     Save-SafePodLog $pod (Join-Path $directory "ai-$pod.log")
   }
+
+  $scenario = [ordered]@{
+    schema = "m2-t15.scenario-evidence.v1"
+    scenarioId = $Name
+    result = "PASS"
+    candidate = $script:CandidateIdentity.candidate
+    initialState = "pre-state.json"
+    perturbation = $Crash.Perturbation
+    podLifecycle = [ordered]@{
+      deletedPod = $Crash.Pod
+      deletedPodUid = $Crash.PodUid
+      replacementPod = $Crash.ReplacementPod
+      replacementPodUid = $Crash.ReplacementPodUid
+      deletedObservedAtUtc = $Crash.DeletedObservedAtUtc
+    }
+    correlations = $correlations
+    claim = [ordered]@{
+      ownerPod = $Crash.Pod
+      ownerPodUid = $Crash.PodUid
+      executionToken = $Crash.OldToken
+      attemptCount = $Crash.OldAttempt
+      staleWorkflowCas = $Assertions.StaleWorkflowCas
+      staleOutboxCas = $Assertions.StaleOutboxCas
+    }
+    workflowCursor = [ordered]@{
+      history = "cursor-history.log"
+      final = $Crash.Terminal.State
+    }
+    durableState = [ordered]@{
+      before = "pre-state.json"
+      after = "post-state.json"
+      decisionOutboxAiCorrelation = "post-state.json"
+    }
+    logsAndTraces = [ordered]@{
+      deletedPod = "deleted-pod-correlation.log"
+      survivingPods = "backend-*.log and ai-*.log"
+      correlationIds = "correlation.json"
+    }
+    kubernetesEvents = "events.json"
+    expectedInvariant = $ExpectedInvariant
+    observedInvariant = $Assertions
+  }
+  $scenario | ConvertTo-Json -Depth 50 |
+    Set-Content -LiteralPath (Join-Path $directory "scenario.json") -Encoding utf8
 }
 
 function Run-Scenario {
@@ -866,6 +1155,17 @@ function Run-Scenario {
   $expectedFailure = $false
   $expectedAdaptation = $true
   $expectedAdaptationAbandoned = $false
+  $expectedInvariant = [ordered]@{
+    authoritativeEvidenceRows = 1
+    masterySnapshots = 1
+    masteryAggregateVersions = "monotonic; final lineage is one snapshot"
+    providerDispatch = 1
+    adaptationOutboxRows = if ($expectedAdaptation) { 1 } else { 0 }
+    staleExecutionToken = "rejected"
+    claim = "reclaimable with bounded attempt count"
+    workflowCursor = "monotonic"
+    provenance = "requestId/interactionId/traceId/decisionId/AI provenance reconstructable"
+  }
 
   switch ($Name) {
     "after-claim" {
@@ -966,7 +1266,7 @@ function Run-Scenario {
     $history = @($crash.Terminal.History)
   }
   Assert-CursorHistory $Name $history
-  Capture-ScenarioEvidence $fixture $Name $crash $history $assertions
+  Capture-ScenarioEvidence $fixture $Name $crash $history $assertions $expectedInvariant
   $script:Summary.Add(
     "$Name|PASS|run=$($fixture.RunId)|pod=$($crash.Pod)|podUid=$($crash.PodUid)|staleWorkflowCas=$($assertions.StaleWorkflowCas)|staleOutboxCas=$($assertions.StaleOutboxCas)"
   )
@@ -978,10 +1278,11 @@ try {
   Assert-Equal "kube context" $context "k3d-$ClusterName"
   [void](Invoke-Kubectl @("get", "namespace", $Namespace, "-o", "name"))
   [void](Invoke-Kubectl @("get", "secret", "ramals-t15-runtime", "-n", $Namespace, "-o", "name"))
+  # A crash run is not allowed to produce evidence for a stale image or schema. Run the exact same
+  # candidate gate used by the baseline smoke before creating a fixture or arming a fault.
+  [void](Invoke-CandidateIntegrityGate)
   Wait-DeploymentReady "learning-platform" 2 "learning-platform"
   Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
-  $migration = Get-Scalar "SELECT version FROM core.flyway_schema_history WHERE version = '033' AND success = true;"
-  Assert-Equal "V033 migration" $migration "033"
   $pending = Get-Scalar "SELECT COUNT(*) FROM core.agent_work_outbox WHERE status IN ('PENDING', 'RETRY', 'CLAIMED');"
   Assert-Equal "pre-qualification pending outbox" $pending "0"
 

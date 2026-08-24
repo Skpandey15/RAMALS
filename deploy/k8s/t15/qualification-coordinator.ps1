@@ -94,7 +94,7 @@ $pod = [ordered]@{
     }
     containers = @([ordered]@{
       name = "psql"
-      image = "k3d-ramals-t15-registry:5000/ramals-postgres@sha256:f2e582060a6a0cbf5eecd729f472fe54d39702f382f0d72fde5194cee2c1914e"
+      image = "k3d-ramals-t15-registry:5000/ramals-postgres@sha256:693389930ec1a20133cf4e6c4744da9127a580cf72a7ca6b8b1d13fe0967a972"
       imagePullPolicy = "IfNotPresent"
       command = @("sh", "-ec")
       args = @($command)
