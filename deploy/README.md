@@ -59,17 +59,18 @@ RAMALS_DESIRED_MANIFEST=deploy/desired-version.json ./deploy/deploy-controller.s
 ## M2-T15 qualification
 
 The qualification environment is separate from the Compose and pull-based deployment paths. It is
-an isolated k3d cluster with digest-pinned current-main artifacts:
+an isolated k3d cluster with digest-pinned artifacts from an explicitly approved main commit:
 
 ```powershell
+$approvedCommit = (git rev-parse --verify origin/main).Trim()
 pwsh -File .\deploy\k8s\t15\bootstrap.ps1
-pwsh -File .\deploy\k8s\t15\smoke.ps1
+pwsh -File .\deploy\k8s\t15\smoke.ps1 -ApprovedCommit $approvedCommit
 ```
 
-This path does not replace Docker Compose or add production trigger wiring. M2-T15.2 has now
-crash-qualified the T14 workflow in the isolated namespace; T14 activation prerequisites #1 and #2
-remain open. See [`k8s/t15/README.md`](k8s/t15/README.md) for the matrix, topology, secret handling,
-and evidence rules.
+This path does not replace Docker Compose or add production trigger wiring. The candidate-integrity
+gate and baseline smoke are the only M2-T15 checks in the first qualification task; crash, performance,
+and Phase-G security qualification remain pending. See [`k8s/t15/README.md`](k8s/t15/README.md) for
+the candidate lock, evidence schema, topology, secret handling, and deferred qualification rules.
 
 Exit codes: `0` reconciled/healthy · `1` transient failure exhausted · `2` desired version is held ·
 `3` deployed but failed health gates, rolled back and now held.

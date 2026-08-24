@@ -1,0 +1,444 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ramals.example.invalid/m2-t15/evidence-schema.json",
+  "title": "RAMALS M2-T15 qualification evidence",
+  "description": "Schema for candidate-integrity.json and future scenario.json artifacts. The example is documentation only.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/candidateIntegrity"
+    },
+    {
+      "$ref": "#/$defs/scenarioEvidence"
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "nonEmpty": {
+      "type": "string",
+      "minLength": 1
+    },
+    "image": {
+      "type": "object",
+      "required": ["name", "repository", "digest", "reference"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "repository": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reference": {
+          "type": "string",
+          "pattern": "@sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "required": ["version", "success"],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "qualification",
+        "sourceCommit",
+        "sourceTree",
+        "lockSha256",
+        "imageDigests",
+        "manifest",
+        "migrationSet",
+        "liveMigrationHistory"
+      ],
+      "properties": {
+        "qualification": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "sourceTree": {
+          "$ref": "#/$defs/commit"
+        },
+        "lockSha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "imageDigests": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/image"
+          }
+        },
+        "manifest": {
+          "type": "object",
+          "required": ["kustomizationSha256", "renderedManifestSha256"],
+          "properties": {
+            "kustomizationSha256": {
+              "$ref": "#/$defs/hash"
+            },
+            "renderedManifestSha256": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        "migrationSet": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9]{3}$"
+          }
+        },
+        "liveMigrationHistory": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/migration"
+          }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "required": ["name", "result", "observed"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "result": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "observed": {
+          "type": "string"
+        }
+      }
+    },
+    "candidateIntegrity": {
+      "type": "object",
+      "required": [
+        "schema",
+        "qualification",
+        "result",
+        "capturedAtUtc",
+        "approvedCommit",
+        "approvedRef",
+        "checks"
+      ],
+      "properties": {
+        "schema": {
+          "const": "m2-t15.candidate-integrity.v1"
+        },
+        "qualification": {
+          "const": "M2-T15.1"
+        },
+        "result": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "capturedAtUtc": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "approvedCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "approvedRef": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "environment": {
+          "type": "object",
+          "required": [
+            "context",
+            "namespace",
+            "kubernetes",
+            "k3d",
+            "replicas",
+            "podUids",
+            "podImages",
+            "featureFlagsAndConfiguration"
+          ],
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "namespace": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "kubernetes": {
+              "type": "object"
+            },
+            "k3d": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "replicas": {
+              "type": "array"
+            },
+            "podUids": {
+              "type": "array"
+            },
+            "podImages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name", "uid", "containers"],
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/nonEmpty"
+                  },
+                  "uid": {
+                    "$ref": "#/$defs/nonEmpty"
+                  },
+                  "containers": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["name", "image", "imageID"],
+                      "properties": {
+                        "name": {
+                          "$ref": "#/$defs/nonEmpty"
+                        },
+                        "image": {
+                          "$ref": "#/$defs/nonEmpty"
+                        },
+                        "imageID": {
+                          "$ref": "#/$defs/nonEmpty"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "featureFlagsAndConfiguration": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "PASS"
+              }
+            }
+          },
+          "then": {
+            "required": ["candidate", "environment"]
+          }
+        }
+      ]
+    },
+    "scenarioEvidence": {
+      "type": "object",
+      "required": [
+        "schema",
+        "scenarioId",
+        "result",
+        "candidate",
+        "initialState",
+        "perturbation",
+        "podLifecycle",
+        "correlations",
+        "claim",
+        "workflowCursor",
+        "durableState",
+        "logsAndTraces",
+        "kubernetesEvents",
+        "expectedInvariant",
+        "observedInvariant"
+      ],
+      "properties": {
+        "schema": {
+          "const": "m2-t15.scenario-evidence.v1"
+        },
+        "scenarioId": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "result": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "initialState": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "perturbation": {
+          "type": "object"
+        },
+        "podLifecycle": {
+          "type": "object",
+          "required": ["deletedPod", "deletedPodUid", "replacementPod", "replacementPodUid"],
+          "properties": {
+            "deletedPod": {
+              "type": "string"
+            },
+            "deletedPodUid": {
+              "type": "string"
+            },
+            "replacementPod": {
+              "type": "string"
+            },
+            "replacementPodUid": {
+              "type": "string"
+            }
+          }
+        },
+        "correlations": {
+          "type": "object",
+          "required": [
+            "requestId",
+            "diagnosticRequestId",
+            "interactionId",
+            "traceId",
+            "evaluationDecisionId",
+            "aiExecutionIds",
+            "runId"
+          ],
+          "properties": {
+            "requestId": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "diagnosticRequestId": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "interactionId": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "traceId": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "evaluationDecisionId": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "aiExecutionIds": {
+              "type": "array"
+            },
+            "runId": {
+              "$ref": "#/$defs/nonEmpty"
+            }
+          }
+        },
+        "claim": {
+          "type": "object",
+          "required": [
+            "ownerPod",
+            "ownerPodUid",
+            "executionToken",
+            "attemptCount",
+            "staleWorkflowCas",
+            "staleOutboxCas"
+          ],
+          "properties": {
+            "ownerPod": {
+              "type": "string"
+            },
+            "ownerPodUid": {
+              "type": "string"
+            },
+            "executionToken": {
+              "type": "string"
+            },
+            "attemptCount": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "staleWorkflowCas": {
+              "type": "string"
+            },
+            "staleOutboxCas": {
+              "type": "string"
+            }
+          }
+        },
+        "workflowCursor": {
+          "type": "object",
+          "required": ["history", "final"],
+          "properties": {
+            "history": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "final": {
+              "type": "object"
+            }
+          }
+        },
+        "durableState": {
+          "type": "object",
+          "required": ["before", "after", "decisionOutboxAiCorrelation"],
+          "properties": {
+            "before": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "after": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "decisionOutboxAiCorrelation": {
+              "$ref": "#/$defs/nonEmpty"
+            }
+          }
+        },
+        "logsAndTraces": {
+          "type": "object",
+          "required": ["deletedPod", "survivingPods", "correlationIds"],
+          "properties": {
+            "deletedPod": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "survivingPods": {
+              "$ref": "#/$defs/nonEmpty"
+            },
+            "correlationIds": {
+              "$ref": "#/$defs/nonEmpty"
+            }
+          }
+        },
+        "kubernetesEvents": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "expectedInvariant": {
+          "type": "object"
+        },
+        "observedInvariant": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

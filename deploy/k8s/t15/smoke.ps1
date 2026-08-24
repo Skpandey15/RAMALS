@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+  [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ApprovedCommit,
   [string]$ClusterName = "t15",
   [string]$Namespace = "ramals-t15",
   [string]$EvidenceDirectory = "",
@@ -55,6 +56,27 @@ function Assert-Rollout {
 
   $output = Invoke-Kubectl @("rollout", "status", $Resource, "-n", $Namespace, "--timeout=300s")
   $output | Set-Content -Path (Join-Path $EvidenceDirectory $FileName) -Encoding utf8
+}
+
+function Invoke-CandidateIntegrityGate {
+  $gatePath = Join-Path $scriptRoot "candidate-integrity.ps1"
+  $output = & pwsh -NoProfile -File $gatePath `
+    -ApprovedCommit $ApprovedCommit `
+    -ApprovedRef "origin/main" `
+    -ClusterName $ClusterName `
+    -Namespace $Namespace `
+    -ManifestRoot $scriptRoot `
+    -LockPath (Join-Path $scriptRoot "images.lock.json") `
+    -EvidenceDirectory $EvidenceDirectory 2>&1
+  $output | Set-Content -Path (Join-Path $EvidenceDirectory "candidate-integrity-gate.log") -Encoding utf8
+  if ($LASTEXITCODE -ne 0) {
+    throw "candidate-integrity gate failed with exit code $LASTEXITCODE"
+  }
+  $resultPath = Join-Path $EvidenceDirectory "candidate-integrity.json"
+  if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+    throw "candidate-integrity gate did not produce $resultPath"
+  }
+  return (Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json)
 }
 
 function Start-PortForward {
@@ -115,7 +137,13 @@ function Assert-DeploymentImage {
   )
 
   $lock = Get-Content (Join-Path $scriptRoot "images.lock.json") -Raw | ConvertFrom-Json
-  $entry = $lock.images.PSObject.Properties[$Component].Value
+  $entry = @($lock.images, $lock.supportingImages) |
+    ForEach-Object { $_.PSObject.Properties[$Component].Value } |
+    Where-Object { $null -ne $_ } |
+    Select-Object -First 1
+  if ($null -eq $entry) {
+    throw "qualification lock has no image entry for $Component"
+  }
   $object = Invoke-KubectlJson @("get", $Resource, "-n", $Namespace)
   $actual = $object.spec.template.spec.containers[0].image
   if ($actual -ne $entry.reference) {
@@ -139,27 +167,12 @@ $forwards = @()
 try {
   Invoke-Kubectl @("config", "use-context", "k3d-$ClusterName") | Out-Null
 
-  # Capture the exact rendered intent before any health assertion. This is the object used to prove
-  # that a qualification run used the pinned artifact set and the intended replica topology.
-  $rendered = & kubectl kustomize deploy/k8s/t15 2>&1
-  if ($LASTEXITCODE -ne 0) {
-    throw "kubectl kustomize failed: $($rendered -join ' ')"
-  }
-  $renderedPath = Join-Path $EvidenceDirectory "rendered.yaml"
-  $rendered | Set-Content -Path $renderedPath -Encoding utf8
-  $renderedHash = (Get-FileHash -Path $renderedPath -Algorithm SHA256).Hash
+  # This is deliberately the first substantive check. It binds the approved commit, lock,
+  # rendered intent, live imageIDs and schema before health or smoke assertions can produce a PASS.
+  $candidate = Invoke-CandidateIntegrityGate
 
   Save-Kubectl "cluster.version.json" @("version")
   Save-Kubectl "nodes.txt" @("get", "nodes", "-o", "wide")
-  $migrationOutput = Invoke-Kubectl @(
-    "exec", "statefulset/postgres", "-n", $Namespace, "--",
-    "sh", "-ec",
-    'psql --set=ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" -At -c "SELECT version || ''|'' || description || ''|'' || success FROM core.flyway_schema_history ORDER BY installed_rank DESC LIMIT 5;"'
-  )
-  $migrationOutput | Set-Content -Path (Join-Path $EvidenceDirectory "migration-history.txt") -Encoding utf8
-  if (($migrationOutput -join "`n") -notmatch "(?m)^033\|.*\|true$") {
-    throw "Flyway migration history does not show successful M2-T14 migration 033"
-  }
   Save-Kubectl "workloads.json" @("get", "deploy,statefulset,job,service", "-n", $Namespace)
 
   $workloads = @(
@@ -211,7 +224,12 @@ try {
     qualification = "M2-T15.1"
     cluster = $ClusterName
     namespace = $Namespace
-    renderedManifestSha256 = $renderedHash
+    approvedCommit = $ApprovedCommit.ToLowerInvariant()
+    candidateIntegrity = $candidate.result
+    candidateEvidence = "candidate-integrity.json"
+    renderedManifestSha256 = $candidate.candidate.manifest.renderedManifestSha256
+    kustomizationSha256 = $candidate.candidate.manifest.kustomizationSha256
+    migrationSet = @($candidate.candidate.migrationSet)
     imageLock = (Join-Path $scriptRoot "images.lock.json")
     capturedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
     result = "PASS"

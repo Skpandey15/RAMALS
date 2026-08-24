@@ -4,9 +4,10 @@ This directory is the isolated Kubernetes qualification environment for M2-T15. 
 production deployment and it does not activate a production trigger. Docker Compose remains the
 local developer smoke/integration environment and is intentionally unchanged.
 
-The manifests consume the current-main artifacts recorded in [`images.lock.json`](images.lock.json)
-by digest. The `current-main` image names in `kustomization.yaml` are only Kustomize transformer
-keys; the rendered and applied objects contain `image@sha256:...` references.
+The manifests consume the exact approved-main artifacts recorded in
+[`images.lock.json`](images.lock.json) by digest. The `current-main` image names in
+`kustomization.yaml` are only Kustomize transformer keys; the rendered and applied objects contain
+`image@sha256:...` references.
 
 ## Topology
 
@@ -31,13 +32,22 @@ operator access path is a port-forward, not an externally exposed database port.
 Install Docker/Rancher Desktop, `k3d`, `kubectl`, and PowerShell. From the repository root:
 
 ```powershell
+$approvedCommit = (git rev-parse --verify origin/main).Trim()
 pwsh -File .\deploy\k8s\t15\bootstrap.ps1
-pwsh -File .\deploy\k8s\t15\smoke.ps1
+pwsh -File .\deploy\k8s\t15\smoke.ps1 -ApprovedCommit $approvedCommit
 ```
 
-For a new qualification artifact set, use `publish-images.ps1` to build and push all five images to
-the local registry. It reports digests but intentionally does not rewrite the lock file; review the
-new digest set, then update the lock/manifests together.
+For a new candidate, first resolve and review one full commit, then build from that commit's
+detached worktree. `publish-images.ps1` builds and pushes the backend, AI, web, PostgreSQL, and
+Keycloak artifacts with immutable digests and can update the lock/manifests together:
+
+```powershell
+$approvedCommit = (git rev-parse --verify origin/main).Trim()
+pwsh -File .\deploy\k8s\t15\publish-images.ps1 -Commit $approvedCommit -UpdateLock
+```
+
+Do not replace the explicit commit with `HEAD` or a mutable image tag. The lock is a reviewable
+candidate declaration; deployment is not qualified until the candidate-integrity gate passes.
 
 `bootstrap.ps1` creates an isolated `t15` cluster with two k3d agents and a local registry on
 `localhost:5111` when they do not already exist. It creates the `ramals-t15-runtime` Secret only
@@ -62,10 +72,44 @@ The AI plane is configured as `RAMALS_AI_ENVIRONMENT=test`, `RAMALS_AI_AI_ENABLE
 `RAMALS_AI_MODEL_ROUTE=ci-fake`. This makes the real authenticated provider path deterministic and
 non-billable. It is not a production model configuration.
 
+## Candidate-integrity gate — M2-T15.1
+
+[`candidate-integrity.ps1`](candidate-integrity.ps1) is the first substantive qualification check.
+It requires a full 40-character approved commit and fails with a non-zero exit code on any mismatch.
+The gate proves this chain:
+
+```text
+approved origin/main commit + tree
+        -> reviewed image lock digests
+        -> rendered Kustomize manifest and hashes
+        -> live deployment intent and resolved pod imageIDs
+```
+
+It independently compares the approved migration set with PostgreSQL Flyway history, rejects every
+failed migration, and requires V034 to be successful. A passing
+`candidate-integrity.json` records the commit/tree, lock and manifest hashes, all image digests,
+live pod imageIDs and UIDs, Kubernetes/k3d versions, namespace, replica counts, safe feature/config
+values, migration history, checks, and UTC capture time.
+
+Run the gate directly when establishing or reviewing a candidate:
+
+```powershell
+pwsh -File .\deploy\k8s\t15\candidate-integrity.ps1 `
+  -ApprovedCommit $approvedCommit `
+  -SelfTest
+```
+
+`-SelfTest` deliberately mutates the approved commit, migration set, backend image, and rendered
+manifest in temporary copies. Each mutation must fail for its expected check. The committed shape
+is defined by [`evidence-schema.json`](evidence-schema.json), with a redacted structural example in
+[`evidence-example.json`](evidence-example.json). The example is documentation only and cannot be
+used as qualification evidence.
+
 ## Evidence and checks
 
-`smoke.ps1` records the rendered manifest, its SHA-256, cluster/node state, workload state, pod
-image IDs, rollout output, events, and health responses under `evidence/<UTC-stamp>/`. It checks:
+`smoke.ps1` invokes the candidate gate before health assertions and records the gate output alongside
+the rendered manifest, cluster/node state, workload state, pod image IDs, rollout output, events, and
+health responses under `evidence/<UTC-stamp>/`. It checks:
 
 - two ready Spring replicas and two ready AI replicas;
 - ready PostgreSQL, Keycloak, and web UI;
@@ -76,44 +120,62 @@ image IDs, rollout output, events, and health responses under `evidence/<UTC-sta
 - Spring readiness, AI readiness/capabilities, Keycloak management readiness, and NGINX health.
 
 Evidence directories are ignored by Git. Do not copy Secret objects or decoded Secret data into
-evidence.
+evidence. A PASS is valid only when the evidence directory contains a passing candidate gate for
+the same run; a stale or drifted candidate fails before smoke or crash work starts.
 
-The foundation smoke is separate from the T14 crash gate. The real crash gate is recorded below and
-must remain separate from performance or security qualification.
+The foundation smoke is separate from the T14 crash gate and remains separate from performance or
+security qualification.
 
-## M2-T15.2 real crash/pod-death qualification — PASS
+## M2-T15.2 real crash/pod-death qualification — not claimed
 
-On 2026-08-24, `crash-qualification.ps1 -Scenario all` ran the ordered matrix against the
-digest-pinned topology. The final clean run is recorded in
-[`evidence/m2-t15.2-20260824T062227Z/SUMMARY.tsv`](evidence/m2-t15.2-20260824T062227Z/SUMMARY.tsv).
-The tested backend and AI image pins were respectively
-`sha256:2c37abd7973ea62085700e5588fdd70bc783e991f808a25cea0363b6c1e3e0df` and
-`sha256:9af2b6ab6eb1ebe60df9b05ff754cdab43cd8a3835945b6b99b699026c9ed3f6`.
+The real crash matrix, performance qualification, and Phase-G security work have not been run by this
+candidate-integrity task. The pre-existing `evidence/m2-t15.2-*` directories are historical local
+artifacts from an earlier candidate and are not evidence for the approved commit above. They must not
+be used to claim T15.2 completion.
 
-| Scenario | Fault boundary | Result |
-| --- | --- | --- |
-| `after-claim` | backend pod after workflow claim | `COMPLETED`; evidence step reclaimed at attempt 2 |
-| `after-evidence-effect` | backend pod after evidence effect | `COMPLETED`; evidence lineage remains single, attempt 2 |
-| `after-mastery-effect` | backend pod after mastery effect | `COMPLETED`; one snapshot at aggregate version 1, attempt 2 |
-| `diagnostic-commission` | backend pod after diagnostic commission | fail-closed `FAILED`; one commission, no duplicate dispatch |
-| `diagnostic-provider` | AI pod during diagnostic provider execution | fail-closed `FAILED`; one provider boundary/commission |
-| `diagnostic-outcome-commit` | backend pod after atomic execution + gate commit | `COMPLETED`; diagnostic step reclaimed at attempt 2 |
-| `adaptation-handoff` | backend pod around adaptation outbox handoff | `COMPLETED`; one outbox row, adaptation attempt 2 |
-| `adaptation-commission` | backend pod after adaptation commission | `COMPLETED`; outbox terminal abandonment at attempt 2, one failed execution |
-| `contention` | two backend replicas contend for one workflow | `COMPLETED`; one winner, all step attempts 1 |
+`crash-qualification.ps1` now requires `-ApprovedCommit`, reruns the same candidate gate before
+creating a fixture or arming a fault, and emits one structured scenario record with the following
+links for each future perturbation:
 
-Every scenario asserted one evaluation evidence lineage, one mastery snapshot, monotonic aggregate
-version, one diagnostic execution with one `STARTED` and one terminal event, no duplicate adaptation
-outbox or execution, stale workflow-token rejection, and complete request/interaction/trace/provenance
-reconstruction. Cursor history includes the boundary observation and the recovered terminal state;
-the harness rejects any backwards step index. Stale outbox lease CAS also returned zero where an
-outbox lease was exercised.
+- scenario ID and candidate identity;
+- PostgreSQL pre/post state, claim owner/token/attempt count, cursor history, decision/outbox/AI
+  execution correlation;
+- exact perturbation, deleted and replacement pod names/UIDs, scoped Kubernetes events, and
+  correlation-filtered surviving/deleted-pod logs;
+- expected invariant, observed invariant, and PASS/FAIL result.
 
-The qualification exposed and then closed a real PostgreSQL commission replay race: duplicate-key handling
-previously queried an aborted transaction (`25P02`) under concurrent adaptation recovery. Commission
-now uses `ON CONFLICT DO NOTHING` before reading the existing event, and the final rerun passed.
-The final namespace posture is two ready backend replicas, two ready AI replicas, zero pending or
-claimed outbox rows, and qualification faults disabled.
+The generated scenario shape is `m2-t15.scenario-evidence.v1`. No real crash scenario is a PASS from
+this task.
+
+## Deterministic stale-worker race design — not qualified
+
+The eventual stale-worker run must use a qualification-only barrier, not pod deletion timing:
+
+1. Backend replica A claims the workflow and is held at `WORKFLOW_AFTER_CLAIM`; record A's pod UID,
+   token, and attempt count from PostgreSQL.
+2. Expire only A's lease through the qualification PostgreSQL control, then enable replica B and
+   wait for PostgreSQL to show B's distinct token and incremented attempt.
+3. Release A at an explicit barrier after B owns the row; A resumes and submits completion with its
+   old token.
+4. Assert PostgreSQL rejects A's token CAS, while B is the sole owner and sole authoritative-effect
+   producer. Capture both owners, tokens, attempts, cursor, and the rejected row count.
+
+The current pod-death harness records the primitives needed for this run, but pod deletion alone
+cannot prove the stale-worker race and no such qualification claim is made here.
+
+## Known observability follow-up
+
+The trace-ID investigation found that `LearningWorkflowOrchestrator.log()` adds `traceId` while the
+structured Logstash encoder also serializes the MDC `traceId`. In affected workflow transition
+records this can raise `IllegalStateException: The name 'traceId' has already been written` and make
+observability reconstruction incomplete. No application code is changed in this task; a separate
+focused remediation PR is required before relying on those records for full crash qualification.
+
+## Deferred Phase-G prerequisites
+
+NetworkPolicy coverage and `TD-M2-SEC-01` remain deferred to Phase G. The isolated namespace is
+restricted and locally scoped for this harness, but this task does not claim the broader security
+qualification.
 
 ## Qualification-only fault coordination
 
