@@ -783,14 +783,49 @@ function Invoke-AdaptationCommissionCrash {
 
 function Invoke-Contention {
   param([Parameter(Mandatory = $true)]$Fixture)
+  $targetStep = "RECORD_EVALUATION_EVIDENCE"
   Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
   Wait-DeploymentReady "learning-platform" 0 "learning-platform"
-  Set-BackendFault $true "WORKFLOW_AFTER_CLAIM" $Fixture.RunId "" 5000
+  # The previous five-second window was shorter than the log/snapshot round trip. It allowed the
+  # fixture to advance and made a later sequential boundary look like replica contention. Keep the
+  # existing fixed qualification barrier, but give the operator enough time to prove the live claim.
+  Set-BackendFault $true "WORKFLOW_AFTER_CLAIM" $Fixture.RunId "" 30000
   Wait-DeploymentReady "learning-platform" 2 "learning-platform"
   $boundaryPod = Wait-WorkflowBoundary "WORKFLOW_AFTER_CLAIM" $Fixture.RunId
-  $claim = Get-StepClaim $Fixture.RunId "RECORD_EVALUATION_EVIDENCE"
+  $claim = Get-StepClaim $Fixture.RunId $targetStep
+  if ([string]::IsNullOrWhiteSpace($claim.Token) -or
+      $claim.Status -ne "RUNNING" -or $claim.AttemptCount -ne "1") {
+    throw "contention boundary did not capture a live attempt-1 claim: token='$($claim.Token)' status='$($claim.Status)' attempt='$($claim.AttemptCount)'"
+  }
+  $backendPodsAtClaim = @(
+    foreach ($pod in @(Get-PodNames "learning-platform")) {
+      [pscustomobject]@{
+        Name = [string]$pod
+        Uid = Get-PodUid $pod
+      }
+    }
+  )
+  if ($backendPodsAtClaim.Count -ne 2) {
+    throw "contention boundary observed $($backendPodsAtClaim.Count) running backend replicas; expected 2"
+  }
+  $stateAtBoundary = Get-WorkflowState $Fixture.RunId
+  if ($stateAtBoundary.CurrentStep -ne $targetStep -or
+      $stateAtBoundary.StepStatus -ne "RUNNING" -or
+      $stateAtBoundary.ExecutionToken -ne $claim.Token -or
+      $stateAtBoundary.AttemptCount -ne "1") {
+    throw "contention boundary moved past the captured claim: cursor='$($stateAtBoundary.CurrentStep)' stepStatus='$($stateAtBoundary.StepStatus)' token='$($stateAtBoundary.ExecutionToken)' attempt='$($stateAtBoundary.AttemptCount)'"
+  }
   $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
   $preState = Get-ScenarioDbSnapshot $Fixture
+  $preStateObject = $preState | ConvertFrom-Json
+  $preStep = @($preStateObject.steps | Where-Object { $_.step_name -eq $targetStep }) | Select-Object -First 1
+  if ($null -eq $preStep -or
+      $preStateObject.workflow.current_step -ne $targetStep -or
+      $preStep.status -ne "RUNNING" -or
+      $preStep.execution_token -ne $claim.Token -or
+      $preStep.attempt_count -ne 1) {
+    throw "contention PostgreSQL pre-state did not preserve the live authoritative claim"
+  }
   $preLogs = Get-SafePodLogText $boundaryPod $Fixture
   $podUid = Get-PodUid $boundaryPod
   $terminal = Wait-WorkflowTerminal $Fixture.RunId
@@ -818,6 +853,7 @@ function Invoke-Contention {
     }
     OldToken = $claim.Token
     OldAttempt = $claim.AttemptCount
+    CompetingPods = $backendPodsAtClaim
     Terminal = $terminal
     CursorHistory = @($boundaryCursor) + @($terminal.History)
     StaleOutboxId = ""
@@ -1093,7 +1129,15 @@ function Capture-ScenarioEvidence {
 
   $pods = Invoke-Kubectl @("get", "pods", "-n", $Namespace, "-o", "wide")
   $pods | Out-File -LiteralPath (Join-Path $directory "pods.txt") -Encoding utf8
-  foreach ($pod in @(Get-PodNames "learning-platform")) {
+  $contentionPods = if ($null -eq $Crash.CompetingPods) {
+    @()
+  } else {
+    @($Crash.CompetingPods)
+  }
+  $backendLogPods = @($contentionPods | ForEach-Object { [string]$_.Name }) +
+    @(Get-PodNames "learning-platform")
+  foreach ($pod in @($backendLogPods | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      Sort-Object -Unique)) {
     Save-SafePodLog $pod (Join-Path $directory "backend-$pod.log")
   }
   foreach ($pod in @(Get-PodNames "ramals-ai")) {
@@ -1113,6 +1157,7 @@ function Capture-ScenarioEvidence {
       replacementPod = $Crash.ReplacementPod
       replacementPodUid = $Crash.ReplacementPodUid
       deletedObservedAtUtc = $Crash.DeletedObservedAtUtc
+      competingPodsAtClaim = $contentionPods
     }
     correlations = $correlations
     claim = [ordered]@{
