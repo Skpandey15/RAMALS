@@ -1,6 +1,10 @@
 package io.ramals.learningplatform.orchestration;
 
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.AcceptedEvaluationDecision;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationTarget;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationRubricScorePolicy;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
@@ -13,7 +17,6 @@ import io.ramals.learningplatform.orchestration.LearningWorkflow.StepRun;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.StepStatus;
 import io.ramals.learningplatform.orchestration.LearningWorkflowPolicy.Eligibility;
 import io.ramals.learningplatform.qualification.QualificationFault;
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.Locale;
 import java.util.Optional;
@@ -52,6 +55,7 @@ public class LearningWorkflowOrchestrator {
   static final String REASON_SNAPSHOT_LINEAGE = "MASTERY_SNAPSHOT_LINEAGE_BROKEN";
 
   private final LearningWorkflowRepository runs;
+  private final AssessmentEvaluationDecisionPort decisions;
   private final EvidenceService evidence;
   private final MasteryService mastery;
   private final WorkflowAgentStep.Diagnostic diagnostic;
@@ -61,6 +65,7 @@ public class LearningWorkflowOrchestrator {
 
   public LearningWorkflowOrchestrator(
       LearningWorkflowRepository runs,
+      AssessmentEvaluationDecisionPort decisions,
       EvidenceService evidence,
       MasteryService mastery,
       WorkflowAgentStep.Diagnostic diagnostic,
@@ -68,6 +73,7 @@ public class LearningWorkflowOrchestrator {
       WorkflowUnitOfWork unitOfWork,
       Clock clock) {
     this.runs = runs;
+    this.decisions = decisions;
     this.evidence = evidence;
     this.mastery = mastery;
     this.diagnostic = diagnostic;
@@ -76,18 +82,8 @@ public class LearningWorkflowOrchestrator {
     this.clock = clock;
   }
 
-  /** The Spring-owned facts that start a composition. None of them come from a proposal. */
-  public record EvaluationTrigger(
-      String evaluationRequestId,
-      EvaluationProposalGate.Outcome outcome,
-      BigDecimal normalizedScore,
-      UUID learnerId,
-      UUID skillId,
-      UUID curriculumVersionId,
-      UUID attemptId,
-      UUID assessmentVersionId,
-      String interactionId,
-      String traceId) {}
+  /** The only input accepted at the workflow trigger boundary. */
+  public record EvaluationTrigger(String evaluationRequestId) {}
 
   /**
    * Starts, or re-returns, the one workflow for a gated evaluation.
@@ -96,39 +92,65 @@ public class LearningWorkflowOrchestrator {
    * the run table refuses a second row for it. A redelivered trigger therefore returns the existing
    * run rather than starting a parallel chain of agent calls.
    *
-   * <p>An ineligible evaluation still gets a run row, immediately STOPPED with its reason. Recording
-   * the refusal costs one row and answers the question an operator actually asks -- "why did nothing
-   * happen for this learner?" -- which a silent no-op cannot.
+   * <p>The trigger only accepts an accepted decision with a frozen target and score. Rejected,
+   * manual-review, and legacy accepted decisions remain visible in the decision ledger but cannot
+   * seed a workflow; refusing them at the boundary prevents caller-supplied or incomplete facts from
+   * reaching authoritative state.
    */
   public Run trigger(EvaluationTrigger trigger) {
     requireTrigger(trigger);
+    AcceptedEvaluationDecision decision =
+        decisions
+            .findAcceptedByRequestId(trigger.evaluationRequestId())
+            .orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        "evaluation request is not backed by an accepted decision"));
+    EvaluationTarget target = decision.target();
+    if (target == null || !target.complete()) {
+      throw new IllegalStateException(
+          "accepted evaluation decision has incomplete authoritative target facts");
+    }
+    if (decision.normalizedScore() == null
+        || !EvaluationRubricScorePolicy.POLICY_VERSION.equals(decision.scorePolicyVersion())) {
+      throw new IllegalStateException(
+          "accepted evaluation decision has no supported frozen normalized score");
+    }
+    if (!bounded(decision.interactionId()) || !nullableBounded(decision.traceId())) {
+      throw new IllegalStateException(
+          "accepted evaluation decision has incomplete provenance identities");
+    }
     Eligibility eligibility =
-        LearningWorkflowPolicy.evaluationEligible(trigger.outcome(), trigger.normalizedScore());
-    BigDecimal score = eligibility.eligible() ? trigger.normalizedScore() : BigDecimal.ZERO;
+        LearningWorkflowPolicy.evaluationEligible(
+            EvaluationProposalGate.Outcome.ACCEPTED, decision.normalizedScore());
+    if (!eligibility.eligible()) {
+      throw new IllegalStateException("accepted evaluation decision has an unusable score");
+    }
 
     Run run =
         runs.startOrGet(
             triggerKey(trigger.evaluationRequestId()),
-            trigger.learnerId(),
-            trigger.skillId(),
-            trigger.curriculumVersionId(),
-            trigger.attemptId(),
-            trigger.assessmentVersionId(),
-            score,
+            target.learnerId(),
+            target.skillId(),
+            target.curriculumVersionId(),
+            target.attemptId(),
+            target.assessmentVersionId(),
+            decision.normalizedScore(),
             trigger.evaluationRequestId(),
-            trigger.interactionId(),
-            trigger.traceId(),
+            decision.interactionId(),
+            decision.traceId(),
             clock.instant().plus(LearningWorkflowPolicy.RUN_DEADLINE));
 
     if (run.status().terminal()) {
       return run;
     }
-    if (!eligibility.eligible()) {
-      stop(run, eligibility.reasonCode());
-      return reload(run.id());
-    }
     log("workflow.triggered", run, null, null);
     return run;
+  }
+
+  /** Convenience boundary for a production caller carrying only the accepted request identity. */
+  public Run trigger(String evaluationRequestId) {
+    return trigger(new EvaluationTrigger(evaluationRequestId));
   }
 
   /**
@@ -479,16 +501,18 @@ public class LearningWorkflowOrchestrator {
     if (trigger == null
         || trigger.evaluationRequestId() == null
         || trigger.evaluationRequestId().isBlank()
-        || trigger.learnerId() == null
-        || trigger.skillId() == null
-        || trigger.curriculumVersionId() == null
-        || trigger.attemptId() == null
-        || trigger.assessmentVersionId() == null
-        || trigger.interactionId() == null
-        || trigger.interactionId().isBlank()) {
+        || trigger.evaluationRequestId().length() > 64) {
       throw new IllegalArgumentException(
-          "a controlled workflow requires complete runtime-owned identities");
+          "a controlled workflow requires a bounded evaluation request identity");
     }
+  }
+
+  private static boolean bounded(String value) {
+    return value != null && !value.isBlank() && value.length() <= 64;
+  }
+
+  private static boolean nullableBounded(String value) {
+    return value == null || bounded(value);
   }
 
   private static IllegalArgumentException unknownRun(UUID runId) {

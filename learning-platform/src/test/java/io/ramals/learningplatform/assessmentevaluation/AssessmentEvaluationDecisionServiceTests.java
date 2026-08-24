@@ -1,12 +1,15 @@
 package io.ramals.learningplatform.assessmentevaluation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.ai.contract.AgentType;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AssessmentEvaluationRequest;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.AcceptedEvaluationDecision;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationDecisionRecord;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationTarget;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Decision;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DeterministicCheck;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Outcome;
@@ -17,6 +20,8 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 import tools.jackson.databind.json.JsonMapper;
@@ -36,8 +41,13 @@ class AssessmentEvaluationDecisionServiceTests {
   @Test
   void acceptedProposalIsPersistedWithAnswerRubricExecutionAndGateIdentity() {
     Decision result =
-        service.decide(envelope(AssessmentEvaluationProposalTestsPayload.valid()), request(),
-            DeterministicCheck.notApplicable());
+        service.decide(
+            envelope(AssessmentEvaluationProposalTestsPayload.valid()),
+            request(),
+            DeterministicCheck.notApplicable(),
+            new EvaluationTarget(
+                UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                UUID.randomUUID()));
 
     assertThat(result.outcome()).isEqualTo(Outcome.ACCEPTED);
     assertThat(decisions.records).singleElement().satisfies(record -> {
@@ -50,7 +60,21 @@ class AssessmentEvaluationDecisionServiceTests {
       assertThat(record.rubricVersion()).isEqualTo("rubric-v3");
       assertThat(record.decision().allowsAuthoritativeEffect()).isTrue();
       assertThat(record.parserReasonCode()).isNull();
+      assertThat(record.target()).isNotNull();
     });
+  }
+
+  @Test
+  void acceptedProposalWithoutSpringOwnedTargetFactsFailsClosedBeforePersistence() {
+    assertThatThrownBy(
+            () ->
+                service.decide(
+                    envelope(AssessmentEvaluationProposalTestsPayload.valid()),
+                    request(),
+                    DeterministicCheck.notApplicable()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("an accepted evaluation decision requires complete Spring-owned target facts");
+    assertThat(decisions.records).isEmpty();
   }
 
   @Test
@@ -108,7 +132,10 @@ class AssessmentEvaluationDecisionServiceTests {
     service.decide(
         envelope(AssessmentEvaluationProposalTestsPayload.valid()),
         request(),
-        DeterministicCheck.notApplicable());
+        DeterministicCheck.notApplicable(),
+        new EvaluationTarget(
+            UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+            UUID.randomUUID()));
 
     assertThat(decisions.records).singleElement().satisfies(record -> {
       assertThat(record.interactionId()).isEqualTo("interaction-1");
@@ -149,6 +176,11 @@ class AssessmentEvaluationDecisionServiceTests {
     @Override
     public void append(EvaluationDecisionRecord record) {
       records.add(record);
+    }
+
+    @Override
+    public Optional<AcceptedEvaluationDecision> findAcceptedByRequestId(String requestId) {
+      return Optional.empty();
     }
   }
 

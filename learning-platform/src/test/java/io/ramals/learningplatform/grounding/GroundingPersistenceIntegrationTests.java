@@ -15,6 +15,7 @@ import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.ai.contract.Usage;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationDecisionRecord;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationTarget;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionService;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationReplayConflictException;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentFeedbackRepository;
@@ -257,6 +258,7 @@ class GroundingPersistenceIntegrationTests {
     String agentRunId = "evaluation-run-1";
     String contextId = "evaluation-context-1";
     UUID executionId = UUID.randomUUID();
+    UUID attemptId = UUID.randomUUID();
 
     jdbc.update(
         """
@@ -285,6 +287,16 @@ class GroundingPersistenceIntegrationTests {
         agentRunId,
         "a".repeat(64),
         "b".repeat(64));
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_attempt
+          (id, learner_id, assessment_version_id, status, idempotency_key)
+        VALUES (?, ?, ?, 'COMPLETED', ?)
+        """,
+        attemptId,
+        learnerId,
+        ASSESSMENT,
+        "evaluation-gate-" + attemptId);
 
     int evidenceBefore = jdbc.queryForObject("SELECT count(*) FROM ledger.evidence", Integer.class);
     int masteryBefore =
@@ -316,7 +328,8 @@ class GroundingPersistenceIntegrationTests {
             "evaluation-interaction-1",
             "evaluation-trace-1",
             accepted,
-            null);
+            null,
+            new EvaluationTarget(learnerId, SKILL, CURRICULUM, attemptId, ASSESSMENT));
     JdbcAssessmentEvaluationDecisionRepository repository =
         new JdbcAssessmentEvaluationDecisionRepository(jdbc);
 
@@ -334,7 +347,8 @@ class GroundingPersistenceIntegrationTests {
             record.interactionId(),
             "evaluation-trace-retry",
             record.decision(),
-            record.parserReasonCode());
+            record.parserReasonCode(),
+            record.target());
     repository.append(differentTraceReplay);
     EvaluationDecisionRecord differentInteractionReplay =
         new EvaluationDecisionRecord(
@@ -348,7 +362,8 @@ class GroundingPersistenceIntegrationTests {
             "evaluation-interaction-retry",
             "evaluation-trace-retry-2",
             record.decision(),
-            record.parserReasonCode());
+            record.parserReasonCode(),
+            record.target());
     repository.append(differentInteractionReplay);
 
     assertThat(
@@ -363,6 +378,9 @@ class GroundingPersistenceIntegrationTests {
                 SELECT decision.request_id, decision.agent_run_id, decision.answer_evidence_id,
                        decision.answer_version, decision.rubric_version, decision.outcome,
                        decision.deterministic_check, execution.id AS execution_id,
+                       decision.learner_id, decision.skill_id, decision.curriculum_version_id,
+                       decision.attempt_id, decision.assessment_version_id,
+                       decision.normalized_score, decision.score_policy_version,
                        decision.context_id
                   FROM ledger.assessment_evaluation_decision decision
                   JOIN core.ai_execution execution ON execution.id = decision.ai_execution_id
@@ -379,7 +397,22 @@ class GroundingPersistenceIntegrationTests {
         .containsEntry("outcome", "ACCEPTED")
         .containsEntry("deterministic_check", "NOT_APPLICABLE")
         .containsEntry("execution_id", executionId)
+        .containsEntry("learner_id", learnerId)
+        .containsEntry("skill_id", SKILL)
+        .containsEntry("curriculum_version_id", CURRICULUM)
+        .containsEntry("attempt_id", attemptId)
+        .containsEntry("assessment_version_id", ASSESSMENT)
+        .containsEntry("normalized_score", new BigDecimal("0.7500"))
+        .containsEntry("score_policy_version", "EVALUATION_SCORE_POLICY_V1")
         .containsEntry("context_id", contextId);
+    assertThat(repository.findAcceptedByRequestId(requestId)).get().satisfies(found -> {
+      assertThat(found.target()).isEqualTo(
+          new EvaluationTarget(learnerId, SKILL, CURRICULUM, attemptId, ASSESSMENT));
+      assertThat(found.normalizedScore()).isEqualByComparingTo("0.7500");
+      assertThat(found.scorePolicyVersion()).isEqualTo("EVALUATION_SCORE_POLICY_V1");
+      assertThat(found.interactionId()).isEqualTo("evaluation-interaction-1");
+      assertThat(found.traceId()).isEqualTo("evaluation-trace-1");
+    });
     assertThat(jdbc.queryForObject("SELECT count(*) FROM ledger.evidence", Integer.class))
         .isEqualTo(evidenceBefore);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM ledger.mastery_snapshot", Integer.class))
@@ -416,7 +449,8 @@ class GroundingPersistenceIntegrationTests {
             record.interactionId(),
             record.traceId(),
             conflicting,
-            null);
+            null,
+            record.target());
     assertThatThrownBy(() -> repository.append(conflictingReplay))
         .isInstanceOf(AssessmentEvaluationReplayConflictException.class);
 
@@ -450,7 +484,8 @@ class GroundingPersistenceIntegrationTests {
             "evaluation-interaction-2",
             "evaluation-trace-2",
             record.decision(),
-            record.parserReasonCode());
+            record.parserReasonCode(),
+            record.target());
     assertThatThrownBy(() -> repository.append(reusedProposalIdentity))
         .isInstanceOf(AssessmentEvaluationReplayConflictException.class)
         .hasMessage("evaluation proposal identity was reused for a different request");
@@ -467,6 +502,162 @@ class GroundingPersistenceIntegrationTests {
                         + "WHERE request_id = ?",
                     requestId))
         .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void targetBindingKeepsLegacyWritesCompatibleAndRejectsMismatchedNewTargets() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    LearnerRepository learners = new LearnerRepository(jdbc);
+    UUID legacyLearner = learners.provisionForSubject("evaluation-target-legacy").id();
+    UUID mismatchedContextLearner =
+        learners.provisionForSubject("evaluation-target-context-owner").id();
+    UUID mismatchedTargetLearner =
+        learners.provisionForSubject("evaluation-target-mismatch").id();
+
+    String legacyContext = "evaluation-target-legacy-context";
+    String legacyRequest = "evaluation-target-legacy-request";
+    String legacyRun = "evaluation-target-legacy-run";
+    jdbc.update(
+        """
+        INSERT INTO ledger.grounding_retrieval_record
+          (context_id, learner_id, retrieval_policy_version, as_of, expires_at,
+           source_refs, source_count)
+        VALUES (?, ?, 'EVALUATION_POLICY_V1', CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP + INTERVAL '10 minutes', '["answer","rubric"]'::jsonb, 2)
+        """,
+        legacyContext,
+        legacyLearner);
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+           agent_run_id, prompt_template_id, prompt_version, model_route, status,
+           request_digest, proposal_digest, started_at, completed_at)
+        VALUES (?, ?, 'evaluation-target-legacy-interaction', 'ASSESSMENT', '1.0',
+                'ASSESSMENT_EVALUATION_AGENT_V1', ?, 'ASSESSMENT_RUBRIC_EVALUATE',
+                'ASSESSMENT_RUBRIC_EVALUATE_V1', 'ci-fake', 'SUCCEEDED', ?, ?,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        UUID.randomUUID(),
+        legacyRequest,
+        legacyRun,
+        "a".repeat(64),
+        "b".repeat(64));
+
+    // This is the V033 image's INSERT shape: it does not mention any V034 column. The rollback
+    // contract requires it to remain valid after the new migration is applied.
+    jdbc.update(
+        """
+        INSERT INTO ledger.assessment_evaluation_decision
+          (id, proposal_id, request_id, agent_run_id, ai_execution_id, context_id,
+           answer_evidence_id, answer_version, rubric_version, outcome, reason_codes,
+           referenced_evidence_ids, dimension_results, feedback, confidence,
+           deterministic_check, deterministic_reason_code, parser_reason_code,
+           policy_version, decision_digest, interaction_id, trace_id)
+        SELECT ?, ?, ?, ?, execution.id, ?, 'answer', 'answer-v1', 'rubric-v1', 'ACCEPTED',
+               '["ACCEPTED"]'::jsonb, '["answer","rubric"]'::jsonb,
+               '[{"dimensionId":"accuracy","score":3,"maxScore":4}]'::jsonb,
+               'Legacy accepted decision.', 0.85000000, 'NOT_APPLICABLE', NULL, NULL,
+               'EVALUATION_GATE_V1', ?, 'evaluation-target-legacy-interaction', 'trace-legacy'
+          FROM core.ai_execution execution
+         WHERE execution.request_id = ? AND execution.agent_run_id = ?
+        """,
+        UUID.randomUUID(),
+        "evaluation-target-legacy-proposal",
+        legacyRequest,
+        legacyRun,
+        legacyContext,
+        "c".repeat(64),
+        legacyRequest,
+        legacyRun);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.assessment_evaluation_decision WHERE request_id = ?",
+                Integer.class,
+                legacyRequest))
+        .isEqualTo(1);
+
+    String mismatchedContext = "evaluation-target-mismatch-context";
+    String mismatchedRequest = "evaluation-target-mismatch-request";
+    String mismatchedRun = "evaluation-target-mismatch-run";
+    UUID mismatchedAttempt = UUID.randomUUID();
+    UUID mismatchedExecution = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO ledger.grounding_retrieval_record
+          (context_id, learner_id, retrieval_policy_version, as_of, expires_at,
+           source_refs, source_count)
+        VALUES (?, ?, 'EVALUATION_POLICY_V1', CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP + INTERVAL '10 minutes', '["answer","rubric"]'::jsonb, 2)
+        """,
+        mismatchedContext,
+        mismatchedContextLearner);
+    jdbc.update(
+        """
+        INSERT INTO core.assessment_attempt
+          (id, learner_id, assessment_version_id, status, idempotency_key)
+        VALUES (?, ?, ?, 'COMPLETED', ?)
+        """,
+        mismatchedAttempt,
+        mismatchedTargetLearner,
+        ASSESSMENT,
+        "evaluation-target-mismatch-" + mismatchedAttempt);
+    jdbc.update(
+        """
+        INSERT INTO core.ai_execution
+          (id, request_id, interaction_id, agent_type, contract_version, agent_version,
+           agent_run_id, prompt_template_id, prompt_version, model_route, status,
+           request_digest, proposal_digest, started_at, completed_at)
+        VALUES (?, ?, 'evaluation-target-mismatch-interaction', 'ASSESSMENT', '1.0',
+                'ASSESSMENT_EVALUATION_AGENT_V1', ?, 'ASSESSMENT_RUBRIC_EVALUATE',
+                'ASSESSMENT_RUBRIC_EVALUATE_V1', 'ci-fake', 'SUCCEEDED', ?, ?,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        mismatchedExecution,
+        mismatchedRequest,
+        mismatchedRun,
+        "d".repeat(64),
+        "e".repeat(64));
+
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    INSERT INTO ledger.assessment_evaluation_decision
+                      (id, proposal_id, request_id, agent_run_id, ai_execution_id, context_id,
+                       answer_evidence_id, answer_version, rubric_version, outcome, reason_codes,
+                       referenced_evidence_ids, dimension_results, feedback, confidence,
+                       deterministic_check, deterministic_reason_code, parser_reason_code,
+                       policy_version, decision_digest, interaction_id, trace_id,
+                       learner_id, skill_id, curriculum_version_id, attempt_id,
+                       assessment_version_id, normalized_score, score_policy_version)
+                    VALUES (?, ?, ?, ?, ?, ?, 'answer', 'answer-v1', 'rubric-v1', 'ACCEPTED',
+                            '["ACCEPTED"]'::jsonb, '["answer","rubric"]'::jsonb,
+                            '[{"dimensionId":"accuracy","score":3,"maxScore":4}]'::jsonb,
+                            'Mismatched target.', 0.85000000, 'NOT_APPLICABLE', NULL, NULL,
+                            'EVALUATION_GATE_V1', ?, 'evaluation-target-mismatch-interaction',
+                            'trace-mismatch', ?, ?, ?, ?, ?, 0.7500,
+                            'EVALUATION_SCORE_POLICY_V1')
+                    """,
+                    UUID.randomUUID(),
+                    "evaluation-target-mismatch-proposal",
+                    mismatchedRequest,
+                    mismatchedRun,
+                    mismatchedExecution,
+                    mismatchedContext,
+                    "f".repeat(64),
+                    mismatchedTargetLearner,
+                    SKILL,
+                    CURRICULUM,
+                    mismatchedAttempt,
+                    ASSESSMENT))
+        .isInstanceOf(DataAccessException.class);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.assessment_evaluation_decision WHERE request_id = ?",
+                Integer.class,
+                mismatchedRequest))
+        .isZero();
   }
 
   @Test

@@ -1,14 +1,21 @@
 package io.ramals.learningplatform.assessmentevaluation;
 
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.AcceptedEvaluationDecision;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationDecisionRecord;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationTarget;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DimensionResult;
 import io.ramals.learningplatform.observability.UuidV7;
+import java.math.BigDecimal;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import tools.jackson.databind.json.JsonMapper;
@@ -29,7 +36,19 @@ public class JdbcAssessmentEvaluationDecisionRepository
   @Override
   public void append(EvaluationDecisionRecord record) {
     requireRecord(record);
+    requireAuthoritativeTarget(record);
     String digest = digest(record);
+    BigDecimal normalizedScore =
+        record.decision().allowsAuthoritativeEffect()
+            ? EvaluationRubricScorePolicy.normalizedScore(record.decision().dimensions())
+            : null;
+    String scorePolicyVersion =
+        record.decision().allowsAuthoritativeEffect()
+            ? EvaluationRubricScorePolicy.POLICY_VERSION
+            : null;
+    if (record.target() != null) {
+      requireTargetMatchesAuthoritativeFacts(record);
+    }
     List<String> reasons = record.decision().reasons().stream().map(Enum::name).toList();
     List<String> evidence = record.decision().referencedEvidenceIds().stream().sorted().toList();
     List<Map<String, Object>> dimensions =
@@ -42,9 +61,11 @@ public class JdbcAssessmentEvaluationDecisionRepository
            answer_evidence_id, answer_version, rubric_version, outcome, reason_codes,
            referenced_evidence_ids, dimension_results, feedback, confidence,
            deterministic_check, deterministic_reason_code, parser_reason_code,
-           policy_version, decision_digest, interaction_id, trace_id)
+           policy_version, decision_digest, interaction_id, trace_id,
+           learner_id, skill_id, curriculum_version_id, attempt_id, assessment_version_id,
+           normalized_score, score_policy_version)
         SELECT ?, ?, ?, ?, execution.id, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb),
-               CAST(? AS jsonb), ?, ?, ?, ?, ?, ?, ?, ?, ?
+               CAST(? AS jsonb), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
           FROM core.ai_execution execution
          WHERE execution.request_id = ?
            AND execution.agent_run_id = ?
@@ -73,6 +94,13 @@ public class JdbcAssessmentEvaluationDecisionRepository
         digest,
         record.interactionId(),
         record.traceId(),
+        record.target() == null ? null : record.target().learnerId(),
+        record.target() == null ? null : record.target().skillId(),
+        record.target() == null ? null : record.target().curriculumVersionId(),
+        record.target() == null ? null : record.target().attemptId(),
+        record.target() == null ? null : record.target().assessmentVersionId(),
+        normalizedScore,
+        scorePolicyVersion,
         record.requestId(),
         record.agentRunId());
 
@@ -98,6 +126,29 @@ public class JdbcAssessmentEvaluationDecisionRepository
       throw new AssessmentEvaluationReplayConflictException(
           "evaluation requestId was replayed with a different gate outcome");
     }
+  }
+
+  @Override
+  public Optional<AcceptedEvaluationDecision> findAcceptedByRequestId(
+      String requestId) {
+    if (requestId == null || requestId.isBlank() || requestId.length() > 64) {
+      return Optional.empty();
+    }
+    return jdbc
+        .query(
+            """
+            SELECT request_id, learner_id, skill_id, curriculum_version_id, attempt_id,
+                   assessment_version_id, normalized_score, score_policy_version,
+                   interaction_id, trace_id
+              FROM ledger.assessment_evaluation_decision
+             WHERE request_id = ? AND outcome = 'ACCEPTED'
+             ORDER BY decided_at DESC, id DESC
+             LIMIT 1
+            """,
+            JdbcAssessmentEvaluationDecisionRepository::acceptedDecision,
+            requestId)
+        .stream()
+        .findFirst();
   }
 
   private Map<String, Object> dimensionJson(DimensionResult dimension) {
@@ -132,6 +183,19 @@ public class JdbcAssessmentEvaluationDecisionRepository
         "deterministicReasonCode", record.decision().deterministicCheck().reasonCode());
     canonical.put("parserReasonCode", record.parserReasonCode());
     canonical.put("policyVersion", EvaluationProposalGate.POLICY_VERSION);
+    if (record.target() != null) {
+      canonical.put("learnerId", record.target().learnerId());
+      canonical.put("skillId", record.target().skillId());
+      canonical.put("curriculumVersionId", record.target().curriculumVersionId());
+      canonical.put("attemptId", record.target().attemptId());
+      canonical.put("assessmentVersionId", record.target().assessmentVersionId());
+      if (record.decision().allowsAuthoritativeEffect()) {
+        canonical.put(
+            "normalizedScore",
+            EvaluationRubricScorePolicy.normalizedScore(record.decision().dimensions()));
+        canonical.put("scorePolicyVersion", EvaluationRubricScorePolicy.POLICY_VERSION);
+      }
+    }
     try {
       byte[] serialized = JSON.writeValueAsBytes(canonical);
       return HexFormat.of()
@@ -156,6 +220,87 @@ public class JdbcAssessmentEvaluationDecisionRepository
         || !nullableBounded(record.traceId())) {
       throw new IllegalArgumentException("a complete, bounded evaluation decision is required");
     }
+  }
+
+  private static void requireAuthoritativeTarget(EvaluationDecisionRecord record) {
+    if (record.target() != null && !record.target().complete()) {
+      throw new IllegalArgumentException("evaluation target facts must be complete");
+    }
+    if (record.decision().allowsAuthoritativeEffect()
+        && (record.target() == null || !record.target().complete())) {
+      throw new IllegalArgumentException(
+          "an accepted evaluation decision requires complete target facts");
+    }
+  }
+
+  private void requireTargetMatchesAuthoritativeFacts(EvaluationDecisionRecord record) {
+    EvaluationTarget target = record.target();
+    Integer matches =
+        jdbc.queryForObject(
+            """
+            SELECT count(*)
+              FROM ledger.grounding_retrieval_record grounding
+              JOIN core.assessment_attempt attempt
+                ON attempt.id = ?
+               AND attempt.learner_id = ?
+               AND attempt.assessment_version_id = ?
+              JOIN core.assessment_version assessment_version
+                ON assessment_version.id = ?
+               AND assessment_version.curriculum_version_id = ?
+              JOIN core.assessment_item_version assessment_item
+                ON assessment_item.assessment_version_id = ?
+               AND assessment_item.skill_id = ?
+              JOIN core.skill_version skill_version
+                ON skill_version.skill_id = ?
+               AND skill_version.curriculum_version_id = ?
+             WHERE grounding.context_id = ?
+               AND grounding.learner_id = ?
+            """,
+            Integer.class,
+            target.attemptId(),
+            target.learnerId(),
+            target.assessmentVersionId(),
+            target.assessmentVersionId(),
+            target.curriculumVersionId(),
+            target.assessmentVersionId(),
+            target.skillId(),
+            target.skillId(),
+            target.curriculumVersionId(),
+            record.contextId(),
+            target.learnerId());
+    if (matches == null || matches != 1) {
+      throw new IllegalArgumentException(
+          "evaluation target does not match authoritative assessment facts");
+    }
+  }
+
+  private static AcceptedEvaluationDecision acceptedDecision(ResultSet result, int row)
+      throws SQLException {
+    UUID learnerId = result.getObject("learner_id", UUID.class);
+    UUID skillId = result.getObject("skill_id", UUID.class);
+    UUID curriculumVersionId = result.getObject("curriculum_version_id", UUID.class);
+    UUID attemptId = result.getObject("attempt_id", UUID.class);
+    UUID assessmentVersionId = result.getObject("assessment_version_id", UUID.class);
+    EvaluationTarget target =
+        learnerId == null
+                && skillId == null
+                && curriculumVersionId == null
+                && attemptId == null
+                && assessmentVersionId == null
+            ? null
+            : new EvaluationTarget(
+                learnerId,
+                skillId,
+                curriculumVersionId,
+                attemptId,
+                assessmentVersionId);
+    return new AcceptedEvaluationDecision(
+        result.getString("request_id"),
+        target,
+        result.getBigDecimal("normalized_score"),
+        result.getString("score_policy_version"),
+        result.getString("interaction_id"),
+        result.getString("trace_id"));
   }
 
   private StoredDecision conflictingProposalIdentity(EvaluationDecisionRecord record) {

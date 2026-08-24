@@ -1,5 +1,6 @@
 package io.ramals.learningplatform.orchestration;
 
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.mastery.MasteryService;
 import java.time.Clock;
@@ -15,6 +16,7 @@ public class OrchestrationConfiguration {
   @Bean
   LearningWorkflowOrchestrator learningWorkflowOrchestrator(
       LearningWorkflowRepository runs,
+      AssessmentEvaluationDecisionPort decisions,
       EvidenceService evidence,
       MasteryService mastery,
       WorkflowAgentStep.Diagnostic diagnostic,
@@ -22,6 +24,7 @@ public class OrchestrationConfiguration {
       PlatformTransactionManager transactionManager) {
     return new LearningWorkflowOrchestrator(
         runs,
+        decisions,
         evidence,
         mastery,
         diagnostic,

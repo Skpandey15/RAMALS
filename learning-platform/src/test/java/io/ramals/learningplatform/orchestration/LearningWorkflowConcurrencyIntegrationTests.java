@@ -987,13 +987,14 @@ class LearningWorkflowConcurrencyIntegrationTests {
   private Run startRun(
       JdbcTemplate jdbc, LearningWorkflowRepository runs, String key, UUID learnerId) {
     String requestId = "eval-" + key;
-    seedEvaluationDecision(jdbc, learnerId, requestId);
+    UUID attemptId = seedAttempt(jdbc, learnerId);
+    seedEvaluationDecision(jdbc, learnerId, requestId, attemptId);
     return runs.startOrGet(
         "EVALUATION_TO_ADAPTATION:" + requestId,
         learnerId,
         SKILL,
         CURRICULUM,
-        seedAttempt(jdbc, learnerId),
+        attemptId,
         ASSESSMENT,
         new BigDecimal("0.6000"),
         requestId,
@@ -1003,7 +1004,8 @@ class LearningWorkflowConcurrencyIntegrationTests {
   }
 
   /** The run's FK parents: a grounding record, a successful execution, and a gate decision. */
-  private void seedEvaluationDecision(JdbcTemplate jdbc, UUID learnerId, String requestId) {
+  private void seedEvaluationDecision(
+      JdbcTemplate jdbc, UUID learnerId, String requestId, UUID attemptId) {
     String contextId = "ctx-" + requestId;
     jdbc.update(
         """
@@ -1039,10 +1041,12 @@ class LearningWorkflowConcurrencyIntegrationTests {
           (id, proposal_id, request_id, agent_run_id, ai_execution_id, context_id,
            answer_evidence_id, answer_version, rubric_version, outcome, reason_codes,
            referenced_evidence_ids, dimension_results, feedback, confidence, deterministic_check,
-           policy_version, decision_digest, interaction_id, trace_id)
+           policy_version, decision_digest, interaction_id, trace_id,
+           learner_id, skill_id, curriculum_version_id, attempt_id, assessment_version_id,
+           normalized_score, score_policy_version)
         VALUES (?, ?, ?, ?, ?, ?, 'answer-evidence', 'answer-v1', 'rubric-v1', 'ACCEPTED',
                 CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), 'Feedback.', 0.85,
-                'NOT_APPLICABLE', 'EVALUATION_GATE_V1', ?, ?, ?)
+                'NOT_APPLICABLE', 'EVALUATION_GATE_V1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         UUID.randomUUID(),
         "proposal-" + requestId,
@@ -1057,7 +1061,14 @@ class LearningWorkflowConcurrencyIntegrationTests {
         "[{\"dimensionId\":\"accuracy\",\"score\":3,\"maxScore\":4}]",
         "c".repeat(64),
         "interaction-" + requestId,
-        "trace-" + requestId);
+        "trace-" + requestId,
+        learnerId,
+        SKILL,
+        CURRICULUM,
+        attemptId,
+        ASSESSMENT,
+        new BigDecimal("0.7500"),
+        "EVALUATION_SCORE_POLICY_V1");
   }
 
   private UUID seedAttempt(JdbcTemplate jdbc, UUID learnerId) {

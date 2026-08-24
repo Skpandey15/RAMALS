@@ -1,10 +1,10 @@
 # M2-T14 — Controlled multi-agent orchestration
 
-> **Status: `IMPLEMENTED — NOT ACCEPTED — NOT ACTIVATABLE`**
+> **Status: `IMPLEMENTED — ACTIVATION PREREQUISITES CLOSED — NO PRODUCTION CALLER`**
 >
-> The orchestration described below is implemented, reviewed and remediated. It is **not** accepted
-> for production use, and it must not be activated until the three prerequisites in
-> [Activation prerequisites](#activation-prerequisites--mandatory-and-currently-open) are closed.
+> The orchestration described below is implemented, reviewed and remediated. All three activation
+> prerequisites are now closed; production activation still requires an explicit caller and
+> deployment decision.
 >
 > **It is safe today because it is inert**, for three specific reasons:
 >
@@ -254,19 +254,20 @@ preserved; the current qualification result is recorded at the end of this secti
 ### The three prerequisites
 
 **1. The production trigger must derive its authoritative facts from the immutable accepted M2-T12
-decision**, rather than from caller-restated values. `EvaluationTrigger` currently takes the ACCEPTED
-outcome, learner, skill, attempt and assessment version as parameters. That is adequate for a
-component with no caller and inadequate the moment one exists: a caller that can restate the outcome
-can assert an acceptance the gate never gave.
+decision**, rather than from caller-restated values. Before this prerequisite was closed,
+`EvaluationTrigger` took the ACCEPTED outcome, learner, skill, attempt and assessment version as
+parameters. That was adequate for a component with no caller and inadequate the moment one existed:
+a caller could restate the outcome and assert an acceptance the gate never gave. It now accepts only
+the evaluation request identity and reads the frozen decision projection.
 
-*Status: OPEN.*
+*Status: CLOSED — implemented by the authoritative trigger and V034 target binding below.*
 
 **2. A deterministic, versioned rubric → normalized evaluation-evidence policy must be defined and
-tested** before an evaluation may affect authoritative mastery. The score is currently supplied by
-the caller and only range-checked. Evidence that feeds mastery needs its derivation frozen and
-versioned like every other engine in `EngineVersionFreezeTests`.
+tested** before an evaluation may affect authoritative mastery. Before this prerequisite was closed,
+the score was supplied by the caller and only range-checked. Evidence that feeds mastery now uses
+the frozen `EVALUATION_SCORE_POLICY_V1` derivation, covered by `EngineVersionFreezeTests`.
 
-*Status: OPEN.*
+*Status: CLOSED — implemented by the frozen `EVALUATION_SCORE_POLICY_V1` below.*
 
 **3. Abandoned-claim recovery and effect→workflow-marker atomicity must be implemented and
 crash-qualified.** The execution token added during remediation guarantees concurrency and
@@ -600,5 +601,6 @@ bug: catching a PostgreSQL duplicate-key exception and then querying on the same
 `25P02`. Commissioning now uses `ON CONFLICT DO NOTHING` and reads the durable event only after
 PostgreSQL has handled the conflict. The fixed image was rerun through the full matrix successfully.
 
-**Current status: CLOSED for prerequisite 3.** Prerequisites 1 and 2 remain open, so the overall
-production activation gate remains in force.
+**Current status: CLOSED for prerequisite 3.** Together with the authoritative trigger and frozen
+score policy above, all three activation prerequisites are now closed. The overall orchestration
+feature remains inert until an explicit production caller and deployment decision are approved.

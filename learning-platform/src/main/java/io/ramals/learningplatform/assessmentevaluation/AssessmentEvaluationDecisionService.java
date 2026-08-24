@@ -6,6 +6,7 @@ import io.ramals.learningplatform.ai.contract.AssessmentEvaluationContext;
 import io.ramals.learningplatform.ai.contract.AssessmentEvaluationRequest;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationDecisionRecord;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationTarget;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationProposal.MalformedProposalException;
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationProposal.RuntimeIdentity;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Decision;
@@ -50,6 +51,22 @@ public class AssessmentEvaluationDecisionService {
       AiProposalEnvelope envelope,
       AssessmentEvaluationRequest request,
       DeterministicCheck deterministicCheck) {
+    return decide(envelope, request, deterministicCheck, null);
+  }
+
+  /**
+   * Decides and records a proposal together with the Spring-owned facts it may affect.
+   *
+   * <p>The target is intentionally separate from the AI request. It is not part of the wire
+   * contract and cannot be selected by model output. An accepted decision without a complete target
+   * is refused because it could not safely seed an authoritative workflow.
+   */
+  @Transactional
+  public Decision decide(
+      AiProposalEnvelope envelope,
+      AssessmentEvaluationRequest request,
+      DeterministicCheck deterministicCheck,
+      EvaluationTarget target) {
     requireTraceableInputs(envelope, request);
     DeterministicCheck comparison =
         deterministicCheck == null ? DeterministicCheck.notApplicable() : deterministicCheck;
@@ -86,6 +103,11 @@ public class AssessmentEvaluationDecisionService {
     if (!bounded(traceId)) {
       traceId = null;
     }
+    if (decision.allowsAuthoritativeEffect() && (target == null || !target.complete())) {
+      throw new IllegalArgumentException(
+          "an accepted evaluation decision requires complete Spring-owned target facts");
+    }
+
     decisions.append(
         new EvaluationDecisionRecord(
             envelope.proposalId(),
@@ -98,7 +120,8 @@ public class AssessmentEvaluationDecisionService {
             request.interactionId(),
             traceId,
             decision,
-            parserReasonCode));
+            parserReasonCode,
+            target));
 
     logDecision(envelope, request, decision, parserReasonCode, traceId);
     return decision;

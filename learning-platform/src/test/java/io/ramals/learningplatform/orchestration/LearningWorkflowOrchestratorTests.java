@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.orchestration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -8,6 +9,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.AcceptedEvaluationDecision;
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort.EvaluationTarget;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Outcome;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceService;
@@ -27,6 +31,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +57,7 @@ class LearningWorkflowOrchestratorTests {
 
   private final EvidenceService evidence = mock(EvidenceService.class);
   private final MasteryService mastery = mock(MasteryService.class);
+  private final RecordingEvaluationDecisions decisions = new RecordingEvaluationDecisions();
   private final RecordingDiagnostic diagnostic = new RecordingDiagnostic();
   private final RecordingAdaptation adaptation = new RecordingAdaptation();
   private final AtomicReference<Instant> now = new AtomicReference<>(T0);
@@ -65,6 +71,7 @@ class LearningWorkflowOrchestratorTests {
     orchestrator =
         new LearningWorkflowOrchestrator(
             store,
+            decisions,
             evidence,
             mastery,
             diagnostic,
@@ -76,6 +83,15 @@ class LearningWorkflowOrchestratorTests {
         .thenReturn(evidenceRow());
     when(mastery.recompute(any(), any(), any(), anyString()))
         .thenReturn(snapshot(MasteryStatus.NEEDS_PRACTICE));
+    decisions.accepted =
+        Optional.of(
+            new AcceptedEvaluationDecision(
+                "evaluation-request-1",
+                new EvaluationTarget(LEARNER, SKILL, CURRICULUM, ATTEMPT, VERSION),
+                new BigDecimal("0.6000"),
+                "EVALUATION_SCORE_POLICY_V1",
+                "interaction-1",
+                "trace-1"));
   }
 
   private Clock movingClock() {
@@ -166,12 +182,44 @@ class LearningWorkflowOrchestratorTests {
 
   @Test
   void anEvaluationTheGateRefusedNeverReachesTheEvidenceLedger() {
-    Run run = orchestrator.trigger(trigger(Outcome.REJECTED, "0.6000"));
+    decisions.accepted = Optional.empty();
 
-    assertThat(run.status()).isEqualTo(Status.STOPPED);
-    assertThat(run.terminalReason()).isEqualTo("EVALUATION_NOT_ACCEPTED");
+    assertThatThrownBy(() -> orchestrator.trigger(trigger(Outcome.REJECTED, "0.6000")))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("evaluation request is not backed by an accepted decision");
+    assertThat(store.runCount()).isZero();
     verify(evidence, never())
         .recordEvaluationEvidence(any(), any(), any(), any(), anyString(), anyString(), any(), anyString());
+  }
+
+  @Test
+  void triggerCopiesEveryWorkflowFactFromTheAcceptedDecisionProjection() {
+    UUID otherLearner = UUID.randomUUID();
+    UUID otherSkill = UUID.randomUUID();
+    UUID otherCurriculum = UUID.randomUUID();
+    UUID otherAttempt = UUID.randomUUID();
+    UUID otherAssessment = UUID.randomUUID();
+    decisions.accepted =
+        Optional.of(
+            new AcceptedEvaluationDecision(
+                "evaluation-request-1",
+                new EvaluationTarget(
+                    otherLearner, otherSkill, otherCurriculum, otherAttempt, otherAssessment),
+                new BigDecimal("0.3750"),
+                "EVALUATION_SCORE_POLICY_V1",
+                "decision-interaction",
+                "decision-trace"));
+
+    Run run = orchestrator.trigger(new EvaluationTrigger("evaluation-request-1"));
+
+    assertThat(run.learnerId()).isEqualTo(otherLearner);
+    assertThat(run.skillId()).isEqualTo(otherSkill);
+    assertThat(run.curriculumVersionId()).isEqualTo(otherCurriculum);
+    assertThat(run.attemptId()).isEqualTo(otherAttempt);
+    assertThat(run.assessmentVersionId()).isEqualTo(otherAssessment);
+    assertThat(run.normalizedScore()).isEqualByComparingTo("0.3750");
+    assertThat(run.interactionId()).isEqualTo("decision-interaction");
+    assertThat(run.traceId()).isEqualTo("decision-trace");
   }
 
   @Test
@@ -412,17 +460,7 @@ class LearningWorkflowOrchestratorTests {
   }
 
   private static EvaluationTrigger trigger(Outcome outcome, String score) {
-    return new EvaluationTrigger(
-        "evaluation-request-1",
-        outcome,
-        new BigDecimal(score),
-        LEARNER,
-        SKILL,
-        CURRICULUM,
-        ATTEMPT,
-        VERSION,
-        "interaction-1",
-        "trace-1");
+    return new EvaluationTrigger("evaluation-request-1");
   }
 
   private static Evidence evidenceRow() {
@@ -490,6 +528,22 @@ class LearningWorkflowOrchestratorTests {
       calls++;
       snapshotSeen = masterySnapshotId;
       return Result.accepted("ADAPTATION_WORK_ENQUEUED", "outbox-request-1");
+    }
+  }
+
+  private static final class RecordingEvaluationDecisions
+      implements AssessmentEvaluationDecisionPort {
+    private Optional<AcceptedEvaluationDecision> accepted = Optional.empty();
+
+    @Override
+    public void append(
+        AssessmentEvaluationDecisionPort.EvaluationDecisionRecord record) {
+      // This test double is read-only because the orchestrator only consumes decisions.
+    }
+
+    @Override
+    public Optional<AcceptedEvaluationDecision> findAcceptedByRequestId(String requestId) {
+      return accepted.filter(decision -> decision.requestId().equals(requestId));
     }
   }
 
