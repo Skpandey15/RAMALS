@@ -180,6 +180,36 @@ class MigrationScriptContractTests {
         .doesNotContain("checkpoint");
   }
 
+  @Test
+  void acceptedEvaluationDecisionsFreezeTheWorkflowTargetAndScore() throws IOException {
+    String migration = statements("/db/migration/V034__assessment_evaluation_workflow_target.sql");
+
+    assertThat(migration)
+        .contains("ADD COLUMN learner_id UUID")
+        .contains("ADD COLUMN skill_id UUID")
+        .contains("ADD COLUMN curriculum_version_id UUID")
+        .contains("ADD COLUMN attempt_id UUID")
+        .contains("ADD COLUMN assessment_version_id UUID")
+        .contains("ADD COLUMN normalized_score NUMERIC(5, 4)")
+        .contains("ADD COLUMN score_policy_version VARCHAR(64)")
+        .contains("CREATE TRIGGER trg_assessment_evaluation_target")
+        .contains("NEW.outcome = 'ACCEPTED'")
+        .contains("EVALUATION_SCORE_POLICY_V1")
+        .contains("grounding.learner_id = NEW.learner_id")
+        .contains("attempt.assessment_version_id = NEW.assessment_version_id")
+        .contains("answer_response.id::text = NEW.answer_evidence_id")
+        .contains("answer_response.attempt_id = attempt.id")
+        .contains("answer_item.id = answer_response.item_version_id")
+        .contains("answer_item.assessment_version_id = NEW.assessment_version_id")
+        .contains("answer_item.skill_id = NEW.skill_id")
+        .contains("target_item.assessment_version_id = NEW.assessment_version_id")
+        .contains("target_item.skill_id = NEW.skill_id")
+        .contains("assessment_version.curriculum_version_id = NEW.curriculum_version_id")
+        .contains("skill_version.curriculum_version_id = NEW.curriculum_version_id")
+        .contains("grounding.source_refs @> jsonb_build_array")
+        .doesNotContain("UPDATE ledger.assessment_evaluation_decision");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");

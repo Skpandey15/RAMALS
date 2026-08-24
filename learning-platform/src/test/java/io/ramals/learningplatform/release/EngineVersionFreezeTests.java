@@ -14,6 +14,8 @@ import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationPropo
 import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationProposal.Dimension;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DeterministicCheck;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationRubricScorePolicy;
+import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DimensionResult;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.grounding.GroundedContext;
 import io.ramals.learningplatform.grounding.GroundedContextItem;
@@ -91,6 +93,7 @@ class EngineVersionFreezeTests {
     put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
     put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
     put(EvaluationProposalGate.POLICY_VERSION, EngineVersionFreezeTests::evaluationProposalGate);
+    put(EvaluationRubricScorePolicy.POLICY_VERSION, EngineVersionFreezeTests::evaluationRubricScore);
     put(LearningWorkflowPolicy.POLICY_VERSION, EngineVersionFreezeTests::learningWorkflowPolicy);
   }};
 
@@ -109,6 +112,7 @@ class EngineVersionFreezeTests {
       Map.entry("GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad"),
       Map.entry("PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a"),
       Map.entry("EVALUATION_GATE_V1", "d0587299051f708dea7aa6d29e439b46f903d24b98d53c28dfc74a48bd00c0a3"),
+      Map.entry("EVALUATION_SCORE_POLICY_V1", "b22b8a28e18da7a702816f894e027fe1acb470ea1b7c352adbaae5cd9d3a1a6a"),
       Map.entry("WORKFLOW_POLICY_V1", "7842607b4cad8420bab8aceabe300eaa6236deb59cd5c6954df736c8d24ad1e9"));
 
   @Test
@@ -412,6 +416,26 @@ class EngineVersionFreezeTests {
     }
     out.append("deadlineSeconds|").append(LearningWorkflowPolicy.RUN_DEADLINE.toSeconds())
         .append('\n');
+    return out.toString();
+  }
+
+  private static String evaluationRubricScore() {
+    StringBuilder out = new StringBuilder();
+    List<List<DimensionResult>> cases = List.of(
+        List.of(new DimensionResult("accuracy", new BigDecimal("3"), new BigDecimal("4"),
+            "feedback", Set.of("answer", "rubric"))),
+        List.of(
+            new DimensionResult("accuracy", new BigDecimal("1"), new BigDecimal("4"),
+                "feedback", Set.of("answer", "rubric")),
+            new DimensionResult("reasoning", new BigDecimal("4"), new BigDecimal("4"),
+                "feedback", Set.of("answer", "rubric"))),
+        List.of(new DimensionResult("accuracy", new BigDecimal("1"), new BigDecimal("3"),
+            "feedback", Set.of("answer", "rubric"))),
+        List.of(new DimensionResult("accuracy", new BigDecimal("0"), new BigDecimal("4"),
+            "feedback", Set.of("answer", "rubric"))));
+    for (List<DimensionResult> dimensions : cases) {
+      out.append(EvaluationRubricScorePolicy.normalizedScore(dimensions)).append('\n');
+    }
     return out.toString();
   }
 

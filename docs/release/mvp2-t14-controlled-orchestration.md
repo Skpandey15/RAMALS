@@ -1,10 +1,10 @@
 # M2-T14 — Controlled multi-agent orchestration
 
-> **Status: `IMPLEMENTED — NOT ACCEPTED — NOT ACTIVATABLE`**
+> **Status: `IMPLEMENTED — ACTIVATION PREREQUISITES CLOSED — NO PRODUCTION CALLER`**
 >
-> The orchestration described below is implemented, reviewed and remediated. It is **not** accepted
-> for production use, and it must not be activated until the three prerequisites in
-> [Activation prerequisites](#activation-prerequisites--mandatory-and-currently-open) are closed.
+> The orchestration described below is implemented, reviewed and remediated. All three activation
+> prerequisites are now closed; production activation still requires an explicit caller and
+> deployment decision.
 >
 > **It is safe today because it is inert**, for three specific reasons:
 >
@@ -254,19 +254,71 @@ preserved; the current qualification result is recorded at the end of this secti
 ### The three prerequisites
 
 **1. The production trigger must derive its authoritative facts from the immutable accepted M2-T12
-decision**, rather than from caller-restated values. `EvaluationTrigger` currently takes the ACCEPTED
-outcome, learner, skill, attempt and assessment version as parameters. That is adequate for a
-component with no caller and inadequate the moment one exists: a caller that can restate the outcome
-can assert an acceptance the gate never gave.
+decision**, rather than from caller-restated values. Before this prerequisite was closed,
+`EvaluationTrigger` took the ACCEPTED outcome, learner, skill, attempt and assessment version as
+parameters. That was adequate for a component with no caller and inadequate the moment one existed:
+a caller could restate the outcome and assert an acceptance the gate never gave. It now accepts only
+the evaluation request identity and reads the frozen decision projection.
 
-*Status: OPEN.*
+*Status: CLOSED — after the PostgreSQL authority proof recorded below; implemented by the
+authoritative trigger and V034 target binding.*
 
 **2. A deterministic, versioned rubric → normalized evaluation-evidence policy must be defined and
-tested** before an evaluation may affect authoritative mastery. The score is currently supplied by
-the caller and only range-checked. Evidence that feeds mastery needs its derivation frozen and
-versioned like every other engine in `EngineVersionFreezeTests`.
+tested** before an evaluation may affect authoritative mastery. Before this prerequisite was closed,
+the score was supplied by the caller and only range-checked. Evidence that feeds mastery now uses
+the frozen `EVALUATION_SCORE_POLICY_V1` derivation, covered by `EngineVersionFreezeTests`.
 
-*Status: OPEN.*
+*Status: CLOSED — after the PostgreSQL persistence proof recorded below; implemented by the frozen
+`EVALUATION_SCORE_POLICY_V1` below.*
+
+### Prerequisites 1/2 — adversarial authority proof
+
+The target binding is now proven at the persistence boundary, not just by caller discipline. For a
+target-bearing decision, both Java and V034 use existence semantics. The authoritative predicate is
+the same in each layer:
+
+```sql
+JOIN core.assessment_response answer_response
+  ON answer_response.id::text = NEW.answer_evidence_id
+ AND answer_response.attempt_id = attempt.id
+JOIN core.assessment_item_version answer_item
+  ON answer_item.id = answer_response.item_version_id
+ AND answer_item.assessment_version_id = NEW.assessment_version_id
+ AND answer_item.skill_id = NEW.skill_id
+```
+
+The surrounding joins bind `attempt` to `NEW.learner_id` and `NEW.assessment_version_id`, bind the
+assessment version and skill version to `NEW.curriculum_version_id`, and require the grounding row
+for `NEW.context_id` and learner to contain the exact
+`ASSESSMENT:<answer_evidence_id>:<answer_version>` source reference. The target-item join is an
+`EXISTS` witness only; it does not require one assessment item per skill. Consequently, the
+persisted `EvaluationTarget.attemptId` is the owning attempt of the evaluated immutable response,
+not merely any structurally valid sibling attempt.
+
+`GroundingPersistenceIntegrationTests.targetValidationUsesExistenceAndBindsAnswerToItsOwningAttempt`
+is the PostgreSQL regression. It creates two items for the same skill, two attempts for the same
+learner and assessment version, and an evaluated response on attempt A. A target for A persists and
+the persisted decision is joined back to that response's owning attempt. A target for sibling
+attempt B is rejected by the Java repository, then rejected again by V034 through a direct SQL
+insert that bypasses the Java guard; the direct path leaves no decision row. This is the required
+two-attempt adversarial case, and the duplicate-skill assertion proves the old `count(*) = 1`
+false-negative is gone.
+
+The V034 early return for an all-null target and score projection remains unchanged, so rows written
+by the rollback image remain insertable. Any new target-bearing row must satisfy the response,
+attempt, item, version, skill, grounding, and frozen score-policy predicates. `EvaluationTrigger`
+remains request-ID-only and no production caller was added.
+
+Both protections were deliberately perturbed and restored against PostgreSQL:
+
+| Perturbation | Observed failure |
+| --- | --- |
+| Java `EXISTS` changed back to `count(*) = 1` | The valid two-items/one-skill persistence regression failed. |
+| Java response-to-attempt join removed | The Java cross-attempt assertion failed because the invalid target was no longer rejected at the Java boundary. |
+| V034 response-to-attempt join removed | The direct SQL cross-attempt insert succeeded, so the test's required zero-row assertion failed. |
+
+The guarded implementation was restored before the final PostgreSQL runs. Only after those runs
+passed were prerequisites 1 and 2 recorded as CLOSED.
 
 **3. Abandoned-claim recovery and effect→workflow-marker atomicity must be implemented and
 crash-qualified.** The execution token added during remediation guarantees concurrency and
@@ -600,5 +652,6 @@ bug: catching a PostgreSQL duplicate-key exception and then querying on the same
 `25P02`. Commissioning now uses `ON CONFLICT DO NOTHING` and reads the durable event only after
 PostgreSQL has handled the conflict. The fixed image was rerun through the full matrix successfully.
 
-**Current status: CLOSED for prerequisite 3.** Prerequisites 1 and 2 remain open, so the overall
-production activation gate remains in force.
+**Current status: CLOSED for prerequisite 3.** Together with the authoritative trigger and frozen
+score policy above, all three activation prerequisites are now closed. The overall orchestration
+feature remains inert until an explicit production caller and deployment decision are approved.

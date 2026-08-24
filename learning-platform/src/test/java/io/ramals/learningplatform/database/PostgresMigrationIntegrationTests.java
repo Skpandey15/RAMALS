@@ -82,10 +82,10 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 33 with V033 (M2-T14 controlled orchestration). Asserting the count
+    // 34 with V034 (M2-T14 authoritative workflow target binding). Asserting the count
     // rather than merely that the upgrade succeeds is what makes an accidentally unapplied
     // migration visible -- it caught V029 the first time it ran.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(33);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(34);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 
