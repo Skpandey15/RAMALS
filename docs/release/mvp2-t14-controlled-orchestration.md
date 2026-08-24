@@ -235,7 +235,7 @@ replaced with one that models the original defect directly.
 The race test was re-run five times with `--rerun-tasks` after the constraint fix, to confirm it is
 stable rather than incidentally passing.
 
-## Activation prerequisites — mandatory and currently open
+## Activation prerequisites — mandatory; current statuses are recorded below
 
 This section is appended by a later review. It does not revise the implementation evidence above:
 that record stands as written, including the guarantees it claimed at the time it was written. What
@@ -247,9 +247,9 @@ follows states which guarantees exist today and which do not.
 > orchestration feature must not be enabled for production, until all three activation prerequisites
 > below are CLOSED.**
 
-M2-T15 must subsequently qualify abandoned-claim recovery using **injected process death at each of
-the four crash windows** identified in prerequisite 3. Building the recovery mechanism is
-implementation work; qualifying it under injected failure is T15's.
+M2-T15.2 subsequently qualified abandoned-claim recovery using **injected process death at each of
+the crash windows** identified in prerequisite 3. The historical implementation status below is
+preserved; the current qualification result is recorded at the end of this section.
 
 ### The three prerequisites
 
@@ -273,7 +273,7 @@ crash-qualified.** The execution token added during remediation guarantees concu
 stale-worker safety. It does not guarantee recovery from process death: there is no lease, so a
 claim held by a dead JVM is never released.
 
-*Status: IMPLEMENTED — QUALIFICATION OPEN.* Revised twice: down, when a review found the first
+*Status at the time of the implementation record: IMPLEMENTED — QUALIFICATION OPEN.* Revised twice: down, when a review found the first
 implementation covered only one of five DIAGNOSE recovery states, and back up once state 4 was
 eliminated. See the recovery-state analysis and the state-4 elimination at the end of this section.* The remediation described below has landed;
 what remains is proving it under injected process death, which is M2-T15's. The prerequisite is not
@@ -567,13 +567,38 @@ failure test.
 
 ### Status of prerequisite 3
 
-*Status: IMPLEMENTED — QUALIFICATION OPEN.* This is the current status; the earlier one above is
-marked superseded.
+*Status at the time of this implementation record: IMPLEMENTED — QUALIFICATION OPEN.* The earlier
+status is retained as historical reasoning; the current post-qualification status is recorded in
+the M2-T15.2 section below.
 
 All five DIAGNOSE recovery states are now handled, and state 4 is unreachable through this path
 rather than merely reported. What remains is qualification: **none of this has been exercised by
 actually killing a process**. Every crash window is reasoned about, asserted against durable state,
 and perturbation-tested, but no test has yet terminated a JVM mid-step.
 
-M2-T15 owns that. Until injected process death passes at each of the four crash windows, prerequisite
-3 is **not CLOSED** and the activation gate continues to hold.
+M2-T15 owned the remaining injected process-death qualification. The result is recorded below.
+
+## M2-T15.2 — real crash/pod-death qualification
+
+*Date: 2026-08-24 · Result: PASS.*
+
+The final clean run executed all nine ordered scenarios in the isolated `k3d-t15` cluster with two
+backend replicas and two AI replicas. Evidence is under
+`deploy/k8s/t15/evidence/m2-t15.2-20260824T062227Z/`, with the ordered result in `SUMMARY.tsv`.
+
+The run killed a real backend pod after claim, after evidence effect, after mastery effect, after
+diagnostic commission, after atomic diagnostic outcome/gate commit, and around adaptation handoff;
+it killed an AI pod during diagnostic provider execution and a backend pod after adaptation
+commission; and it ran a two-backend-replica contention case. All nine scenarios passed. The
+assertions covered single evidence lineage, single mastery snapshot and monotonic aggregate cursor,
+single provider commission/terminal lifecycle, single adaptation outbox/execution, stale-token and
+stale-lease CAS rejection, correct reclaim/attempt counts, monotonic workflow cursor, and complete
+request/interaction/trace/provenance reconstruction.
+
+During the first adaptation-commission attempt, qualification exposed a genuine commission replay
+bug: catching a PostgreSQL duplicate-key exception and then querying on the same transaction produced
+`25P02`. Commissioning now uses `ON CONFLICT DO NOTHING` and reads the durable event only after
+PostgreSQL has handled the conflict. The fixed image was rerun through the full matrix successfully.
+
+**Current status: CLOSED for prerequisite 3.** Prerequisites 1 and 2 remain open, so the overall
+production activation gate remains in force.

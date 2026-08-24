@@ -40,7 +40,7 @@ public class AgentWorkOutboxRepository {
         )
         SELECT claimed.id, claimed.request_id, claimed.interaction_id, claimed.trace_id,
                claimed.agent_type, claimed.capability, claimed.source_decision_id,
-               decision.skill_id, decision.recommended_action, decision.reason_code,
+               decision.learner_id, decision.skill_id, decision.recommended_action, decision.reason_code,
                claimed.attempt_count, claimed.lease_owner
           FROM claimed
           JOIN ledger.decision_record decision ON decision.id = claimed.source_decision_id
@@ -50,6 +50,7 @@ public class AgentWorkOutboxRepository {
             result.getString("interaction_id"), result.getString("trace_id"),
             result.getString("agent_type"), result.getString("capability"),
             result.getObject("source_decision_id", java.util.UUID.class),
+            result.getObject("learner_id", java.util.UUID.class),
             result.getObject("skill_id", java.util.UUID.class),
             RecommendedAction.valueOf(result.getString("recommended_action")),
             result.getString("reason_code"), result.getInt("attempt_count"),

@@ -1,7 +1,7 @@
 {
-  "$comment": "M2-T15.1 qualification artifacts built from current main. These are local-registry manifest-list digests, not mutable tags and not production release approval.",
-  "qualification": "m2-t15.1",
-  "sourceCommit": "cd1e36fd9e8f16fef1720a383acbd64d564ebabe",
+  "$comment": "M2-T15.2 qualification artifacts built from the current working tree at the T15.2 qualification point. These are local-registry manifest-list digests, not mutable tags and not production release approval.",
+  "qualification": "m2-t15.2",
+  "sourceCommit": "add835e1cadba4e94bfc429d7b7f79840dda433a",
   "registry": "k3d-ramals-t15-registry:5000",
   "supportingImages": {
     "busybox": {
@@ -13,13 +13,13 @@
   "images": {
     "learning-platform": {
       "repository": "ramals-learning-platform",
-      "digest": "sha256:2fa272a9ea07fae6d8dd0f06dffc4664b0812a9091e778417b0abeee0f39feb8",
-      "reference": "k3d-ramals-t15-registry:5000/ramals-learning-platform@sha256:2fa272a9ea07fae6d8dd0f06dffc4664b0812a9091e778417b0abeee0f39feb8"
+      "digest": "sha256:2c37abd7973ea62085700e5588fdd70bc783e991f808a25cea0363b6c1e3e0df",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-learning-platform@sha256:2c37abd7973ea62085700e5588fdd70bc783e991f808a25cea0363b6c1e3e0df"
     },
     "ramals-ai": {
       "repository": "ramals-ai",
-      "digest": "sha256:10fbbe736ac7f5589315f589eddf124986689fb749c9896a9fc787f8d64f6186",
-      "reference": "k3d-ramals-t15-registry:5000/ramals-ai@sha256:10fbbe736ac7f5589315f589eddf124986689fb749c9896a9fc787f8d64f6186"
+      "digest": "sha256:9af2b6ab6eb1ebe60df9b05ff754cdab43cd8a3835945b6b99b699026c9ed3f6",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-ai@sha256:9af2b6ab6eb1ebe60df9b05ff754cdab43cd8a3835945b6b99b699026c9ed3f6"
     },
     "web-ui": {
       "repository": "ramals-web-ui",

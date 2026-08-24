@@ -11,6 +11,7 @@ import io.ramals.learningplatform.orchestration.LearningWorkflow.Run;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 /**
@@ -54,6 +55,23 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
    */
   @Override
   public Result diagnose(Run run) {
+    String previousInteractionId = MDC.get("interactionId");
+    String previousTraceId = MDC.get("traceId");
+    MDC.put("interactionId", run.interactionId());
+    if (run.traceId() == null || run.traceId().isBlank()) {
+      MDC.remove("traceId");
+    } else {
+      MDC.put("traceId", run.traceId());
+    }
+    try {
+      return diagnoseWithCorrelation(run);
+    } finally {
+      restore("interactionId", previousInteractionId);
+      restore("traceId", previousTraceId);
+    }
+  }
+
+  private Result diagnoseWithCorrelation(Run run) {
     String requestId = requestId(run);
 
     // State 5: the gate already ruled. The cheapest and most complete recovery there is.
@@ -74,6 +92,14 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
       case FAILED -> adoptFailure(run, requestId, execution.errorCode());
       case SUCCEEDED -> unrecoverableSuccess(run, requestId);
     };
+  }
+
+  private static void restore(String key, String previous) {
+    if (previous == null) {
+      MDC.remove(key);
+    } else {
+      MDC.put(key, previous);
+    }
   }
 
   /** State 1: nothing was ever commissioned, so this is an ordinary first attempt. */

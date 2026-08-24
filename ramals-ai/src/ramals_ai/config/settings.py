@@ -58,6 +58,14 @@ class Settings(BaseSettings):
 
     request_timeout_seconds: float = Field(default=12.0, gt=0, le=60)
 
+    # T15 crash qualification fixtures are an explicitly opt-in test mode. They are kept in the
+    # settings object so an unexpected environment variable cannot silently alter a normal local or
+    # shared process, and the default route remains the original deterministic canned completion.
+    qualification_fixtures: bool = False
+    qualification_provider_pause_enabled: bool = False
+    qualification_provider_pause_request_id: str | None = None
+    qualification_provider_pause_ms: int = Field(default=0, ge=0, le=600_000)
+
     # --- rollback pins (M1-ADR-008) -------------------------------------------------------------
     # Withdrawing a bad prompt or model is the fastest remedy available for a quality regression, so
     # it must not cost a service deployment. These pins repoint a route at a revision this image
