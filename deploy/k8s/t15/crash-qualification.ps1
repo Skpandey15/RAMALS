@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ApprovedCommit,
+  [string]$ApprovedRef = "origin/main",
   [ValidateSet(
     "all",
     "after-claim",
@@ -100,7 +101,7 @@ function Invoke-CandidateIntegrityGate {
   $gatePath = Join-Path $scriptRoot "candidate-integrity.ps1"
   $output = & pwsh -NoProfile -File $gatePath `
     -ApprovedCommit $ApprovedCommit `
-    -ApprovedRef "origin/main" `
+    -ApprovedRef $ApprovedRef `
     -ClusterName $ClusterName `
     -Namespace $Namespace `
     -ManifestRoot $scriptRoot `

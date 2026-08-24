@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ApprovedCommit,
+  [string]$ApprovedRef = "origin/main",
   [string]$ClusterName = "t15",
   [string]$Namespace = "ramals-t15",
   [string]$EvidenceDirectory = "",
@@ -62,7 +63,7 @@ function Invoke-CandidateIntegrityGate {
   $gatePath = Join-Path $scriptRoot "candidate-integrity.ps1"
   $output = & pwsh -NoProfile -File $gatePath `
     -ApprovedCommit $ApprovedCommit `
-    -ApprovedRef "origin/main" `
+    -ApprovedRef $ApprovedRef `
     -ClusterName $ClusterName `
     -Namespace $Namespace `
     -ManifestRoot $scriptRoot `
@@ -225,6 +226,8 @@ try {
     cluster = $ClusterName
     namespace = $Namespace
     approvedCommit = $ApprovedCommit.ToLowerInvariant()
+    approvedRef = $ApprovedRef
+    approvedRefCommit = $candidate.approvedRefCommit
     candidateIntegrity = $candidate.result
     candidateEvidence = "candidate-integrity.json"
     renderedManifestSha256 = $candidate.candidate.manifest.renderedManifestSha256

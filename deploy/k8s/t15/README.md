@@ -76,10 +76,12 @@ non-billable. It is not a production model configuration.
 
 [`candidate-integrity.ps1`](candidate-integrity.ps1) is the first substantive qualification check.
 It requires a full 40-character approved commit and fails with a non-zero exit code on any mismatch.
+The approved ref may advance after the candidate is frozen: it must resolve successfully and contain
+the candidate commit as an ancestor.
 The gate proves this chain:
 
 ```text
-approved origin/main commit + tree
+approved candidate commit + tree, reachable from approved main ref
         -> reviewed image lock digests
         -> rendered Kustomize manifest and hashes
         -> live deployment intent and resolved pod imageIDs
@@ -99,11 +101,18 @@ pwsh -File .\deploy\k8s\t15\candidate-integrity.ps1 `
   -SelfTest
 ```
 
-`-SelfTest` deliberately mutates the approved commit, migration set, backend image, and rendered
-manifest in temporary copies. Each mutation must fail for its expected check. The committed shape
-is defined by [`evidence-schema.json`](evidence-schema.json), with a redacted structural example in
-[`evidence-example.json`](evidence-example.json). The example is documentation only and cannot be
+`-SelfTest` deliberately exercises candidate/ref A, candidate A with descendant ref B, an unreachable
+candidate B with ref A, and a lock source-commit mismatch, in addition to mutating the migration set,
+backend image, and rendered manifest in temporary copies. Each mutation must fail for its expected
+check. It also bypasses the ancestry guard in a temporary script and verifies that the unreachable
+candidate case would otherwise pass, proving the negative test detects guard removal. The committed
+shape is defined by [`evidence-schema.json`](evidence-schema.json), with a redacted structural example
+in [`evidence-example.json`](evidence-example.json). The example is documentation only and cannot be
 used as qualification evidence.
+
+When `publish-images.ps1` is run without `-UpdateLock`, it writes the proposed lock to
+`images.lock.proposed.json` by default. Use `-ProposedLockPath` to choose another persistent review
+location; the temporary build metadata directory is still cleaned up after the run.
 
 ## Evidence and checks
 

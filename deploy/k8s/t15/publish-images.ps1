@@ -4,6 +4,7 @@ param(
   [string]$DockerRegistry = "localhost:5111",
   [string]$KubernetesRegistry = "k3d-ramals-t15-registry:5000",
   [string]$Tag = "",
+  [string]$ProposedLockPath = "",
   [switch]$UpdateLock
 )
 
@@ -11,6 +12,16 @@ $ErrorActionPreference = "Stop"
 $scriptRoot = (Resolve-Path $PSScriptRoot).Path
 $repositoryRoot = (Resolve-Path (Join-Path $scriptRoot "..\..\..")).Path
 Set-Location $repositoryRoot
+
+if ([string]::IsNullOrWhiteSpace($ProposedLockPath)) {
+  $ProposedLockPath = Join-Path $scriptRoot "images.lock.proposed.json"
+} elseif (-not [System.IO.Path]::IsPathRooted($ProposedLockPath)) {
+  $ProposedLockPath = Join-Path $repositoryRoot $ProposedLockPath
+}
+$proposedLockParent = Split-Path -Parent $ProposedLockPath
+if (-not [string]::IsNullOrWhiteSpace($proposedLockParent)) {
+  New-Item -ItemType Directory -Path $proposedLockParent -Force | Out-Null
+}
 
 function Invoke-Checked {
   param(
@@ -158,9 +169,12 @@ try {
     [System.IO.File]::WriteAllText($lockPath, (($lock | ConvertTo-Json -Depth 30) + [Environment]::NewLine), $utf8)
     Write-Host "Updated $lockPath and kustomization.yaml for the exact candidate"
   } else {
-    $outputPath = Join-Path $metadataRoot "images.lock.json"
-    $lock | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $outputPath -Encoding utf8
-    Write-Host "Candidate lock written to $outputPath"
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText(
+      $ProposedLockPath,
+      (($lock | ConvertTo-Json -Depth 30) + [Environment]::NewLine),
+      $utf8)
+    Write-Host "Candidate lock written to $ProposedLockPath"
     Write-Host "Re-run with -UpdateLock only after reviewing the digest set"
   }
 } finally {

@@ -68,9 +68,10 @@ pwsh -File .\deploy\k8s\t15\smoke.ps1 -ApprovedCommit $approvedCommit
 ```
 
 This path does not replace Docker Compose or add production trigger wiring. The candidate-integrity
-gate and baseline smoke are the only M2-T15 checks in the first qualification task; crash, performance,
-and Phase-G security qualification remain pending. See [`k8s/t15/README.md`](k8s/t15/README.md) for
-the candidate lock, evidence schema, topology, secret handling, and deferred qualification rules.
+gate accepts a frozen candidate when it is reachable from the approved main ref; baseline smoke is the
+only M2-T15 check in the first qualification task. Crash, performance, and Phase-G security
+qualification remain pending. See [`k8s/t15/README.md`](k8s/t15/README.md) for the candidate lock,
+evidence schema, topology, secret handling, and deferred qualification rules.
 
 Exit codes: `0` reconciled/healthy · `1` transient failure exhausted · `2` desired version is held ·
 `3` deployed but failed health gates, rolled back and now held.

@@ -164,6 +164,9 @@
         "approvedRef": {
           "$ref": "#/$defs/nonEmpty"
         },
+        "approvedRefCommit": {
+          "$ref": "#/$defs/commit"
+        },
         "checks": {
           "type": "array",
           "items": {

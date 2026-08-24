@@ -61,6 +61,29 @@ function Invoke-Checked {
   return ($output -join "`n")
 }
 
+function Resolve-GitCommit {
+  param([Parameter(Mandatory = $true)][string]$Reference)
+  return (Invoke-Checked "git" @("rev-parse", "--verify", "$Reference^{commit}")).Trim().ToLowerInvariant()
+}
+
+function Test-CommitReachable {
+  param(
+    [Parameter(Mandatory = $true)][string]$CandidateCommit,
+    [Parameter(Mandatory = $true)][string]$ApprovedRefCommit
+  )
+  # git merge-base returns 1 for a valid, unrelated/non-ancestor pair. That is a
+  # qualification failure, not a command failure; only other exit codes are tool errors.
+  $null = & git merge-base --is-ancestor $CandidateCommit $ApprovedRefCommit 2>&1
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -eq 0) {
+    return $true
+  }
+  if ($exitCode -eq 1) {
+    return $false
+  }
+  throw "git merge-base --is-ancestor failed with exit code $exitCode"
+}
+
 function Invoke-Kubectl {
   param([Parameter(Mandatory = $true)][string[]]$Arguments)
   return Invoke-Checked "kubectl" $Arguments
@@ -440,22 +463,20 @@ function Run-ExpectedDriftFailure {
     [Parameter(Mandatory = $true)][string]$TempManifestRoot,
     [Parameter(Mandatory = $true)][string]$TempLock,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
-    [Parameter(Mandatory = $true)][string]$ExpectedFailureText
+    [Parameter(Mandatory = $true)][string]$ExpectedFailureText,
+    [string]$CandidateCommit = "",
+    [string]$CandidateRef = "",
+    [string]$GateScriptPath = ""
   )
-  New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-  $arguments = @(
-    "-NoProfile", "-File", $PSCommandPath,
-    "-ApprovedCommit", $ApprovedCommit,
-    "-ApprovedRef", $ApprovedRef,
-    "-ClusterName", $ClusterName,
-    "-Namespace", $Namespace,
-    "-ManifestRoot", $TempManifestRoot,
-    "-LockPath", $TempLock,
-    "-EvidenceDirectory", $OutputDirectory
-  )
-  $output = & pwsh @arguments 2>&1
-  $exitCode = $LASTEXITCODE
-  Write-Utf8 (Join-Path $OutputDirectory "output.log") ($output -join "`n")
+  $invocation = Invoke-GateForSelfTest `
+    -TempManifestRoot $TempManifestRoot `
+    -TempLock $TempLock `
+    -OutputDirectory $OutputDirectory `
+    -CandidateCommit $CandidateCommit `
+    -CandidateRef $CandidateRef `
+    -GateScriptPath $GateScriptPath
+  $exitCode = $invocation.exitCode
+  $output = @($invocation.output)
   if ($exitCode -eq 0) {
     throw "drift self-test '$Name' unexpectedly passed"
   }
@@ -472,16 +493,176 @@ function Run-ExpectedDriftFailure {
   }
 }
 
+function Invoke-GateForSelfTest {
+  param(
+    [Parameter(Mandatory = $true)][string]$TempManifestRoot,
+    [Parameter(Mandatory = $true)][string]$TempLock,
+    [Parameter(Mandatory = $true)][string]$OutputDirectory,
+    [string]$CandidateCommit = "",
+    [string]$CandidateRef = "",
+    [string]$GateScriptPath = ""
+  )
+  if ([string]::IsNullOrWhiteSpace($CandidateCommit)) {
+    $CandidateCommit = $ApprovedCommit
+  }
+  if ([string]::IsNullOrWhiteSpace($CandidateRef)) {
+    $CandidateRef = $ApprovedRef
+  }
+  if ([string]::IsNullOrWhiteSpace($GateScriptPath)) {
+    $GateScriptPath = Join-Path $scriptRoot "candidate-integrity.ps1"
+  }
+  New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+  $arguments = @(
+    "-NoProfile", "-File", $GateScriptPath,
+    "-ApprovedCommit", $CandidateCommit,
+    "-ApprovedRef", $CandidateRef,
+    "-ClusterName", $ClusterName,
+    "-Namespace", $Namespace,
+    "-ManifestRoot", $TempManifestRoot,
+    "-LockPath", $TempLock,
+    "-EvidenceDirectory", $OutputDirectory
+  )
+  $output = & pwsh @arguments 2>&1
+  $exitCode = $LASTEXITCODE
+  Write-Utf8 (Join-Path $OutputDirectory "output.log") ($output -join "`n")
+  return [pscustomobject]@{
+    exitCode = $exitCode
+    output = @($output)
+    resultPath = Join-Path $OutputDirectory "candidate-integrity.json"
+  }
+}
+
+function Run-ExpectedGatePass {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string]$TempManifestRoot,
+    [Parameter(Mandatory = $true)][string]$TempLock,
+    [Parameter(Mandatory = $true)][string]$OutputDirectory,
+    [string]$CandidateCommit = "",
+    [string]$CandidateRef = ""
+  )
+  $invocation = Invoke-GateForSelfTest `
+    -TempManifestRoot $TempManifestRoot `
+    -TempLock $TempLock `
+    -OutputDirectory $OutputDirectory `
+    -CandidateCommit $CandidateCommit `
+    -CandidateRef $CandidateRef
+  if ($invocation.exitCode -ne 0) {
+    throw "provenance self-test '$Name' unexpectedly failed: $($invocation.output -join "`n")"
+  }
+  $gateResult = Get-Content -LiteralPath $invocation.resultPath -Raw | ConvertFrom-Json
+  if ($gateResult.result -ne "PASS") {
+    throw "provenance self-test '$Name' produced result '$($gateResult.result)'"
+  }
+  return [ordered]@{
+    name = $Name
+    result = "PASS"
+    expected = "gate accepts reachable candidate"
+    observedExitCode = $invocation.exitCode
+  }
+}
+
+function New-ProvenanceGuardMutation {
+  $sourcePath = Join-Path $scriptRoot "candidate-integrity.ps1"
+  $source = Get-Content -LiteralPath $sourcePath -Raw
+  $needle = '$provenanceCondition = Test-CommitReachable $ApprovedCommit $approvedRefCommit'
+  if ($source.IndexOf($needle, [System.StringComparison]::Ordinal) -lt 0) {
+    throw "provenance self-test could not locate the ancestry guard"
+  }
+  $mutatedPath = Join-Path $scriptRoot (".candidate-integrity-selftest-" + [guid]::NewGuid().ToString("N") + ".ps1")
+  Write-Utf8 $mutatedPath ($source.Replace($needle, '$provenanceCondition = $true'))
+  return $mutatedPath
+}
+
 function Run-SelfTests {
   param([Parameter(Mandatory = $true)]$Lock)
   $tests = [System.Collections.Generic.List[object]]::new()
   $selfRoot = Join-Path $EvidenceDirectory "candidate-drift-self-tests"
 
-  $commitDrift = New-DriftFixture "approved-commit-drift" $Lock `
+  $candidateA = $ApprovedCommit.ToLowerInvariant()
+  $candidateB = ""
+  $headCommit = Resolve-GitCommit "HEAD"
+  if ($headCommit -ne $candidateA -and (Test-CommitReachable $candidateA $headCommit)) {
+    $candidateB = $headCommit
+  } else {
+    $descendantsText = Invoke-Checked "git" @("rev-list", "--all", "--ancestry-path", "$candidateA..")
+    foreach ($descendant in @($descendantsText -split "`r?`n" | Where-Object { $_ -match '^[0-9a-fA-F]{40}$' })) {
+      $normalized = $descendant.ToLowerInvariant()
+      if ($normalized -ne $candidateA -and (Test-CommitReachable $candidateA $normalized)) {
+        $candidateB = $normalized
+        break
+      }
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($candidateB)) {
+    throw "provenance self-test requires a descendant commit B for candidate $candidateA"
+  }
+  $candidateBTree = (Invoke-Checked "git" @("rev-parse", "--verify", "$candidateB^{tree}")).Trim().ToLowerInvariant()
+  $originMainCommit = Resolve-GitCommit "origin/main"
+  $sameCandidateRef = if ($originMainCommit -eq $candidateA) { "origin/main" } else { $candidateA }
+  $descendantCandidateRef = if ($originMainCommit -ne $candidateA -and
+      (Test-CommitReachable $candidateA $originMainCommit)) { "origin/main" } else { $candidateB }
+
+  $provenanceFixture = New-DriftFixture "provenance-reachability" $Lock
+  try {
+    [void]$tests.Add((Run-ExpectedGatePass "candidate-a-ref-a" $provenanceFixture.Root $provenanceFixture.Lock `
+        (Join-Path $selfRoot "candidate-a-ref-a") `
+        -CandidateCommit $candidateA -CandidateRef $sameCandidateRef))
+    [void]$tests.Add((Run-ExpectedGatePass "candidate-a-ref-descendant-b" $provenanceFixture.Root $provenanceFixture.Lock `
+        (Join-Path $selfRoot "candidate-a-ref-descendant-b") `
+        -CandidateCommit $candidateA -CandidateRef $descendantCandidateRef))
+  } finally {
+    Remove-Item -LiteralPath $provenanceFixture.Root -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $unreachableFixture = New-DriftFixture "candidate-not-reachable" $Lock `
+    -MutateLock {
+      param($value)
+      $value.sourceCommit = $candidateB
+      $value.sourceTree = $candidateBTree
+    }
+  try {
+    # This is the adversarial case: the lock and candidate agree on B, but approved ref A
+    # cannot contain B. The ancestry check must be the first failing authority check.
+    [void]$tests.Add((Run-ExpectedDriftFailure "candidate-not-reachable-from-approved-ref" `
+        $unreachableFixture.Root $unreachableFixture.Lock `
+        (Join-Path $selfRoot "candidate-not-reachable-from-approved-ref") `
+        "approved commit is reachable from approved ref" `
+        -CandidateCommit $candidateB -CandidateRef $candidateA))
+
+    # Mutation proof: if the ancestry guard is bypassed, this otherwise valid live fixture
+    # passes. That makes the negative test sensitive to removal of the provenance protection.
+    $mutatedGatePath = New-ProvenanceGuardMutation
+    try {
+      $perturbed = Invoke-GateForSelfTest `
+        -TempManifestRoot $unreachableFixture.Root `
+        -TempLock $unreachableFixture.Lock `
+        -OutputDirectory (Join-Path $selfRoot "candidate-not-reachable-guard-perturbed") `
+        -CandidateCommit $candidateB `
+        -CandidateRef $candidateA `
+        -GateScriptPath $mutatedGatePath
+      if ($perturbed.exitCode -ne 0) {
+        throw "provenance guard perturbation did not isolate the reachability check: $($perturbed.output -join "`n")"
+      }
+      [void]$tests.Add([ordered]@{
+          name = "candidate-not-reachable-provenance-guard-perturbation"
+          result = "PASS"
+          expected = "unreachable candidate fails only when ancestry guard is active"
+          observedOriginalExitCode = 1
+          observedPerturbedExitCode = $perturbed.exitCode
+        })
+    } finally {
+      Remove-Item -LiteralPath $mutatedGatePath -Force -ErrorAction SilentlyContinue
+    }
+  } finally {
+    Remove-Item -LiteralPath $unreachableFixture.Root -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $commitDrift = New-DriftFixture "lock-source-commit-differs" $Lock `
     -MutateLock { param($value) $value.sourceCommit = "0" * 40 }
   try {
-    [void]$tests.Add((Run-ExpectedDriftFailure "approved-commit-drift" $commitDrift.Root $commitDrift.Lock `
-        (Join-Path $selfRoot "approved-commit-drift") `
+    [void]$tests.Add((Run-ExpectedDriftFailure "lock-source-commit-differs" $commitDrift.Root $commitDrift.Lock `
+        (Join-Path $selfRoot "lock-source-commit-differs") `
         "lock source commit equals approved commit"))
   } finally {
     Remove-Item -LiteralPath $commitDrift.Root -Recurse -Force -ErrorAction SilentlyContinue
@@ -562,8 +743,12 @@ try {
   $lock = Read-Lock
   $lockCommit = ([string]$lock.sourceCommit).ToLowerInvariant()
   Require-Check "lock source commit equals approved commit" ($lockCommit -eq $ApprovedCommit.ToLowerInvariant()) $lockCommit
-  $approvedRefCommit = (Invoke-Checked "git" @("rev-parse", "--verify", $ApprovedRef)).Trim().ToLowerInvariant()
-  Require-Check "approved ref resolves to approved commit" ($approvedRefCommit -eq $ApprovedCommit.ToLowerInvariant()) $approvedRefCommit
+  $approvedRefCommit = Resolve-GitCommit $ApprovedRef
+  $result.approvedRefCommit = $approvedRefCommit
+  $provenanceCondition = Test-CommitReachable $ApprovedCommit $approvedRefCommit
+  Require-Check "approved commit is reachable from approved ref" `
+    $provenanceCondition `
+    ("candidate=$($ApprovedCommit.ToLowerInvariant()); approvedRef=$approvedRefCommit")
   $approvedTree = (Invoke-Checked "git" @("rev-parse", "--verify", "$ApprovedCommit^{tree}")).Trim().ToLowerInvariant()
   Require-Check "lock source tree equals approved commit tree" `
     ($approvedTree -eq ([string]$lock.sourceTree).ToLowerInvariant()) $approvedTree
