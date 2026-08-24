@@ -164,6 +164,17 @@ links for each future perturbation:
 The generated scenario shape is `m2-t15.scenario-evidence.v1`. No real crash scenario is a PASS from
 this task.
 
+The two-replica contention case has an additional deterministic qualification boundary. It
+pre-creates the target step as `PENDING`, holds that exact PostgreSQL row with the
+`qualification-coordinator.ps1` helper, and observes `pg_stat_activity` claim sessions blocked by
+the helper transaction. Each session is mapped from its client IP to a live backend pod UID. The
+scenario is allowed to pass only when the evidence contains exactly two distinct PostgreSQL claim
+sessions from two distinct backend pod UIDs, one durable `WON` token and one `LOST` CAS result. The
+raw barrier and durable proof are retained as `claim-barrier.json`, `claim-attempts.json`,
+`postgres-claim-after.json`, and `postgres-claim-final.json`; pod count alone is not evidence of a
+second attempt. `contention-proof.tests.ps1` includes the negative perturbation that removes the
+second attempt and verifies that the proof fails.
+
 ## Deterministic stale-worker race design — not qualified
 
 The eventual stale-worker run must use a qualification-only barrier, not pod deletion timing:
