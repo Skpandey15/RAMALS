@@ -17,6 +17,7 @@ import io.ramals.learningplatform.grounding.ProposalType;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
 import io.ramals.learningplatform.qualification.QualificationFault;
 import io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder;
+import io.ramals.learningplatform.observability.CorrelationContext;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -151,18 +152,19 @@ public class DiagnosticAssessmentService {
   private static void logDecision(Evaluation evaluation, String interactionId, String traceId) {
     Outcome outcome = evaluation.outcome();
     boolean malformed = evaluation.parserReasonCode() != null;
-    var event = malformed || !outcome.accepted() ? LOGGER.atWarn() : LOGGER.atInfo();
-    event
-        .addKeyValue("operation", "ai.diagnosticAssessment.gate")
-        .addKeyValue("outcome", outcome.accepted() ? "ACCEPTED" : "REJECTED")
-        .addKeyValue("reasonCodes", outcome.reasons().stream().map(Enum::name).toList())
-        .addKeyValue("parserReasonCode", evaluation.parserReasonCode())
-        .addKeyValue("proposalId", outcome.proposalId())
-        .addKeyValue("agentRunId", outcome.agentRunId())
-        .addKeyValue("contextId", outcome.contextId())
-        .addKeyValue("interactionId", interactionId)
-        .addKeyValue("traceId", traceId)
-        .log("diagnostic assessment gate decided");
+    try (CorrelationContext.Scope ignored =
+        CorrelationContext.withCorrelation(interactionId, traceId)) {
+      var event = malformed || !outcome.accepted() ? LOGGER.atWarn() : LOGGER.atInfo();
+      event
+          .addKeyValue("operation", "ai.diagnosticAssessment.gate")
+          .addKeyValue("outcome", outcome.accepted() ? "ACCEPTED" : "REJECTED")
+          .addKeyValue("reasonCodes", outcome.reasons().stream().map(Enum::name).toList())
+          .addKeyValue("parserReasonCode", evaluation.parserReasonCode())
+          .addKeyValue("proposalId", outcome.proposalId())
+          .addKeyValue("agentRunId", outcome.agentRunId())
+          .addKeyValue("contextId", outcome.contextId())
+          .log("diagnostic assessment gate decided");
+    }
   }
 
   /**

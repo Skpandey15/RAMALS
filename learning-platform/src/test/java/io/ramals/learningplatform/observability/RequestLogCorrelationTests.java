@@ -34,7 +34,8 @@ import org.springframework.test.web.servlet.MockMvc;
     "RAMALS_DB_URL=jdbc:h2:mem:requestlog;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
     "RAMALS_DB_USER=sa",
     "RAMALS_DB_PASSWORD=",
-    "spring.flyway.enabled=false"
+    "spring.flyway.enabled=false",
+    "logging.structured.format.console=logstash"
 })
 @AutoConfigureMockMvc
 class RequestLogCorrelationTests {
@@ -46,6 +47,7 @@ class RequestLogCorrelationTests {
 
   private Logger filterLogger;
   private ListAppender<ILoggingEvent> appender;
+  private StructuredLogCapture structuredLogs;
 
   @BeforeEach
   void captureFilterLogging() {
@@ -53,12 +55,14 @@ class RequestLogCorrelationTests {
     appender = new ListAppender<>();
     appender.start();
     filterLogger.addAppender(appender);
+    structuredLogs = new StructuredLogCapture(InteractionIdFilter.class);
   }
 
   @AfterEach
   void releaseFilterLogging() {
     filterLogger.detachAppender(appender);
     appender.stop();
+    structuredLogs.close();
   }
 
   private Map<String, String> summaryContext() {
@@ -116,6 +120,30 @@ class RequestLogCorrelationTests {
         .as("interactionId finds the request; traceId is what walks it across services")
         .isNotBlank();
     assertThat(context.get("spanId")).isNotBlank();
+
+    String json = serializedSummary();
+    assertThat(count(json, "\"traceId\"")).isEqualTo(1);
+    assertThat(count(json, "\"spanId\"")).isEqualTo(1);
+    assertThat(count(json, "\"interactionId\"")).isEqualTo(1);
+    assertThat(count(json, "\"requestId\"")).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("an existing W3C trace context remains correlated in the structured event")
+  void existingW3cTraceContextIsRetainedWithoutDuplicateTraceFields() throws Exception {
+    String traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+    String parentSpanId = "00f067aa0ba902b7";
+
+    mockMvc.perform(
+        get("/api/v1/learners/me")
+            .header("traceparent", "00-" + traceId + "-" + parentSpanId + "-01"));
+
+    assertThat(summaryContext().get("traceId")).isEqualTo(traceId);
+    String json = serializedSummary();
+    assertThat(count(json, "\"traceId\"")).isEqualTo(1);
+    assertThat(count(json, "\"spanId\"")).isEqualTo(1);
+    assertThat(count(json, "\"interactionId\"")).isEqualTo(1);
+    assertThat(count(json, "\"requestId\"")).isEqualTo(1);
   }
 
   @Test
@@ -128,5 +156,21 @@ class RequestLogCorrelationTests {
     mockMvc.perform(get("/api/v1/learners/me"));
 
     assertThat(summaryContext().get("interactionId")).isNotEqualTo(first);
+  }
+
+  private String serializedSummary() {
+    List<ILoggingEvent> summaries = structuredLogs.events().stream()
+        .filter(event -> SUMMARY_MESSAGE.equals(event.getMessage()))
+        .toList();
+    assertThat(summaries).as("the serialized capture should contain one request summary").hasSize(1);
+    return structuredLogs.encode(summaries.getFirst());
+  }
+
+  private static int count(String value, String needle) {
+    int count = 0;
+    for (int offset = 0; (offset = value.indexOf(needle, offset)) >= 0; offset += needle.length()) {
+      count++;
+    }
+    return count;
   }
 }

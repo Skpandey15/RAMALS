@@ -3,13 +3,13 @@ package io.ramals.learningplatform.recommendation;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerService;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
+import io.ramals.learningplatform.observability.BusinessEventLogger;
+import io.ramals.learningplatform.observability.CorrelationContext;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import io.ramals.learningplatform.observability.BusinessEventLogger;
-import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,35 +40,37 @@ public class RecommendationService {
   public RecommendationResult recommend(
       MasterySnapshot snapshot, String interactionId, String traceId) {
     RecommendationDecision decision = policy.decide(snapshot);
-    BusinessEventLogger.info(LOGGER, "recommendation.decided", "Learning recommendation decided",
-        Map.ofEntries(
-            Map.entry("entityType", "Recommendation"),
-            Map.entry("entityId", snapshot.id()),
-            Map.entry("snapshotId", snapshot.id()),
-            Map.entry("learnerId", snapshot.learnerId()),
-            Map.entry("skillId", snapshot.skillId()),
-            Map.entry("policyVersion", RecommendationPolicy.POLICY_VERSION),
-            Map.entry("outcome", "SUCCESS"),
-            Map.entry("recommendedAction", decision.action()),
-            Map.entry("reasonCode", decision.reasonCode()),
-            Map.entry("interactionId", correlationValue(interactionId, "interactionId")),
-            Map.entry("traceId", correlationValue(traceId, "traceId"))));
+    try (CorrelationContext.Scope ignored =
+        CorrelationContext.withCorrelation(interactionId, traceId)) {
+      BusinessEventLogger.info(LOGGER, "recommendation.decided", "Learning recommendation decided",
+          Map.ofEntries(
+              Map.entry("entityType", "Recommendation"),
+              Map.entry("entityId", snapshot.id()),
+              Map.entry("snapshotId", snapshot.id()),
+              Map.entry("learnerId", snapshot.learnerId()),
+              Map.entry("skillId", snapshot.skillId()),
+              Map.entry("policyVersion", RecommendationPolicy.POLICY_VERSION),
+              Map.entry("outcome", "SUCCESS"),
+              Map.entry("recommendedAction", decision.action()),
+              Map.entry("reasonCode", decision.reasonCode())));
+    }
     DecisionRecord decisionRecord = repository.appendDecisionRecord(
         snapshot, decision, RecommendationPolicy.POLICY_VERSION, interactionId, traceId);
     LearningRecommendation recommendation = repository.appendRecommendation(
         snapshot, decision, decisionRecord.id());
     RecommendationRepository.AdaptationWork adaptationWork =
         repository.appendAdaptationWork(decisionRecord);
-    BusinessEventLogger.info(LOGGER, "recommendation.persisted",
-        "Learning recommendation persisted",
-        Map.of(
-            "entityType", "Recommendation",
-            "entityId", recommendation.id(),
-            "decisionRecordId", decisionRecord.id(),
-            "snapshotId", snapshot.id(),
-            "outcome", "SUCCESS",
-            "interactionId", correlationValue(interactionId, "interactionId"),
-            "traceId", correlationValue(traceId, "traceId")));
+    try (CorrelationContext.Scope ignored =
+        CorrelationContext.withCorrelation(interactionId, traceId)) {
+      BusinessEventLogger.info(LOGGER, "recommendation.persisted",
+          "Learning recommendation persisted",
+          Map.of(
+              "entityType", "Recommendation",
+              "entityId", recommendation.id(),
+              "decisionRecordId", decisionRecord.id(),
+              "snapshotId", snapshot.id(),
+              "outcome", "SUCCESS"));
+    }
 
     // The durable dispatcher owns delivery. No remote call or volatile event is part of this
     // transaction; commit makes the work recoverable and a worker claims it afterwards.
@@ -98,11 +100,4 @@ public class RecommendationService {
         .orElseGet(List::of);
   }
 
-  private static String correlationValue(String supplied, String mdcKey) {
-    if (supplied != null && !supplied.isBlank()) {
-      return supplied;
-    }
-    String current = MDC.get(mdcKey);
-    return current == null ? "" : current;
-  }
 }

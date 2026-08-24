@@ -28,6 +28,7 @@ import io.ramals.learningplatform.grounding.ProposalGroundingRequest;
 import io.ramals.learningplatform.execution.AiExecution;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
 import io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder;
+import io.ramals.learningplatform.observability.StructuredLogCapture;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -36,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
@@ -294,6 +296,33 @@ class DiagnosticAssessmentServiceTests {
     assertThat(decisions.appended).isEmpty();
     assertThat(executions.successfulRequests).isEmpty();
     assertThat(executions.failureCodes).isEmpty();
+  }
+
+  @Test
+  void diagnosticGateLogHasOneCanonicalCorrelationFieldPerIdentifier() {
+    try (StructuredLogCapture logs =
+        new StructuredLogCapture(DiagnosticAssessmentService.class)) {
+      service(envelopeAccepting()).assess("subject-1", CURRICULUM, "r-1");
+
+      ILoggingEvent event =
+          logs.events().stream()
+              .filter(candidate -> "diagnostic assessment gate decided".equals(candidate.getMessage()))
+              .findFirst()
+              .orElseThrow();
+      String json = logs.encode(event);
+      assertThat(json).contains("\"interactionId\":\"interaction-1\"");
+      assertThat(json).contains("\"traceId\":\"trace-1\"");
+      assertThat(count(json, "\"interactionId\"")).isEqualTo(1);
+      assertThat(count(json, "\"traceId\"")).isEqualTo(1);
+    }
+  }
+
+  private static int count(String value, String needle) {
+    int count = 0;
+    for (int offset = 0; (offset = value.indexOf(needle, offset)) >= 0; offset += needle.length()) {
+      count++;
+    }
+    return count;
   }
 
   // -- fixtures ---------------------------------------------------------------------------------------------

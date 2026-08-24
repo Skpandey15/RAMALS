@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.execution;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import io.ramals.learningplatform.observability.CorrelationContext;
 import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -84,12 +85,14 @@ public class AgentWorkDispatcher {
     metrics.counter("ramals.ai.dispatch", "outcome", outcome).increment();
     metrics.timer("ramals.ai.dispatch.duration", "outcome", outcome)
         .record(System.nanoTime() - started, java.util.concurrent.TimeUnit.NANOSECONDS);
-    var event = "completed".equals(outcome) ? LOGGER.atInfo() : LOGGER.atWarn();
-    event.addKeyValue("operation", "ai.work.dispatch")
-        .addKeyValue("outcome", outcome.toUpperCase(Locale.ROOT))
-        .addKeyValue("workId", work.id()).addKeyValue("requestId", work.requestId())
-        .addKeyValue("interactionId", work.interactionId()).addKeyValue("traceId", work.traceId())
-        .addKeyValue("attempt", work.attemptCount()).addKeyValue("errorCode", errorCode)
-        .log("agent work dispatch finished");
+    try (CorrelationContext.Scope ignored =
+        CorrelationContext.withCorrelation(work.interactionId(), work.traceId())) {
+      var event = "completed".equals(outcome) ? LOGGER.atInfo() : LOGGER.atWarn();
+      event.addKeyValue("operation", "ai.work.dispatch")
+          .addKeyValue("outcome", outcome.toUpperCase(Locale.ROOT))
+          .addKeyValue("workId", work.id()).addKeyValue("requestId", work.requestId())
+          .addKeyValue("attempt", work.attemptCount()).addKeyValue("errorCode", errorCode)
+          .log("agent work dispatch finished");
+    }
   }
 }
