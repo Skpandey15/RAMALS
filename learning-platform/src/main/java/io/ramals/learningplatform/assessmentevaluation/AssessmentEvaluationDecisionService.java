@@ -13,6 +13,7 @@ import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.De
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DeterministicCheck;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.Reason;
 import java.time.Clock;
+import io.ramals.learningplatform.observability.CorrelationContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -156,20 +157,21 @@ public class AssessmentEvaluationDecisionService {
       Decision decision,
       String parserReasonCode,
       String traceId) {
-    LOGGER
-        .atInfo()
-        .addKeyValue("operation", "ai.assessmentEvaluation.gate")
-        .addKeyValue("outcome", decision.outcome().name())
-        .addKeyValue("reasonCodes", decision.reasons().stream().map(Enum::name).toList())
-        .addKeyValue("parserReasonCode", parserReasonCode)
-        .addKeyValue("proposalId", envelope.proposalId())
-        .addKeyValue("requestId", request.requestId())
-        .addKeyValue("agentRunId", envelope.agentRunId())
-        .addKeyValue("contextId", request.groundedContext().contextId())
-        .addKeyValue("answerVersion", request.evaluationContext().answerVersion())
-        .addKeyValue("rubricVersion", request.evaluationContext().rubricVersion())
-        .addKeyValue("interactionId", request.interactionId())
-        .addKeyValue("traceId", traceId)
-        .log("assessment evaluation gate decided");
+    try (CorrelationContext.Scope ignored =
+        CorrelationContext.withCorrelation(request.interactionId(), traceId)) {
+      LOGGER
+          .atInfo()
+          .addKeyValue("operation", "ai.assessmentEvaluation.gate")
+          .addKeyValue("outcome", decision.outcome().name())
+          .addKeyValue("reasonCodes", decision.reasons().stream().map(Enum::name).toList())
+          .addKeyValue("parserReasonCode", parserReasonCode)
+          .addKeyValue("proposalId", envelope.proposalId())
+          .addKeyValue("requestId", request.requestId())
+          .addKeyValue("agentRunId", envelope.agentRunId())
+          .addKeyValue("contextId", request.groundedContext().contextId())
+          .addKeyValue("answerVersion", request.evaluationContext().answerVersion())
+          .addKeyValue("rubricVersion", request.evaluationContext().rubricVersion())
+          .log("assessment evaluation gate decided");
+    }
   }
 }

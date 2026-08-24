@@ -1,7 +1,9 @@
 package io.ramals.learningplatform.observability;
 
 import java.util.Map;
+import java.util.Set;
 import org.slf4j.Logger;
+import org.slf4j.MDC;
 
 /**
  * Emits consequential business events using the structured SLF4J API.
@@ -18,6 +20,8 @@ public final class BusinessEventLogger {
   private static final String ENVIRONMENT = System.getProperty(
       "ramals.environment", System.getenv().getOrDefault("SPRING_PROFILES_ACTIVE", "unknown"));
   private static final int MAX_VALUE_LENGTH = 256;
+  private static final Set<String> MDC_OWNED_FIELDS =
+      Set.of("interactionId", "traceId", "spanId");
 
   private BusinessEventLogger() {
   }
@@ -40,17 +44,32 @@ public final class BusinessEventLogger {
 
   private static void write(org.slf4j.spi.LoggingEventBuilder event, String operation,
       String message, Map<String, ?> fields) {
-    event.addKeyValue("service", SERVICE)
-        .addKeyValue("environment", ENVIRONMENT)
-        .addKeyValue("operation", safe(operation));
-    if (fields != null) {
-      fields.forEach((key, value) -> {
-        if (key != null && !key.isBlank()) {
-          event.addKeyValue(safe(key), safeField(key, value));
-        }
-      });
+    try (var ignored = CorrelationContext.withCorrelation(
+        effectiveCorrelation(fields, "interactionId", MDC.get("interactionId")),
+        effectiveCorrelation(fields, "traceId", MDC.get("traceId")))) {
+      event.addKeyValue("service", SERVICE)
+          .addKeyValue("environment", ENVIRONMENT)
+          .addKeyValue("operation", safe(operation));
+      if (fields != null) {
+        fields.forEach((key, value) -> {
+          if (key != null && !key.isBlank() && !MDC_OWNED_FIELDS.contains(key)) {
+            event.addKeyValue(safe(key), safeField(key, value));
+          }
+        });
+      }
+      event.log(safe(message));
     }
-    event.log(safe(message));
+  }
+
+  private static String effectiveCorrelation(Map<String, ?> fields, String key, String current) {
+    if (current != null && !current.isBlank()) {
+      return current;
+    }
+    if (fields == null) {
+      return null;
+    }
+    Object supplied = fields.get(key);
+    return supplied == null ? null : String.valueOf(supplied);
   }
 
   /** Returns a bounded, non-sensitive representation suitable for structured logs. */

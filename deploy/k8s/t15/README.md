@@ -180,13 +180,16 @@ The eventual stale-worker run must use a qualification-only barrier, not pod del
 The current pod-death harness records the primitives needed for this run, but pod deletion alone
 cannot prove the stale-worker race and no such qualification claim is made here.
 
-## Known observability follow-up
+## Observability remediation status
 
-The trace-ID investigation found that `LearningWorkflowOrchestrator.log()` adds `traceId` while the
-structured Logstash encoder also serializes the MDC `traceId`. In affected workflow transition
-records this can raise `IllegalStateException: The name 'traceId' has already been written` and make
-observability reconstruction incomplete. No application code is changed in this task; a separate
-focused remediation PR is required before relying on those records for full crash qualification.
+The focused trace-ID remediation makes MDC the sole structured owner of `interactionId`, `traceId`,
+and `spanId`. Workflow and AI hand-off workers rebind persisted correlation around their log events;
+they do not add a second fluent field. The serialized-log regression exercises workflow start,
+success, rejection, failure, exception, asynchronous worker, and valid W3C-parent paths, including
+the original duplicate-field mutation.
+
+This does not qualify any T15.2 crash scenario. A new candidate must be cut and attested after the
+application change is reviewed and merged; the frozen T15 lock is unchanged.
 
 ## Deferred Phase-G prerequisites
 

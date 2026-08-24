@@ -9,6 +9,7 @@ import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.mastery.MasteryService;
+import io.ramals.learningplatform.observability.CorrelationContext;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Run;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Status;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Step;
@@ -213,15 +214,18 @@ public class LearningWorkflowOrchestrator {
             });
       }
     } catch (RuntimeException failure) {
-      LOGGER
-          .atWarn()
-          .addKeyValue("operation", "workflow.step")
-          .addKeyValue("outcome", "FAILED")
-          .addKeyValue("runId", runId)
-          .addKeyValue("step", step.name())
-          .addKeyValue("attempt", claim.attemptCount())
-          .addKeyValue("errorType", failure.getClass().getSimpleName())
-          .log("workflow step failed", failure);
+      try (CorrelationContext.Scope ignored =
+          CorrelationContext.withCorrelation(run.interactionId(), run.traceId())) {
+        LOGGER
+            .atWarn()
+            .addKeyValue("operation", "workflow.step")
+            .addKeyValue("outcome", "FAILED")
+            .addKeyValue("runId", runId)
+            .addKeyValue("step", step.name())
+            .addKeyValue("attempt", claim.attemptCount())
+            .addKeyValue("errorType", failure.getClass().getSimpleName())
+            .log("workflow step failed", failure);
+      }
       releaseAfterFailure(run, claim);
     }
     return reload(runId);
@@ -477,20 +481,21 @@ public class LearningWorkflowOrchestrator {
   }
 
   private void log(String operation, Run run, Step step, String reasonCode) {
-    LOGGER
-        .atInfo()
-        .addKeyValue("operation", operation)
-        .addKeyValue("runId", run.id())
-        .addKeyValue("workflowType", run.workflowType())
-        .addKeyValue("policyVersion", run.policyVersion())
-        .addKeyValue("step", step == null ? null : step.name())
-        .addKeyValue("reasonCode", reasonCode)
-        .addKeyValue("learnerId", run.learnerId())
-        .addKeyValue("skillId", run.skillId())
-        .addKeyValue("evaluationRequestId", run.evaluationRequestId())
-        .addKeyValue("interactionId", run.interactionId())
-        .addKeyValue("traceId", run.traceId())
-        .log("controlled workflow transition");
+    try (CorrelationContext.Scope ignored =
+        CorrelationContext.withCorrelation(run.interactionId(), run.traceId())) {
+      LOGGER
+          .atInfo()
+          .addKeyValue("operation", operation)
+          .addKeyValue("runId", run.id())
+          .addKeyValue("workflowType", run.workflowType())
+          .addKeyValue("policyVersion", run.policyVersion())
+          .addKeyValue("step", step == null ? null : step.name())
+          .addKeyValue("reasonCode", reasonCode)
+          .addKeyValue("learnerId", run.learnerId())
+          .addKeyValue("skillId", run.skillId())
+          .addKeyValue("evaluationRequestId", run.evaluationRequestId())
+          .log("controlled workflow transition");
+    }
   }
 
   private static String triggerKey(String evaluationRequestId) {

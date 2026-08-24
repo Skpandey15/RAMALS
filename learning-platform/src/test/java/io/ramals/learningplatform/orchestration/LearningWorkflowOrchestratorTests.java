@@ -18,6 +18,7 @@ import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.mastery.MasteryService;
 import io.ramals.learningplatform.mastery.MasteryStatus;
+import io.ramals.learningplatform.observability.StructuredLogCapture;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Run;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Status;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Step;
@@ -34,8 +35,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 
 /**
  * The G-series controlled-orchestration scenarios, driven against an in-memory workflow store.
@@ -440,6 +445,118 @@ class LearningWorkflowOrchestratorTests {
         .as("the diagnostic provider call must not hold a transaction")
         .contains("diagnose");
     assertThat(unitOfWork.ranInsideTransaction).doesNotContain("diagnose");
+  }
+
+  @Test
+  void workflowTransitionIsSerializableAsOneStructuredCorrelationEvent() {
+    try (StructuredLogCapture logs =
+        new StructuredLogCapture(LearningWorkflowOrchestrator.class)) {
+      MDC.put("interactionId", "interaction-1");
+      MDC.put("traceId", "trace-1");
+      try {
+        orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+      } finally {
+        MDC.clear();
+      }
+
+      ILoggingEvent transition =
+          logs.events().stream()
+              .filter(event -> "controlled workflow transition".equals(event.getMessage()))
+              .findFirst()
+              .orElseThrow();
+      String json = logs.encode(transition);
+      assertThat(json).contains("\"interactionId\"").contains("\"traceId\"");
+      assertThat(count(json, "\"interactionId\"")).isEqualTo(1);
+      assertThat(count(json, "\"traceId\"")).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void successfulWorkflowEventsRemainCorrelatedAcrossAnAsyncWorkerThread() throws Exception {
+    try (StructuredLogCapture logs =
+            new StructuredLogCapture(LearningWorkflowOrchestrator.class);
+        ExecutorService worker = Executors.newSingleThreadExecutor()) {
+      Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+      worker.submit(() -> drive(run.id())).get();
+
+      List<ILoggingEvent> events = workflowEvents(logs);
+      assertThat(events).isNotEmpty();
+      assertThat(events.stream().map(event -> operation(logs, event)).toList())
+          .contains("workflow.triggered", "workflow.advanced", "workflow.completed");
+      events.forEach(event -> assertOneCanonicalCorrelationObject(logs, event, run));
+    }
+  }
+
+  @Test
+  void rejectedWorkflowStepIsCorrelatedWithoutASecondStructuredTraceWriter() throws Exception {
+    diagnostic.result =
+        WorkflowAgentStep.Result.rejected("DIAGNOSIS_PROPOSAL_REJECTED", "req-d");
+    try (StructuredLogCapture logs =
+            new StructuredLogCapture(LearningWorkflowOrchestrator.class);
+        ExecutorService worker = Executors.newSingleThreadExecutor()) {
+      Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+      worker.submit(() -> drive(run.id())).get();
+
+      List<ILoggingEvent> events = workflowEvents(logs);
+      assertThat(events.stream().map(event -> operation(logs, event)).toList())
+          .contains("workflow.stopped");
+      events.forEach(event -> assertOneCanonicalCorrelationObject(logs, event, run));
+    }
+  }
+
+  @Test
+  void failedWorkflowStepAndExceptionAreCorrelatedWithoutSerializationFailure() {
+    diagnostic.failuresBeforeSuccess = 1;
+    try (StructuredLogCapture logs =
+        new StructuredLogCapture(LearningWorkflowOrchestrator.class)) {
+      Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+      drive(run.id(), 3);
+
+      ILoggingEvent failure =
+          logs.events().stream()
+              .filter(event -> "workflow step failed".equals(event.getMessage()))
+              .findFirst()
+              .orElseThrow();
+      assertOneCanonicalCorrelationObject(logs, failure, run);
+      assertThat(failure.getThrowableProxy()).isNotNull();
+    }
+  }
+
+  private static List<ILoggingEvent> workflowEvents(StructuredLogCapture logs) {
+    return logs.events().stream()
+        .filter(event -> "controlled workflow transition".equals(event.getMessage()))
+        .toList();
+  }
+
+  private static String operation(StructuredLogCapture logs, ILoggingEvent event) {
+    String json = logs.encode(event);
+    String marker = "\"operation\":\"";
+    int start = json.indexOf(marker);
+    return json.substring(start + marker.length()).split("\"", 2)[0];
+  }
+
+  private static void assertOneCanonicalCorrelationObject(
+      StructuredLogCapture logs, ILoggingEvent event, Run run) {
+    String json = logs.encode(event);
+    assertThat(json).contains("\"interactionId\":\"" + run.interactionId() + "\"");
+    assertThat(json).contains("\"traceId\":\"" + run.traceId() + "\"");
+    assertThat(json).contains("\"runId\":\"" + run.id() + "\"");
+    assertThat(count(json, "\"interactionId\"")).isEqualTo(1);
+    assertThat(count(json, "\"traceId\"")).isEqualTo(1);
+    assertThat(count(json, "\"runId\"")).isEqualTo(1);
+    if ("controlled workflow transition".equals(event.getMessage())) {
+      assertThat(json)
+          .contains("\"evaluationRequestId\":\"" + run.evaluationRequestId() + "\"");
+      assertThat(count(json, "\"evaluationRequestId\"")).isEqualTo(1);
+    }
+  }
+
+  private static int count(String value, String needle) {
+    int count = 0;
+    for (int offset = 0; (offset = value.indexOf(needle, offset)) >= 0; offset += needle.length()) {
+      count++;
+    }
+    return count;
   }
 
   /** Drives the workflow until it is terminal, with a hard cap so a stuck run fails the test. */
