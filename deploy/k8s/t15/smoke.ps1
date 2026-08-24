@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ApprovedCommit,
+  [string]$ApprovedCommit = "",
   [string]$ApprovedRef = "origin/main",
   [string]$ClusterName = "t15",
   [string]$Namespace = "ramals-t15",
@@ -15,6 +15,24 @@ $ErrorActionPreference = "Stop"
 $scriptRoot = (Resolve-Path $PSScriptRoot).Path
 $repositoryRoot = (Resolve-Path (Join-Path $scriptRoot "..\..\..")).Path
 Set-Location $repositoryRoot
+$lockPath = Join-Path $scriptRoot "images.lock.json"
+$candidateSource = "explicit"
+
+if ([string]::IsNullOrWhiteSpace($ApprovedCommit)) {
+  if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+    throw "qualification lock does not exist: $lockPath"
+  }
+  try {
+    $reviewedLock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+  } catch {
+    throw "qualification lock is not valid JSON: $($_.Exception.Message)"
+  }
+  $ApprovedCommit = [string]$reviewedLock.sourceCommit
+  $candidateSource = "reviewed-lock"
+}
+if ($ApprovedCommit -notmatch '^[0-9a-fA-F]{40}$') {
+  throw "ApprovedCommit must be a full 40-character Git commit, supplied explicitly or read from images.lock.json"
+}
 
 if ([string]::IsNullOrWhiteSpace($EvidenceDirectory)) {
   $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
@@ -137,7 +155,7 @@ function Assert-DeploymentImage {
     [Parameter(Mandatory = $true)][string]$Component
   )
 
-  $lock = Get-Content (Join-Path $scriptRoot "images.lock.json") -Raw | ConvertFrom-Json
+  $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
   $entry = @($lock.images, $lock.supportingImages) |
     ForEach-Object { $_.PSObject.Properties[$Component].Value } |
     Where-Object { $null -ne $_ } |
@@ -228,6 +246,7 @@ try {
     approvedCommit = $ApprovedCommit.ToLowerInvariant()
     approvedRef = $ApprovedRef
     approvedRefCommit = $candidate.approvedRefCommit
+    candidateSource = $candidateSource
     candidateIntegrity = $candidate.result
     candidateEvidence = "candidate-integrity.json"
     renderedManifestSha256 = $candidate.candidate.manifest.renderedManifestSha256

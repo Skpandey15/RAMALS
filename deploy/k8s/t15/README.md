@@ -4,7 +4,7 @@ This directory is the isolated Kubernetes qualification environment for M2-T15. 
 production deployment and it does not activate a production trigger. Docker Compose remains the
 local developer smoke/integration environment and is intentionally unchanged.
 
-The manifests consume the exact approved-main artifacts recorded in
+The manifests consume the exact reviewed-candidate artifacts recorded in
 [`images.lock.json`](images.lock.json) by digest. The `current-main` image names in
 `kustomization.yaml` are only Kustomize transformer keys; the rendered and applied objects contain
 `image@sha256:...` references.
@@ -32,9 +32,11 @@ operator access path is a port-forward, not an externally exposed database port.
 Install Docker/Rancher Desktop, `k3d`, `kubectl`, and PowerShell. From the repository root:
 
 ```powershell
-$approvedCommit = (git rev-parse --verify origin/main).Trim()
+$lock = Get-Content .\deploy\k8s\t15\images.lock.json -Raw | ConvertFrom-Json
+$approvedCommit = [string]$lock.sourceCommit
+$approvedRef = "origin/main"
 pwsh -File .\deploy\k8s\t15\bootstrap.ps1
-pwsh -File .\deploy\k8s\t15\smoke.ps1 -ApprovedCommit $approvedCommit
+pwsh -File .\deploy\k8s\t15\smoke.ps1 -ApprovedCommit $approvedCommit -ApprovedRef $approvedRef
 ```
 
 For a new candidate, first resolve and review one full commit, then build from that commit's
@@ -42,8 +44,8 @@ detached worktree. `publish-images.ps1` builds and pushes the backend, AI, web, 
 Keycloak artifacts with immutable digests and can update the lock/manifests together:
 
 ```powershell
-$approvedCommit = (git rev-parse --verify origin/main).Trim()
-pwsh -File .\deploy\k8s\t15\publish-images.ps1 -Commit $approvedCommit -UpdateLock
+$reviewedCandidateCommit = Read-Host "Enter the reviewed 40-character candidate commit"
+pwsh -File .\deploy\k8s\t15\publish-images.ps1 -Commit $reviewedCandidateCommit -UpdateLock
 ```
 
 Do not replace the explicit commit with `HEAD` or a mutable image tag. The lock is a reviewable
@@ -98,10 +100,16 @@ Run the gate directly when establishing or reviewing a candidate:
 ```powershell
 pwsh -File .\deploy\k8s\t15\candidate-integrity.ps1 `
   -ApprovedCommit $approvedCommit `
+  -ApprovedRef $approvedRef `
   -SelfTest
 ```
 
-`-SelfTest` deliberately exercises candidate/ref A, candidate A with descendant ref B, an unreachable
+For an existing deployment, `approvedCommit` must come from the reviewed lock (or be supplied as an
+explicit reviewed SHA); `origin/main` is only the `ApprovedRef` used for ancestry validation. The
+smoke helper defaults `-ApprovedCommit` to `images.lock.json.sourceCommit` for this reason.
+
+`-SelfTest` deliberately exercises candidate/ref A, candidate A with descendant ref B (including the
+post-merge lock-candidate-A/origin-main-descendant-B case), an unreachable
 candidate B with ref A, and a lock source-commit mismatch, in addition to mutating the migration set,
 backend image, and rendered manifest in temporary copies. Each mutation must fail for its expected
 check. It also bypasses the ancestry guard in a temporary script and verifies that the unreachable
