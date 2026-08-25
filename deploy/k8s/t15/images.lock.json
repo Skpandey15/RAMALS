@@ -1,8 +1,8 @@
 {
-  "$comment": "M2-T15.1 qualification candidate refreshed from the exact merged main commit containing the deterministic WORKFLOW_AFTER_CLAIM stale-worker qualification hook remediation (#146). The backend was rebuilt from this source; independently verified unchanged artifacts retain their immutable digests.",
+  "$comment": "M2-T15.1 qualification candidate refreshed from the exact merged main commit containing the stale-worker ownership/transaction rollback remediation (#148). The backend was rebuilt from this source; independently verified unchanged artifacts retain their immutable digests.",
   "qualification": "m2-t15.1",
-  "sourceCommit": "9dc956fca7eaf412dc09cfa996969d4f8e9760b7",
-  "sourceTree": "db9908fc4fdc09b79099a8b281b5c5854dd31035",
+  "sourceCommit": "027e9967434ea7c1c8001bf61550d451de5a6255",
+  "sourceTree": "ba6378145000a611f8c8f7d2cd9b3c0bfcc828f7",
   "registry": "k3d-ramals-t15-registry:5000",
   "migrationSet": [
     "001",
@@ -41,8 +41,8 @@
     "034"
   ],
   "manifest": {
-    "kustomizationSha256": "a09d0a810e6b614c07cb032886db58c61619580c56d82098355d384ec6ec1ee0",
-    "renderedManifestSha256": "ee14b4dd5baa5b87712ac21775548e94191e5eff36ee8b6c77cc3d6ba27fe5d9"
+    "kustomizationSha256": "9a53a5d953079d5d10e027a2ce81a8163e47c404775e021f787c716eae8a7af3",
+    "renderedManifestSha256": "5dc5e119400343d24740807354699f2c32f8487fc2bff644f3fc4852f09cb352"
   },
   "supportingImages": {
     "busybox": {
@@ -64,8 +64,8 @@
   "images": {
     "learning-platform": {
       "repository": "ramals-learning-platform",
-      "digest": "sha256:945dabf7dce039a4a4b9179317e85ab017e232684558c77c2973677ed51d5a63",
-      "reference": "k3d-ramals-t15-registry:5000/ramals-learning-platform@sha256:945dabf7dce039a4a4b9179317e85ab017e232684558c77c2973677ed51d5a63"
+      "digest": "sha256:64acbaa033e5e9ab098518d31c53143172236b4fd3084ceaa76f7265eca2c5c0",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-learning-platform@sha256:64acbaa033e5e9ab098518d31c53143172236b4fd3084ceaa76f7265eca2c5c0"
     },
     "ramals-ai": {
       "repository": "ramals-ai",

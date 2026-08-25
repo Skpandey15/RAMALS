@@ -22,7 +22,7 @@ resources:
 images:
   - name: qualification/learning-platform:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-learning-platform
-    digest: sha256:945dabf7dce039a4a4b9179317e85ab017e232684558c77c2973677ed51d5a63
+    digest: sha256:64acbaa033e5e9ab098518d31c53143172236b4fd3084ceaa76f7265eca2c5c0
   - name: qualification/ramals-ai:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-ai
     digest: sha256:e28b95496c328dc79cc882e92e40820035d0e1f093f28e062a128d54ae09c68c

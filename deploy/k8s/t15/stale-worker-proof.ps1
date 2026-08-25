@@ -33,3 +33,18 @@ function Assert-StaleWorkerObservation {
     attemptB = [int]$Observation.attemptB
   }
 }
+
+function Get-StaleWorkerDiagnosticExecutionCount {
+  param(
+    [Parameter(Mandatory = $true)]$Snapshot,
+    [Parameter(Mandatory = $true)][string]$DiagnosticRequestId
+  )
+
+  if ([string]::IsNullOrWhiteSpace($DiagnosticRequestId)) {
+    throw "stale-worker diagnostic attribution requires the fixture request identity"
+  }
+  return @($Snapshot.aiExecutions | Where-Object {
+      [string]$_.agent_type -eq "DIAGNOSTIC" -and
+      [string]$_.request_id -eq $DiagnosticRequestId
+    }).Count
+}
