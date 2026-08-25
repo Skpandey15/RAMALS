@@ -219,6 +219,11 @@ public class LearningWorkflowOrchestrator {
               apply(run, claim, outcome);
             });
       }
+    } catch (SupersededClaimException ignored) {
+      // The ownership CAS is the commit authority for local effects. Propagating this marker out of
+      // the unit of work made Spring roll that transaction back; handle it only after that boundary
+      // so stale evidence or mastery state can never survive a refused completion.
+      log("workflow.step.superseded", run, claim.step(), null);
     } catch (RuntimeException failure) {
       try (CorrelationContext.Scope ignored =
           CorrelationContext.withCorrelation(run.interactionId(), run.traceId())) {
@@ -375,8 +380,10 @@ public class LearningWorkflowOrchestrator {
         runs.finishClaimedStep(
             claim, outcome.status(), outcome.reasonCode(), outcome.requestId(), outcome.resultRef());
     if (!owned) {
-      log("workflow.step.superseded", run, claim.step(), null);
-      return;
+      // This method runs inside the workflow unit of work. Returning normally would commit a local
+      // authoritative effect even though the worker no longer owns the step. The marker must cross
+      // the transaction boundary so TransactionTemplate rolls every preceding local write back.
+      throw new SupersededClaimException();
     }
 
     if (outcome.status() == StepStatus.FAILED) {
@@ -404,6 +411,11 @@ public class LearningWorkflowOrchestrator {
     }
     runs.advanceTo(run.id(), next.get());
     log("workflow.advanced", run, next.get(), null);
+  }
+
+  /** Internal rollback signal for a worker whose claim was replaced while its work was in flight. */
+  private static final class SupersededClaimException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
   }
 
   /**
