@@ -1,8 +1,8 @@
 {
-  "$comment": "M2-T15.1 qualification candidate artifacts built from the exact approved main commit containing the structured trace-correlation remediation (#142). All deployment references are immutable digests.",
+  "$comment": "M2-T15.1 qualification candidate refreshed from the exact merged main commit containing the deterministic WORKFLOW_AFTER_CLAIM stale-worker qualification hook remediation (#146). The backend was rebuilt from this source; independently verified unchanged artifacts retain their immutable digests.",
   "qualification": "m2-t15.1",
-  "sourceCommit": "36936ece39c95e9d5e700ec9f46871ccca24eaa6",
-  "sourceTree": "3992f2b289a9e0bcfe7db7955e3e973cd5b3f48a",
+  "sourceCommit": "9dc956fca7eaf412dc09cfa996969d4f8e9760b7",
+  "sourceTree": "db9908fc4fdc09b79099a8b281b5c5854dd31035",
   "registry": "k3d-ramals-t15-registry:5000",
   "migrationSet": [
     "001",
@@ -41,8 +41,8 @@
     "034"
   ],
   "manifest": {
-    "kustomizationSha256": "ee229382380e53a068364d0808eb0920b4906907a22bcd606c544f4c378fd9f1",
-    "renderedManifestSha256": "b757155c06ffc32437d5edc8e6fd97080cba40eb09d7e8904f4fe18845cd8a4a"
+    "kustomizationSha256": "a09d0a810e6b614c07cb032886db58c61619580c56d82098355d384ec6ec1ee0",
+    "renderedManifestSha256": "ee14b4dd5baa5b87712ac21775548e94191e5eff36ee8b6c77cc3d6ba27fe5d9"
   },
   "supportingImages": {
     "busybox": {
@@ -64,8 +64,8 @@
   "images": {
     "learning-platform": {
       "repository": "ramals-learning-platform",
-      "digest": "sha256:711224a321f0576a0712b9d50049745e941462f2cb9217e1e6d7ef5a941db0ad",
-      "reference": "k3d-ramals-t15-registry:5000/ramals-learning-platform@sha256:711224a321f0576a0712b9d50049745e941462f2cb9217e1e6d7ef5a941db0ad"
+      "digest": "sha256:945dabf7dce039a4a4b9179317e85ab017e232684558c77c2973677ed51d5a63",
+      "reference": "k3d-ramals-t15-registry:5000/ramals-learning-platform@sha256:945dabf7dce039a4a4b9179317e85ab017e232684558c77c2973677ed51d5a63"
     },
     "ramals-ai": {
       "repository": "ramals-ai",
