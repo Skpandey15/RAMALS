@@ -29,6 +29,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $scriptRoot "..\..\..")).Path
 Set-Location $repositoryRoot
 . (Join-Path $scriptRoot "contention-proof.ps1")
 . (Join-Path $scriptRoot "stale-worker-proof.ps1")
+. (Join-Path $scriptRoot "after-claim-proof.ps1")
 $qualificationManifestRoot = if ([string]::IsNullOrWhiteSpace($ManifestRoot)) {
   $scriptRoot
 } else {
@@ -161,6 +162,27 @@ function Invoke-StaleWorkerNegativeProofTests {
   }
   $result | ConvertTo-Json -Depth 30 |
     Set-Content -LiteralPath (Join-Path $EvidenceRoot "stale-worker-negative-proof.json") -Encoding utf8
+  return $result
+}
+
+function Invoke-AfterClaimProofTests {
+  $testPath = Join-Path $scriptRoot "after-claim-proof.tests.ps1"
+  $output = & pwsh -NoProfile -File $testPath 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    $output | Set-Content -LiteralPath (Join-Path $EvidenceRoot "after-claim-proof-tests.log") -Encoding utf8
+    throw "after-claim natural-lease proof self-test failed with exit code $LASTEXITCODE"
+  }
+  $raw = $output -join "`n"
+  try {
+    $result = $raw | ConvertFrom-Json
+  } catch {
+    throw "after-claim natural-lease proof self-test did not return valid JSON: $raw"
+  }
+  if ($result.result -ne "PASS" -or $result.claimedAtMutation.result -ne "PASS") {
+    throw "after-claim proof self-test did not reject claimed_at mutation"
+  }
+  $result | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $EvidenceRoot "after-claim-proof-tests.json") -Encoding utf8
   return $result
 }
 
@@ -1104,6 +1126,142 @@ function Wait-ReplacementPod {
   throw "no replacement pod appeared for $Label after deleting pod UID $OldPodUid"
 }
 
+function Wait-PodUidGone {
+  param(
+    [Parameter(Mandatory = $true)][string]$Pod,
+    [Parameter(Mandatory = $true)][string]$PodUid,
+    [int]$TimeoutSeconds = 120
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $raw = & kubectl get pod $Pod -n $Namespace -o json 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      return (Get-Date).ToUniversalTime().ToString("o")
+    }
+    try {
+      $current = ($raw -join "`n") | ConvertFrom-Json
+      if ([string]$current.metadata.uid -ne $PodUid) {
+        return (Get-Date).ToUniversalTime().ToString("o")
+      }
+    } catch {
+      # Retry transport-level partial output until deletion is unambiguous.
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  throw "pod $Pod/$PodUid was not observed deleted"
+}
+
+function Get-ApprovedWorkflowClaimLeaseSeconds {
+  $policyPath = "learning-platform/src/main/java/io/ramals/learningplatform/orchestration/LearningWorkflowPolicy.java"
+  $source = & git show "${ApprovedCommit}:$policyPath" 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "could not read workflow claim lease from approved candidate $ApprovedCommit"
+  }
+  $match = [regex]::Match(($source -join "`n"), 'CLAIM_LEASE\s*=\s*Duration\.ofMinutes\(([0-9]+)\)')
+  if (-not $match.Success) {
+    throw "approved candidate does not expose CLAIM_LEASE as Duration.ofMinutes"
+  }
+  $minutes = [int]$match.Groups[1].Value
+  if ($minutes -le 0) {
+    throw "approved candidate has an invalid workflow claim lease"
+  }
+  return $minutes * 60
+}
+
+function Get-AfterClaimLeaseObservation {
+  param(
+    [Parameter(Mandatory = $true)]$Claim,
+    [Parameter(Mandatory = $true)][int]$LeaseSeconds
+  )
+  if ([string]$Claim.claimedAt -notmatch '^[0-9TZ:.-]+$') {
+    throw "unsafe claimed_at value in after-claim lease observation"
+  }
+  $raw = Get-Scalar @"
+SELECT jsonb_build_object(
+  'databaseNow', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'claimAClaimedAt', '$($Claim.claimedAt)',
+  'leaseSeconds', $LeaseSeconds,
+  'leaseExpiresAt', to_char(('$($Claim.claimedAt)'::timestamptz + make_interval(secs => $LeaseSeconds)) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'remainingMillis', FLOOR(EXTRACT(EPOCH FROM (('$($Claim.claimedAt)'::timestamptz + make_interval(secs => $LeaseSeconds)) - CURRENT_TIMESTAMP)) * 1000)::bigint,
+  'expired', CURRENT_TIMESTAMP >= ('$($Claim.claimedAt)'::timestamptz + make_interval(secs => $LeaseSeconds))
+)::text;
+"@
+  # Preserve PostgreSQL's invariant UTC rendering. PowerShell's automatic DateTime conversion
+  # otherwise formats the value with the workstation locale when it is later serialized/proved.
+  return $raw | ConvertFrom-Json -DateKind String
+}
+
+function Wait-AfterClaimNaturalLeaseExpiry {
+  param(
+    [Parameter(Mandatory = $true)]$Claim,
+    [Parameter(Mandatory = $true)][int]$LeaseSeconds,
+    [int]$TimeoutSeconds = 120
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $observation = Get-AfterClaimLeaseObservation $Claim $LeaseSeconds
+    if ([bool]$observation.expired) {
+      return $observation
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "workflow claim lease did not expire naturally within $TimeoutSeconds seconds"
+}
+
+function Wait-AfterClaimPreLeaseWaiter {
+  param(
+    [Parameter(Mandatory = $true)][string]$BarrierPid,
+    [Parameter(Mandatory = $true)][string]$ReplacementPodUid,
+    [int]$TimeoutSeconds = 15
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $waiters = @(Get-ContentionClaimWaiters $BarrierPid)
+    if ($waiters.Count -gt 1) {
+      throw "after-claim pre-lease observation found multiple real claim SQL waiters"
+    }
+    if ($waiters.Count -eq 1) {
+      if ([string]$waiters[0].podUid -ne $ReplacementPodUid) {
+        throw "after-claim pre-lease claim SQL came from an unexpected pod"
+      }
+      return $waiters[0]
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "replacement worker's real claim SQL was not observed before lease expiry"
+}
+
+function Get-AfterClaimCheckpointCounts {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Raw,
+    [Parameter(Mandatory = $true)]$Fixture
+  )
+  $state = $Raw | ConvertFrom-Json
+  $diagnostic = @($state.aiExecutions | Where-Object {
+      [string]$_.agent_type -eq "DIAGNOSTIC" -and
+      [string]$_.request_id -eq [string]$Fixture.DiagnosticRequestId
+    }).Count
+  return [pscustomobject]@{
+    evidence = @($state.evidence).Count
+    mastery = @($state.mastery).Count
+    diagnostic = $diagnostic
+    outbox = @($state.adaptationOutbox).Count
+  }
+}
+
+function Assert-AfterClaimZeroEffectCheckpoint {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)]$Counts
+  )
+  if ([int]$Counts.evidence -ne 0 -or
+      [int]$Counts.mastery -ne 0 -or
+      [int]$Counts.diagnostic -ne 0 -or
+      [int]$Counts.outbox -ne 0) {
+    throw "$Label authoritative effects expected 0/0/0/0 but were $($Counts.evidence)/$($Counts.mastery)/$($Counts.diagnostic)/$($Counts.outbox)"
+  }
+}
+
 function Get-ScenarioDbSnapshot {
   param([Parameter(Mandatory = $true)]$Fixture)
   return Get-Scalar @"
@@ -1288,6 +1446,277 @@ function Invoke-BackendCrash {
     }
     OldToken = $claim.Token
     OldAttempt = $claim.AttemptCount
+    Terminal = $terminal
+    CursorHistory = @($boundaryCursor) + @($terminal.History)
+    StaleOutboxId = ""
+    StaleOutboxOwner = ""
+  }
+}
+
+function Wait-BackendClaimStatementSettled {
+  param(
+    [Parameter(Mandatory = $true)][string]$BackendPid,
+    [int]$TimeoutSeconds = 30
+  )
+  if ($BackendPid -notmatch '^[0-9]+$') {
+    throw "invalid backend PID '$BackendPid'"
+  }
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $active = Get-Scalar @"
+SELECT COUNT(*)
+  FROM pg_stat_activity
+ WHERE pid = $BackendPid
+   AND state = 'active'
+   AND query ILIKE '%INSERT INTO core.learning_workflow_step%'
+   AND query ILIKE '%ON CONFLICT%';
+"@
+    if ($active -eq "0") {
+      return
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "backend claim statement $BackendPid did not settle after the pre-lease barrier was released"
+}
+
+function Assert-AfterClaimOwnsExactClaim {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)]$Actual,
+    [Parameter(Mandatory = $true)]$Expected
+  )
+  if ([string]$Actual.status -ne "RUNNING" -or
+      [int]$Actual.attemptCount -ne [int]$Expected.attemptCount -or
+      [string]$Actual.executionToken -ne [string]$Expected.executionToken -or
+      [string]$Actual.claimedAt -ne [string]$Expected.claimedAt) {
+    throw "$Label did not preserve RUNNING attempt $($Expected.attemptCount)/token $($Expected.executionToken)/claimed_at $($Expected.claimedAt)"
+  }
+}
+
+function Invoke-AfterClaimPodDeath {
+  param([Parameter(Mandatory = $true)]$Fixture)
+
+  $targetStep = "RECORD_EVALUATION_EVIDENCE"
+  $directory = Join-Path $EvidenceRoot "after-claim"
+  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  $leaseSeconds = Get-ApprovedWorkflowClaimLeaseSeconds
+  [ordered]@{
+    sourceCommit = $ApprovedCommit
+    sourcePath = "learning-platform/src/main/java/io/ramals/learningplatform/orchestration/LearningWorkflowPolicy.java"
+    constant = "CLAIM_LEASE"
+    leaseSeconds = $leaseSeconds
+  } | ConvertTo-Json -Depth 10 |
+    Set-Content -LiteralPath (Join-Path $directory "production-lease.json") -Encoding utf8
+
+  $claimA = Wait-StepClaimAttempt $Fixture.RunId $targetStep 1
+  $boundaryA = Wait-StaleWorkerClaimBoundary `
+    $Fixture.RunId $targetStep $claimA.attemptCount $claimA.executionToken
+  $claimantA = Save-StaleWorkerClaimant "a" $Fixture $claimA $boundaryA $directory
+  Assert-StaleWorkerClaimHeld $boundaryA
+  if ($boundaryA.interactionId -ne $Fixture.InteractionId -or
+      $boundaryA.traceId -ne $Fixture.TraceId) {
+    throw "after-claim worker A barrier did not preserve the fixture correlation lineage"
+  }
+
+  $preCrashClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  Assert-AfterClaimOwnsExactClaim "after-claim pre-crash checkpoint" $preCrashClaim $claimA
+  $preCrash = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-pre-crash.json" $preCrash
+  $preCrashCounts = Get-AfterClaimCheckpointCounts $preCrash $Fixture
+  Assert-AfterClaimZeroEffectCheckpoint "after-claim pre-crash" $preCrashCounts
+  $preLogs = Get-SafePodLogText $claimantA.podName $Fixture
+  $preLogs | Set-Content -LiteralPath `
+    (Join-Path $directory "backend-a-pre-deletion-$($claimantA.podName).log") -Encoding utf8
+
+  $stepId = Get-Scalar "SELECT id::text FROM core.learning_workflow_step WHERE run_id = '$($Fixture.RunId)' AND step_name = '$targetStep';"
+  if ($stepId -notmatch '^[0-9a-fA-F-]{36}$') {
+    throw "after-claim target step id was not found"
+  }
+  $deletion = Force-DeletePod $claimantA.podName
+  $deletedObservedAt = Wait-PodUidGone $claimantA.podName $claimantA.podUid
+  $replacement = Wait-ReplacementPod "learning-platform" $claimantA.podUid
+  Wait-DeploymentReady "learning-platform" 1 "learning-platform"
+
+  $postDeletionClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  Assert-AfterClaimOwnsExactClaim "after-claim post-deletion/pre-lease checkpoint" `
+    $postDeletionClaim $claimA
+  $postDeletion = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-post-deletion-pre-lease.json" $postDeletion
+  $postDeletionCounts = Get-AfterClaimCheckpointCounts $postDeletion $Fixture
+  Assert-AfterClaimZeroEffectCheckpoint "after-claim post-deletion/pre-lease" $postDeletionCounts
+  $postDeletionLease = Get-AfterClaimLeaseObservation $claimA $leaseSeconds
+  if ([bool]$postDeletionLease.expired) {
+    throw "replacement pod was not ready before worker A's natural claim lease expired"
+  }
+  if ([long]$postDeletionLease.remainingMillis -lt 15000) {
+    throw "insufficient unexpired lease remained to observe a real replacement claim safely"
+  }
+  $postDeletionLease | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "lease-post-deletion.json") -Encoding utf8
+
+  # This lock does not update the step. It makes one scheduled production claim attempt observable
+  # before expiry; after release, the production WHERE predicate must reject that attempt.
+  $preLeaseBarrier = $null
+  $preLeaseBarrierActive = $false
+  try {
+    $preLeaseBarrier = Start-ContentionRowBarrier $stepId
+    $preLeaseBarrierActive = $true
+    $preLeaseWaiter = Wait-AfterClaimPreLeaseWaiter `
+      ([string]$preLeaseBarrier.pid) ([string]$replacement.Uid)
+    $atWaiter = Get-AfterClaimLeaseObservation $claimA $leaseSeconds
+    if ([bool]$atWaiter.expired) {
+      throw "replacement claim SQL reached the observation lock only after lease expiry"
+    }
+    [ordered]@{
+      barrier = $preLeaseBarrier
+      applicationClaimSession = $preLeaseWaiter
+      lease = $atWaiter
+      expectedOutcomeAfterRelease = "LOST_WHILE_LEASE_VALID"
+    } | ConvertTo-Json -Depth 30 |
+      Set-Content -LiteralPath (Join-Path $directory "pre-lease-reclaim-attempt.json") -Encoding utf8
+    Stop-ContentionRowBarrier
+    $preLeaseBarrierActive = $false
+    Wait-BackendClaimStatementSettled ([string]$preLeaseWaiter.backendPid)
+  } finally {
+    if ($preLeaseBarrierActive) {
+      try {
+        Stop-ContentionRowBarrier
+      } catch {
+        Write-Warning "could not release after-claim pre-lease observation barrier: $($_.Exception.Message)"
+      }
+    }
+  }
+
+  $preLeaseClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  $preLeaseReclaimSucceeded = -not (
+    $preLeaseClaim.status -eq "RUNNING" -and
+    $preLeaseClaim.attemptCount -eq $claimA.attemptCount -and
+    $preLeaseClaim.executionToken -eq $claimA.executionToken)
+  Assert-AfterClaimOwnsExactClaim "after-claim real pre-lease claim attempt" $preLeaseClaim $claimA
+  $preLease = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-pre-lease-reclaim-attempt.json" $preLease
+  $preLeaseCounts = Get-AfterClaimCheckpointCounts $preLease $Fixture
+  Assert-AfterClaimZeroEffectCheckpoint "after-claim pre-lease reclaim attempt" $preLeaseCounts
+  $preLeaseObservation = Get-AfterClaimLeaseObservation $claimA $leaseSeconds
+  if ([bool]$preLeaseObservation.expired) {
+    throw "pre-lease rejection evidence was captured after the lease expired"
+  }
+
+  $naturalExpiry = Wait-AfterClaimNaturalLeaseExpiry $claimA $leaseSeconds (2 * $leaseSeconds)
+  $naturalExpiry | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "natural-lease-expiry.json") -Encoding utf8
+
+  $postLeasePreReclaimClaim = $null
+  $postLeaseRaw = Get-ScenarioDbSnapshot $Fixture
+  $postLeaseClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  if ($postLeaseClaim.attemptCount -eq $claimA.attemptCount -and
+      $postLeaseClaim.executionToken -eq $claimA.executionToken) {
+    $postLeasePreReclaimClaim = $postLeaseClaim
+    Save-StaleWorkerCheckpoint $directory "postgres-post-lease-pre-reclaim.json" $postLeaseRaw
+  }
+
+  $claimB = Wait-StepClaimAttempt $Fixture.RunId $targetStep 2 $claimA.executionToken
+  $boundaryB = Wait-StaleWorkerClaimBoundary `
+    $Fixture.RunId $targetStep $claimB.attemptCount $claimB.executionToken
+  if ($boundaryB.podUid -ne $replacement.Uid) {
+    throw "after-claim reclaim did not originate from the observed replacement pod"
+  }
+  $claimantB = Save-StaleWorkerClaimant "b" $Fixture $claimB $boundaryB $directory
+  Assert-StaleWorkerClaimHeld $boundaryB
+  if ($boundaryB.interactionId -ne $Fixture.InteractionId -or
+      $boundaryB.traceId -ne $Fixture.TraceId) {
+    throw "after-claim worker B barrier did not preserve the fixture correlation lineage"
+  }
+  $bClaimed = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-b-claimed.json" $bClaimed
+  $bClaimedCounts = Get-AfterClaimCheckpointCounts $bClaimed $Fixture
+  Assert-AfterClaimZeroEffectCheckpoint "after-claim worker B held" $bClaimedCounts
+
+  $naturalLeaseProof = [pscustomobject]@{
+    claimA = $claimA
+    postDeletionClaim = $postDeletionClaim
+    preLeaseClaim = $preLeaseClaim
+    postLeasePreReclaimClaim = $postLeasePreReclaimClaim
+    preLeaseReclaimAttemptObserved = $true
+    preLeaseReclaimSucceeded = $preLeaseReclaimSucceeded
+    leaseExpiredNaturally = [bool]$naturalExpiry.expired
+    leaseExpiresAt = [string]$naturalExpiry.leaseExpiresAt
+    workerBHeld = $true
+    claimB = $claimB
+    podUidA = $claimantA.podUid
+    podUidB = $claimantB.podUid
+    postDeletionCounts = $postDeletionCounts
+    preLeaseCounts = $preLeaseCounts
+  }
+  $proofResult = Assert-AfterClaimNaturalLeaseObservation $naturalLeaseProof
+  [ordered]@{
+    result = $proofResult
+    observation = $naturalLeaseProof
+    preCrashCounts = $preCrashCounts
+    workerBHeldCounts = $bClaimedCounts
+  } | ConvertTo-Json -Depth 40 |
+    Set-Content -LiteralPath (Join-Path $directory "natural-lease-proof.json") -Encoding utf8
+
+  $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
+  $releaseB = Release-StaleWorkerClaimBoundary $boundaryB
+  $releaseB | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "release-b.json") -Encoding utf8
+  $terminal = Wait-WorkflowTerminal $Fixture.RunId
+  $finalState = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-final.json" $finalState
+  $finalClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  $logB = Get-SafePodLogText $claimantB.podName $Fixture
+  $logB | Set-Content -LiteralPath `
+    (Join-Path $directory "backend-b-$($claimantB.podName).log") -Encoding utf8
+  [ordered]@{
+    runId = $Fixture.RunId
+    step = $targetStep
+    requestId = $Fixture.EvaluationRequestId
+    diagnosticRequestId = $Fixture.DiagnosticRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+    workerA = $claimantA
+    claimA = $claimA
+    workerB = $claimantB
+    claimB = $claimB
+    finalClaim = $finalClaim
+  } | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "token-lineage.json") -Encoding utf8
+
+  return [pscustomobject]@{
+    Pod = $claimantA.podName
+    PodUid = $claimantA.podUid
+    ReplacementPod = $claimantB.podName
+    ReplacementPodUid = $claimantB.podUid
+    DeletedObservedAtUtc = $deletedObservedAt
+    Deletion = $deletion
+    PreState = $preCrash
+    PostState = $finalState
+    PreDeletionLogs = $preLogs
+    Perturbation = [ordered]@{
+      type = "backend-pod-death-after-claim"
+      boundary = "explicit WORKFLOW_AFTER_CLAIM barrier"
+      targetStep = $targetStep
+      deletedPod = $claimantA.podName
+      deletedPodUid = $claimantA.podUid
+      command = $deletion.operation
+      requestedAtUtc = $deletion.requestedAtUtc
+      deletedObservedAtUtc = $deletedObservedAt
+      leaseControl = "natural production lease expiry; claimed_at never updated by qualification"
+      preLeaseAttempt = "real replacement claim SQL observed and rejected while lease valid"
+    }
+    OldToken = $claimA.executionToken
+    OldAttempt = [string]$claimA.attemptCount
+    NewToken = $claimB.executionToken
+    NewAttempt = [string]$claimB.attemptCount
+    ClaimA = $claimA
+    ClaimB = $claimB
+    ClaimantA = $claimantA
+    ClaimantB = $claimantB
+    NaturalLeaseObservation = $naturalLeaseProof
+    BCompletionCas = "1"
+    CompetingPods = @($claimantA, $claimantB)
+    ClaimAttempts = $null
     Terminal = $terminal
     CursorHistory = @($boundaryCursor) + @($terminal.History)
     StaleOutboxId = ""
@@ -2316,7 +2745,7 @@ function Capture-ScenarioEvidence {
         postgresFinal = "postgres-claim-final.json"
       }
     }
-    staleWorkerProof = if ($null -eq $Crash.ClaimB) {
+    staleWorkerProof = if ($Name -ne "stale-worker" -or $null -eq $Crash.ClaimB) {
       $null
     } else {
       [ordered]@{
@@ -2335,6 +2764,28 @@ function Capture-ScenarioEvidence {
         tokenLineage = "token-lineage.json"
         productionStaleRejectionLog = "stale-a-production-cas.log"
         negativePerturbation = "../stale-worker-negative-proof.json"
+      }
+    }
+    afterClaimPodDeathProof = if ($Name -ne "after-claim") {
+      $null
+    } else {
+      [ordered]@{
+        lease = "production-lease.json"
+        claimantA = "claimant-a.json"
+        claimantB = "claimant-b.json"
+        checkpoints = @(
+          "postgres-pre-crash.json",
+          "postgres-post-deletion-pre-lease.json",
+          "postgres-pre-lease-reclaim-attempt.json",
+          "postgres-post-lease-pre-reclaim.json (when distinct)",
+          "postgres-b-claimed.json",
+          "postgres-final.json"
+        )
+        preLeaseApplicationClaim = "pre-lease-reclaim-attempt.json"
+        naturalExpiry = "natural-lease-expiry.json"
+        naturalLeaseProof = "natural-lease-proof.json"
+        tokenLineage = "token-lineage.json"
+        regression = "../after-claim-proof-tests.json"
       }
     }
     workflowCursor = [ordered]@{
@@ -2399,17 +2850,32 @@ function Run-Scenario {
       staleAuthoritativeEffectsBeforeB = 0
     }
   }
+  if ($Name -eq "after-claim") {
+    $expectedInvariant.afterClaimPodDeathProof = [ordered]@{
+      claimedAtMutation = "forbidden"
+      preLeaseReplacementClaim = "observed and rejected"
+      leaseExpiry = "natural production lease"
+      tokenAAndTokenBDiffer = $true
+      attemptIncrement = 1
+      staleAuthoritativeEffects = 0
+    }
+  }
 
   switch ($Name) {
     "after-claim" {
       Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
       Wait-DeploymentReady "learning-platform" 0 "learning-platform"
-      Set-BackendFault $true "WORKFLOW_AFTER_CLAIM" $fixture.RunId "" 120000
+      Set-BackendFault `
+        -Enabled $true `
+        -Window "WORKFLOW_AFTER_CLAIM" `
+        -RunId $fixture.RunId `
+        -Step "RECORD_EVALUATION_EVIDENCE" `
+        -ClaimBarrierDirectory $script:StaleWorkerClaimBarrierDirectory
       Seed-ScenarioFixture $fixture
       Wait-DeploymentReady "learning-platform" 1 "learning-platform"
       $targetStep = "RECORD_EVALUATION_EVIDENCE"
       $expectedTargetAttempt = 2
-      $crash = Invoke-BackendCrash $fixture "WORKFLOW_AFTER_CLAIM" $targetStep
+      $crash = Invoke-AfterClaimPodDeath $fixture
     }
     "after-evidence-effect" {
       Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
@@ -2506,6 +2972,9 @@ function Run-Scenario {
     if ($Name -eq "stale-worker") {
       Assert-StaleWorkerProof $fixture $crash
     }
+    if ($Name -eq "after-claim") {
+      [void](Assert-AfterClaimNaturalLeaseObservation $crash.NaturalLeaseObservation)
+    }
     Assert-CursorHistory $Name $history
   } catch {
     if ($Name -eq "stale-worker") {
@@ -2528,6 +2997,26 @@ function Run-Scenario {
       } | ConvertTo-Json -Depth 50 |
         Set-Content -LiteralPath (Join-Path $EvidenceRoot "$Name/scenario.json") -Encoding utf8
     }
+    if ($Name -eq "after-claim") {
+      [ordered]@{
+        schema = "m2-t15.scenario-evidence.v1"
+        scenarioId = $Name
+        result = "FAIL"
+        error = $_.Exception.Message
+        candidate = $script:CandidateIdentity.candidate
+        runId = $fixture.RunId
+        step = $targetStep
+        evidencePreservedIn = "after-claim"
+        requiredCheckpoints = @(
+          "postgres-pre-crash.json",
+          "postgres-post-deletion-pre-lease.json",
+          "postgres-pre-lease-reclaim-attempt.json",
+          "postgres-b-claimed.json",
+          "postgres-final.json"
+        )
+      } | ConvertTo-Json -Depth 30 |
+        Set-Content -LiteralPath (Join-Path $EvidenceRoot "$Name/scenario.json") -Encoding utf8
+    }
     throw
   }
   Capture-ScenarioEvidence $fixture $Name $crash $history $assertions $expectedInvariant
@@ -2547,6 +3036,9 @@ try {
   [void](Invoke-CandidateIntegrityGate)
   if ($Scenario -eq "stale-worker") {
     [void](Invoke-StaleWorkerNegativeProofTests)
+  }
+  if ($Scenario -eq "after-claim") {
+    [void](Invoke-AfterClaimProofTests)
   }
   Wait-DeploymentReady "learning-platform" 2 "learning-platform"
   Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
