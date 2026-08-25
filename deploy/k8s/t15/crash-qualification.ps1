@@ -1799,7 +1799,8 @@ function Invoke-StaleWorker {
   $afterStaleObject = $afterStaleResume | ConvertFrom-Json
   $staleEvidenceCount = @($afterStaleObject.evidence).Count
   $staleMasteryCount = @($afterStaleObject.mastery).Count
-  $staleDiagnosticCount = @($afterStaleObject.aiExecutions).Count
+  $staleDiagnosticCount = Get-StaleWorkerDiagnosticExecutionCount `
+    $afterStaleObject $Fixture.DiagnosticRequestId
   $staleOutboxCount = @($afterStaleObject.adaptationOutbox).Count
   $stateAfterStaleValid =
     $stateAfterStale.status -eq "RUNNING" -and
@@ -2152,7 +2153,9 @@ function Assert-StaleWorkerProof {
   Assert-Equal "stale-worker B claim survives A resume" ([string]$Crash.StateAfterStaleValid) "True"
   Assert-Equal "stale-worker no stale evidence effect" ([string]@($afterStale.evidence).Count) "0"
   Assert-Equal "stale-worker no stale mastery effect" ([string]@($afterStale.mastery).Count) "0"
-  Assert-Equal "stale-worker no stale diagnostic dispatch" ([string]@($afterStale.aiExecutions).Count) "0"
+  $staleDiagnosticCount = Get-StaleWorkerDiagnosticExecutionCount `
+    $afterStale $Fixture.DiagnosticRequestId
+  Assert-Equal "stale-worker no stale diagnostic dispatch" ([string]$staleDiagnosticCount) "0"
   Assert-Equal "stale-worker no stale adaptation work" ([string]@($afterStale.adaptationOutbox).Count) "0"
 
   $final = ([string]$Crash.FinalState) | ConvertFrom-Json

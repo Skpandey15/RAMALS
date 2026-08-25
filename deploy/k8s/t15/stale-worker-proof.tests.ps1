@@ -15,6 +15,30 @@ $valid = [pscustomobject]@{
 }
 [void](Assert-StaleWorkerObservation $valid)
 
+$diagnosticRequestId = "wf-diag-run-1"
+$preSeededAssessment = [pscustomobject]@{
+  aiExecutions = @(
+    [pscustomobject]@{ agent_type = "ASSESSMENT"; request_id = "t15-eval-run-1" }
+  )
+}
+$assessmentCount = Get-StaleWorkerDiagnosticExecutionCount `
+  $preSeededAssessment $diagnosticRequestId
+if ($assessmentCount -ne 0) {
+  throw "pre-seeded ASSESSMENT execution was incorrectly attributed to the stale diagnostic"
+}
+$mixedExecutions = [pscustomobject]@{
+  aiExecutions = @(
+    [pscustomobject]@{ agent_type = "ASSESSMENT"; request_id = "t15-eval-run-1" },
+    [pscustomobject]@{ agent_type = "DIAGNOSTIC"; request_id = "wf-diag-other-run" },
+    [pscustomobject]@{ agent_type = "DIAGNOSTIC"; request_id = $diagnosticRequestId }
+  )
+}
+$exactDiagnosticCount = Get-StaleWorkerDiagnosticExecutionCount `
+  $mixedExecutions $diagnosticRequestId
+if ($exactDiagnosticCount -ne 1) {
+  throw "exact stale-worker diagnostic lineage count expected 1 but was $exactDiagnosticCount"
+}
+
 function Assert-NegativeRejected {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -58,5 +82,10 @@ try {
   schema = "m2-t15.stale-worker-negative-proof.v1"
   result = "PASS"
   cases = @($holdResult, $reclaimResult, $bypassResult)
+  diagnosticAttribution = [ordered]@{
+    preSeededAssessmentCount = $assessmentCount
+    exactDiagnosticCount = $exactDiagnosticCount
+    result = "PASS"
+  }
   temporaryMutationRestored = ($valid.staleACompletionCasAffectedRows -eq 0)
 } | ConvertTo-Json -Depth 20
