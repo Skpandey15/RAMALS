@@ -2365,6 +2365,344 @@ function Invoke-AfterMasteryEffectPodDeath {
   }
 }
 
+function Get-DiagnosticCommissionCheckpointCounts {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Raw,
+    [Parameter(Mandatory = $true)]$Fixture
+  )
+  $state = $Raw | ConvertFrom-Json -DateKind String
+  $executions = @($state.aiExecutions | Where-Object {
+      [string]$_.agent_type -eq "DIAGNOSTIC" -and
+      [string]$_.request_id -eq [string]$Fixture.DiagnosticRequestId
+    })
+  $events = @($state.aiEvents | Where-Object {
+      [string]$_.agent_type -eq "DIAGNOSTIC" -and
+      [string]$_.request_id -eq [string]$Fixture.DiagnosticRequestId
+    })
+  return [pscustomobject]@{
+    evidence = @($state.evidence).Count
+    mastery = @($state.mastery).Count
+    diagnosticExecution = $executions.Count
+    diagnosticExecutionStatus = if ($executions.Count -eq 1) { [string]$executions[0].status } else { "" }
+    diagnosticExecutionError = if ($executions.Count -eq 1) { [string]$executions[0].error_code } else { "" }
+    diagnosticCommission = @($events | Where-Object { [string]$_.event_type -eq "STARTED" }).Count
+    diagnosticTerminal = @($events | Where-Object {
+        [string]$_.event_type -in @("SUCCEEDED", "FAILED")
+      }).Count
+    diagnosticGate = @($state.diagnosticGate).Count
+    outbox = @($state.adaptationOutbox).Count
+  }
+}
+
+function Assert-DiagnosticCommissionOnlyCheckpoint {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)]$Counts
+  )
+  if ([int]$Counts.evidence -ne 1 -or
+      [int]$Counts.mastery -ne 1 -or
+      [int]$Counts.diagnosticExecution -ne 0 -or
+      [int]$Counts.diagnosticCommission -ne 1 -or
+      [int]$Counts.diagnosticTerminal -ne 0 -or
+      [int]$Counts.diagnosticGate -ne 0 -or
+      [int]$Counts.outbox -ne 0) {
+    throw "$Label expected evidence/mastery/execution/commission/terminal/gate/outbox 1/1/0/1/0/0/0 but observed $($Counts.evidence)/$($Counts.mastery)/$($Counts.diagnosticExecution)/$($Counts.diagnosticCommission)/$($Counts.diagnosticTerminal)/$($Counts.diagnosticGate)/$($Counts.outbox)"
+  }
+}
+
+function Get-DiagnosticCommissionBoundaryLogText {
+  param(
+    [Parameter(Mandatory = $true)][string]$Pod,
+    [Parameter(Mandatory = $true)]$Fixture
+  )
+  $raw = & kubectl logs $Pod -n $Namespace -c learning-platform --since=15m 2>&1
+  $lines = @($raw | Where-Object {
+      $line = [string]$_
+      $correlated = $line.Contains([string]$Fixture.RunId) -or
+        $line.Contains([string]$Fixture.DiagnosticRequestId) -or
+        $line.Contains([string]$Fixture.InteractionId) -or
+        $line.Contains([string]$Fixture.TraceId)
+      $relevant = $line -match 'WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION|qualification crash boundary reached|ai\.execution\.commissioned|AI execution commission evaluated'
+      $correlated -and $relevant
+    })
+  return $lines -join "`n"
+}
+
+function Get-AiRequestLogText {
+  param([Parameter(Mandatory = $true)][string]$RequestId)
+  $lines = [System.Collections.Generic.List[string]]::new()
+  foreach ($pod in @(Get-PodNames "ramals-ai")) {
+    $raw = & kubectl logs $pod -n $Namespace -c ramals-ai --since=30m 2>&1
+    foreach ($line in @($raw | Where-Object { ([string]$_).Contains($RequestId) })) {
+      [void]$lines.Add("$pod|$line")
+    }
+  }
+  return $lines -join "`n"
+}
+
+function New-DiagnosticCommissionClaimant {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)]$Claim,
+    [Parameter(Mandatory = $true)]$Identity,
+    $Boundary = $null
+  )
+  return [pscustomobject]@{
+    runId = $Fixture.RunId
+    step = "DIAGNOSE"
+    podName = [string]$Identity.podName
+    podUid = [string]$Identity.podUid
+    podIp = [string]$Identity.podIp
+    processId = if ($null -eq $Boundary) { $null } else { [long]$Boundary.processId }
+    threadId = if ($null -eq $Boundary) { $null } else { [long]$Boundary.threadId }
+    executionToken = [string]$Claim.executionToken
+    attemptCount = [int]$Claim.attemptCount
+    claimedAt = [string]$Claim.claimedAt
+    diagnosticRequestId = $Fixture.DiagnosticRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+    barrierHeldAtUtc = if ($null -eq $Boundary) { "" } else { [string]$Boundary.heldAtUtc }
+    markerPath = if ($null -eq $Boundary) { "" } else { [string]$Boundary.markerPath }
+    releasePath = if ($null -eq $Boundary) { "" } else { [string]$Boundary.releasePath }
+    capturedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+  }
+}
+
+function Invoke-DiagnosticCommissionPodDeath {
+  param([Parameter(Mandatory = $true)]$Fixture)
+
+  $targetStep = "DIAGNOSE"
+  $directory = Join-Path $EvidenceRoot "diagnostic-commission"
+  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  $leaseSeconds = Get-ApprovedWorkflowClaimLeaseSeconds
+  [ordered]@{
+    sourceCommit = $ApprovedCommit
+    constant = "LearningWorkflowPolicy.CLAIM_LEASE"
+    leaseSeconds = $leaseSeconds
+    mutation = "none; claimed_at is observed, never rewritten"
+  } | ConvertTo-Json -Depth 10 |
+    Set-Content -LiteralPath (Join-Path $directory "production-lease.json") -Encoding utf8
+
+  $boundaryPod = Wait-WorkflowBoundary `
+    "WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION" "" $Fixture.DiagnosticRequestId
+  $claimA = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  if ($claimA.status -ne "RUNNING" -or $claimA.attemptCount -ne 1 -or
+      [string]::IsNullOrWhiteSpace([string]$claimA.executionToken)) {
+    throw "diagnostic commission boundary did not preserve a live attempt-1 claim"
+  }
+  $identitiesA = @(Get-BackendPodIdentities | Where-Object { $_.podName -eq $boundaryPod })
+  if ($identitiesA.Count -ne 1) {
+    throw "could not resolve the owning backend pod identity at the diagnostic commission boundary"
+  }
+  $identityA = $identitiesA[0]
+  $claimantA = New-DiagnosticCommissionClaimant $Fixture $claimA $identityA
+  $claimantA | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "claimant-a.json") -Encoding utf8
+
+  $boundaryLog = Get-DiagnosticCommissionBoundaryLogText $boundaryPod $Fixture
+  $boundaryLog | Set-Content -LiteralPath (Join-Path $directory "boundary-a.log") -Encoding utf8
+  if (-not $boundaryLog.Contains("ai.execution.commissioned") -or
+      -not $boundaryLog.Contains("WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION") -or
+      -not $boundaryLog.Contains("qualification crash boundary reached")) {
+    throw "diagnostic durable commission/boundary log sequence was not captured"
+  }
+  $preDeletionLogs = Get-SafePodLogText $boundaryPod $Fixture
+  $preDeletionLogs | Set-Content -LiteralPath `
+    (Join-Path $directory "backend-a-pre-deletion-$boundaryPod.log") -Encoding utf8
+  $providerBefore = Get-AiRequestLogText $Fixture.DiagnosticRequestId
+  $providerBefore | Set-Content -LiteralPath `
+    (Join-Path $directory "provider-request-before-kill.log") -Encoding utf8
+
+  $beforeKillClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  Assert-AfterClaimOwnsExactClaim "diagnostic commission pre-kill claim" $beforeKillClaim $claimA
+  $beforeKill = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-before-kill.json" $beforeKill
+  $beforeKillCounts = Get-DiagnosticCommissionCheckpointCounts $beforeKill $Fixture
+  Assert-DiagnosticCommissionOnlyCheckpoint "diagnostic commission pre-kill" $beforeKillCounts
+  $beforeKillWorkflow = Get-WorkflowState $Fixture.RunId
+  if ($beforeKillWorkflow.CurrentStep -ne $targetStep -or
+      $beforeKillWorkflow.StepStatus -ne "RUNNING" -or
+      $beforeKillWorkflow.AttemptCount -ne 1 -or
+      $beforeKillWorkflow.ExecutionToken -ne $claimA.executionToken) {
+    throw "workflow cursor advanced before the commissioned diagnostic worker was killed"
+  }
+  [ordered]@{
+    boundary = "WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION"
+    codeOrder = "durable STARTED commission -> qualification boundary -> provider request -> atomic execution + gate commit"
+    applicationLog = "boundary-a.log"
+    durableCounts = $beforeKillCounts
+    providerRequestLog = "provider-request-before-kill.log"
+    providerRequestLines = if ([string]::IsNullOrWhiteSpace($providerBefore)) { 0 } else { @($providerBefore -split "`r?`n").Count }
+    claim = $beforeKillClaim
+  } | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "boundary-evidence.json") -Encoding utf8
+
+  $deletion = Force-DeletePod $boundaryPod
+  $deletedObservedAt = Wait-PodUidGone $boundaryPod $identityA.podUid
+
+  $afterDeathClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  Assert-AfterClaimOwnsExactClaim "diagnostic commission post-death/pre-reclaim claim" $afterDeathClaim $claimA
+  $afterDeath = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-after-pod-death.json" $afterDeath
+  $afterDeathCounts = Get-DiagnosticCommissionCheckpointCounts $afterDeath $Fixture
+  Assert-DiagnosticCommissionOnlyCheckpoint "diagnostic commission post-death" $afterDeathCounts
+
+  Set-BackendFault `
+    -Enabled $true `
+    -Window "WORKFLOW_AFTER_CLAIM" `
+    -RunId $Fixture.RunId `
+    -Step $targetStep `
+    -ClaimBarrierDirectory $script:StaleWorkerClaimBarrierDirectory
+  Wait-DeploymentReady "learning-platform" 1 "learning-platform"
+  $replacement = Wait-SingleBackendReplacement $identityA.podUid
+  $preLeaseClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  Assert-AfterClaimOwnsExactClaim "diagnostic replacement/pre-lease claim" $preLeaseClaim $claimA
+  $preLease = Get-AfterClaimLeaseObservation $claimA $leaseSeconds
+  if ([bool]$preLease.expired) {
+    throw "diagnostic replacement was not ready before natural lease expiry"
+  }
+  $preLease | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "lease-before-natural-expiry.json") -Encoding utf8
+
+  $naturalExpiry = Wait-AfterClaimNaturalLeaseExpiry $claimA $leaseSeconds (2 * $leaseSeconds)
+  $naturalExpiry | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "natural-lease-expiry.json") -Encoding utf8
+  $postLeaseRaw = Get-ScenarioDbSnapshot $Fixture
+  $postLeaseClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  if ($postLeaseClaim.attemptCount -eq $claimA.attemptCount -and
+      $postLeaseClaim.executionToken -eq $claimA.executionToken) {
+    Save-StaleWorkerCheckpoint $directory "postgres-post-lease-pre-reclaim.json" $postLeaseRaw
+  }
+
+  $claimB = Wait-StepClaimAttempt $Fixture.RunId $targetStep 2 $claimA.executionToken
+  $boundaryB = Wait-StaleWorkerClaimBoundary `
+    $Fixture.RunId $targetStep $claimB.attemptCount $claimB.executionToken
+  if ($boundaryB.podUid -ne $replacement.podUid) {
+    throw "diagnostic reclaim did not originate from the configured replacement pod"
+  }
+  Assert-StaleWorkerClaimHeld $boundaryB
+  $claimantB = New-DiagnosticCommissionClaimant $Fixture $claimB $replacement $boundaryB
+  $claimantB | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "claimant-b.json") -Encoding utf8
+  (Get-SafePodLogText $claimantB.podName $Fixture) |
+    Set-Content -LiteralPath `
+      (Join-Path $directory "claimant-b-boundary.log") -Encoding utf8
+  $replacementClaimState = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-replacement-claimed.json" $replacementClaimState
+  $replacementCounts = Get-DiagnosticCommissionCheckpointCounts $replacementClaimState $Fixture
+  Assert-DiagnosticCommissionOnlyCheckpoint "diagnostic replacement held before recovery" $replacementCounts
+  if ($claimB.executionToken -eq $claimA.executionToken -or
+      $claimB.attemptCount -ne ($claimA.attemptCount + 1) -or
+      [datetimeoffset]::Parse($claimB.claimedAt) -lt
+        [datetimeoffset]::Parse([string]$naturalExpiry.leaseExpiresAt)) {
+    throw "diagnostic replacement claim did not follow natural lease expiry with attempt N+1/token B"
+  }
+
+  $boundaryCursor = @(
+    (Format-CursorObservation $beforeKillWorkflow),
+    (Format-CursorObservation (Get-WorkflowState $Fixture.RunId))
+  )
+  $releaseB = Release-StaleWorkerClaimBoundary $boundaryB
+  $releaseB | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "release-b.json") -Encoding utf8
+  $terminal = Wait-WorkflowTerminal $Fixture.RunId
+  $finalState = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-final.json" $finalState
+  $finalCounts = Get-DiagnosticCommissionCheckpointCounts $finalState $Fixture
+  $finalClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  $logB = Get-SafePodLogText $claimantB.podName $Fixture
+  $logB | Set-Content -LiteralPath `
+    (Join-Path $directory "backend-b-$($claimantB.podName).log") -Encoding utf8
+  $providerAfter = Get-AiRequestLogText $Fixture.DiagnosticRequestId
+  $providerAfter | Set-Content -LiteralPath `
+    (Join-Path $directory "provider-request-final.log") -Encoding utf8
+  $cursorHistory = @($boundaryCursor) + @($terminal.History)
+  $cursorHistory | Set-Content -LiteralPath (Join-Path $directory "cursor-history.log") -Encoding utf8
+  [ordered]@{
+    runId = $Fixture.RunId
+    step = $targetStep
+    diagnosticRequestId = $Fixture.DiagnosticRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+    workerA = $claimantA
+    claimA = $claimA
+    workerB = $claimantB
+    claimB = $claimB
+    finalClaim = $finalClaim
+  } | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "token-lineage.json") -Encoding utf8
+
+  $crash = [pscustomobject]@{
+    Pod = $claimantA.podName
+    PodUid = $claimantA.podUid
+    ReplacementPod = $claimantB.podName
+    ReplacementPodUid = $claimantB.podUid
+    DeletedObservedAtUtc = $deletedObservedAt
+    Deletion = $deletion
+    PreState = $beforeKill
+    PostState = $finalState
+    PreDeletionLogs = $preDeletionLogs
+    Perturbation = [ordered]@{
+      type = "backend-pod-death-after-diagnostic-commission"
+      boundary = "WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION"
+      targetStep = $targetStep
+      targetRequestId = $Fixture.DiagnosticRequestId
+      deletedPod = $claimantA.podName
+      deletedPodUid = $claimantA.podUid
+      command = $deletion.operation
+      requestedAtUtc = $deletion.requestedAtUtc
+      deletedObservedAtUtc = $deletedObservedAt
+      reclaim = "natural production lease expiry"
+    }
+    OldToken = $claimA.executionToken
+    OldAttempt = [string]$claimA.attemptCount
+    NewToken = $claimB.executionToken
+    NewAttempt = [string]$claimB.attemptCount
+    ClaimA = $claimA
+    ClaimB = $claimB
+    ClaimantA = $claimantA
+    ClaimantB = $claimantB
+    BoundaryLog = $boundaryLog
+    BeforeKillState = $beforeKill
+    AfterDeathState = $afterDeath
+    ReplacementClaimState = $replacementClaimState
+    FinalState = $finalState
+    BeforeKillCounts = $beforeKillCounts
+    AfterDeathCounts = $afterDeathCounts
+    ReplacementCounts = $replacementCounts
+    FinalCounts = $finalCounts
+    ProviderRequestLogBefore = $providerBefore
+    ProviderRequestLogAfter = $providerAfter
+    NaturalLeaseObservation = $naturalExpiry
+    CompetingPods = @($claimantA, $claimantB)
+    ClaimAttempts = $null
+    Terminal = $terminal
+    CursorHistory = $cursorHistory
+    StaleOutboxId = ""
+    StaleOutboxOwner = ""
+  }
+  (Get-ScopedKubernetesEvents $crash $Fixture) | ConvertTo-Json -Depth 50 |
+    Set-Content -LiteralPath (Join-Path $directory "events.json") -Encoding utf8
+  [ordered]@{
+    schema = "m2-t15.diagnostic-commission-observation.v1"
+    candidate = $script:CandidateIdentity.candidate
+    runId = $Fixture.RunId
+    requestId = $Fixture.DiagnosticRequestId
+    claimA = $claimA
+    claimB = $claimB
+    naturalLease = $naturalExpiry
+    beforeKill = $beforeKillCounts
+    afterDeath = $afterDeathCounts
+    replacementHeld = $replacementCounts
+    final = $finalCounts
+    terminal = $terminal.State
+    providerRequestLinesBefore = if ([string]::IsNullOrWhiteSpace($providerBefore)) { 0 } else { @($providerBefore -split "`r?`n").Count }
+    providerRequestLinesFinal = if ([string]::IsNullOrWhiteSpace($providerAfter)) { 0 } else { @($providerAfter -split "`r?`n").Count }
+  } | ConvertTo-Json -Depth 40 |
+    Set-Content -LiteralPath (Join-Path $directory "diagnostic-commission-observation.json") -Encoding utf8
+  return $crash
+}
+
 function Invoke-DiagnosticProviderCrash {
   param([Parameter(Mandatory = $true)]$Fixture)
   Wait-DeploymentReady "learning-platform" 1 "learning-platform"
@@ -3358,6 +3696,66 @@ function Assert-AfterMasteryEffectAtomicityProof {
     ([string]$final.workflow.terminal_reason) "WORKFLOW_COMPLETED"
 }
 
+function Assert-DiagnosticCommissionRecoveryProof {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)]$Crash
+  )
+  if (-not ([string]$Crash.BoundaryLog).Contains("ai.execution.commissioned") -or
+      -not ([string]$Crash.BoundaryLog).Contains("WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION") -or
+      -not ([string]$Crash.BoundaryLog).Contains("qualification crash boundary reached")) {
+    throw "diagnostic recovery proof lacks the durable commission/boundary log sequence"
+  }
+  foreach ($countsName in @("BeforeKillCounts", "AfterDeathCounts", "ReplacementCounts")) {
+    Assert-DiagnosticCommissionOnlyCheckpoint "diagnostic $countsName" $Crash.$countsName
+  }
+  if ($Crash.PodUid -eq $Crash.ReplacementPodUid) {
+    throw "diagnostic recovery proof requires distinct worker A/B pod UIDs"
+  }
+  if ($Crash.OldToken -eq $Crash.NewToken) {
+    throw "diagnostic recovery reclaim reused execution token A"
+  }
+  Assert-Equal "diagnostic recovery attempt increment" ([string]$Crash.NewAttempt) `
+    ([string]([int]$Crash.OldAttempt + 1))
+  if ([datetimeoffset]::Parse([string]$Crash.ClaimB.claimedAt) -lt
+      [datetimeoffset]::Parse([string]$Crash.NaturalLeaseObservation.leaseExpiresAt)) {
+    throw "diagnostic recovery claim B preceded natural production lease expiry"
+  }
+
+  $final = ([string]$Crash.FinalState) | ConvertFrom-Json -DateKind String
+  $counts = $Crash.FinalCounts
+  $target = @($final.steps | Where-Object { $_.step_name -eq "DIAGNOSE" })
+  $failed = [System.Collections.Generic.List[string]]::new()
+  if ($target.Count -ne 1 -or [string]$target[0].status -ne "COMPLETED") {
+    [void]$failed.Add("DIAGNOSE status=$([string]$target[0].status)")
+  }
+  if ([int]$target[0].attempt_count -ne 2) {
+    [void]$failed.Add("DIAGNOSE attempt=$([string]$target[0].attempt_count)")
+  }
+  if ([int]$counts.diagnosticExecution -ne 1 -or
+      [string]$counts.diagnosticExecutionStatus -ne "SUCCEEDED") {
+    [void]$failed.Add("execution=$($counts.diagnosticExecution)/$($counts.diagnosticExecutionStatus)/$($counts.diagnosticExecutionError)")
+  }
+  if ([int]$counts.diagnosticCommission -ne 1 -or [int]$counts.diagnosticTerminal -ne 1) {
+    [void]$failed.Add("commission/terminal=$($counts.diagnosticCommission)/$($counts.diagnosticTerminal)")
+  }
+  if ([int]$counts.diagnosticGate -ne 1) {
+    [void]$failed.Add("gate=$($counts.diagnosticGate)")
+  }
+  if ([int]$counts.evidence -ne 1 -or [int]$counts.mastery -ne 1 -or
+      [int]$counts.outbox -ne 1) {
+    [void]$failed.Add("evidence/mastery/outbox=$($counts.evidence)/$($counts.mastery)/$($counts.outbox)")
+  }
+  if ([string]$final.workflow.status -ne "COMPLETED" -or
+      [string]$final.workflow.terminal_reason -ne "WORKFLOW_COMPLETED") {
+    [void]$failed.Add("workflow=$([string]$final.workflow.status)/$([string]$final.workflow.terminal_reason)")
+  }
+  if ($failed.Count -gt 0) {
+    throw "DIAGNOSTIC RECOVERY INVARIANT FAILED after durable commission: $($failed -join '; ')"
+  }
+  Assert-StaleWorkerExecutionTokenCleared $target[0].execution_token
+}
+
 function Assert-CursorHistory {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -3686,6 +4084,18 @@ function Run-Scenario {
       finalEffects = "1/1/1/1"
     }
   }
+  if ($Name -eq "diagnostic-commission") {
+    $expectedInvariant.diagnosticCommissionRecoveryProof = [ordered]@{
+      durableCommission = "one DIAGNOSTIC STARTED event for the deterministic requestId"
+      providerRedispatch = 0
+      leaseExpiry = "natural production lease"
+      replacementAttempt = 2
+      requestIdentity = "unchanged"
+      finalExecution = "one SUCCEEDED execution and one terminal event"
+      finalGateDecision = 1
+      finalWorkflow = "COMPLETED/WORKFLOW_COMPLETED"
+    }
+  }
 
   switch ($Name) {
     "after-claim" {
@@ -3734,14 +4144,12 @@ function Run-Scenario {
     "diagnostic-commission" {
       Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
       Wait-DeploymentReady "learning-platform" 0 "learning-platform"
-      Set-BackendFault $true "WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION" "" $fixture.DiagnosticRequestId 120000
+      Set-BackendFault $true "WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION" "" $fixture.DiagnosticRequestId 300000
       Seed-ScenarioFixture $fixture
       Wait-DeploymentReady "learning-platform" 1 "learning-platform"
       $targetStep = "DIAGNOSE"
       $expectedTargetAttempt = 2
-      $expectedFailure = $true
-      $expectedAdaptation = $false
-      $crash = Invoke-BackendCrash $fixture "WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION" $targetStep
+      $crash = Invoke-DiagnosticCommissionPodDeath $fixture
     }
     "diagnostic-provider" {
       $targetStep = "DIAGNOSE"
@@ -3798,6 +4206,9 @@ function Run-Scenario {
     $history = @($crash.Terminal.History)
   }
   try {
+    if ($Name -eq "diagnostic-commission") {
+      Assert-DiagnosticCommissionRecoveryProof $fixture $crash
+    }
     $assertions = Assert-Scenario $fixture $Name $targetStep $expectedTargetAttempt `
       $expectedFailure $expectedAdaptation $expectedAdaptationAbandoned $crash
     if ($Name -eq "contention") {
@@ -3834,6 +4245,28 @@ function Run-Scenario {
         bClaimSurvivedStaleAResume = $crash.StateAfterStaleValid
         expectedInvariant = $expectedInvariant
         rawObservation = "stale-worker-observation.json"
+      } | ConvertTo-Json -Depth 50 |
+        Set-Content -LiteralPath (Join-Path $EvidenceRoot "$Name/scenario.json") -Encoding utf8
+    }
+    if ($Name -eq "diagnostic-commission") {
+      [ordered]@{
+        schema = "m2-t15.scenario-evidence.v1"
+        scenarioId = $Name
+        result = "FAIL"
+        error = $_.Exception.Message
+        candidate = $script:CandidateIdentity.candidate
+        runId = $fixture.RunId
+        step = $targetStep
+        diagnosticRequestId = $fixture.DiagnosticRequestId
+        claimantA = $crash.ClaimantA
+        claimantB = $crash.ClaimantB
+        beforeKillCounts = $crash.BeforeKillCounts
+        afterDeathCounts = $crash.AfterDeathCounts
+        replacementHeldCounts = $crash.ReplacementCounts
+        finalCounts = $crash.FinalCounts
+        terminal = $crash.Terminal.State
+        expectedInvariant = $expectedInvariant
+        rawObservation = "diagnostic-commission-observation.json"
       } | ConvertTo-Json -Depth 50 |
         Set-Content -LiteralPath (Join-Path $EvidenceRoot "$Name/scenario.json") -Encoding utf8
     }
