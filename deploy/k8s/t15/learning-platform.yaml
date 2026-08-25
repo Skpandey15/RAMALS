@@ -121,6 +121,20 @@ spec:
                 secretKeyRef:
                   name: ramals-t15-runtime
                   key: workload-client-secret
+            # Qualification-only claimant identity. The application reads these only when the
+            # disabled-by-default WORKFLOW_AFTER_CLAIM barrier is explicitly armed.
+            - name: RAMALS_QUALIFICATION_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RAMALS_QUALIFICATION_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: RAMALS_QUALIFICATION_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           resources:
             requests:
               cpu: 250m
