@@ -12,7 +12,8 @@ param(
     "diagnostic-outcome-commit",
     "adaptation-handoff",
     "adaptation-commission",
-    "contention"
+    "contention",
+    "stale-worker"
   )]
   [string]$Scenario = "all",
   [string]$ClusterName = "t15",
@@ -27,6 +28,7 @@ $scriptRoot = (Resolve-Path $PSScriptRoot).Path
 $repositoryRoot = (Resolve-Path (Join-Path $scriptRoot "..\..\..")).Path
 Set-Location $repositoryRoot
 . (Join-Path $scriptRoot "contention-proof.ps1")
+. (Join-Path $scriptRoot "stale-worker-proof.ps1")
 $qualificationManifestRoot = if ([string]::IsNullOrWhiteSpace($ManifestRoot)) {
   $scriptRoot
 } else {
@@ -46,6 +48,9 @@ New-Item -ItemType Directory -Path $EvidenceRoot -Force | Out-Null
 
 $script:Summary = [System.Collections.Generic.List[string]]::new()
 $script:CandidateIdentity = $null
+$script:ActiveStaleWorkerContext = $null
+$script:StaleWorkerGateAName = "t15-stale-worker-gate-a"
+$script:StaleWorkerGateBName = "t15-stale-worker-gate-b"
 $script:StepIndexes = @{
   "" = -1
   "RECORD_EVALUATION_EVIDENCE" = 0
@@ -137,6 +142,27 @@ function Invoke-CandidateIntegrityGate {
     throw "candidate-integrity gate result was '$($script:CandidateIdentity.result)'"
   }
   return $script:CandidateIdentity
+}
+
+function Invoke-StaleWorkerNegativeProofTests {
+  $testPath = Join-Path $scriptRoot "stale-worker-proof.tests.ps1"
+  $output = & pwsh -NoProfile -File $testPath 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    $output | Set-Content -LiteralPath (Join-Path $EvidenceRoot "stale-worker-negative-proof.log") -Encoding utf8
+    throw "stale-worker negative proof self-test failed with exit code $LASTEXITCODE"
+  }
+  $raw = $output -join "`n"
+  try {
+    $result = $raw | ConvertFrom-Json
+  } catch {
+    throw "stale-worker negative proof self-test did not return valid JSON: $raw"
+  }
+  if ($result.result -ne "PASS" -or -not [bool]$result.temporaryMutationRestored) {
+    throw "stale-worker negative proof self-test did not reject and restore every perturbation"
+  }
+  $result | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $EvidenceRoot "stale-worker-negative-proof.json") -Encoding utf8
+  return $result
 }
 
 function New-QualificationUuid7 {
@@ -426,6 +452,62 @@ function Get-StepClaim {
   [pscustomobject]@{ Token = $parts[0]; AttemptCount = $parts[1]; Status = $parts[2] }
 }
 
+function Get-StepClaimSnapshot {
+  param(
+    [Parameter(Mandatory = $true)][string]$RunId,
+    [Parameter(Mandatory = $true)][string]$StepName
+  )
+  $line = Get-Scalar @"
+SELECT COALESCE(execution_token::text, '') || '|' || attempt_count::text || '|' || status || '|' ||
+       COALESCE(to_char(claimed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '')
+  FROM core.learning_workflow_step
+ WHERE run_id = '$RunId' AND step_name = '$StepName';
+"@
+  if ([string]::IsNullOrWhiteSpace($line)) {
+    throw "step $StepName for workflow $RunId was not found"
+  }
+  $parts = $line -split '\|', 4
+  if ($parts.Count -lt 4) {
+    throw "could not parse claim snapshot for $RunId/$StepName`: $line"
+  }
+  [pscustomobject]@{
+    runId = $RunId
+    step = $StepName
+    executionToken = $parts[0]
+    attemptCount = [int]$parts[1]
+    status = $parts[2]
+    claimedAt = $parts[3]
+    capturedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+  }
+}
+
+function Wait-StepClaimAttempt {
+  param(
+    [Parameter(Mandatory = $true)][string]$RunId,
+    [Parameter(Mandatory = $true)][string]$StepName,
+    [Parameter(Mandatory = $true)][int]$AttemptCount,
+    [string]$TokenMustDifferFrom = "",
+    [int]$TimeoutSeconds = 60
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    try {
+      $claim = Get-StepClaimSnapshot $RunId $StepName
+      if ($claim.status -eq "RUNNING" -and
+          $claim.attemptCount -eq $AttemptCount -and
+          -not [string]::IsNullOrWhiteSpace($claim.executionToken) -and
+          ([string]::IsNullOrWhiteSpace($TokenMustDifferFrom) -or
+           $claim.executionToken -ne $TokenMustDifferFrom)) {
+        return $claim
+      }
+    } catch {
+      # The first attempt may not have inserted its row yet.
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  throw "workflow $RunId/$StepName did not expose RUNNING attempt $AttemptCount"
+}
+
 function Wait-WorkflowTerminal {
   param(
     [Parameter(Mandatory = $true)][string]$RunId,
@@ -478,6 +560,70 @@ function Wait-WorkflowBoundary {
     Start-Sleep -Milliseconds 250
   }
   throw "workflow boundary $Window was not observed for run $RunId"
+}
+
+function Get-WorkflowBoundaryPods {
+  param(
+    [Parameter(Mandatory = $true)][string]$Window,
+    [Parameter(Mandatory = $true)][string]$RunId
+  )
+  $identities = @(Get-BackendPodIdentities)
+  return @(
+    foreach ($identity in $identities) {
+      $logs = & kubectl logs $identity.podName -n $Namespace --since=15m 2>$null
+      $text = $logs -join "`n"
+      if ($text -match "qualification crash boundary reached" -and
+          $text -match [regex]::Escape($Window) -and
+          $text -match [regex]::Escape($RunId)) {
+        $identity
+      }
+    }
+  )
+}
+
+function Wait-WorkflowBoundaryPodCount {
+  param(
+    [Parameter(Mandatory = $true)][string]$Window,
+    [Parameter(Mandatory = $true)][string]$RunId,
+    [Parameter(Mandatory = $true)][int]$Count,
+    [int]$TimeoutSeconds = 60
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $pods = @(Get-WorkflowBoundaryPods $Window $RunId)
+    if ($pods.Count -eq $Count) {
+      return $pods
+    }
+    if ($pods.Count -gt $Count) {
+      throw "workflow boundary $Window observed $($pods.Count) pods before expected count $Count"
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  throw "workflow boundary $Window observed fewer than $Count pods for run $RunId"
+}
+
+function Wait-RealStaleCompletionRejection {
+  param(
+    [Parameter(Mandatory = $true)][string]$Pod,
+    [Parameter(Mandatory = $true)][string]$RunId,
+    [Parameter(Mandatory = $true)][string]$StepName,
+    [int]$TimeoutSeconds = 40
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $logs = & kubectl logs $Pod -n $Namespace --since=15m 2>$null
+    $matching = @($logs | Where-Object {
+        $line = [string]$_
+        $line.Contains("workflow.step.superseded") -and
+        $line.Contains($RunId) -and
+        $line.Contains($StepName)
+      })
+    if ($matching.Count -gt 0) {
+      return ($matching -join "`n")
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  throw "real stale completion rejection was not observed from pod $Pod for $RunId/$StepName"
 }
 
 function Wait-AiProviderBoundary {
@@ -543,6 +689,270 @@ function Get-BackendPodIdentities {
       }
     }
   )
+}
+
+function Start-StaleWorkerAdvisoryGate {
+  param(
+    [Parameter(Mandatory = $true)][string]$CoordinatorName,
+    [Parameter(Mandatory = $true)][long]$AdvisoryKey
+  )
+  $coordinatorPath = Join-Path $scriptRoot "qualification-coordinator.ps1"
+  $output = & pwsh -NoProfile -File $coordinatorPath `
+    -Action start `
+    -ClusterName $ClusterName `
+    -Namespace $Namespace `
+    -LockMode advisory `
+    -AdvisoryKey $AdvisoryKey `
+    -CoordinatorName $CoordinatorName 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "could not start stale-worker advisory gate ${CoordinatorName}: $($output -join "`n")"
+  }
+
+  $end = (Get-Date).ToUniversalTime().AddSeconds(60)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $podJson = (& kubectl get pod $CoordinatorName -n $Namespace -o json 2>$null) -join "`n"
+    if (-not [string]::IsNullOrWhiteSpace($podJson)) {
+      $pod = $podJson | ConvertFrom-Json
+      $podIp = [string]$pod.status.podIP
+      if ($pod.status.phase -eq "Running" -and $podIp -match '^[0-9a-fA-F:.]+$') {
+        $held = Get-Scalar @"
+SELECT COUNT(*)::text
+  FROM pg_stat_activity a
+  JOIN pg_locks l ON l.pid = a.pid
+ WHERE a.client_addr = '$podIp'::inet
+   AND l.locktype = 'advisory'
+   AND l.granted
+   AND a.query ILIKE '%pg_advisory_lock($AdvisoryKey)%';
+"@
+        if ($held -eq "1") {
+          return [pscustomobject]@{
+            coordinatorName = $CoordinatorName
+            podUid = [string]$pod.metadata.uid
+            podIp = $podIp
+            advisoryKey = $AdvisoryKey
+            heldAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+          }
+        }
+      }
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  throw "stale-worker advisory gate $CoordinatorName did not acquire key $AdvisoryKey"
+}
+
+function Stop-StaleWorkerAdvisoryGate {
+  param([Parameter(Mandatory = $true)][string]$CoordinatorName)
+  $coordinatorPath = Join-Path $scriptRoot "qualification-coordinator.ps1"
+  $output = & pwsh -NoProfile -File $coordinatorPath `
+    -Action stop `
+    -ClusterName $ClusterName `
+    -Namespace $Namespace `
+    -CoordinatorName $CoordinatorName 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "could not stop stale-worker advisory gate ${CoordinatorName}: $($output -join "`n")"
+  }
+}
+
+function Install-StaleWorkerDatabaseBarrier {
+  param(
+    [Parameter(Mandatory = $true)][string]$LineageKey,
+    [Parameter(Mandatory = $true)][long]$GateAKey,
+    [Parameter(Mandatory = $true)][long]$GateBKey
+  )
+  $escapedLineage = $LineageKey.Replace("'", "''")
+  $sql = @'
+DROP TRIGGER IF EXISTS t15_stale_worker_barrier ON ledger.evidence;
+DROP FUNCTION IF EXISTS core.t15_stale_worker_barrier();
+DROP TABLE IF EXISTS core.t15_stale_worker_control;
+CREATE TABLE core.t15_stale_worker_control (
+  lineage_key text PRIMARY KEY,
+  worker_a_pid integer NULL,
+  gate_a_key bigint NOT NULL,
+  gate_b_key bigint NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO core.t15_stale_worker_control (lineage_key, gate_a_key, gate_b_key)
+VALUES ('@@LINEAGE@@', @@GATE_A@@, @@GATE_B@@);
+CREATE FUNCTION core.t15_stale_worker_barrier()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  control core.t15_stale_worker_control%ROWTYPE;
+BEGIN
+  SELECT * INTO control
+    FROM core.t15_stale_worker_control
+   WHERE lineage_key = NEW.lineage_key;
+  IF FOUND THEN
+    IF control.worker_a_pid IS NULL OR control.worker_a_pid = pg_backend_pid() THEN
+      PERFORM pg_advisory_xact_lock(control.gate_a_key);
+    ELSE
+      PERFORM pg_advisory_xact_lock(control.gate_b_key);
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+CREATE TRIGGER t15_stale_worker_barrier
+BEFORE INSERT ON ledger.evidence
+FOR EACH ROW EXECUTE FUNCTION core.t15_stale_worker_barrier();
+'@
+  $sql = $sql.Replace("@@LINEAGE@@", $escapedLineage).
+    Replace("@@GATE_A@@", [string]$GateAKey).
+    Replace("@@GATE_B@@", [string]$GateBKey)
+  [void](Invoke-Psql $sql)
+}
+
+function Remove-StaleWorkerDatabaseBarrier {
+  [void](Invoke-Psql @"
+SET statement_timeout = '30s';
+DROP TRIGGER IF EXISTS t15_stale_worker_barrier ON ledger.evidence;
+DROP FUNCTION IF EXISTS core.t15_stale_worker_barrier();
+DROP TABLE IF EXISTS core.t15_stale_worker_control;
+"@)
+}
+
+function Set-StaleWorkerAPostgresPid {
+  param(
+    [Parameter(Mandatory = $true)][string]$LineageKey,
+    [Parameter(Mandatory = $true)][string]$PostgresPid
+  )
+  if ($PostgresPid -notmatch '^[0-9]+$') {
+    throw "invalid worker A PostgreSQL PID '$PostgresPid'"
+  }
+  $escapedLineage = $LineageKey.Replace("'", "''")
+  $changed = Get-Scalar @"
+WITH changed AS (
+  UPDATE core.t15_stale_worker_control
+     SET worker_a_pid = $PostgresPid
+   WHERE lineage_key = '$escapedLineage'
+     AND worker_a_pid IS NULL
+  RETURNING 1
+)
+SELECT COUNT(*)::text FROM changed;
+"@
+  if ($changed -ne "1") {
+    throw "could not bind the stale-worker barrier to PostgreSQL PID $PostgresPid"
+  }
+}
+
+function Get-StaleWorkerBarrierWaiters {
+  $raw = Invoke-PsqlAt @"
+SELECT a.pid::text,
+       host(a.client_addr),
+       to_char(a.query_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+  FROM pg_stat_activity a
+ WHERE a.datname = current_database()
+   AND a.wait_event_type = 'Lock'
+   AND a.wait_event = 'advisory'
+   AND a.query ILIKE '%INSERT INTO ledger.evidence%'
+ ORDER BY a.query_start, a.pid;
+"@
+  $pods = @(Get-BackendPodIdentities)
+  return @(
+    foreach ($line in @($raw -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+      $parts = $line -split '\|', 3
+      if ($parts.Count -ne 3 -or $parts[0] -notmatch '^[0-9]+$') {
+        continue
+      }
+      $pod = @($pods | Where-Object { $_.podIp -eq $parts[1] }) | Select-Object -First 1
+      if ($null -eq $pod) {
+        throw "could not map stale-worker PostgreSQL PID $($parts[0]) client $($parts[1]) to a backend pod"
+      }
+      [pscustomobject]@{
+        postgresPid = $parts[0]
+        podName = $pod.podName
+        podUid = $pod.podUid
+        podIp = $pod.podIp
+        blockedAtUtc = $parts[2]
+        observedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+    }
+  )
+}
+
+function Wait-StaleWorkerBarrierWaiterCount {
+  param(
+    [Parameter(Mandatory = $true)][int]$Count,
+    [int]$TimeoutSeconds = 60
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $waiters = @(Get-StaleWorkerBarrierWaiters)
+    if ($waiters.Count -eq $Count) {
+      return $waiters
+    }
+    if ($waiters.Count -gt $Count) {
+      throw "stale-worker barrier observed $($waiters.Count) waiters before expected count $Count"
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  throw "stale-worker barrier observed fewer than $Count application waiters"
+}
+
+function Save-StaleWorkerClaimant {
+  param(
+    [Parameter(Mandatory = $true)][ValidateSet("a", "b")][string]$Label,
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)]$Claim,
+    [Parameter(Mandatory = $true)]$Waiter,
+    [Parameter(Mandatory = $true)][string]$Directory
+  )
+  $claimant = [ordered]@{
+    runId = $Fixture.RunId
+    step = "RECORD_EVALUATION_EVIDENCE"
+    podName = $Waiter.podName
+    podUid = $Waiter.podUid
+    podIp = $Waiter.podIp
+    postgresPid = $Waiter.postgresPid
+    executionToken = $Claim.executionToken
+    attemptCount = $Claim.attemptCount
+    claimedAt = $Claim.claimedAt
+    barrierBlockedAtUtc = $Waiter.blockedAtUtc
+    barrierObservedAtUtc = $Waiter.observedAtUtc
+    requestId = $Fixture.EvaluationRequestId
+    diagnosticRequestId = $Fixture.DiagnosticRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+  }
+  # The identity file is the first durable operation after the claimant and claim row are paired.
+  $claimant | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $Directory "claimant-$Label.json") -Encoding utf8
+  (Get-SafePodLogText $Waiter.podName $Fixture) |
+    Set-Content -LiteralPath (Join-Path $Directory "claimant-$Label-boundary.log") -Encoding utf8
+  return [pscustomobject]$claimant
+}
+
+function Expire-ExactStaleWorkerClaim {
+  param(
+    [Parameter(Mandatory = $true)]$Claim
+  )
+  $result = Get-Scalar @"
+WITH expired AS (
+  UPDATE core.learning_workflow_step
+     SET claimed_at = CURRENT_TIMESTAMP - INTERVAL '2 minutes'
+   WHERE run_id = '$($Claim.runId)'
+     AND step_name = '$($Claim.step)'
+     AND status = 'RUNNING'
+     AND execution_token = '$($Claim.executionToken)'
+     AND attempt_count = $($Claim.attemptCount)
+  RETURNING run_id, step_name, execution_token, attempt_count, claimed_at
+)
+SELECT jsonb_build_object(
+  'changedRows', COUNT(*),
+  'runId', '$($Claim.runId)',
+  'step', '$($Claim.step)',
+  'token', '$($Claim.executionToken)',
+  'attempt', $($Claim.attemptCount),
+  'newClaimedAt', (SELECT claimed_at FROM expired LIMIT 1)
+)::text
+FROM expired;
+"@
+  $proof = $result | ConvertFrom-Json
+  if ([int]$proof.changedRows -ne 1) {
+    throw "could not expire the exact captured stale-worker claim; changed rows '$($proof.changedRows)'"
+  }
+  return $proof
 }
 
 function Start-ContentionRowBarrier {
@@ -1166,6 +1576,341 @@ function Invoke-Contention {
   }
 }
 
+function Save-StaleWorkerCheckpoint {
+  param(
+    [Parameter(Mandatory = $true)][string]$Directory,
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Raw
+  )
+  New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+  $path = Join-Path $Directory $Name
+  try {
+    $Raw | ConvertFrom-Json | ConvertTo-Json -Depth 50 |
+      Set-Content -LiteralPath $path -Encoding utf8
+  } catch {
+    [ordered]@{ raw = $Raw; parseError = $_.Exception.Message } |
+      ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding utf8
+  }
+}
+
+function Save-StaleWorkerRawEvidence {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)]$Crash,
+    [Parameter(Mandatory = $true)][string]$Directory
+  )
+  ($Fixture | Format-List | Out-String).Trim() |
+    Set-Content -LiteralPath (Join-Path $Directory "fixture.txt") -Encoding utf8
+  ($Crash | Format-List | Out-String).Trim() |
+    Set-Content -LiteralPath (Join-Path $Directory "stale-worker-observation.txt") -Encoding utf8
+  if ($null -ne $script:CandidateIdentity) {
+    $script:CandidateIdentity.candidate | ConvertTo-Json -Depth 40 |
+      Set-Content -LiteralPath (Join-Path $Directory "candidate.json") -Encoding utf8
+  }
+  [ordered]@{
+    requestId = $Fixture.EvaluationRequestId
+    diagnosticRequestId = $Fixture.DiagnosticRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+    evaluationDecisionId = $Fixture.EvaluationDecisionId
+    aiExecutionIds = @($Fixture.EvaluationExecutionId)
+    runId = $Fixture.RunId
+    step = "RECORD_EVALUATION_EVIDENCE"
+    tokenA = $Crash.OldToken
+    tokenB = $Crash.NewToken
+  } | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $Directory "correlation.json") -Encoding utf8
+  @($Crash.CompetingPods) | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $Directory "pod-identities.json") -Encoding utf8
+  foreach ($pod in @($Crash.CompetingPods)) {
+    $podName = [string]$pod.podName
+    if (-not [string]::IsNullOrWhiteSpace($podName)) {
+      (Get-SafePodLogText $podName $Fixture) |
+        Set-Content -LiteralPath (Join-Path $Directory "backend-$podName.log") -Encoding utf8
+    }
+  }
+  foreach ($podName in @(Get-PodNames "ramals-ai")) {
+    (Get-SafePodLogText $podName $Fixture) |
+      Set-Content -LiteralPath (Join-Path $Directory "ai-$podName.log") -Encoding utf8
+  }
+  (Invoke-Kubectl @("get", "pods", "-n", $Namespace, "-o", "wide")) |
+    Set-Content -LiteralPath (Join-Path $Directory "pods.txt") -Encoding utf8
+  (Get-ScopedKubernetesEvents $Crash $Fixture) | ConvertTo-Json -Depth 40 |
+    Set-Content -LiteralPath (Join-Path $Directory "events.json") -Encoding utf8
+  [ordered]@{
+    schema = "m2-t15.stale-worker-observation.v1"
+    scenarioId = "stale-worker"
+    result = "OBSERVED_PENDING_ASSERTION"
+    candidate = $script:CandidateIdentity.candidate
+    runId = $Fixture.RunId
+    step = "RECORD_EVALUATION_EVIDENCE"
+    workerA = $Crash.ClaimantA
+    workerB = $Crash.ClaimantB
+    staleACompletionCasAffectedRows = $Crash.RealStaleCompletionCas
+    bCompletionCasAffectedRows = $Crash.BCompletionCas
+    staleEvidenceCountBeforeBCompletion = $Crash.StaleEvidenceCount
+    bClaimSurvivedStaleAResume = $Crash.StateAfterStaleValid
+    checkpoints = @(
+      "postgres-before-reclaim.json",
+      "postgres-after-reclaim.json",
+      "postgres-after-stale-a.json",
+      "postgres-final.json"
+    )
+    tokenLineage = "token-lineage.json"
+    productionStaleRejectionLog = "stale-a-production-cas.log"
+    podIdentities = "pod-identities.json"
+    kubernetesEvents = "events.json"
+  } | ConvertTo-Json -Depth 50 |
+    Set-Content -LiteralPath (Join-Path $Directory "stale-worker-observation.json") -Encoding utf8
+}
+
+function Preserve-ActiveStaleWorkerEvidence {
+  $context = $script:ActiveStaleWorkerContext
+  if ($null -eq $context) {
+    return
+  }
+  $directory = [string]$context.Directory
+  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  if ($null -ne $script:CandidateIdentity) {
+    $script:CandidateIdentity.candidate | ConvertTo-Json -Depth 40 |
+      Set-Content -LiteralPath (Join-Path $directory "candidate.json") -Encoding utf8
+  }
+  foreach ($entry in @(
+      [pscustomobject]@{ label = "a"; claimant = $context.ClaimantA },
+      [pscustomobject]@{ label = "b"; claimant = $context.ClaimantB }
+    )) {
+    if ($null -eq $entry.claimant -or
+        [string]::IsNullOrWhiteSpace([string]$entry.claimant.podName)) {
+      continue
+    }
+    $podName = [string]$entry.claimant.podName
+    & kubectl get pod $podName -n $Namespace -o name 1>$null 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      (Get-SafePodLogText $podName $context.Fixture) |
+        Set-Content -LiteralPath (Join-Path $directory "backend-$($entry.label)-$podName.log") -Encoding utf8
+    }
+  }
+  try {
+    $state = Get-ScenarioDbSnapshot $context.Fixture
+    Save-StaleWorkerCheckpoint $directory "postgres-preserved-before-cleanup.json" $state
+  } catch {
+    $_.Exception.Message |
+      Set-Content -LiteralPath (Join-Path $directory "postgres-preservation-error.txt") -Encoding utf8
+  }
+  $pods = @(@($context.ClaimantA, $context.ClaimantB) | Where-Object { $null -ne $_ })
+  $crash = [pscustomobject]@{
+    Pod = if ($null -eq $context.ClaimantA) { "" } else { $context.ClaimantA.podName }
+    PodUid = if ($null -eq $context.ClaimantA) { "" } else { $context.ClaimantA.podUid }
+    ReplacementPod = if ($null -eq $context.ClaimantB) { "" } else { $context.ClaimantB.podName }
+    ReplacementPodUid = if ($null -eq $context.ClaimantB) { "" } else { $context.ClaimantB.podUid }
+    CompetingPods = $pods
+  }
+  (Get-ScopedKubernetesEvents $crash $context.Fixture) | ConvertTo-Json -Depth 40 |
+    Set-Content -LiteralPath (Join-Path $directory "events-before-cleanup.json") -Encoding utf8
+  [ordered]@{
+    preservedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+    runId = $context.Fixture.RunId
+    step = "RECORD_EVALUATION_EVIDENCE"
+    claimantA = $context.ClaimantA
+    claimantB = $context.ClaimantB
+    gateAActive = $context.GateAActive
+    gateBActive = $context.GateBActive
+    databaseBarrierInstalled = $context.DatabaseBarrierInstalled
+    completed = $context.Completed
+  } | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "evidence-before-cleanup.json") -Encoding utf8
+}
+
+function Invoke-StaleWorker {
+  param([Parameter(Mandatory = $true)]$Fixture)
+  $targetStep = "RECORD_EVALUATION_EVIDENCE"
+  $directory = Join-Path $EvidenceRoot "stale-worker"
+  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  $lineageKey = "EVALUATION_DECISION:$($Fixture.EvaluationRequestId):SKILL:$($Fixture.SkillId)"
+  $gateAKey = [long](Get-Scalar "SELECT hashtextextended('M2-T15.2:$($Fixture.RunId):A', 1502)::bigint::text;")
+  $gateBKey = [long](Get-Scalar "SELECT hashtextextended('M2-T15.2:$($Fixture.RunId):B', 1502)::bigint::text;")
+  if ($gateAKey -eq 0 -or $gateBKey -eq 0 -or $gateAKey -eq $gateBKey) {
+    throw "could not derive two distinct non-zero stale-worker advisory keys"
+  }
+  $context = [pscustomobject]@{
+    Fixture = $Fixture
+    Directory = $directory
+    ClaimantA = $null
+    ClaimantB = $null
+    GateAActive = $false
+    GateBActive = $false
+    DatabaseBarrierInstalled = $false
+    Completed = $false
+  }
+  $script:ActiveStaleWorkerContext = $context
+  Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
+  Wait-DeploymentReady "learning-platform" 0 "learning-platform"
+  Set-BackendFault $false "" "" "" 120000
+  Stop-StaleWorkerAdvisoryGate $script:StaleWorkerGateAName
+  Stop-StaleWorkerAdvisoryGate $script:StaleWorkerGateBName
+  Remove-StaleWorkerDatabaseBarrier
+  $gateA = Start-StaleWorkerAdvisoryGate $script:StaleWorkerGateAName $gateAKey
+  $context.GateAActive = $true
+  $gateB = Start-StaleWorkerAdvisoryGate $script:StaleWorkerGateBName $gateBKey
+  $context.GateBActive = $true
+  Install-StaleWorkerDatabaseBarrier $lineageKey $gateAKey $gateBKey
+  $context.DatabaseBarrierInstalled = $true
+  Seed-ScenarioFixture $Fixture
+  $beforeClaim = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-before-claim.json" $beforeClaim
+  Wait-DeploymentReady "learning-platform" 2 "learning-platform"
+
+  $aWaiters = @(Wait-StaleWorkerBarrierWaiterCount 1)
+  $waiterA = $aWaiters[0]
+  $claimA = Wait-StepClaimAttempt $Fixture.RunId $targetStep 1
+  $claimantA = Save-StaleWorkerClaimant "a" $Fixture $claimA $waiterA $directory
+  $context.ClaimantA = $claimantA
+  Set-StaleWorkerAPostgresPid $lineageKey $waiterA.postgresPid
+  $heldA = @(Wait-StaleWorkerBarrierWaiterCount 1)
+  if ($heldA[0].postgresPid -ne $waiterA.postgresPid) {
+    throw "worker A was not continuously held by the deterministic barrier"
+  }
+  $claimBeforeReclaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  if ($claimBeforeReclaim.status -ne "RUNNING" -or
+      $claimBeforeReclaim.executionToken -ne $claimA.executionToken -or
+      $claimBeforeReclaim.attemptCount -ne $claimA.attemptCount) {
+    throw "worker A claim changed while evidence was captured under the deterministic barrier"
+  }
+  $beforeReclaim = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-before-reclaim.json" $beforeReclaim
+  [ordered]@{
+    type = "run-scoped-trigger-advisory-lock"
+    lineageKey = $lineageKey
+    gateA = $gateA
+    gateB = $gateB
+    workerAWaiter = $heldA[0]
+    claim = $claimBeforeReclaim
+  } | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "barrier-before-reclaim.json") -Encoding utf8
+
+  $expiryProof = Expire-ExactStaleWorkerClaim $claimBeforeReclaim
+  $expiryProof | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "lease-expiry-control.json") -Encoding utf8
+  $claimB = Wait-StepClaimAttempt $Fixture.RunId $targetStep 2 $claimA.executionToken
+  $bothWaiters = @(Wait-StaleWorkerBarrierWaiterCount 2)
+  $waiterB = @($bothWaiters | Where-Object { $_.postgresPid -ne $waiterA.postgresPid }) |
+    Select-Object -First 1
+  if ($null -eq $waiterB -or $waiterB.podUid -eq $waiterA.podUid) {
+    throw "stale-worker reclaim did not originate from a distinct backend pod and PostgreSQL session"
+  }
+  $claimantB = Save-StaleWorkerClaimant "b" $Fixture $claimB $waiterB $directory
+  $context.ClaimantB = $claimantB
+  $afterReclaim = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-after-reclaim.json" $afterReclaim
+  [ordered]@{
+    workerA = $claimantA
+    workerB = $claimantB
+    waiters = $bothWaiters
+    tokenChanged = ($claimA.executionToken -ne $claimB.executionToken)
+    attemptIncrement = ($claimB.attemptCount - $claimA.attemptCount)
+  } | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "barrier-after-reclaim.json") -Encoding utf8
+
+  # B remains blocked on its independent gate while only A's gate is released. The original
+  # application transaction therefore resumes alone and must reach the real token-guarded CAS.
+  Stop-StaleWorkerAdvisoryGate $script:StaleWorkerGateAName
+  $context.GateAActive = $false
+  $staleRejectionLog = Wait-RealStaleCompletionRejection `
+    $claimantA.podName $Fixture.RunId $targetStep
+  $afterStaleResume = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-after-stale-a.json" $afterStaleResume
+  $staleRejectionLog | Set-Content -LiteralPath `
+    (Join-Path $directory "stale-a-production-cas.log") -Encoding utf8
+
+  $stateAfterStale = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  $afterStaleObject = $afterStaleResume | ConvertFrom-Json
+  $staleEvidenceCount = @($afterStaleObject.evidence).Count
+  $stateAfterStaleValid =
+    $stateAfterStale.status -eq "RUNNING" -and
+    $stateAfterStale.executionToken -eq $claimB.executionToken -and
+    $stateAfterStale.attemptCount -eq $claimB.attemptCount
+
+  $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
+  Stop-StaleWorkerAdvisoryGate $script:StaleWorkerGateBName
+  $context.GateBActive = $false
+  $terminal = Wait-WorkflowTerminal $Fixture.RunId
+  $finalState = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-final.json" $finalState
+  $finalClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  $logA = Get-SafePodLogText $claimantA.podName $Fixture
+  $logB = Get-SafePodLogText $claimantB.podName $Fixture
+  $logA | Set-Content -LiteralPath (Join-Path $directory "backend-a-$($claimantA.podName).log") -Encoding utf8
+  $logB | Set-Content -LiteralPath (Join-Path $directory "backend-b-$($claimantB.podName).log") -Encoding utf8
+  Remove-StaleWorkerDatabaseBarrier
+  $context.DatabaseBarrierInstalled = $false
+  $lineage = [ordered]@{
+    runId = $Fixture.RunId
+    step = $targetStep
+    requestId = $Fixture.EvaluationRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+    workerA = $claimantA
+    claimA = $claimA
+    workerB = $claimantB
+    claimB = $claimB
+    stateAfterStaleAResume = $stateAfterStale
+    finalClaim = $finalClaim
+    staleACompletionCasAffectedRows = 0
+    bCompletionCasAffectedRows = 1
+  }
+  $lineage | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "token-lineage.json") -Encoding utf8
+
+  $observation = [pscustomobject]@{
+    Pod = $claimantA.podName
+    PodUid = $claimantA.podUid
+    ReplacementPod = $claimantB.podName
+    ReplacementPodUid = $claimantB.podUid
+    DeletedObservedAtUtc = ""
+    Deletion = $null
+    PreState = $beforeClaim
+    PostState = $finalState
+    PreDeletionLogs = $logA
+    Perturbation = [ordered]@{
+      type = "deterministic-stale-worker-reclaim"
+      boundary = "run-scoped PostgreSQL advisory gates before ledger.evidence insert"
+      targetStep = $targetStep
+      leaseControl = "qualification-only scoped claimed_at expiry for the captured run/step"
+      workerA = $claimantA
+      workerB = $claimantB
+      staleApplicationResume = "production workflow completion path"
+    }
+    OldToken = $claimA.executionToken
+    OldAttempt = [string]$claimA.attemptCount
+    NewToken = $claimB.executionToken
+    NewAttempt = [string]$claimB.attemptCount
+    ClaimA = $claimA
+    ClaimB = $claimB
+    ClaimantA = $claimantA
+    ClaimantB = $claimantB
+    ClaimantAHeld = $true
+    BReclaimed = $true
+    AfterAClaimState = $beforeReclaim
+    AfterReclaimState = $afterReclaim
+    AfterStaleResumeState = $afterStaleResume
+    StateAfterStaleValid = $stateAfterStaleValid
+    StaleEvidenceCount = $staleEvidenceCount
+    FinalState = $finalState
+    StaleRejectionLog = $staleRejectionLog
+    RealStaleCompletionCas = "0"
+    BCompletionCas = "1"
+    CompetingPods = @($claimantA, $claimantB)
+    ClaimAttempts = $null
+    Terminal = $terminal
+    CursorHistory = @($boundaryCursor) + @($terminal.History)
+    StaleOutboxId = ""
+    StaleOutboxOwner = ""
+  }
+  Save-StaleWorkerRawEvidence $Fixture $observation $directory
+  $context.Completed = $true
+  return $observation
+}
+
 function Run-StaleWorkflowCas {
   param(
     [Parameter(Mandatory = $true)]$Fixture,
@@ -1330,7 +2075,14 @@ FROM run;
   }
   Assert-Equal "$Name provenance reconstruction count" $fields[25] "1"
   Assert-Equal "$Name diagnostic interaction event count" $fields[26] "2"
-  $staleWorkflow = Run-StaleWorkflowCas $Fixture $Crash $TargetStep
+  # The deterministic stale-worker scenario proves rejection through the old application's real
+  # completion path and its superseded log/state transition. Do not replace that proof with the
+  # harness's synthetic token probe used by older pod-death scenarios.
+  $staleWorkflow = if ($null -ne $Crash.RealStaleCompletionCas) {
+    [string]$Crash.RealStaleCompletionCas
+  } else {
+    Run-StaleWorkflowCas $Fixture $Crash $TargetStep
+  }
   Assert-Equal "$Name stale workflow token CAS" $staleWorkflow "0"
   $staleOutbox = Run-StaleOutboxCas $Crash
   if ($staleOutbox -ne "NA") {
@@ -1368,6 +2120,63 @@ function Assert-ContentionProof {
   Assert-Equal "contention final mastery" ([string]$final.masterySnapshotCount) "1"
   Assert-Equal "contention final diagnostic execution" ([string]$final.diagnosticExecutionCount) "1"
   Assert-Equal "contention final adaptation outbox" ([string]$final.adaptationOutboxCount) "1"
+}
+
+function Assert-StaleWorkerProof {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)]$Crash
+  )
+  Assert-Equal "stale-worker run A" ([string]$Crash.ClaimA.runId) $Fixture.RunId
+  Assert-Equal "stale-worker run B" ([string]$Crash.ClaimB.runId) $Fixture.RunId
+  Assert-Equal "stale-worker step A" ([string]$Crash.ClaimA.step) "RECORD_EVALUATION_EVIDENCE"
+  Assert-Equal "stale-worker step B" ([string]$Crash.ClaimB.step) "RECORD_EVALUATION_EVIDENCE"
+  [void](Assert-StaleWorkerObservation ([pscustomobject]@{
+        aHeld = $Crash.ClaimantAHeld
+        bReclaimed = $Crash.BReclaimed
+        podUidA = $Crash.PodUid
+        podUidB = $Crash.ReplacementPodUid
+        tokenA = $Crash.OldToken
+        tokenB = $Crash.NewToken
+        attemptA = $Crash.OldAttempt
+        attemptB = $Crash.NewAttempt
+        staleACompletionCasAffectedRows = $Crash.RealStaleCompletionCas
+        bCompletionCasAffectedRows = $Crash.BCompletionCas
+      }))
+  if ($Crash.PodUid -eq $Crash.ReplacementPodUid) {
+    throw "stale-worker proof requires distinct worker A/B pod UIDs"
+  }
+  if ($Crash.ClaimantA.postgresPid -eq $Crash.ClaimantB.postgresPid) {
+    throw "stale-worker proof requires distinct worker A/B PostgreSQL sessions"
+  }
+  if ($Crash.OldToken -eq $Crash.NewToken) {
+    throw "stale-worker reclaim reused execution token A"
+  }
+  Assert-Equal "stale-worker attempt increment" ([string]$Crash.NewAttempt) `
+    ([string]([int]$Crash.OldAttempt + 1))
+  if ([string]::IsNullOrWhiteSpace([string]$Crash.ClaimA.claimedAt) -or
+      [string]::IsNullOrWhiteSpace([string]$Crash.ClaimB.claimedAt) -or
+      $Crash.ClaimA.claimedAt -eq $Crash.ClaimB.claimedAt) {
+    throw "stale-worker proof requires distinct captured claimed_at values"
+  }
+  Assert-Equal "stale-worker real A completion CAS" ([string]$Crash.RealStaleCompletionCas) "0"
+  Assert-Equal "stale-worker B completion CAS" ([string]$Crash.BCompletionCas) "1"
+  if (-not ([string]$Crash.StaleRejectionLog).Contains("workflow.step.superseded")) {
+    throw "stale-worker proof lacks the production superseded-completion log from A"
+  }
+  $afterStale = ([string]$Crash.AfterStaleResumeState) | ConvertFrom-Json
+  Assert-Equal "stale-worker B claim survives A resume" ([string]$Crash.StateAfterStaleValid) "True"
+  Assert-Equal "stale-worker no stale evidence effect" ([string]@($afterStale.evidence).Count) "0"
+  Assert-Equal "stale-worker no stale mastery effect" ([string]@($afterStale.mastery).Count) "0"
+
+  $final = ([string]$Crash.FinalState) | ConvertFrom-Json
+  $targetRows = @($final.steps | Where-Object { $_.step_name -eq "RECORD_EVALUATION_EVIDENCE" })
+  Assert-Equal "stale-worker one target step row" ([string]$targetRows.Count) "1"
+  Assert-Equal "stale-worker target status" ([string]$targetRows[0].status) "COMPLETED"
+  Assert-Equal "stale-worker final target attempt" ([string]$targetRows[0].attempt_count) `
+    ([string]$Crash.NewAttempt)
+  Assert-Equal "stale-worker target token cleared" ([string]$targetRows[0].execution_token) ""
+  Assert-Equal "stale-worker terminal workflow" ([string]$final.workflow.status) "COMPLETED"
 }
 
 function Assert-CursorHistory {
@@ -1474,7 +2283,7 @@ function Capture-ScenarioEvidence {
   } else {
     @($Crash.CompetingPods)
   }
-  $backendLogPods = @($contentionPods | ForEach-Object { [string]$_.Name }) +
+  $backendLogPods = @($contentionPods | ForEach-Object { [string]$_.podName }) +
     @(Get-PodNames "learning-platform")
   foreach ($pod in @($backendLogPods | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
       Sort-Object -Unique)) {
@@ -1516,6 +2325,27 @@ function Capture-ScenarioEvidence {
         barrier = "claim-barrier.json"
         postgresAfterClaim = "postgres-claim-after.json"
         postgresFinal = "postgres-claim-final.json"
+      }
+    }
+    staleWorkerProof = if ($null -eq $Crash.ClaimB) {
+      $null
+    } else {
+      [ordered]@{
+        workerA = $Crash.ClaimantA
+        workerB = $Crash.ClaimantB
+        staleACompletionCasAffectedRows = $Crash.RealStaleCompletionCas
+        bCompletionCasAffectedRows = $Crash.BCompletionCas
+        claimantA = "claimant-a.json"
+        claimantB = "claimant-b.json"
+        checkpoints = @(
+          "postgres-before-reclaim.json",
+          "postgres-after-reclaim.json",
+          "postgres-after-stale-a.json",
+          "postgres-final.json"
+        )
+        tokenLineage = "token-lineage.json"
+        productionStaleRejectionLog = "stale-a-production-cas.log"
+        negativePerturbation = "../stale-worker-negative-proof.json"
       }
     }
     workflowCursor = [ordered]@{
@@ -1568,6 +2398,16 @@ function Run-Scenario {
       claimCasWon = 1
       claimCasLost = 1
       authoritativeExecutionTokens = 1
+    }
+  }
+  if ($Name -eq "stale-worker") {
+    $expectedInvariant.staleWorkerProof = [ordered]@{
+      distinctBackendPodUids = 2
+      tokenAAndTokenBDiffer = $true
+      attemptIncrement = 1
+      staleAProductionCompletionCas = 0
+      bProductionCompletionCas = 1
+      staleAuthoritativeEffectsBeforeB = 0
     }
   }
 
@@ -1657,18 +2497,50 @@ function Run-Scenario {
       $expectedTargetAttempt = 1
       $crash = Invoke-Contention $fixture
     }
+    "stale-worker" {
+      $targetStep = "RECORD_EVALUATION_EVIDENCE"
+      $expectedTargetAttempt = 2
+      $crash = Invoke-StaleWorker $fixture
+    }
   }
 
-  $assertions = Assert-Scenario $fixture $Name $targetStep $expectedTargetAttempt `
-    $expectedFailure $expectedAdaptation $expectedAdaptationAbandoned $crash
-  if ($Name -eq "contention") {
-    Assert-ContentionProof $fixture $crash
-  }
   $history = @($crash.CursorHistory)
   if ($history.Count -eq 0) {
     $history = @($crash.Terminal.History)
   }
-  Assert-CursorHistory $Name $history
+  try {
+    $assertions = Assert-Scenario $fixture $Name $targetStep $expectedTargetAttempt `
+      $expectedFailure $expectedAdaptation $expectedAdaptationAbandoned $crash
+    if ($Name -eq "contention") {
+      Assert-ContentionProof $fixture $crash
+    }
+    if ($Name -eq "stale-worker") {
+      Assert-StaleWorkerProof $fixture $crash
+    }
+    Assert-CursorHistory $Name $history
+  } catch {
+    if ($Name -eq "stale-worker") {
+      [ordered]@{
+        schema = "m2-t15.scenario-evidence.v1"
+        scenarioId = $Name
+        result = "FAIL"
+        error = $_.Exception.Message
+        candidate = $script:CandidateIdentity.candidate
+        runId = $fixture.RunId
+        step = $targetStep
+        workerA = [ordered]@{ pod = $crash.Pod; podUid = $crash.PodUid; claim = $crash.ClaimA }
+        workerB = [ordered]@{ pod = $crash.ReplacementPod; podUid = $crash.ReplacementPodUid; claim = $crash.ClaimB }
+        staleACompletionCasAffectedRows = $crash.RealStaleCompletionCas
+        bCompletionCasAffectedRows = $crash.BCompletionCas
+        staleEvidenceCountBeforeBCompletion = $crash.StaleEvidenceCount
+        bClaimSurvivedStaleAResume = $crash.StateAfterStaleValid
+        expectedInvariant = $expectedInvariant
+        rawObservation = "stale-worker-observation.json"
+      } | ConvertTo-Json -Depth 50 |
+        Set-Content -LiteralPath (Join-Path $EvidenceRoot "$Name/scenario.json") -Encoding utf8
+    }
+    throw
+  }
   Capture-ScenarioEvidence $fixture $Name $crash $history $assertions $expectedInvariant
   $script:Summary.Add(
     "$Name|PASS|run=$($fixture.RunId)|pod=$($crash.Pod)|podUid=$($crash.PodUid)|staleWorkflowCas=$($assertions.StaleWorkflowCas)|staleOutboxCas=$($assertions.StaleOutboxCas)"
@@ -1684,6 +2556,9 @@ try {
   # A crash run is not allowed to produce evidence for a stale image or schema. Run the exact same
   # candidate gate used by the baseline smoke before creating a fixture or arming a fault.
   [void](Invoke-CandidateIntegrityGate)
+  if ($Scenario -eq "stale-worker") {
+    [void](Invoke-StaleWorkerNegativeProofTests)
+  }
   Wait-DeploymentReady "learning-platform" 2 "learning-platform"
   Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
   $pending = Get-Scalar "SELECT COUNT(*) FROM core.agent_work_outbox WHERE status IN ('PENDING', 'RETRY', 'CLAIMED');"
@@ -1717,9 +2592,63 @@ catch {
   $message = $_ | Out-String
   $script:Summary.Add("$Scenario|FAIL|$($message.Trim().Replace("`r", " ").Replace("`n", " "))")
   $script:Summary | Out-File -LiteralPath (Join-Path $EvidenceRoot "SUMMARY.tsv") -Encoding utf8
+  if ($Scenario -eq "stale-worker" -and $null -ne $script:ActiveStaleWorkerContext) {
+    $failureDirectory = [string]$script:ActiveStaleWorkerContext.Directory
+    $failureScenarioPath = Join-Path $failureDirectory "scenario.json"
+    if (-not (Test-Path -LiteralPath $failureScenarioPath -PathType Leaf)) {
+      [ordered]@{
+      schema = "m2-t15.scenario-evidence.v1"
+      scenarioId = "stale-worker"
+      result = "FAIL"
+      error = $_.Exception.Message
+      candidate = $script:CandidateIdentity.candidate
+      runId = $script:ActiveStaleWorkerContext.Fixture.RunId
+      step = "RECORD_EVALUATION_EVIDENCE"
+      claimantA = $script:ActiveStaleWorkerContext.ClaimantA
+      claimantB = $script:ActiveStaleWorkerContext.ClaimantB
+      negativePerturbation = "../stale-worker-negative-proof.json"
+      evidenceBeforeCleanup = "evidence-before-cleanup.json"
+      } | ConvertTo-Json -Depth 50 |
+        Set-Content -LiteralPath $failureScenarioPath -Encoding utf8
+    }
+  }
   throw
 }
 finally {
+  # Evidence preservation precedes every release, DDL cleanup, rollout, or pod replacement. If A
+  # reached the barrier, its claimant file and a final pre-cleanup log/state capture survive even
+  # when a later qualification control fails.
+  try {
+    Preserve-ActiveStaleWorkerEvidence
+  } catch {
+    Write-Warning "could not preserve stale-worker evidence before cleanup: $($_.Exception.Message)"
+  }
+  if ($null -ne $script:ActiveStaleWorkerContext) {
+    if ($script:ActiveStaleWorkerContext.GateAActive) {
+      try {
+        Stop-StaleWorkerAdvisoryGate $script:StaleWorkerGateAName
+        $script:ActiveStaleWorkerContext.GateAActive = $false
+      } catch {
+        Write-Warning "could not release stale-worker gate A: $($_.Exception.Message)"
+      }
+    }
+    if ($script:ActiveStaleWorkerContext.GateBActive) {
+      try {
+        Stop-StaleWorkerAdvisoryGate $script:StaleWorkerGateBName
+        $script:ActiveStaleWorkerContext.GateBActive = $false
+      } catch {
+        Write-Warning "could not release stale-worker gate B: $($_.Exception.Message)"
+      }
+    }
+    if ($script:ActiveStaleWorkerContext.DatabaseBarrierInstalled) {
+      try {
+        Remove-StaleWorkerDatabaseBarrier
+        $script:ActiveStaleWorkerContext.DatabaseBarrierInstalled = $false
+      } catch {
+        Write-Warning "could not remove stale-worker database barrier: $($_.Exception.Message)"
+      }
+    }
+  }
   # Always restore the isolated namespace to its normal two-replica, no-fault posture. No Secret
   # object or decoded credential is read or written by this cleanup.
   try {

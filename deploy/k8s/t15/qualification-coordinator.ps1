@@ -4,6 +4,11 @@ param(
   [string]$Action = "inspect",
   [string]$ClusterName = "t15",
   [string]$Namespace = "ramals-t15",
+  [ValidateSet("relation", "advisory")]
+  [string]$LockMode = "relation",
+  [long]$AdvisoryKey = 0,
+  [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')]
+  [string]$CoordinatorName = "t15-pg-lock-coordinator",
   [ValidateSet(
     "core.learning_workflow_run",
     "core.learning_workflow_step",
@@ -32,7 +37,7 @@ function Invoke-Checked {
 }
 
 Invoke-Checked "kubectl" @("config", "use-context", "k3d-$ClusterName")
-$podName = "t15-pg-lock-coordinator"
+$podName = $CoordinatorName
 
 if ($Action -eq "stop") {
   $podIp = ""
@@ -79,13 +84,18 @@ if ($Action -eq "inspect") {
 if (-not [string]::IsNullOrWhiteSpace($RowId) -and $RowId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
   throw "-RowId must be a UUID"
 }
+if ($LockMode -eq "advisory" -and $AdvisoryKey -eq 0) {
+  throw "-AdvisoryKey must be a non-zero signed 64-bit integer for advisory locks"
+}
 
 $existing = (& kubectl get pod $podName -n $Namespace --ignore-not-found=true -o name 2>$null) -join ""
 if (-not [string]::IsNullOrWhiteSpace($existing)) {
   throw "$podName already exists; stop it before starting another lock"
 }
 
-$sql = if ([string]::IsNullOrWhiteSpace($RowId)) {
+$sql = if ($LockMode -eq "advisory") {
+  "SELECT pg_advisory_lock($AdvisoryKey); SELECT pg_sleep(86400);"
+} elseif ([string]::IsNullOrWhiteSpace($RowId)) {
   "BEGIN; LOCK TABLE $Table IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(86400);"
 } else {
   "BEGIN; SELECT id FROM $Table WHERE id = '$RowId' FOR UPDATE; SELECT pg_sleep(86400);"
@@ -145,5 +155,9 @@ $podJson | & kubectl apply -f -
 if ($LASTEXITCODE -ne 0) {
   throw "could not start the qualification lock coordinator"
 }
-Write-Host "Started $podName for $Table$(if ($RowId) { " row $RowId" } else { " table lock" })"
+if ($LockMode -eq "advisory") {
+  Write-Host "Started $podName for PostgreSQL advisory key $AdvisoryKey"
+} else {
+  Write-Host "Started $podName for $Table$(if ($RowId) { " row $RowId" } else { " table lock" })"
+}
 Write-Host "Run the T15 crash action, then invoke this script with -Action stop"
