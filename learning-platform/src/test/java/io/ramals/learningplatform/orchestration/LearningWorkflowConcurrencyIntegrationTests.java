@@ -2,9 +2,15 @@ package io.ramals.learningplatform.orchestration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
+import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecisionPort;
+import io.ramals.learningplatform.evidence.Evidence;
+import io.ramals.learningplatform.evidence.EvidenceRepository;
+import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.mastery.MasteryRepository;
+import io.ramals.learningplatform.mastery.MasteryService;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.mastery.MasterySnapshotDraft;
 import io.ramals.learningplatform.mastery.MasteryStatus;
@@ -20,6 +26,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -29,11 +36,14 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Real-PostgreSQL proof for the M2-T14 step claim (G04-G08 concurrency semantics).
@@ -389,6 +399,73 @@ class LearningWorkflowConcurrencyIntegrationTests {
         .as("the superseded claim cannot complete the step")
         .isFalse();
     assertThat(runs.finishClaimedStep(reclaimed, StepStatus.COMPLETED, null, null, null)).isTrue();
+  }
+
+  @Test
+  void staleLocalEvidenceIsRolledBackWhenTheCompletionCasLosesOwnership() {
+    DriverManagerDataSource dataSource = runtimeDataSource();
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    LearningWorkflowRepository runs = new LearningWorkflowRepository(jdbc);
+    Run run = startRun(jdbc, runs, "stale-evidence-rollback");
+    EvidenceRepository evidenceRows = new EvidenceRepository(jdbc);
+    AtomicReference<StepClaim> replacement = new AtomicReference<>();
+    EvidenceService evidence =
+        new EvidenceService(evidenceRows) {
+          @Override
+          public Evidence recordEvaluationEvidence(
+              UUID learnerId,
+              UUID skillId,
+              UUID attemptId,
+              UUID assessmentVersionId,
+              String evaluationRequestId,
+              String scoringVersion,
+              BigDecimal normalizedScore,
+              String interactionId) {
+            Evidence recorded =
+                super.recordEvaluationEvidence(
+                    learnerId,
+                    skillId,
+                    attemptId,
+                    assessmentVersionId,
+                    evaluationRequestId,
+                    scoringVersion,
+                    normalizedScore,
+                    interactionId);
+            // A separate worker replaces the claim after the insert but before A's ownership CAS.
+            replacement.set(
+                new LearningWorkflowRepository(runtimeJdbc())
+                    .claimStep(
+                        run.id(),
+                        Step.RECORD_EVALUATION_EVIDENCE,
+                        LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                        java.time.Duration.ZERO)
+                    .orElseThrow());
+            return recorded;
+          }
+        };
+    LearningWorkflowOrchestrator orchestrator =
+        new LearningWorkflowOrchestrator(
+            runs,
+            mock(AssessmentEvaluationDecisionPort.class),
+            evidence,
+            mock(MasteryService.class),
+            mock(WorkflowAgentStep.Diagnostic.class),
+            mock(WorkflowAgentStep.Adaptation.class),
+            new SpringWorkflowUnitOfWork(
+                new TransactionTemplate(new DataSourceTransactionManager(dataSource))),
+            Clock.systemUTC());
+
+    Run afterStaleWorker = orchestrator.advance(run.id());
+
+    String lineage = "EVALUATION_DECISION:" + run.evaluationRequestId() + ":SKILL:" + run.skillId();
+    assertThat(evidenceRows.findByLineageKey(lineage))
+        .as("the stale worker's local authoritative effect must roll back with its refused CAS")
+        .isEmpty();
+    StepRun current = runs.step(run.id(), Step.RECORD_EVALUATION_EVIDENCE).orElseThrow();
+    assertThat(current.status()).isEqualTo(StepStatus.RUNNING);
+    assertThat(current.attemptCount()).isEqualTo(2);
+    assertThat(current.executionToken()).isEqualTo(replacement.get().executionToken());
+    assertThat(afterStaleWorker.currentStep()).isEqualTo(Step.RECORD_EVALUATION_EVIDENCE);
   }
 
   @Test
@@ -1173,8 +1250,11 @@ class LearningWorkflowConcurrencyIntegrationTests {
   }
 
   private static JdbcTemplate runtimeJdbc() {
-    return new JdbcTemplate(
-        new DriverManagerDataSource(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD));
+    return new JdbcTemplate(runtimeDataSource());
+  }
+
+  private static DriverManagerDataSource runtimeDataSource() {
+    return new DriverManagerDataSource(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD);
   }
 
   private static String required(String name) {

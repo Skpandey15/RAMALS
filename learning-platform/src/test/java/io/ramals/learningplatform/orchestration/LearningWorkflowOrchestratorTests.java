@@ -22,6 +22,7 @@ import io.ramals.learningplatform.observability.StructuredLogCapture;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Run;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Status;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.Step;
+import io.ramals.learningplatform.orchestration.LearningWorkflow.StepClaim;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.StepRun;
 import io.ramals.learningplatform.orchestration.LearningWorkflow.StepStatus;
 import io.ramals.learningplatform.orchestration.LearningWorkflowOrchestrator.EvaluationTrigger;
@@ -433,6 +434,39 @@ class LearningWorkflowOrchestratorTests {
   }
 
   @Test
+  void aSupersededLocalStepAbortsItsUnitOfWorkInsteadOfCommittingTheEffect() {
+    Run run = orchestrator.trigger(trigger(Outcome.ACCEPTED, "0.6000"));
+    AtomicReference<StepClaim> replacement = new AtomicReference<>();
+    when(evidence.recordEvaluationEvidence(
+            any(), any(), any(), any(), anyString(), anyString(), any(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              // Replace A after its effect starts but before its completion CAS. The production
+              // transaction must abort rather than treating the refused CAS as a normal return.
+              now.set(T0.plus(LearningWorkflowPolicy.CLAIM_LEASE));
+              replacement.set(
+                  store
+                      .claimStep(
+                          run.id(),
+                          Step.RECORD_EVALUATION_EVIDENCE,
+                          LearningWorkflowPolicy.MAX_STEP_ATTEMPTS,
+                          LearningWorkflowPolicy.CLAIM_LEASE)
+                      .orElseThrow());
+              return evidenceRow();
+            });
+
+    Run afterStaleWorker = orchestrator.advance(run.id());
+
+    assertThat(unitOfWork.rollbackCount).isEqualTo(1);
+    assertThat(afterStaleWorker.status()).isEqualTo(Status.RUNNING);
+    assertThat(step(run.id(), Step.RECORD_EVALUATION_EVIDENCE).status())
+        .isEqualTo(StepStatus.RUNNING);
+    assertThat(step(run.id(), Step.RECORD_EVALUATION_EVIDENCE).attemptCount()).isEqualTo(2);
+    assertThat(step(run.id(), Step.RECORD_EVALUATION_EVIDENCE).executionToken())
+        .isEqualTo(replacement.get().executionToken());
+  }
+
+  @Test
   void aRemoteStepNeverRunsInsideATransaction() {
     // The rule that matters most in this file: a database connection held across a provider call is
     // held for seconds. This asserts the orchestrator's branch, not a comment about it.
@@ -597,6 +631,7 @@ class LearningWorkflowOrchestratorTests {
   /** Reports whether work ran inside the transaction boundary, so tests can assert the branch. */
   private static final class RecordingUnitOfWork implements WorkflowUnitOfWork {
     private boolean open;
+    private int rollbackCount;
     private final List<String> ranInsideTransaction = new ArrayList<>();
     private final List<String> ranOutsideTransaction = new ArrayList<>();
 
@@ -605,6 +640,9 @@ class LearningWorkflowOrchestratorTests {
       open = true;
       try {
         writes.run();
+      } catch (RuntimeException failure) {
+        rollbackCount++;
+        throw failure;
       } finally {
         open = false;
       }
