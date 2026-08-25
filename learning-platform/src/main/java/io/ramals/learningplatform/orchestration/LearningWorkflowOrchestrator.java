@@ -191,10 +191,16 @@ public class LearningWorkflowOrchestrator {
     }
 
     StepClaim claim = claimed.orElseThrow();
-    QualificationFault.pause(
-        QualificationFault.Window.WORKFLOW_AFTER_CLAIM,
-        claim.runId().toString(),
-        null);
+    try (CorrelationContext.Scope ignored =
+        CorrelationContext.withCorrelation(run.interactionId(), run.traceId())) {
+      QualificationFault.pauseAfterClaim(
+          claim.runId().toString(),
+          claim.step().name(),
+          claim.attemptCount(),
+          claim.executionToken().toString(),
+          run.interactionId(),
+          run.traceId());
+    }
     try {
       if (step.remoteCall()) {
         // The provider call runs with no transaction open -- a connection held across it would be

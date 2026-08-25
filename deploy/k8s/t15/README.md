@@ -177,25 +177,27 @@ second attempt and verifies that the proof fails.
 
 ## Deterministic stale-worker race design — qualification required
 
-The stale-worker scenario uses two independently releasable PostgreSQL advisory gates rather than
-elapsed-time inference. A temporary T15-only trigger is scoped to the exact evaluation-evidence
-lineage for the generated run. Its control row initially routes the first blocked application PID to
-gate A; after that PID is captured, every distinct PID routes to gate B.
+The stale-worker scenario uses the existing application `WORKFLOW_AFTER_CLAIM` qualification hook
+with explicit release files rather than elapsed-time inference. The hook is disabled by default and
+is armed only for the generated run and `RECORD_EVALUATION_EVIDENCE` step. Each boundary is keyed by
+run ID, step, attempt count, and execution token, so attempts A and B have independent releases.
 
-1. Backend replica A claims the step and its real evidence insert blocks on gate A before any
-   authoritative effect. The harness immediately persists `claimant-a.json` and A's logs, then
-   confirms PostgreSQL still shows A's token and attempt as `RUNNING`.
+1. Backend replica A commits its claim, writes its post-claim boundary marker, and blocks before the
+   authoritative transaction begins. The marker immediately records the pod identity, process,
+   thread, token, attempt, run, step, and correlation lineage. The harness persists
+   `claimant-a.json` and A's logs, then confirms PostgreSQL still shows A as `RUNNING`.
 2. One qualification update makes only that run/step/token/attempt lease reclaimable. Replica B
-   claims the same row with a new token and incremented attempt, blocks independently on gate B, and
-   is persisted to `claimant-b.json`.
-3. Gate A alone is released. The original application transaction resumes through normal code and
+   claims the same row with a new token and incremented attempt, reaches its independently keyed
+   post-claim barrier, and is persisted to `claimant-b.json`.
+3. A's exact release file is created. The original application worker resumes through normal code and
    must emit the superseded-completion result from the production token CAS while B remains blocked.
-4. Gate B is released only after the stale-A snapshot is durable. Final PostgreSQL proof requires
+4. B's exact release file is created only after the stale-A snapshot proves that no authoritative
+   effect survived. Final PostgreSQL proof requires
    one B completion, bounded attempts, one effect per authoritative lineage, monotonic cursor state,
    and no duplicate provider or outbox work.
 
-Both gates, the trigger, its one control row, and helper pods are removed during evidence-first
-teardown. None is present in application manifests or enabled outside the isolated T15 run.
+No trigger, control table, advisory lock, or qualification database session is installed. Teardown
+preserves evidence before releasing any still-held claimant and restores the disabled hook settings.
 
 ## Observability remediation status
 
@@ -216,13 +218,12 @@ qualification.
 
 ## Qualification-only fault coordination
 
-[`qualification-coordinator.ps1`](qualification-coordinator.ps1) can start a temporary PostgreSQL
-client pod using the already pinned PostgreSQL artifact and hold an explicitly selected row, table,
-or advisory lock. It uses database-admin credentials from the runtime Secret, never application
-credentials. The helper is intentionally outside the application manifests. Qualification runners
-may install a temporary, lineage-scoped trigger solely to route a real application statement to an
-advisory gate; teardown removes it before restoring the namespace. This does not change business
-logic or assert that a lock alone is an exact lifecycle boundary. Later T15 crash
+[Qualification coordinator](qualification-coordinator/README.md) can start a temporary PostgreSQL
+client pod using the already pinned PostgreSQL artifact and hold an explicitly selected row or
+table. It uses database-admin credentials from the runtime Secret, never application credentials.
+The helper is intentionally outside the application manifests and remains the contention-scenario
+row-lock coordinator; stale-worker qualification does not use it. A lock alone is not an exact
+lifecycle boundary. Later T15 crash
 scenarios must pair the lock with trace/log evidence, PostgreSQL lock evidence, an actual pod death,
 recovery checks, and a clean teardown.
 
