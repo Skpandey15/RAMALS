@@ -175,21 +175,27 @@ raw barrier and durable proof are retained as `claim-barrier.json`, `claim-attem
 second attempt. `contention-proof.tests.ps1` includes the negative perturbation that removes the
 second attempt and verifies that the proof fails.
 
-## Deterministic stale-worker race design — not qualified
+## Deterministic stale-worker race design — qualification required
 
-The eventual stale-worker run must use a qualification-only barrier, not pod deletion timing:
+The stale-worker scenario uses two independently releasable PostgreSQL advisory gates rather than
+elapsed-time inference. A temporary T15-only trigger is scoped to the exact evaluation-evidence
+lineage for the generated run. Its control row initially routes the first blocked application PID to
+gate A; after that PID is captured, every distinct PID routes to gate B.
 
-1. Backend replica A claims the workflow and is held at `WORKFLOW_AFTER_CLAIM`; record A's pod UID,
-   token, and attempt count from PostgreSQL.
-2. Expire only A's lease through the qualification PostgreSQL control, then enable replica B and
-   wait for PostgreSQL to show B's distinct token and incremented attempt.
-3. Release A at an explicit barrier after B owns the row; A resumes and submits completion with its
-   old token.
-4. Assert PostgreSQL rejects A's token CAS, while B is the sole owner and sole authoritative-effect
-   producer. Capture both owners, tokens, attempts, cursor, and the rejected row count.
+1. Backend replica A claims the step and its real evidence insert blocks on gate A before any
+   authoritative effect. The harness immediately persists `claimant-a.json` and A's logs, then
+   confirms PostgreSQL still shows A's token and attempt as `RUNNING`.
+2. One qualification update makes only that run/step/token/attempt lease reclaimable. Replica B
+   claims the same row with a new token and incremented attempt, blocks independently on gate B, and
+   is persisted to `claimant-b.json`.
+3. Gate A alone is released. The original application transaction resumes through normal code and
+   must emit the superseded-completion result from the production token CAS while B remains blocked.
+4. Gate B is released only after the stale-A snapshot is durable. Final PostgreSQL proof requires
+   one B completion, bounded attempts, one effect per authoritative lineage, monotonic cursor state,
+   and no duplicate provider or outbox work.
 
-The current pod-death harness records the primitives needed for this run, but pod deletion alone
-cannot prove the stale-worker race and no such qualification claim is made here.
+Both gates, the trigger, its one control row, and helper pods are removed during evidence-first
+teardown. None is present in application manifests or enabled outside the isolated T15 run.
 
 ## Observability remediation status
 
@@ -211,10 +217,12 @@ qualification.
 ## Qualification-only fault coordination
 
 [`qualification-coordinator.ps1`](qualification-coordinator.ps1) can start a temporary PostgreSQL
-client pod using the already pinned PostgreSQL artifact and hold an explicitly selected row or table
-lock. It uses database-admin credentials from the runtime Secret, never application credentials.
-The helper is intentionally outside the application manifests. It does not add trigger wiring,
-change business logic, or assert that a lock alone is an exact lifecycle boundary. Later T15 crash
+client pod using the already pinned PostgreSQL artifact and hold an explicitly selected row, table,
+or advisory lock. It uses database-admin credentials from the runtime Secret, never application
+credentials. The helper is intentionally outside the application manifests. Qualification runners
+may install a temporary, lineage-scoped trigger solely to route a real application statement to an
+advisory gate; teardown removes it before restoring the namespace. This does not change business
+logic or assert that a lock alone is an exact lifecycle boundary. Later T15 crash
 scenarios must pair the lock with trace/log evidence, PostgreSQL lock evidence, an actual pod death,
 recovery checks, and a clean teardown.
 
