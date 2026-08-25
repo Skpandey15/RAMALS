@@ -1724,6 +1724,339 @@ function Invoke-AfterClaimPodDeath {
   }
 }
 
+function Wait-AfterEvidenceTransactionSession {
+  param(
+    [Parameter(Mandatory = $true)][string]$PodIp,
+    [int]$TimeoutSeconds = 30
+  )
+  if ($PodIp -notmatch '^[0-9a-fA-F:.]+$') {
+    throw "unsafe backend pod IP '$PodIp'"
+  }
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $raw = Get-Scalar @"
+SELECT jsonb_build_object(
+  'backendPid', pid,
+  'clientAddress', client_addr::text,
+  'state', state,
+  'transactionStartedAt', to_char(xact_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'queryStartedAt', to_char(query_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'backendXid', backend_xid::text,
+  'waitEventType', wait_event_type,
+  'waitEvent', wait_event,
+  'lastStatement', regexp_replace(query, '[[:space:]]+', ' ', 'g')
+)::text
+  FROM pg_stat_activity
+ WHERE datname = current_database()
+   AND usename = 'ramals_core_runtime'
+   AND client_addr = '$PodIp'::inet
+   AND state = 'idle in transaction'
+   AND backend_xid IS NOT NULL
+   AND query ILIKE '%ledger.evidence%'
+ ORDER BY xact_start
+ LIMIT 1;
+"@
+    if (-not [string]::IsNullOrWhiteSpace($raw)) {
+      return $raw | ConvertFrom-Json -DateKind String
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "after-evidence boundary did not expose an open PostgreSQL write transaction for pod IP $PodIp"
+}
+
+function Wait-PostgresBackendSessionGone {
+  param(
+    [Parameter(Mandatory = $true)][string]$BackendPid,
+    [int]$TimeoutSeconds = 60
+  )
+  if ($BackendPid -notmatch '^[0-9]+$') {
+    throw "invalid PostgreSQL backend PID '$BackendPid'"
+  }
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $count = Get-Scalar "SELECT COUNT(*) FROM pg_stat_activity WHERE pid = $BackendPid;"
+    if ($count -eq "0") {
+      return [pscustomobject]@{
+        backendPid = $BackendPid
+        sessionGone = $true
+        observedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "PostgreSQL backend session $BackendPid survived owning pod death"
+}
+
+function Wait-SingleBackendReplacement {
+  param(
+    [Parameter(Mandatory = $true)][string]$OldPodUid,
+    [int]$TimeoutSeconds = 120
+  )
+  $end = (Get-Date).ToUniversalTime().AddSeconds($TimeoutSeconds)
+  while ((Get-Date).ToUniversalTime() -lt $end) {
+    $pods = @(Get-BackendPodIdentities)
+    if ($pods.Count -eq 1 -and [string]$pods[0].podUid -ne $OldPodUid) {
+      return $pods[0]
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  throw "deployment did not settle on one replacement backend pod"
+}
+
+function Get-AfterEvidenceBoundaryLogText {
+  param(
+    [Parameter(Mandatory = $true)][string]$Pod,
+    [Parameter(Mandatory = $true)]$Fixture
+  )
+  $raw = & kubectl logs $Pod -n $Namespace -c learning-platform --since=15m 2>&1
+  $lines = @($raw | Where-Object {
+      $line = [string]$_
+      $correlated = $line.Contains([string]$Fixture.RunId) -or
+        $line.Contains([string]$Fixture.InteractionId) -or
+        $line.Contains([string]$Fixture.EvaluationRequestId)
+      $relevant = $line -match 'WORKFLOW_AFTER_EVIDENCE_EFFECT|qualification crash boundary reached|evidence\.recorded|Evaluation evidence recorded'
+      $correlated -and $relevant
+    })
+  if ($lines.Count -eq 0) {
+    return ""
+  }
+  return $lines -join "`n"
+}
+
+function Invoke-AfterEvidenceEffectPodDeath {
+  param([Parameter(Mandatory = $true)]$Fixture)
+
+  $targetStep = "RECORD_EVALUATION_EVIDENCE"
+  $directory = Join-Path $EvidenceRoot "after-evidence-effect"
+  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  $leaseSeconds = Get-ApprovedWorkflowClaimLeaseSeconds
+  [ordered]@{
+    sourceCommit = $ApprovedCommit
+    constant = "LearningWorkflowPolicy.CLAIM_LEASE"
+    leaseSeconds = $leaseSeconds
+  } | ConvertTo-Json -Depth 10 |
+    Set-Content -LiteralPath (Join-Path $directory "production-lease.json") -Encoding utf8
+
+  $boundaryPod = Wait-WorkflowBoundary "WORKFLOW_AFTER_EVIDENCE_EFFECT" $Fixture.RunId
+  $claimA = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  if ($claimA.status -ne "RUNNING" -or $claimA.attemptCount -ne 1 -or
+      [string]::IsNullOrWhiteSpace([string]$claimA.executionToken)) {
+    throw "after-evidence boundary did not preserve a live attempt-1 claim"
+  }
+  $identityA = @(Get-BackendPodIdentities | Where-Object { $_.podName -eq $boundaryPod })
+  if ($identityA.Count -ne 1) {
+    throw "could not resolve the owning backend pod identity at the after-evidence boundary"
+  }
+  $identityA = $identityA[0]
+  $claimantA = [pscustomobject]@{
+    runId = $Fixture.RunId
+    step = $targetStep
+    podName = $identityA.podName
+    podUid = $identityA.podUid
+    podIp = $identityA.podIp
+    executionToken = $claimA.executionToken
+    attemptCount = $claimA.attemptCount
+    claimedAt = $claimA.claimedAt
+    requestId = $Fixture.EvaluationRequestId
+    diagnosticRequestId = $Fixture.DiagnosticRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+    capturedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+  }
+  $claimantA | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "claimant-a.json") -Encoding utf8
+
+  $boundaryLog = Get-AfterEvidenceBoundaryLogText $boundaryPod $Fixture
+  $boundaryLog | Set-Content -LiteralPath (Join-Path $directory "boundary-a.log") -Encoding utf8
+  if (-not $boundaryLog.Contains("WORKFLOW_AFTER_EVIDENCE_EFFECT") -or
+      -not $boundaryLog.Contains("qualification crash boundary reached")) {
+    throw "after-evidence application boundary log was not captured"
+  }
+  $preDeletionLogs = Get-SafePodLogText $boundaryPod $Fixture
+  $preDeletionLogs | Set-Content -LiteralPath `
+    (Join-Path $directory "backend-a-pre-deletion-$boundaryPod.log") -Encoding utf8
+
+  $transactionA = Wait-AfterEvidenceTransactionSession $identityA.podIp
+  $transactionA | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "postgres-transaction-before-kill.json") -Encoding utf8
+  $beforeKillClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  Assert-AfterClaimOwnsExactClaim "after-evidence pre-kill claim" $beforeKillClaim $claimA
+  $beforeKill = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-before-kill.json" $beforeKill
+  $beforeKillCounts = Get-AfterClaimCheckpointCounts $beforeKill $Fixture
+  Assert-AfterClaimZeroEffectCheckpoint "after-evidence external pre-kill state" $beforeKillCounts
+  $beforeKillWorkflow = Get-WorkflowState $Fixture.RunId
+  if ($beforeKillWorkflow.CurrentStep -ne $targetStep -or
+      $beforeKillWorkflow.StepStatus -ne "RUNNING") {
+    throw "workflow cursor advanced before the owning pod was killed"
+  }
+  [ordered]@{
+    boundary = "WORKFLOW_AFTER_EVIDENCE_EFFECT"
+    codeOrder = "evidence effect executed -> qualification boundary -> finishClaimedStep"
+    applicationLog = "boundary-a.log"
+    postgresSession = $transactionA
+    externalCounts = $beforeKillCounts
+    claim = $beforeKillClaim
+  } | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "boundary-evidence.json") -Encoding utf8
+
+  $deletion = Force-DeletePod $boundaryPod
+  $deletedObservedAt = Wait-PodUidGone $boundaryPod $identityA.podUid
+  $sessionTermination = Wait-PostgresBackendSessionGone ([string]$transactionA.backendPid)
+  $sessionTermination | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "postgres-session-terminated.json") -Encoding utf8
+
+  # This is the decisive rollback checkpoint. No SQL deletes or timestamp changes are permitted.
+  $afterDeathClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  Assert-AfterClaimOwnsExactClaim "after-evidence post-death/pre-reclaim claim" $afterDeathClaim $claimA
+  $afterDeath = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-after-pod-death.json" $afterDeath
+  $afterDeathCounts = Get-AfterClaimCheckpointCounts $afterDeath $Fixture
+  if ([int]$afterDeathCounts.evidence -ne 0 -or
+      [int]$afterDeathCounts.mastery -ne 0 -or
+      [int]$afterDeathCounts.diagnostic -ne 0 -or
+      [int]$afterDeathCounts.outbox -ne 0) {
+    throw "PRODUCTION ATOMICITY DEFECT: an authoritative effect survived owning PostgreSQL session termination before the workflow completion marker"
+  }
+  Assert-AfterClaimZeroEffectCheckpoint "after-evidence post-death rollback" $afterDeathCounts
+  $afterDeathWorkflow = Get-WorkflowState $Fixture.RunId
+  if ($afterDeathWorkflow.CurrentStep -ne $targetStep -or
+      $afterDeathWorkflow.StepStatus -ne "RUNNING" -or
+      $afterDeathWorkflow.AttemptCount -ne 1 -or
+      $afterDeathWorkflow.ExecutionToken -ne $claimA.executionToken) {
+    throw "after-evidence post-death state advanced or lost abandoned claim A before reclaim"
+  }
+
+  # Roll the replacement onto the independently releasable post-claim hook. It will capture token B
+  # before any second evidence effect, while A's original claim continues ageing naturally.
+  Set-BackendFault `
+    -Enabled $true `
+    -Window "WORKFLOW_AFTER_CLAIM" `
+    -RunId $Fixture.RunId `
+    -Step $targetStep `
+    -ClaimBarrierDirectory $script:StaleWorkerClaimBarrierDirectory
+  Wait-DeploymentReady "learning-platform" 1 "learning-platform"
+  $replacement = Wait-SingleBackendReplacement $identityA.podUid
+  $preLeaseClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  Assert-AfterClaimOwnsExactClaim "after-evidence replacement/pre-lease claim" $preLeaseClaim $claimA
+  $preLease = Get-AfterClaimLeaseObservation $claimA $leaseSeconds
+  if ([bool]$preLease.expired) {
+    throw "after-evidence replacement was not ready before natural lease expiry"
+  }
+  $preLease | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "lease-before-natural-expiry.json") -Encoding utf8
+
+  $naturalExpiry = Wait-AfterClaimNaturalLeaseExpiry $claimA $leaseSeconds (2 * $leaseSeconds)
+  $naturalExpiry | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "natural-lease-expiry.json") -Encoding utf8
+  $postLeaseRaw = Get-ScenarioDbSnapshot $Fixture
+  $postLeaseClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  if ($postLeaseClaim.attemptCount -eq $claimA.attemptCount -and
+      $postLeaseClaim.executionToken -eq $claimA.executionToken) {
+    Save-StaleWorkerCheckpoint $directory "postgres-post-lease-pre-reclaim.json" $postLeaseRaw
+  }
+
+  $claimB = Wait-StepClaimAttempt $Fixture.RunId $targetStep 2 $claimA.executionToken
+  $boundaryB = Wait-StaleWorkerClaimBoundary `
+    $Fixture.RunId $targetStep $claimB.attemptCount $claimB.executionToken
+  if ($boundaryB.podUid -ne $replacement.podUid) {
+    throw "after-evidence reclaim did not originate from the configured replacement pod"
+  }
+  $claimantB = Save-StaleWorkerClaimant "b" $Fixture $claimB $boundaryB $directory
+  Assert-StaleWorkerClaimHeld $boundaryB
+  $replacementClaimState = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-replacement-claimed.json" $replacementClaimState
+  $replacementCounts = Get-AfterClaimCheckpointCounts $replacementClaimState $Fixture
+  Assert-AfterClaimZeroEffectCheckpoint "after-evidence replacement held before effect" $replacementCounts
+  if ($claimB.executionToken -eq $claimA.executionToken -or
+      $claimB.attemptCount -ne ($claimA.attemptCount + 1) -or
+      [datetimeoffset]::Parse($claimB.claimedAt) -lt
+        [datetimeoffset]::Parse([string]$naturalExpiry.leaseExpiresAt)) {
+    throw "after-evidence replacement claim did not follow natural lease expiry with attempt N+1/token B"
+  }
+
+  $boundaryCursor = @(
+    (Format-CursorObservation $beforeKillWorkflow),
+    (Format-CursorObservation (Get-WorkflowState $Fixture.RunId))
+  )
+  $releaseB = Release-StaleWorkerClaimBoundary $boundaryB
+  $releaseB | ConvertTo-Json -Depth 20 |
+    Set-Content -LiteralPath (Join-Path $directory "release-b.json") -Encoding utf8
+  $terminal = Wait-WorkflowTerminal $Fixture.RunId
+  $finalState = Get-ScenarioDbSnapshot $Fixture
+  Save-StaleWorkerCheckpoint $directory "postgres-final.json" $finalState
+  $finalClaim = Get-StepClaimSnapshot $Fixture.RunId $targetStep
+  $logB = Get-SafePodLogText $claimantB.podName $Fixture
+  $logB | Set-Content -LiteralPath `
+    (Join-Path $directory "backend-b-$($claimantB.podName).log") -Encoding utf8
+  [ordered]@{
+    runId = $Fixture.RunId
+    step = $targetStep
+    requestId = $Fixture.EvaluationRequestId
+    diagnosticRequestId = $Fixture.DiagnosticRequestId
+    interactionId = $Fixture.InteractionId
+    traceId = $Fixture.TraceId
+    workerA = $claimantA
+    claimA = $claimA
+    postgresTransactionA = $transactionA
+    transactionATermination = $sessionTermination
+    workerB = $claimantB
+    claimB = $claimB
+    finalClaim = $finalClaim
+  } | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath (Join-Path $directory "token-lineage.json") -Encoding utf8
+
+  return [pscustomobject]@{
+    Pod = $claimantA.podName
+    PodUid = $claimantA.podUid
+    ReplacementPod = $claimantB.podName
+    ReplacementPodUid = $claimantB.podUid
+    DeletedObservedAtUtc = $deletedObservedAt
+    Deletion = $deletion
+    PreState = $beforeKill
+    PostState = $finalState
+    PreDeletionLogs = $preDeletionLogs
+    Perturbation = [ordered]@{
+      type = "backend-pod-death-after-authoritative-evidence-effect"
+      boundary = "WORKFLOW_AFTER_EVIDENCE_EFFECT"
+      targetStep = $targetStep
+      deletedPod = $claimantA.podName
+      deletedPodUid = $claimantA.podUid
+      postgresBackendPid = $transactionA.backendPid
+      command = $deletion.operation
+      requestedAtUtc = $deletion.requestedAtUtc
+      deletedObservedAtUtc = $deletedObservedAt
+      rollback = "real PostgreSQL session termination; no cleanup SQL"
+      reclaim = "natural production lease expiry"
+    }
+    OldToken = $claimA.executionToken
+    OldAttempt = [string]$claimA.attemptCount
+    NewToken = $claimB.executionToken
+    NewAttempt = [string]$claimB.attemptCount
+    ClaimA = $claimA
+    ClaimB = $claimB
+    ClaimantA = $claimantA
+    ClaimantB = $claimantB
+    BoundaryLog = $boundaryLog
+    TransactionA = $transactionA
+    TransactionATermination = $sessionTermination
+    BeforeKillState = $beforeKill
+    AfterDeathState = $afterDeath
+    ReplacementClaimState = $replacementClaimState
+    BeforeKillCounts = $beforeKillCounts
+    AfterDeathCounts = $afterDeathCounts
+    ReplacementCounts = $replacementCounts
+    FinalState = $finalState
+    BCompletionCas = "1"
+    CompetingPods = @($claimantA, $claimantB)
+    ClaimAttempts = $null
+    Terminal = $terminal
+    CursorHistory = @($boundaryCursor) + @($terminal.History)
+    StaleOutboxId = ""
+    StaleOutboxOwner = ""
+  }
+}
+
 function Invoke-DiagnosticProviderCrash {
   param([Parameter(Mandatory = $true)]$Fixture)
   Wait-DeploymentReady "learning-platform" 1 "learning-platform"
@@ -2597,6 +2930,62 @@ function Assert-StaleWorkerProof {
   Assert-Equal "stale-worker terminal workflow" ([string]$final.workflow.status) "COMPLETED"
 }
 
+function Assert-AfterEvidenceEffectAtomicityProof {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)]$Crash
+  )
+  if (-not ([string]$Crash.BoundaryLog).Contains("WORKFLOW_AFTER_EVIDENCE_EFFECT") -or
+      -not ([string]$Crash.BoundaryLog).Contains("qualification crash boundary reached")) {
+    throw "after-evidence proof lacks the application boundary log"
+  }
+  Assert-Equal "after-evidence PostgreSQL transaction state" `
+    ([string]$Crash.TransactionA.state) "idle in transaction"
+  if ([string]::IsNullOrWhiteSpace([string]$Crash.TransactionA.backendXid) -or
+      -not ([string]$Crash.TransactionA.lastStatement).Contains("ledger.evidence")) {
+    throw "after-evidence proof lacks an open PostgreSQL write transaction over ledger.evidence"
+  }
+  Assert-Equal "after-evidence owning PostgreSQL session terminated" `
+    ([string]$Crash.TransactionATermination.sessionGone) "True"
+  foreach ($countsName in @("BeforeKillCounts", "AfterDeathCounts", "ReplacementCounts")) {
+    $counts = $Crash.$countsName
+    Assert-Equal "after-evidence $countsName evidence" ([string]$counts.evidence) "0"
+    Assert-Equal "after-evidence $countsName mastery" ([string]$counts.mastery) "0"
+    Assert-Equal "after-evidence $countsName diagnostic" ([string]$counts.diagnostic) "0"
+    Assert-Equal "after-evidence $countsName outbox" ([string]$counts.outbox) "0"
+  }
+  $afterDeath = ([string]$Crash.AfterDeathState) | ConvertFrom-Json -DateKind String
+  $abandoned = @($afterDeath.steps | Where-Object { $_.step_name -eq "RECORD_EVALUATION_EVIDENCE" })
+  Assert-Equal "after-evidence one abandoned step row" ([string]$abandoned.Count) "1"
+  Assert-Equal "after-evidence abandoned step status" ([string]$abandoned[0].status) "RUNNING"
+  Assert-Equal "after-evidence abandoned step attempt" ([string]$abandoned[0].attempt_count) "1"
+  Assert-Equal "after-evidence abandoned step token" `
+    ([string]$abandoned[0].execution_token) ([string]$Crash.OldToken)
+  Assert-Equal "after-evidence cursor before reclaim" `
+    ([string]$afterDeath.workflow.current_step) "RECORD_EVALUATION_EVIDENCE"
+
+  if ($Crash.OldToken -eq $Crash.NewToken) {
+    throw "after-evidence reclaim reused execution token A"
+  }
+  Assert-Equal "after-evidence reclaim attempt increment" ([string]$Crash.NewAttempt) `
+    ([string]([int]$Crash.OldAttempt + 1))
+
+  $final = ([string]$Crash.FinalState) | ConvertFrom-Json -DateKind String
+  $target = @($final.steps | Where-Object { $_.step_name -eq "RECORD_EVALUATION_EVIDENCE" })
+  Assert-Equal "after-evidence one final target row" ([string]$target.Count) "1"
+  Assert-Equal "after-evidence final target status" ([string]$target[0].status) "COMPLETED"
+  Assert-Equal "after-evidence final target attempt" ([string]$target[0].attempt_count) "2"
+  Assert-StaleWorkerExecutionTokenCleared $target[0].execution_token
+  Assert-Equal "after-evidence final evidence" ([string]@($final.evidence).Count) "1"
+  Assert-Equal "after-evidence final mastery" ([string]@($final.mastery).Count) "1"
+  $diagnosticCount = Get-StaleWorkerDiagnosticExecutionCount $final $Fixture.DiagnosticRequestId
+  Assert-Equal "after-evidence final exact diagnostic" ([string]$diagnosticCount) "1"
+  Assert-Equal "after-evidence final outbox" ([string]@($final.adaptationOutbox).Count) "1"
+  Assert-Equal "after-evidence final workflow" ([string]$final.workflow.status) "COMPLETED"
+  Assert-Equal "after-evidence terminal reason" `
+    ([string]$final.workflow.terminal_reason) "WORKFLOW_COMPLETED"
+}
+
 function Assert-CursorHistory {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -2788,6 +3177,27 @@ function Capture-ScenarioEvidence {
         regression = "../after-claim-proof-tests.json"
       }
     }
+    afterEvidenceEffectAtomicityProof = if ($Name -ne "after-evidence-effect") {
+      $null
+    } else {
+      [ordered]@{
+        claimantA = "claimant-a.json"
+        boundaryLog = "boundary-a.log"
+        boundaryAndTransaction = "boundary-evidence.json"
+        postgresTransactionBeforeKill = "postgres-transaction-before-kill.json"
+        postgresSessionTermination = "postgres-session-terminated.json"
+        checkpoints = @(
+          "postgres-before-kill.json",
+          "postgres-after-pod-death.json",
+          "postgres-post-lease-pre-reclaim.json (when distinct)",
+          "postgres-replacement-claimed.json",
+          "postgres-final.json"
+        )
+        claimantB = "claimant-b.json"
+        naturalExpiry = "natural-lease-expiry.json"
+        tokenLineage = "token-lineage.json"
+      }
+    }
     workflowCursor = [ordered]@{
       history = "cursor-history.log"
       final = $Crash.Terminal.State
@@ -2860,6 +3270,17 @@ function Run-Scenario {
       staleAuthoritativeEffects = 0
     }
   }
+  if ($Name -eq "after-evidence-effect") {
+    $expectedInvariant.afterEvidenceEffectAtomicityProof = [ordered]@{
+      evidenceEffectExecutedInOpenTransaction = $true
+      owningPostgresSessionTerminated = $true
+      committedEffectsAfterDeath = "0/0/0/0"
+      cursorBeforeReclaim = "RECORD_EVALUATION_EVIDENCE"
+      leaseExpiry = "natural production lease"
+      replacementAttempt = 2
+      finalEffects = "1/1/1/1"
+    }
+  }
 
   switch ($Name) {
     "after-claim" {
@@ -2880,12 +3301,16 @@ function Run-Scenario {
     "after-evidence-effect" {
       Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
       Wait-DeploymentReady "learning-platform" 0 "learning-platform"
-      Set-BackendFault $true "WORKFLOW_AFTER_EVIDENCE_EFFECT" $fixture.RunId "" 120000
+      Set-BackendFault `
+        -Enabled $true `
+        -Window "WORKFLOW_AFTER_EVIDENCE_EFFECT" `
+        -RunId $fixture.RunId `
+        -PauseMs 300000
       Seed-ScenarioFixture $fixture
       Wait-DeploymentReady "learning-platform" 1 "learning-platform"
       $targetStep = "RECORD_EVALUATION_EVIDENCE"
       $expectedTargetAttempt = 2
-      $crash = Invoke-BackendCrash $fixture "WORKFLOW_AFTER_EVIDENCE_EFFECT" $targetStep
+      $crash = Invoke-AfterEvidenceEffectPodDeath $fixture
     }
     "after-mastery-effect" {
       Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
@@ -2974,6 +3399,9 @@ function Run-Scenario {
     }
     if ($Name -eq "after-claim") {
       [void](Assert-AfterClaimNaturalLeaseObservation $crash.NaturalLeaseObservation)
+    }
+    if ($Name -eq "after-evidence-effect") {
+      Assert-AfterEvidenceEffectAtomicityProof $fixture $crash
     }
     Assert-CursorHistory $Name $history
   } catch {
