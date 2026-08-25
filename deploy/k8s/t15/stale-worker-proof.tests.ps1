@@ -39,6 +39,20 @@ if ($exactDiagnosticCount -ne 1) {
   throw "exact stale-worker diagnostic lineage count expected 1 but was $exactDiagnosticCount"
 }
 
+[void](Assert-StaleWorkerExecutionTokenCleared $null)
+[void](Assert-StaleWorkerExecutionTokenCleared "")
+$nonEmptyTokenRejected = $false
+$nonEmptyTokenRejection = ""
+try {
+  [void](Assert-StaleWorkerExecutionTokenCleared "01900000-0000-7000-8000-000000000903")
+} catch {
+  $nonEmptyTokenRejected = $true
+  $nonEmptyTokenRejection = $_.Exception.Message
+}
+if (-not $nonEmptyTokenRejected) {
+  throw "non-empty stale-worker final execution token unexpectedly passed"
+}
+
 function Assert-NegativeRejected {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -85,6 +99,13 @@ try {
   diagnosticAttribution = [ordered]@{
     preSeededAssessmentCount = $assessmentCount
     exactDiagnosticCount = $exactDiagnosticCount
+    result = "PASS"
+  }
+  clearedTokenAssertion = [ordered]@{
+    null = "PASS"
+    empty = "PASS"
+    nonEmpty = "FAIL"
+    nonEmptyRejection = $nonEmptyTokenRejection
     result = "PASS"
   }
   temporaryMutationRestored = ($valid.staleACompletionCasAffectedRows -eq 0)

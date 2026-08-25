@@ -48,3 +48,16 @@ function Get-StaleWorkerDiagnosticExecutionCount {
       [string]$_.request_id -eq $DiagnosticRequestId
     }).Count
 }
+
+function Assert-StaleWorkerExecutionTokenCleared {
+  param(
+    [Parameter(Mandatory = $true)]
+    [AllowNull()]
+    [AllowEmptyString()]
+    [string]$ExecutionToken
+  )
+
+  if (-not [string]::IsNullOrEmpty($ExecutionToken)) {
+    throw "stale-worker final execution token was not cleared"
+  }
+}

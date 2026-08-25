@@ -2164,7 +2164,7 @@ function Assert-StaleWorkerProof {
   Assert-Equal "stale-worker target status" ([string]$targetRows[0].status) "COMPLETED"
   Assert-Equal "stale-worker final target attempt" ([string]$targetRows[0].attempt_count) `
     ([string]$Crash.NewAttempt)
-  Assert-Equal "stale-worker target token cleared" ([string]$targetRows[0].execution_token) ""
+  Assert-StaleWorkerExecutionTokenCleared $targetRows[0].execution_token
   Assert-Equal "stale-worker terminal workflow" ([string]$final.workflow.status) "COMPLETED"
 }
 
