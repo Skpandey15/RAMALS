@@ -107,7 +107,31 @@ try {
     Write-Host "  $($image.Repository) -> $digest"
   }
 
-  $migrationSet = 1..34 | ForEach-Object { "{0:D3}" -f $_ }
+  # The approved migration set is derived from the candidate source itself, never hardcoded. A
+  # stale literal freezes an attestation that no longer describes the candidate's own schema.
+  $migrationDirectory = Join-Path $worktree "learning-platform/src/main/resources/db/migration"
+  if (-not (Test-Path -LiteralPath $migrationDirectory -PathType Container)) {
+    throw "candidate $Commit has no migration directory at $migrationDirectory"
+  }
+  $migrationVersions = [System.Collections.Generic.List[string]]::new()
+  foreach ($migrationFile in (Get-ChildItem -LiteralPath $migrationDirectory -File -Filter "V*.sql" | Sort-Object Name)) {
+    if ($migrationFile.Name -notmatch '^V(\d{3})__[A-Za-z0-9_]+\.sql$') {
+      throw "unsupported migration filename in the candidate source: $($migrationFile.Name)"
+    }
+    [void]$migrationVersions.Add($Matches[1])
+  }
+  $migrationSet = @($migrationVersions | Sort-Object -Unique)
+  if ($migrationSet.Count -eq 0) {
+    throw "candidate $Commit declares no versioned migrations"
+  }
+  if ($migrationSet.Count -ne $migrationVersions.Count) {
+    throw "candidate $Commit declares duplicate migration versions: $($migrationVersions -join ',')"
+  }
+  $expectedContiguous = @(1..$migrationSet.Count | ForEach-Object { "{0:D3}" -f $_ })
+  if (Compare-Object -ReferenceObject $migrationSet -DifferenceObject $expectedContiguous -SyncWindow 0) {
+    throw "candidate migration versions are not contiguous from 001: $($migrationSet -join ',')"
+  }
+  Write-Host "Candidate migration set: $($migrationSet[0])..$($migrationSet[-1]) ($($migrationSet.Count) migrations)"
   $lock = [ordered]@{
     '$comment' = "M2-T15.1 qualification candidate artifacts built from the exact approved main commit. All deployment references are immutable digests."
     qualification = "m2-t15.1"

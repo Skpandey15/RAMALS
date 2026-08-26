@@ -22,16 +22,16 @@ resources:
 images:
   - name: qualification/learning-platform:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-learning-platform
-    digest: sha256:64acbaa033e5e9ab098518d31c53143172236b4fd3084ceaa76f7265eca2c5c0
+    digest: sha256:04098418c57283bc01c8ef3d2f752a4bda9d76e936746213ab6b6544d101dfa4
   - name: qualification/ramals-ai:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-ai
-    digest: sha256:e28b95496c328dc79cc882e92e40820035d0e1f093f28e062a128d54ae09c68c
+    digest: sha256:456dd3f13e8e3d96f19924144df2cd82260c3c535710b0055ec3e21606a9778e
   - name: qualification/web-ui:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-web-ui
-    digest: sha256:13383d737c63f1f55b8b66964f70eb9d238ae7080121119413fc6e6badfebe32
+    digest: sha256:bc378000b0ef4d3d1e690c3785072430cf549d17262dfe75b52e1e85eb5a8e0e
   - name: qualification/postgres:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-postgres
-    digest: sha256:c628c156bf46db7642a55510a5837ceb2e2384d377e50dafc6a6f5f5546cc740
+    digest: sha256:96dc42b5620ec2344e15236ceda3bad5d863f2b952e9bc7d5fd4269866570eca
   - name: qualification/keycloak:current-main
     newName: k3d-ramals-t15-registry:5000/ramals-keycloak
-    digest: sha256:21b52ecc56ddbb0a5d5169417ba65b4590203bc8e510ca7fe5d150f14ca9e88a
+    digest: sha256:67c13631a9ca79c95e32363abd88c5cb687a274df56e824221553ca758704947
