@@ -235,7 +235,6 @@ class MigrationScriptContractTests {
         .contains("NEW.state = 'IN_FLIGHT'")
         .contains("REVOKE ALL ON FUNCTION core.enforce_ai_execution_dispatch_transition()")
         .contains("GRANT SELECT, INSERT, UPDATE ON TABLE core.ai_execution_dispatch")
-        .contains("REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER")
         .doesNotContain("TEXT")
         .doesNotContain("prompt")
         .doesNotContain("model_output");

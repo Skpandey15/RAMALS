@@ -125,6 +125,4 @@ COMMENT ON FUNCTION core.enforce_ai_execution_dispatch_transition() IS
   'and fencing identity. Prevents redispatch by state regression.';
 
 GRANT SELECT, INSERT, UPDATE ON TABLE core.ai_execution_dispatch TO ramals_core_runtime;
-REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER
-  ON TABLE core.ai_execution_dispatch FROM ramals_core_runtime;
 REVOKE ALL ON FUNCTION core.enforce_ai_execution_dispatch_transition() FROM PUBLIC;

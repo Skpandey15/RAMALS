@@ -114,7 +114,8 @@ class PostgresMigrationIntegrationTests {
 
   @Test
   @Order(8)
-  void runtimeHasOnlyTheDmlNeededForDiagnosticDispatchFencing() throws SQLException {
+  void diagnosticDispatchPrivilegesRemainCompatibleWithTheCoreRuntimeContract()
+      throws SQLException {
     try (Connection runtime =
             DriverManager.getConnection(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD);
         Statement statement = runtime.createStatement();
@@ -131,7 +132,10 @@ class PostgresMigrationIntegrationTests {
       assertThat(privileges.getBoolean(1)).isTrue();
       assertThat(privileges.getBoolean(2)).isTrue();
       assertThat(privileges.getBoolean(3)).isTrue();
-      assertThat(privileges.getBoolean(4)).isFalse();
+      // V002 deliberately gives the core runtime DELETE on current and future core tables. V035
+      // must remain additive so rolling back the application image does not narrow that established
+      // role contract; the repository exposes no dispatch-row delete path.
+      assertThat(privileges.getBoolean(4)).isTrue();
       assertThat(privileges.getBoolean(5)).isFalse();
     }
   }
