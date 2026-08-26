@@ -8,6 +8,7 @@ import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationDecis
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.evidence.EvidenceService;
+import io.ramals.learningplatform.execution.AiExecutionDispatchClaim;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.mastery.MasteryRepository;
 import io.ramals.learningplatform.mastery.MasteryService;
@@ -525,7 +526,37 @@ class LearningWorkflowConcurrencyIntegrationTests {
   // --- DIAGNOSE recovery states, against the real execution ledger -------------------------------
 
   @Test
-  void crashAfterCommissionBeforeProviderInvocationIsIndeterminateAndClosedNotRedispatched() {
+  void freshDiagnosticCommissionAcquiresDispatchAndPersistsOneTerminalExecution() {
+    JdbcTemplate jdbc = runtimeJdbc();
+    var executions = executionRepository(jdbc);
+    String requestId = "wf-diag-fresh-dispatch";
+    var request = diagnosticRequest(requestId);
+
+    assertThat(executions.commissionDiagnosticAssessment(request).dispatchAllowed()).isTrue();
+    assertThat(executions.findRecoverableDiagnosticCommission(requestId))
+        .contains(
+            new io.ramals.learningplatform.execution.DiagnosticCommissionContext(
+                request.groundedContext().contextId(), request.groundedContext().asOf()));
+    AiExecutionDispatchClaim claim = executions.acquireDiagnosticDispatch(requestId);
+    assertThat(claim.acquired()).isTrue();
+    assertThat(executions.markDiagnosticProviderInvocationStarted(requestId, claim)).isTrue();
+
+    executions.insertDiagnosticAssessmentSuccess(
+        request, diagnosticEnvelope(requestId), Instant.now(), Instant.now());
+
+    assertThat(executions.findExecutionState(requestId).state())
+        .isEqualTo(
+            io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.SUCCEEDED);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void anUndispatchedDiagnosticCommissionIsRecoverableAndCannotBeAbandoned() {
     JdbcTemplate jdbc = runtimeJdbc();
     var executions = executionRepository(jdbc);
     String requestId = "wf-diag-crash-commission";
@@ -536,20 +567,79 @@ class LearningWorkflowConcurrencyIntegrationTests {
 
     assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.COMMISSIONED);
 
-    // Recovery closes it so the ledger holds no unresolved commission, and the request stays
-    // undispatchable: the terminal row is what commissioning refuses against next time.
-    assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED")).isTrue();
-    assertThat(executions.findExecutionState(requestId).state()).isEqualTo(io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.FAILED);
-    assertThat(executions.findExecutionState(requestId).errorCode())
-        .isEqualTo("AI_EXECUTION_ABANDONED");
-
-    // Closing twice must neither overwrite nor duplicate.
+    // The old recovery path incorrectly terminal-failed this state. With no dispatch owner and no
+    // invocation, abandonment must be rejected and the commission must remain recoverable.
     assertThat(executions.closeAbandonedExecution(requestId, "AI_EXECUTION_ABANDONED")).isFalse();
+    assertThat(executions.findExecutionState(requestId).state())
+        .isEqualTo(
+            io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState
+                .COMMISSIONED);
+
+    AiExecutionDispatchClaim claim = executions.acquireDiagnosticDispatch(requestId);
+    assertThat(claim.acquired()).isTrue();
+    assertThat(executions.findExecutionState(requestId).state())
+        .isEqualTo(
+            io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState
+                .DISPATCH_OWNED);
+    assertThat(executions.markDiagnosticProviderInvocationStarted(requestId, claim)).isTrue();
+    assertThat(executions.findExecutionState(requestId).state())
+        .isEqualTo(
+            io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.IN_FLIGHT);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    UPDATE core.ai_execution_dispatch
+                       SET state = 'AVAILABLE', owner_token = NULL, fence = 0,
+                           ownership_acquired_at = NULL, invocation_started_at = NULL
+                     WHERE request_id = ?
+                    """,
+                    requestId))
+        .as("an in-flight request cannot be reset to dispatchable")
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
+    assertThat(executions.findExecutionState(requestId).state())
+        .isEqualTo(
+            io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState.IN_FLIGHT);
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM core.ai_execution WHERE request_id = ?",
                 Integer.class,
                 requestId))
+        .isZero();
+  }
+
+  @Test
+  void twoReplacementWorkersRaceForDispatchAndExactlyOneWins() throws Exception {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-dispatch-race";
+    commissionOnly(jdbc, requestId);
+
+    List<AiExecutionDispatchClaim> claims =
+        race(
+            () -> executionRepository(runtimeJdbc()).acquireDiagnosticDispatch(requestId),
+            () -> executionRepository(runtimeJdbc()).acquireDiagnosticDispatch(requestId));
+
+    assertThat(claims).filteredOn(AiExecutionDispatchClaim::acquired).hasSize(1);
+    assertThat(claims).filteredOn(claim -> !claim.acquired()).hasSize(1);
+    AiExecutionDispatchClaim winner =
+        claims.stream().filter(AiExecutionDispatchClaim::acquired).findFirst().orElseThrow();
+    AiExecutionDispatchClaim loser =
+        claims.stream().filter(claim -> !claim.acquired()).findFirst().orElseThrow();
+    assertThat(winner.ownerToken()).isNotNull();
+    assertThat(winner.fence()).isEqualTo(1);
+    assertThat(loser.state())
+        .isEqualTo(AiExecutionDispatchClaim.DispatchState.DISPATCH_OWNED);
+    assertThat(executionRepository(jdbc).markDiagnosticProviderInvocationStarted(requestId, loser))
+        .as("a losing worker has no owner token/fence and cannot begin provider invocation")
+        .isFalse();
+    assertThat(executionRepository(jdbc).markDiagnosticProviderInvocationStarted(requestId, winner))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution_dispatch WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .as("the deterministic request identity remains the single dispatch key")
         .isEqualTo(1);
   }
 
@@ -689,7 +779,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
   void twoRecoveryWorkersRacingToCloseTheSameCommissionProduceOneTerminalRow() {
     JdbcTemplate jdbc = runtimeJdbc();
     String requestId = "wf-diag-race-peers";
-    commissionOnly(jdbc, requestId);
+    inFlightCommission(jdbc, requestId);
 
     List<Boolean> outcomes =
         List.of(
@@ -944,6 +1034,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
 
   private io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest diagnosticRequest(
       String requestId) {
+    Instant asOf = Instant.parse("2026-08-25T08:00:00Z");
     return new io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest(
         "1.0",
         "interaction-" + requestId,
@@ -951,7 +1042,14 @@ class LearningWorkflowConcurrencyIntegrationTests {
         new io.ramals.learningplatform.ai.contract.Constraints(
             io.ramals.learningplatform.ai.contract.InteractionClass.INTERACTIVE_AI,
             12_000, null, null, null),
-        null);
+        new io.ramals.learningplatform.grounding.GroundedContext(
+            "1.0",
+            "ctx-" + requestId,
+            "learner-" + requestId,
+            asOf,
+            asOf.plusSeconds(300),
+            "GROUNDING_RETRIEVAL_V1",
+            List.of()));
   }
 
   private io.ramals.learningplatform.ai.contract.AiProposalEnvelope diagnosticEnvelope(
@@ -994,19 +1092,36 @@ class LearningWorkflowConcurrencyIntegrationTests {
         jdbc, tools.jackson.databind.json.JsonMapper.builder().build());
   }
 
-  /** The STARTED event a commission commits before any provider call. */
+  /** The STARTED event and AVAILABLE dispatch row committed before any provider call. */
   private void commissionOnly(JdbcTemplate jdbc, String requestId) {
     jdbc.update(
         """
-        INSERT INTO core.ai_execution_event
-          (id, request_id, interaction_id, agent_type, contract_version, event_type,
-           request_digest, occurred_at)
-        VALUES (?, ?, ?, 'DIAGNOSTIC', '1.0', 'STARTED', ?, CURRENT_TIMESTAMP)
+        WITH started AS (
+          INSERT INTO core.ai_execution_event
+            (id, request_id, interaction_id, agent_type, contract_version, event_type,
+             request_digest, occurred_at)
+          VALUES (?, ?, ?, 'DIAGNOSTIC', '1.0', 'STARTED', ?, CURRENT_TIMESTAMP)
+          RETURNING id, request_id, occurred_at
+        )
+        INSERT INTO core.ai_execution_dispatch
+          (request_id, commission_event_id, state, context_id, context_as_of, owner_token, fence,
+           commissioned_at, ownership_acquired_at, invocation_started_at)
+        SELECT request_id, id, 'AVAILABLE', ?, occurred_at, NULL, 0, occurred_at, NULL, NULL
+          FROM started
         """,
         UUID.randomUUID(),
         requestId,
         "interaction-" + requestId,
-        "f".repeat(64));
+        "f".repeat(64),
+        "ctx-" + requestId);
+  }
+
+  private void inFlightCommission(JdbcTemplate jdbc, String requestId) {
+    commissionOnly(jdbc, requestId);
+    var repository = executionRepository(jdbc);
+    AiExecutionDispatchClaim claim = repository.acquireDiagnosticDispatch(requestId);
+    assertThat(claim.acquired()).isTrue();
+    assertThat(repository.markDiagnosticProviderInvocationStarted(requestId, claim)).isTrue();
   }
 
   private void succeededExecution(JdbcTemplate jdbc, String requestId) {

@@ -3,6 +3,7 @@ package io.ramals.learningplatform.execution;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,6 +65,30 @@ class AiExecutionPersistenceServiceTests {
 
     assertThat(actual.status()).isEqualTo("FAILED");
     verify(transactionManager).commit(status);
+  }
+
+  @Test
+  void dispatchOwnershipAndInvocationStartEachCommitThroughRequiresNew() {
+    AiExecutionRepository repository = mock(AiExecutionRepository.class);
+    PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    TransactionStatus status = mock(TransactionStatus.class);
+    when(transactionManager.getTransaction(any())).thenReturn(status);
+    AiExecutionDispatchClaim expected =
+        AiExecutionDispatchClaim.acquired(
+            UUID.fromString("01900000-0000-7000-8000-0000000000f2"), 1);
+    when(repository.acquireDiagnosticDispatch("request-123")).thenReturn(expected);
+    when(repository.markDiagnosticProviderInvocationStarted("request-123", expected))
+        .thenReturn(true);
+    AiExecutionPersistenceService service =
+        new AiExecutionPersistenceService(repository, transactionManager);
+
+    AiExecutionDispatchClaim acquired = service.acquireDispatch("request-123");
+    boolean marked = service.markProviderInvocationStarted("request-123", acquired);
+
+    assertThat(acquired).isSameAs(expected);
+    assertThat(marked).isTrue();
+    verify(transactionManager, times(2)).getTransaction(any());
+    verify(transactionManager, times(2)).commit(status);
   }
 
   private static AiRequestEnvelope request() {

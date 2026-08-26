@@ -29,10 +29,9 @@ import org.junit.jupiter.api.Test;
 /**
  * Crash recovery for the one step that cannot simply be replayed.
  *
- * <p>Dispatch is at-most-once by construction: the execution commissions in its own transaction
- * before the provider is called. That is deliberate and must not be weakened -- so a worker that
- * dies after the verdict was persisted has to recover it by looking it up, because asking the model
- * again is not available to it.
+ * <p>Commission and provider-dispatch ownership are distinct. An ownerless commission can be
+ * recovered under its stable identity, while owned, in-flight and terminal executions are never
+ * blindly redispatched.
  */
 class DiagnosticAgentStepTests {
 
@@ -122,22 +121,20 @@ class DiagnosticAgentStepTests {
   }
 
   @Test
-  void state2_aCommissionedExecutionWithNoDecisionIsClosedAndNotRedispatched() {
-    // The provider may or may not have been called and nothing can establish which. Guessing either
-    // way is wrong; dispatching again would break at-most-once outright.
+  void state2_anOwnerlessCommissionIsResumedWithTheSameDeterministicRequestId() {
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
     when(executions.findExecutionState("wf-diag-" + RUN_ID))
         .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null));
-    when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(true);
+    when(learners.findActiveSubjectById(LEARNER)).thenReturn(Optional.of("subject-1"));
+    when(diagnostics.assess(anyString(), any(), anyString()))
+        .thenReturn(
+            new DiagnosticAssessmentService.Outcome(true, List.of(), "p-1", "r-1", "ctx-1"));
 
     WorkflowAgentStep.Result result = step.diagnose(run());
 
-    assertThat(result.succeeded()).isFalse();
-    assertThat(result.retryable()).as("retrying would hit the same commissioning guard").isFalse();
-    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_EXECUTION_ABANDONED");
-    verify(diagnostics, never()).assess(anyString(), any(), anyString());
-    // The ledger must not keep an unresolved commission for ever.
-    verify(executions).closeAbandonedExecution("wf-diag-" + RUN_ID, "AI_EXECUTION_ABANDONED");
+    assertThat(result.accepted()).isTrue();
+    verify(diagnostics).assess("subject-1", run().curriculumVersionId(), "wf-diag-" + RUN_ID);
+    verify(executions, never()).closeAbandonedExecution(anyString(), anyString());
   }
 
   @Test
@@ -172,15 +169,19 @@ class DiagnosticAgentStepTests {
   }
 
   @Test
-  void noRecoveryStateEverRedispatchesAnAlreadyCommissionedRequest() {
-    // The single property this whole state machine exists to preserve.
+  void noOwnedInFlightOrTerminalStateBlindlyRedispatches() {
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
     for (ExecutionState state :
         new ExecutionState[] {
-          ExecutionState.COMMISSIONED, ExecutionState.FAILED, ExecutionState.SUCCEEDED
+          ExecutionState.DISPATCH_OWNED,
+          ExecutionState.IN_FLIGHT,
+          ExecutionState.LEGACY_INDETERMINATE,
+          ExecutionState.FAILED,
+          ExecutionState.SUCCEEDED
         }) {
       when(executions.findExecutionState(anyString()))
           .thenReturn(new RecordedExecution(state, null));
+      when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(true);
 
       step.diagnose(run());
     }
@@ -194,7 +195,7 @@ class DiagnosticAgentStepTests {
     // The original worker commits between findExecutionState and closeAbandonedExecution.
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
     when(executions.findExecutionState("wf-diag-" + RUN_ID))
-        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null))
+        .thenReturn(new RecordedExecution(ExecutionState.IN_FLIGHT, null))
         .thenReturn(new RecordedExecution(ExecutionState.SUCCEEDED, null));
     when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
 
@@ -211,7 +212,7 @@ class DiagnosticAgentStepTests {
   void losingTheCloseRaceToARealFailureReportsThatFailure() {
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
     when(executions.findExecutionState("wf-diag-" + RUN_ID))
-        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null))
+        .thenReturn(new RecordedExecution(ExecutionState.IN_FLIGHT, null))
         .thenReturn(new RecordedExecution(ExecutionState.FAILED, "AI_TIMEOUT"));
     when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
 
@@ -227,7 +228,7 @@ class DiagnosticAgentStepTests {
     // the provider failed when in fact nobody ever heard back from it.
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
     when(executions.findExecutionState("wf-diag-" + RUN_ID))
-        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null))
+        .thenReturn(new RecordedExecution(ExecutionState.IN_FLIGHT, null))
         .thenReturn(new RecordedExecution(ExecutionState.FAILED, "AI_EXECUTION_ABANDONED"));
     when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
 
@@ -244,7 +245,7 @@ class DiagnosticAgentStepTests {
         .thenReturn(Optional.empty())
         .thenReturn(Optional.of(recorded(true)));
     when(executions.findExecutionState("wf-diag-" + RUN_ID))
-        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null));
+        .thenReturn(new RecordedExecution(ExecutionState.IN_FLIGHT, null));
     when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
 
     WorkflowAgentStep.Result result = step.diagnose(run());
@@ -260,7 +261,7 @@ class DiagnosticAgentStepTests {
     // thread waits on a database that has just been reported in flux.
     when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
     when(executions.findExecutionState("wf-diag-" + RUN_ID))
-        .thenReturn(new RecordedExecution(ExecutionState.COMMISSIONED, null));
+        .thenReturn(new RecordedExecution(ExecutionState.IN_FLIGHT, null));
     when(executions.closeAbandonedExecution(anyString(), anyString())).thenReturn(false);
 
     WorkflowAgentStep.Result result = step.diagnose(run());

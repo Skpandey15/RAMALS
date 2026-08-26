@@ -2,7 +2,7 @@ package io.ramals.learningplatform.execution;
 
 import java.util.Optional;
 
-/** Result of atomically claiming an AI request before provider dispatch. */
+/** Result of atomically recording an AI request commission. */
 public record AiExecutionCommission(
     boolean dispatchAllowed,
     String state,

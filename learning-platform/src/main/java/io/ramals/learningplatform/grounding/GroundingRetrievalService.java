@@ -29,23 +29,34 @@ public final class GroundingRetrievalService {
       String authenticatedSubject,
       UUID curriculumVersionId,
       Set<SourceType> requiredSources) {
+    return retrieveAt(
+        authenticatedSubject, curriculumVersionId, requiredSources, clock.instant());
+  }
+
+  /** Reconstructs a previously commissioned context at its original authoritative timestamp. */
+  public GroundedContext retrieveAt(
+      String authenticatedSubject,
+      UUID curriculumVersionId,
+      Set<SourceType> requiredSources,
+      Instant contextAsOf) {
     if (authenticatedSubject == null || authenticatedSubject.isBlank()
-        || authenticatedSubject.length() > 255 || curriculumVersionId == null) {
+        || authenticatedSubject.length() > 255 || curriculumVersionId == null
+        || contextAsOf == null || contextAsOf.isAfter(clock.instant())) {
       throw new GroundingRetrievalException("GROUNDING_RETRIEVAL_REQUEST_INVALID");
     }
-    Instant started = clock.instant();
+    Instant retrievalStarted = clock.instant();
     AuthorizedGroundingFacts facts = retrieval.retrieve(
-        authenticatedSubject, curriculumVersionId, started, policy)
+        authenticatedSubject, curriculumVersionId, contextAsOf, policy)
         .orElseThrow(() -> new GroundingRetrievalException("GROUNDING_LEARNER_NOT_AUTHORIZED"));
     if (facts.items().isEmpty()) {
       throw new GroundingRetrievalException("GROUNDING_REQUIRED_SOURCE_MISSING");
     }
-    if (Duration.between(started, clock.instant()).compareTo(policy.timeout()) > 0) {
+    if (Duration.between(retrievalStarted, clock.instant()).compareTo(policy.timeout()) > 0) {
       throw new GroundingRetrievalException("GROUNDING_RETRIEVAL_TIMEOUT");
     }
     GroundedContext context = factory.create(
-        facts.learnerId().toString(), policy.version(), started, policy.freshness(), facts.items(),
-        Set.copyOf(requiredSources));
+        facts.learnerId().toString(), policy.version(), contextAsOf, policy.freshness(),
+        facts.items(), Set.copyOf(requiredSources));
     retrieval.appendRetrievalRecord(context, facts.learnerId());
     return context;
   }
