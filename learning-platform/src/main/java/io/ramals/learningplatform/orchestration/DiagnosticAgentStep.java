@@ -49,9 +49,10 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
   /**
    * Diagnoses, or recovers whatever a previous attempt already achieved.
    *
-   * <p>Five durable states exist under this run's stable request identity, and every one of them has
-   * a deterministic answer. None of them redispatch a request that was already commissioned: dispatch
-   * is at-most-once by construction and recovery must not be the loophole that makes it twice.
+   * <p>Durable commission and provider dispatch are separate states under this run's stable request
+   * identity. An ownerless commission is safe to resume; an owned or in-flight invocation is not.
+   * Recovery therefore preserves at-most-once provider dispatch without abandoning work that was
+   * durably commissioned but never reached the provider.
    */
   @Override
   public Result diagnose(Run run) {
@@ -77,14 +78,15 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
     // No decision. What the execution ledger says now decides whether dispatch is even permitted.
     RecordedExecution execution = executions.findExecutionState(requestId);
     return switch (execution.state()) {
-      case ABSENT -> dispatch(run, requestId);
-      case COMMISSIONED -> closeIndeterminate(run, requestId);
+      case ABSENT, COMMISSIONED -> dispatch(run, requestId);
+      case DISPATCH_OWNED, IN_FLIGHT, LEGACY_INDETERMINATE ->
+          closeIndeterminate(run, requestId);
       case FAILED -> adoptFailure(run, requestId, execution.errorCode());
       case SUCCEEDED -> unrecoverableSuccess(run, requestId);
     };
   }
 
-  /** State 1: nothing was ever commissioned, so this is an ordinary first attempt. */
+  /** Nothing was commissioned, or a durable commission is still explicitly ownerless. */
   private Result dispatch(Run run, String requestId) {
     String subject = learners.findActiveSubjectById(run.learnerId()).orElse(null);
     if (subject == null) {
@@ -100,7 +102,7 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
   }
 
   /**
-   * State 2: commissioned, with no terminal record. The genuinely indeterminate case.
+   * Dispatch ownership exists, with no terminal record. The genuinely indeterminate case.
    *
    * <p>The provider may have been called and may even have answered; the worker died before anything
    * was written. Nothing can establish which, so this must not guess and must not dispatch again.
@@ -144,7 +146,7 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
       // Still not terminal. Bounded by MAX_STEP_ATTEMPTS through the ordinary retry path, which is
       // where a wait belongs; ABSENT cannot follow COMMISSIONED, so it is treated the same way
       // rather than being given a meaning it does not have.
-      case COMMISSIONED, ABSENT -> {
+      case COMMISSIONED, DISPATCH_OWNED, IN_FLIGHT, LEGACY_INDETERMINATE, ABSENT -> {
         log(run, requestId, "unresolved", execution.state().name());
         yield Result.failed("DIAGNOSIS_RECOVERY_UNRESOLVED", requestId);
       }

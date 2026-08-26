@@ -82,10 +82,10 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 34 with V034 (M2-T14 authoritative workflow target binding). Asserting the count
+    // 35 with V035 (M2-T15.2 diagnostic dispatch ownership). Asserting the count
     // rather than merely that the upgrade succeeds is what makes an accidentally unapplied
     // migration visible -- it caught V029 the first time it ran.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(34);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(35);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 
@@ -109,6 +109,30 @@ class PostgresMigrationIntegrationTests {
       assertThatThrownBy(() -> statement.executeUpdate(
           "DELETE FROM ledger.privilege_probe WHERE id = '" + id + "'"))
           .isInstanceOfSatisfying(SQLException.class, PostgresMigrationIntegrationTests::assertPermissionDenied);
+    }
+  }
+
+  @Test
+  @Order(8)
+  void runtimeHasOnlyTheDmlNeededForDiagnosticDispatchFencing() throws SQLException {
+    try (Connection runtime =
+            DriverManager.getConnection(databaseUrl, RUNTIME_USER, RUNTIME_PASSWORD);
+        Statement statement = runtime.createStatement();
+        ResultSet privileges =
+            statement.executeQuery(
+                """
+                SELECT has_table_privilege(current_user, 'core.ai_execution_dispatch', 'SELECT'),
+                       has_table_privilege(current_user, 'core.ai_execution_dispatch', 'INSERT'),
+                       has_table_privilege(current_user, 'core.ai_execution_dispatch', 'UPDATE'),
+                       has_table_privilege(current_user, 'core.ai_execution_dispatch', 'DELETE'),
+                       has_table_privilege(current_user, 'core.ai_execution_dispatch', 'TRUNCATE')
+                """)) {
+      assertThat(privileges.next()).isTrue();
+      assertThat(privileges.getBoolean(1)).isTrue();
+      assertThat(privileges.getBoolean(2)).isTrue();
+      assertThat(privileges.getBoolean(3)).isTrue();
+      assertThat(privileges.getBoolean(4)).isFalse();
+      assertThat(privileges.getBoolean(5)).isFalse();
     }
   }
 

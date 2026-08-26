@@ -3,12 +3,12 @@ package io.ramals.learningplatform.execution;
 /**
  * Reads and closes the durable state of one AI execution, for callers recovering from a crash.
  *
- * <p>Dispatch is at-most-once: an execution commissions in its own transaction before the provider
- * is called, precisely so a repeat cannot reach the model. The cost of that guarantee is that a
- * worker which dies mid-flight cannot ask again what happened -- it has to read what was recorded.
+ * <p>Dispatch is at-most-once: a diagnostic commission with no dispatch owner is recoverable, but
+ * once ownership is acquired or provider invocation starts, a repeat cannot reach the model. A
+ * worker which dies in that later window has to read what was recorded.
  *
  * <p>Deliberately a narrow read plus one closing write. Nothing here may dispatch, and nothing here
- * may make a commissioned request dispatchable again.
+ * may make an owned or in-flight request dispatchable again.
  */
 public interface AiExecutionRecoveryPort {
 
@@ -17,10 +17,16 @@ public interface AiExecutionRecoveryPort {
     /** No commission was ever recorded. The request has not been dispatched. */
     ABSENT,
     /**
-     * Commissioned, with no terminal record. The provider may or may not have been called, and
-     * there is no way to find out: this is the one genuinely indeterminate state.
+     * Commissioned with no dispatch owner. The provider has definitely not been called and a
+     * replacement may compete for ownership under the same request identity.
      */
     COMMISSIONED,
+    /** Dispatch ownership was acquired, but invocation has not yet been marked as started. */
+    DISPATCH_OWNED,
+    /** Provider invocation was durably marked as started; never blindly redispatch this state. */
+    IN_FLIGHT,
+    /** A pre-ownership-model commission whose provider state cannot be reconstructed safely. */
+    LEGACY_INDETERMINATE,
     /** The call was made and failed. The error code is durable. */
     FAILED,
     /**
@@ -42,11 +48,12 @@ public interface AiExecutionRecoveryPort {
   RecordedExecution findExecutionState(String requestId);
 
   /**
-   * Closes a commissioned execution whose worker never returned.
+   * Closes an owned or in-flight execution whose worker never returned.
    *
    * <p>Records a terminal failure so the ledger does not keep an unresolved commission forever. It
-   * does not make the request dispatchable again, and it does not claim to know what the provider
-   * did: the error code says only that the attempt was abandoned.
+   * An ownerless diagnostic commission is deliberately not closable: it remains recoverable. This
+   * does not make an owned request dispatchable again, and it does not claim to know what the
+   * provider did: the error code says only that the attempt was abandoned.
    *
    * @return false when the request already had a terminal record, so nothing was changed
    */

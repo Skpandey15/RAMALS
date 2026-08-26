@@ -15,12 +15,15 @@ import io.ramals.learningplatform.grounding.ProposalGateReason;
 import io.ramals.learningplatform.grounding.ProposalGateResult;
 import io.ramals.learningplatform.grounding.ProposalType;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
-import io.ramals.learningplatform.qualification.QualificationFault;
+import io.ramals.learningplatform.execution.AiExecutionDispatchClaim;
 import io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder;
+import io.ramals.learningplatform.execution.DiagnosticCommissionContext;
 import io.ramals.learningplatform.observability.CorrelationContext;
+import io.ramals.learningplatform.qualification.QualificationFault;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -96,8 +99,27 @@ public class DiagnosticAssessmentService {
    *     makes constructing another learner's context unreachable rather than merely checked.
    */
   public Outcome assess(String authenticatedSubject, UUID curriculumVersionId, String requestId) {
+    Optional<DiagnosticCommissionContext> recoverable =
+        executions.findRecoverableCommission(requestId);
     GroundedContext context =
-        grounding.retrieve(authenticatedSubject, curriculumVersionId, REQUIRED_SOURCES);
+        recoverable
+            .map(
+                prior ->
+                    grounding.retrieveAt(
+                        authenticatedSubject,
+                        curriculumVersionId,
+                        REQUIRED_SOURCES,
+                        prior.asOf()))
+            .orElseGet(
+                () ->
+                    grounding.retrieve(
+                        authenticatedSubject, curriculumVersionId, REQUIRED_SOURCES));
+    if (recoverable.isPresent()
+        && !recoverable.orElseThrow().contextId().equals(context.contextId())) {
+      throw new AiUnavailableException(
+          "AI_EXECUTION_COMMISSION_CONTEXT_MISMATCH",
+          "The diagnostic commission's original grounded context could not be reconstructed.");
+    }
 
     String interactionId = MDC.get("interactionId");
     String traceId = MDC.get("traceId");
@@ -111,15 +133,27 @@ public class DiagnosticAssessmentService {
                 InteractionClass.INTERACTIVE_AI, (int) DEADLINE_MS, null, null, null),
             context);
     AiExecutionCommission commission = executions.commission(request);
-    if (!commission.dispatchAllowed()) {
+    if (commission.existingExecution().isPresent()) {
       throw new AiUnavailableException(
           "AI_EXECUTION_ALREADY_COMMISSIONED",
-          "This diagnostic assessment request has already been commissioned.");
+          "This diagnostic assessment request already has a terminal execution.");
     }
     QualificationFault.pause(
         QualificationFault.Window.WORKFLOW_AFTER_DIAGNOSTIC_COMMISSION,
         null,
         requestId);
+
+    AiExecutionDispatchClaim dispatch = executions.acquireDispatch(requestId);
+    if (!dispatch.acquired()) {
+      throw new AiUnavailableException(
+          "AI_EXECUTION_DISPATCH_NOT_AVAILABLE",
+          "This diagnostic assessment request already has a dispatch owner or invocation.");
+    }
+    if (!executions.markProviderInvocationStarted(requestId, dispatch)) {
+      throw new AiUnavailableException(
+          "AI_EXECUTION_DISPATCH_FENCE_LOST",
+          "This diagnostic assessment request lost provider-dispatch ownership.");
+    }
 
     Instant startedAt = clock.instant();
     AiProposalEnvelope envelope;

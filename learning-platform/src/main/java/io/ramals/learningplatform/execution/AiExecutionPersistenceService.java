@@ -6,6 +6,7 @@ import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -107,6 +108,51 @@ public class AiExecutionPersistenceService
           request.requestId(), request.interactionId(), "DIAGNOSTIC", failure);
       throw failure;
     }
+  }
+
+  @Override
+  public Optional<DiagnosticCommissionContext> findRecoverableCommission(String requestId) {
+    return independent(() -> repository.findRecoverableDiagnosticCommission(requestId));
+  }
+
+  @Override
+  public AiExecutionDispatchClaim acquireDispatch(String requestId) {
+    AiExecutionDispatchClaim claim =
+        independent(() -> repository.acquireDiagnosticDispatch(requestId));
+    BusinessEventLogger.info(
+        LOGGER,
+        claim.acquired()
+            ? "ai.execution.dispatch_acquired"
+            : "ai.execution.dispatch_not_acquired",
+        claim.acquired()
+            ? "AI provider dispatch ownership acquired"
+            : "AI provider dispatch ownership was not available",
+        Map.of(
+            "requestId", requestId,
+            "state", claim.state(),
+            "fence", claim.fence()));
+    return claim;
+  }
+
+  @Override
+  public boolean markProviderInvocationStarted(
+      String requestId, AiExecutionDispatchClaim claim) {
+    boolean marked =
+        independent(
+            () -> repository.markDiagnosticProviderInvocationStarted(requestId, claim));
+    BusinessEventLogger.info(
+        LOGGER,
+        marked
+            ? "ai.execution.provider_invocation_started"
+            : "ai.execution.dispatch_fence_lost",
+        marked
+            ? "AI provider invocation marked as started"
+            : "AI provider invocation ownership fence was not valid",
+        Map.of(
+            "requestId", requestId,
+            "state", claim.state(),
+            "fence", claim.fence()));
+    return marked;
   }
 
   @Override

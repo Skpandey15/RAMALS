@@ -43,8 +43,8 @@ public class AiExecutionRepository {
   }
 
   /**
-   * The durable state of one request identity: never commissioned, commissioned without a terminal
-   * record, or terminal. Read-only, and never makes a commissioned request dispatchable again.
+   * The durable state of one request identity, including the diagnostic provider-dispatch fence.
+   * Read-only, and never makes an owned or in-flight request dispatchable again.
    */
   public AiExecutionRecoveryPort.RecordedExecution findExecutionState(String requestId) {
     if (requestId == null || requestId.isBlank()) {
@@ -59,22 +59,39 @@ public class AiExecutionRepository {
               : AiExecutionRecoveryPort.ExecutionState.FAILED;
       return new AiExecutionRecoveryPort.RecordedExecution(state, execution.errorCode());
     }
-    Integer commissioned =
-        jdbc.queryForObject(
-            """
-            SELECT count(*) FROM core.ai_execution_event
-             WHERE request_id = ? AND event_type = 'STARTED'
-            """,
-            Integer.class,
-            requestId);
-    return commissioned != null && commissioned > 0
-        ? new AiExecutionRecoveryPort.RecordedExecution(
-            AiExecutionRecoveryPort.ExecutionState.COMMISSIONED, null)
-        : AiExecutionRecoveryPort.RecordedExecution.absent();
+    Optional<DispatchLedgerState> dispatchState =
+        jdbc.query(
+                """
+                SELECT dispatch.state
+                  FROM core.ai_execution_event event
+                  LEFT JOIN core.ai_execution_dispatch dispatch
+                    ON dispatch.request_id = event.request_id
+                 WHERE event.request_id = ? AND event.event_type = 'STARTED'
+                """,
+                (row, number) -> new DispatchLedgerState(row.getString("state")),
+                requestId)
+            .stream()
+            .findFirst();
+    if (dispatchState.isEmpty()) {
+      return AiExecutionRecoveryPort.RecordedExecution.absent();
+    }
+    String recordedState = dispatchState.orElseThrow().state();
+    AiExecutionRecoveryPort.ExecutionState state =
+        recordedState == null
+            ? AiExecutionRecoveryPort.ExecutionState.LEGACY_INDETERMINATE
+            : switch (recordedState) {
+          case "AVAILABLE" -> AiExecutionRecoveryPort.ExecutionState.COMMISSIONED;
+          case "DISPATCH_OWNED" -> AiExecutionRecoveryPort.ExecutionState.DISPATCH_OWNED;
+          case "IN_FLIGHT" -> AiExecutionRecoveryPort.ExecutionState.IN_FLIGHT;
+          case "LEGACY_INDETERMINATE" ->
+              AiExecutionRecoveryPort.ExecutionState.LEGACY_INDETERMINATE;
+          default -> throw new IllegalStateException("unknown AI dispatch state");
+        };
+    return new AiExecutionRecoveryPort.RecordedExecution(state, null);
   }
 
   /**
-   * Writes a terminal failure for a commissioned execution whose worker never returned.
+   * Writes a terminal failure for an owned or in-flight execution whose worker never returned.
    *
    * <p>Guarded on there being no terminal row, so a late-arriving real outcome is never overwritten
    * by an abandonment. The unique constraint on request_id makes the insert safe under a race.
@@ -91,6 +108,16 @@ public class AiExecutionRepository {
                    event.occurred_at, CURRENT_TIMESTAMP
               FROM core.ai_execution_event event
              WHERE event.request_id = ? AND event.event_type = 'STARTED'
+               AND (
+                 event.agent_type <> 'DIAGNOSTIC'
+                 OR EXISTS (
+                   SELECT 1
+                     FROM core.ai_execution_dispatch dispatch
+                    WHERE dispatch.request_id = event.request_id
+                      AND dispatch.state IN
+                        ('DISPATCH_OWNED', 'IN_FLIGHT', 'LEGACY_INDETERMINATE')
+                 )
+               )
              ON CONFLICT (request_id) DO NOTHING
              """,
             UuidV7.generate(),
@@ -131,12 +158,148 @@ public class AiExecutionRepository {
 
   public AiExecutionCommission commissionDiagnosticAssessment(
       DiagnosticAssessmentRequest request) {
-    return commission(
-        request.requestId(),
-        request.interactionId(),
-        request.contractVersion(),
-        request,
-        "DIAGNOSTIC");
+    String requestDigest = digest(request);
+    UUID eventId = UuidV7.generate();
+    Long inserted =
+        jdbc.queryForObject(
+            """
+            WITH started AS (
+              INSERT INTO core.ai_execution_event
+                (id, request_id, interaction_id, agent_type, contract_version, event_type,
+                 request_digest, occurred_at)
+              VALUES (?, ?, ?, 'DIAGNOSTIC', ?, 'STARTED', ?, CURRENT_TIMESTAMP)
+              ON CONFLICT (request_id, event_type) DO NOTHING
+              RETURNING id, request_id, occurred_at
+            ), dispatch AS (
+              INSERT INTO core.ai_execution_dispatch
+                (request_id, commission_event_id, state, context_id, context_as_of, owner_token,
+                 fence, commissioned_at, ownership_acquired_at, invocation_started_at)
+              SELECT request_id, id, 'AVAILABLE', ?, ?, NULL, 0, occurred_at, NULL, NULL
+                FROM started
+              RETURNING request_id
+            )
+            SELECT count(*) FROM dispatch
+            """,
+            Long.class,
+            eventId,
+            request.requestId(),
+            request.interactionId(),
+            request.contractVersion(),
+            requestDigest,
+            request.groundedContext().contextId(),
+            timestamp(request.groundedContext().asOf()));
+    if (inserted != null && inserted > 0) {
+      return AiExecutionCommission.claimed();
+    }
+    return existingCommission(request.requestId(), requestDigest);
+  }
+
+  /** Reads reconstruction metadata only while a diagnostic commission is explicitly ownerless. */
+  public Optional<DiagnosticCommissionContext> findRecoverableDiagnosticCommission(
+      String requestId) {
+    if (requestId == null || requestId.isBlank()) {
+      return Optional.empty();
+    }
+    return jdbc.query(
+            """
+            SELECT dispatch.context_id, dispatch.context_as_of
+              FROM core.ai_execution_dispatch dispatch
+             WHERE dispatch.request_id = ?
+               AND dispatch.state = 'AVAILABLE'
+               AND NOT EXISTS (
+                 SELECT 1
+                   FROM core.ai_execution execution
+                  WHERE execution.request_id = dispatch.request_id
+               )
+            """,
+            (row, number) ->
+                new DiagnosticCommissionContext(
+                    row.getString("context_id"), instant(row, "context_as_of")),
+            requestId)
+        .stream()
+        .findFirst();
+  }
+
+  /**
+   * Atomically acquires the one permission to make a diagnostic commission's first provider call.
+   *
+   * <p>The state predicate, absence of a terminal execution, opaque owner token and returned fence
+   * are one PostgreSQL compare-and-set. Concurrent replacement workers can both observe AVAILABLE,
+   * but only the row returned by this statement grants dispatch authority.
+   */
+  public AiExecutionDispatchClaim acquireDiagnosticDispatch(String requestId) {
+    UUID ownerToken = UuidV7.generate();
+    Optional<AiExecutionDispatchClaim> acquired =
+        jdbc.query(
+                """
+                UPDATE core.ai_execution_dispatch dispatch
+                   SET state = 'DISPATCH_OWNED',
+                       owner_token = ?,
+                       fence = dispatch.fence + 1,
+                       ownership_acquired_at = CURRENT_TIMESTAMP
+                 WHERE dispatch.request_id = ?
+                   AND dispatch.state = 'AVAILABLE'
+                   AND NOT EXISTS (
+                     SELECT 1
+                       FROM core.ai_execution execution
+                      WHERE execution.request_id = dispatch.request_id
+                   )
+                RETURNING owner_token, fence
+                """,
+                (row, number) ->
+                    AiExecutionDispatchClaim.acquired(
+                        row.getObject("owner_token", UUID.class), row.getLong("fence")),
+                ownerToken,
+                requestId)
+            .stream()
+            .findFirst();
+    return acquired.orElseGet(() -> unavailableDispatch(requestId));
+  }
+
+  /** Marks invocation started only for the exact owner/fence returned by the acquisition CAS. */
+  public boolean markDiagnosticProviderInvocationStarted(
+      String requestId, AiExecutionDispatchClaim claim) {
+    if (claim == null || !claim.acquired()) {
+      return false;
+    }
+    int updated =
+        jdbc.update(
+            """
+            UPDATE core.ai_execution_dispatch dispatch
+               SET state = 'IN_FLIGHT', invocation_started_at = CURRENT_TIMESTAMP
+             WHERE dispatch.request_id = ?
+               AND dispatch.state = 'DISPATCH_OWNED'
+               AND dispatch.owner_token = ?
+               AND dispatch.fence = ?
+               AND NOT EXISTS (
+                 SELECT 1
+                   FROM core.ai_execution execution
+                  WHERE execution.request_id = dispatch.request_id
+               )
+            """,
+            requestId,
+            claim.ownerToken(),
+            claim.fence());
+    return updated == 1;
+  }
+
+  private AiExecutionDispatchClaim unavailableDispatch(String requestId) {
+    if (findByRequestId(requestId).isPresent()) {
+      return AiExecutionDispatchClaim.unavailable(
+          AiExecutionDispatchClaim.DispatchState.TERMINAL);
+    }
+    return jdbc.query(
+            "SELECT state FROM core.ai_execution_dispatch WHERE request_id = ?",
+            (row, number) ->
+                AiExecutionDispatchClaim.unavailable(
+                    AiExecutionDispatchClaim.DispatchState.valueOf(row.getString("state"))),
+            requestId)
+        .stream()
+        .findFirst()
+        .orElseGet(
+            () ->
+                AiExecutionDispatchClaim.unavailable(
+                    AiExecutionDispatchClaim.DispatchState.ABSENT));
   }
 
   private AiExecutionCommission commission(
@@ -395,6 +558,8 @@ public class AiExecutionRepository {
   }
 
   private record ExecutionStart(String requestDigest) {}
+
+  private record DispatchLedgerState(String state) {}
 
   private record RequestMetadata(
       String requestId, String interactionId, String contractVersion) {}

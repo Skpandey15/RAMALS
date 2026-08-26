@@ -210,6 +210,37 @@ class MigrationScriptContractTests {
         .doesNotContain("UPDATE ledger.assessment_evaluation_decision");
   }
 
+  @Test
+  void diagnosticDispatchOwnershipSeparatesRecoverableCommissionFromInFlightWork()
+      throws IOException {
+    String migration = statements("/db/migration/V035__diagnostic_dispatch_ownership.sql");
+
+    assertThat(migration)
+        .contains("CREATE TABLE core.ai_execution_dispatch")
+        .contains("request_id VARCHAR(64) PRIMARY KEY")
+        .contains("REFERENCES core.ai_execution_event(id) ON DELETE CASCADE")
+        .contains("'AVAILABLE', 'DISPATCH_OWNED', 'IN_FLIGHT', 'LEGACY_INDETERMINATE'")
+        .contains("owner_token UUID")
+        .contains("fence BIGINT NOT NULL DEFAULT 0")
+        .contains("context_id VARCHAR(64)")
+        .contains("context_as_of TIMESTAMPTZ")
+        .contains("state = 'AVAILABLE'")
+        .contains("state = 'DISPATCH_OWNED'")
+        .contains("state = 'IN_FLIGHT'")
+        .contains("'LEGACY_INDETERMINATE'")
+        .contains("CREATE TRIGGER trg_ai_execution_dispatch_transition")
+        .contains("OLD.state = 'AVAILABLE'")
+        .contains("NEW.state = 'DISPATCH_OWNED'")
+        .contains("OLD.state = 'DISPATCH_OWNED'")
+        .contains("NEW.state = 'IN_FLIGHT'")
+        .contains("REVOKE ALL ON FUNCTION core.enforce_ai_execution_dispatch_transition()")
+        .contains("GRANT SELECT, INSERT, UPDATE ON TABLE core.ai_execution_dispatch")
+        .contains("REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER")
+        .doesNotContain("TEXT")
+        .doesNotContain("prompt")
+        .doesNotContain("model_output");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");

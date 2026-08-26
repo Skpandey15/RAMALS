@@ -27,7 +27,10 @@ import io.ramals.learningplatform.grounding.ProposalGroundingPolicy;
 import io.ramals.learningplatform.grounding.ProposalGroundingRequest;
 import io.ramals.learningplatform.execution.AiExecution;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
+import io.ramals.learningplatform.execution.AiExecutionDispatchClaim;
+import io.ramals.learningplatform.execution.AiExecutionDispatchClaim.DispatchState;
 import io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder;
+import io.ramals.learningplatform.execution.DiagnosticCommissionContext;
 import io.ramals.learningplatform.observability.StructuredLogCapture;
 import java.time.Clock;
 import java.time.Instant;
@@ -54,6 +57,8 @@ class DiagnosticAssessmentServiceTests {
 
   private static final Instant NOW = Instant.parse("2026-08-22T12:00:00Z");
   private static final UUID CURRICULUM = UUID.randomUUID();
+  private static final UUID LEARNER_ID =
+      UUID.fromString("01900000-0000-7000-8000-000000000091");
 
   private RecordingDecisions decisions;
   private RecordingExecutions executions;
@@ -273,9 +278,75 @@ class DiagnosticAssessmentServiceTests {
   }
 
   @Test
-  void aDuplicateLogicalRequestIsRefusedBeforeCallingTheAgentOrWritingAnotherDecision() {
+  void anUndispatchedCommissionIsRecoveredUnderTheSameRequestIdentity() {
     List<DiagnosticAssessmentRequest> sent = new ArrayList<>();
     executions.commission = AiExecutionCommission.inProgress();
+    GroundedContext original =
+        retrieval().retrieveAt("subject-1", CURRICULUM, DiagnosticAssessmentService.REQUIRED_SOURCES, NOW);
+    executions.recoverable =
+        Optional.of(new DiagnosticCommissionContext(original.contextId(), original.asOf()));
+    DiagnosticAssessmentService service =
+        new DiagnosticAssessmentService(
+            retrieval(),
+            (request, deadlineMillis) -> {
+              sent.add(request);
+              return envelopeAccepting();
+            },
+            gate,
+            executions,
+            recordingWriter(),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+
+    service.assess("subject-1", CURRICULUM, "r-1");
+
+    assertThat(sent).extracting(DiagnosticAssessmentRequest::requestId).containsExactly("r-1");
+    assertThat(executions.acquiredRequestIds).containsExactly("r-1");
+    assertThat(executions.markedRequestIds).containsExactly("r-1");
+    assertThat(decisions.appended).hasSize(1);
+    assertThat(executions.successfulRequests).hasSize(1);
+    assertThat(executions.failureCodes).isEmpty();
+  }
+
+  @Test
+  void recoveryReconstructsTheOriginalGroundingIdentityInsteadOfRefreshingTheRequest() {
+    Instant originalAsOf = NOW.minusSeconds(60);
+    GroundedContext original =
+        retrieval()
+            .retrieveAt(
+                "subject-1",
+                CURRICULUM,
+                DiagnosticAssessmentService.REQUIRED_SOURCES,
+                originalAsOf);
+    executions.commission = AiExecutionCommission.inProgress();
+    executions.recoverable =
+        Optional.of(new DiagnosticCommissionContext(original.contextId(), originalAsOf));
+    List<DiagnosticAssessmentRequest> sent = new ArrayList<>();
+    DiagnosticAssessmentService service =
+        new DiagnosticAssessmentService(
+            retrieval(),
+            (request, deadlineMillis) -> {
+              sent.add(request);
+              return envelopeAccepting();
+            },
+            gate,
+            executions,
+            recordingWriter(),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+
+    service.assess("subject-1", CURRICULUM, "r-1");
+
+    assertThat(sent).hasSize(1);
+    assertThat(sent.get(0).requestId()).isEqualTo("r-1");
+    assertThat(sent.get(0).groundedContext().asOf()).isEqualTo(originalAsOf);
+    assertThat(sent.get(0).groundedContext().contextId()).isEqualTo(original.contextId());
+  }
+
+  @Test
+  void aCommissionWhoseOriginalGroundingCannotBeReconstructedIsNotDispatched() {
+    executions.commission = AiExecutionCommission.inProgress();
+    executions.recoverable =
+        Optional.of(new DiagnosticCommissionContext("different-original-context", NOW));
+    List<DiagnosticAssessmentRequest> sent = new ArrayList<>();
     DiagnosticAssessmentService service =
         new DiagnosticAssessmentService(
             retrieval(),
@@ -291,11 +362,60 @@ class DiagnosticAssessmentServiceTests {
     assertThatThrownBy(() -> service.assess("subject-1", CURRICULUM, "r-1"))
         .isInstanceOf(AiUnavailableException.class)
         .extracting("code")
-        .isEqualTo("AI_EXECUTION_ALREADY_COMMISSIONED");
+        .isEqualTo("AI_EXECUTION_COMMISSION_CONTEXT_MISMATCH");
     assertThat(sent).isEmpty();
+    assertThat(executions.acquiredRequestIds).isEmpty();
+  }
+
+  @Test
+  void anAlreadyOwnedOrInFlightCommissionDoesNotInvokeTheProvider() {
+    List<DiagnosticAssessmentRequest> sent = new ArrayList<>();
+    executions.commission = AiExecutionCommission.inProgress();
+    executions.dispatch = AiExecutionDispatchClaim.unavailable(DispatchState.IN_FLIGHT);
+    DiagnosticAssessmentService service =
+        new DiagnosticAssessmentService(
+            retrieval(),
+            (request, deadlineMillis) -> {
+              sent.add(request);
+              return envelopeAccepting();
+            },
+            gate,
+            executions,
+            recordingWriter(),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+
+    assertThatThrownBy(() -> service.assess("subject-1", CURRICULUM, "r-1"))
+        .isInstanceOf(AiUnavailableException.class)
+        .extracting("code")
+        .isEqualTo("AI_EXECUTION_DISPATCH_NOT_AVAILABLE");
+    assertThat(sent).isEmpty();
+    assertThat(executions.markedRequestIds).isEmpty();
     assertThat(decisions.appended).isEmpty();
-    assertThat(executions.successfulRequests).isEmpty();
-    assertThat(executions.failureCodes).isEmpty();
+  }
+
+  @Test
+  void aLostDispatchFenceDoesNotInvokeTheProvider() {
+    List<DiagnosticAssessmentRequest> sent = new ArrayList<>();
+    executions.markStarted = false;
+    DiagnosticAssessmentService service =
+        new DiagnosticAssessmentService(
+            retrieval(),
+            (request, deadlineMillis) -> {
+              sent.add(request);
+              return envelopeAccepting();
+            },
+            gate,
+            executions,
+            recordingWriter(),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+
+    assertThatThrownBy(() -> service.assess("subject-1", CURRICULUM, "r-1"))
+        .isInstanceOf(AiUnavailableException.class)
+        .extracting("code")
+        .isEqualTo("AI_EXECUTION_DISPATCH_FENCE_LOST");
+    assertThat(sent).isEmpty();
+    assertThat(executions.acquiredRequestIds).containsExactly("r-1");
+    assertThat(executions.markedRequestIds).containsExactly("r-1");
   }
 
   @Test
@@ -388,7 +508,7 @@ class DiagnosticAssessmentServiceTests {
               GroundingRetrievalPolicy policy) {
             return Optional.of(
                 new AuthorizedGroundingFacts(
-                    UUID.randomUUID(), DiagnosticAssessmentProposalGateTests.context().items()));
+                    LEARNER_ID, DiagnosticAssessmentProposalGateTests.context().items()));
           }
 
           @Override
@@ -473,12 +593,37 @@ class DiagnosticAssessmentServiceTests {
   private static final class RecordingExecutions
       implements DiagnosticAssessmentExecutionRecorder {
     private AiExecutionCommission commission = AiExecutionCommission.claimed();
+    private AiExecutionDispatchClaim dispatch =
+        AiExecutionDispatchClaim.acquired(
+            UUID.fromString("01900000-0000-7000-8000-0000000000f1"), 1);
+    private boolean markStarted = true;
+    private Optional<DiagnosticCommissionContext> recoverable = Optional.empty();
+    private final List<String> acquiredRequestIds = new ArrayList<>();
+    private final List<String> markedRequestIds = new ArrayList<>();
     private final List<DiagnosticAssessmentRequest> successfulRequests = new ArrayList<>();
     private final List<String> failureCodes = new ArrayList<>();
 
     @Override
     public AiExecutionCommission commission(DiagnosticAssessmentRequest request) {
       return commission;
+    }
+
+    @Override
+    public Optional<DiagnosticCommissionContext> findRecoverableCommission(String requestId) {
+      return recoverable;
+    }
+
+    @Override
+    public AiExecutionDispatchClaim acquireDispatch(String requestId) {
+      acquiredRequestIds.add(requestId);
+      return dispatch;
+    }
+
+    @Override
+    public boolean markProviderInvocationStarted(
+        String requestId, AiExecutionDispatchClaim claim) {
+      markedRequestIds.add(requestId);
+      return markStarted;
     }
 
     @Override
