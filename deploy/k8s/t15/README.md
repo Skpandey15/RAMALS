@@ -199,6 +199,59 @@ run ID, step, attempt count, and execution token, so attempts A and B have indep
 No trigger, control table, advisory lock, or qualification database session is installed. Teardown
 preserves evidence before releasing any still-held claimant and restores the disabled hook settings.
 
+## Diagnostic dispatch-ownership proof — M2-T15.2
+
+The `diagnostic-commission` scenario proves the recovery state machine introduced with the
+post-commission remediation, not just the row counts it leaves behind:
+
+```text
+commission -> AVAILABLE -> A dies before dispatch -> natural lease expiry
+  -> B reclaims the same diagnostic request -> exactly one dispatch CAS winner
+  -> DISPATCH_OWNED -> fenced transition to IN_FLIGHT -> exactly one provider invocation
+  -> terminal execution/outcome -> workflow completion
+```
+
+`Get-ScenarioDbSnapshot` now captures `core.ai_execution_dispatch` alongside the workflow and AI
+evidence, so every scenario checkpoint carries the dispatch row. The diagnostic-commission driver
+records six of them: after A's commission and before A's death, after A's death and before reclaim,
+while B is held, after dispatch acquisition, at the fenced `IN_FLIGHT` transition, and final.
+
+The application offers no barrier between the acquisition CAS and the fenced `IN_FLIGHT` update, so
+those two checkpoints are sampled by `Watch-DiagnosticDispatchTransitions` rather than held. Sampling
+is corroboration only. The mandatory proof is durable: `fence` is monotonic and only the acquisition
+CAS increments it, so `fence = 1` on the final row is itself the proof that ownership was granted
+exactly once, and `ownership_acquired_at <= invocation_started_at` orders the two transitions. A
+redispatch would leave `fence > 1`. The evidence records which of the two it relied on as
+`acquisitionEvidence` / `inFlightEvidence`.
+
+[`dispatch-ownership-proof.ps1`](dispatch-ownership-proof.ps1) holds the assertions as pure
+functions over one captured observation. It fails closed: a run whose dispatch evidence is missing
+is rejected before any aggregate count is read, so final success can never be inferred from row
+counts alone. A passing run writes `dispatchProof` into `scenario.json` and
+`dispatch-proof.json`, with the raw observation in `dispatch-observation.json`, the per-checkpoint
+rows in `dispatch-checkpoints.json`, and the sampled sequence in `dispatch-transitions.json`. The
+committed shape is `m2-t15.dispatch-ownership-proof.v1` in
+[`evidence-schema.json`](evidence-schema.json), which requires the block for any passing
+`diagnostic-commission` scenario.
+
+Two harness-level test suites run offline and execute no crash scenario:
+
+```powershell
+pwsh -File .\deploy\k8s\t15\dispatch-ownership-proof.tests.ps1
+pwsh -File .\deploy\k8s\t15\dispatch-capture.tests.ps1
+```
+
+The first drives one compliant observation plus one that was never sampled, then feeds a negative
+control for every fail-closed condition — zero or repeated provider invocations, a changed request
+or grounded-context identity, two dispatch winners, an unprovable owner token, a second commission,
+redispatch from `DISPATCH_OWNED` and from `IN_FLIGHT`, a bumped fence, a rewritten `claimed_at`, a
+pre-expiry reclaim, and a counts-only observation with no dispatch evidence. It finishes with a
+mutation control that removes the single-winner proof from a temporary copy of the module and
+confirms the harness then accepts a two-winner scenario, so deleting the proof cannot look like a
+passing suite. The second lifts the capture helpers out of the harness AST and checks the
+snake_case-to-camelCase mapping, SQL `NULL` handling, request scoping, and the sampler's stop
+condition against synthetic snapshots.
+
 ## Observability remediation status
 
 The focused trace-ID remediation makes MDC the sole structured owner of `interactionId`, `traceId`,
