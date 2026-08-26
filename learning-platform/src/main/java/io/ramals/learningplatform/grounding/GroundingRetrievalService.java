@@ -33,20 +33,28 @@ public final class GroundingRetrievalService {
         authenticatedSubject, curriculumVersionId, requiredSources, clock.instant());
   }
 
-  /** Reconstructs a previously commissioned context at its original authoritative timestamp. */
+  /**
+   * Reconstructs a previously commissioned context at its original authoritative timestamp.
+   *
+   * <p>The timestamp is canonicalized to {@link DurableInstant#PRECISION} before it is used for
+   * anything, so a first retrieval and a later reconstruction from the persisted value select
+   * against the same instant and mint the same identity. Canonicalizing here rather than at each
+   * use also means the retrieval query and the context are pinned to one value, not two.
+   */
   public GroundedContext retrieveAt(
       String authenticatedSubject,
       UUID curriculumVersionId,
       Set<SourceType> requiredSources,
       Instant contextAsOf) {
+    Instant canonicalAsOf = DurableInstant.canonical(contextAsOf);
     if (authenticatedSubject == null || authenticatedSubject.isBlank()
         || authenticatedSubject.length() > 255 || curriculumVersionId == null
-        || contextAsOf == null || contextAsOf.isAfter(clock.instant())) {
+        || canonicalAsOf == null || canonicalAsOf.isAfter(clock.instant())) {
       throw new GroundingRetrievalException("GROUNDING_RETRIEVAL_REQUEST_INVALID");
     }
     Instant retrievalStarted = clock.instant();
     AuthorizedGroundingFacts facts = retrieval.retrieve(
-        authenticatedSubject, curriculumVersionId, contextAsOf, policy)
+        authenticatedSubject, curriculumVersionId, canonicalAsOf, policy)
         .orElseThrow(() -> new GroundingRetrievalException("GROUNDING_LEARNER_NOT_AUTHORIZED"));
     if (facts.items().isEmpty()) {
       throw new GroundingRetrievalException("GROUNDING_REQUIRED_SOURCE_MISSING");
@@ -55,7 +63,7 @@ public final class GroundingRetrievalService {
       throw new GroundingRetrievalException("GROUNDING_RETRIEVAL_TIMEOUT");
     }
     GroundedContext context = factory.create(
-        facts.learnerId().toString(), policy.version(), contextAsOf, policy.freshness(),
+        facts.learnerId().toString(), policy.version(), canonicalAsOf, policy.freshness(),
         facts.items(), Set.copyOf(requiredSources));
     retrieval.appendRetrievalRecord(context, facts.learnerId());
     return context;
