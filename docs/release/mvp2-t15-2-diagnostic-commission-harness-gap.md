@@ -1,11 +1,12 @@
 # M2-T15.2 — DIAGNOSE post-commission / pre-provider: qualification harness gap
 
-> **Status: `PHASE 2 BLOCKED — HARNESS WORK REQUIRED BEFORE ANY QUALIFICATION RUN`**
+> **Status: `HARNESS CHANGE AUTHORED — AWAITING REVIEW — PHASE 2 NOT RUN`**
 >
 > The application remediation for this scenario is merged and deployed. The qualification harness
-> that would prove it is not. No Phase-2 crash window was opened, no fixture was seeded, no fault
-> was armed and no pod was killed. This document is the write-up of the gap, and the specification
-> for the harness change that must be reviewed and merged before Phase 2 runs.
+> that proves it is now written and covered by offline tests, but has not been reviewed and has not
+> been used for a qualification run. No Phase-2 crash window has been opened, no fixture seeded, no
+> fault armed and no pod killed. The gap analysis below is retained as the reasoning that produced
+> the change; see [Resolution](#resolution) for what landed against it.
 
 ## Candidate under qualification
 
@@ -168,8 +169,36 @@ a fixed literal. The Phase-1 attestation is sound — exact set equality indepen
 applied successfully — but that literal will keep passing on candidates that have long moved past
 `034`, and should be generalised to the highest approved migration.
 
+## Resolution
+
+Every item in the specification above is now implemented, qualification tooling only:
+
+| Item | Landed as |
+| --- | --- |
+| 1. Port onto the candidate | `codex/t15-diagnostic-commission-recovery` (`4154231`) cherry-picked onto current `main`; it applied cleanly because `crash-qualification.ps1` was untouched by #154 and #155 |
+| 2. Capture the dispatch row at every checkpoint | `Get-ScenarioDbSnapshot` now selects `core.ai_execution_dispatch`; the driver records six named checkpoints plus a sampled transition sequence |
+| 3. Assert the state machine | `dispatch-ownership-proof.ps1` — pure assertions over one captured observation |
+| 4. Machine-readable evidence | `dispatchProof` (`m2-t15.dispatch-ownership-proof.v1`) in `scenario.json`, required by `evidence-schema.json` for a passing `diagnostic-commission` run |
+| 5. Remove the obsolete abandoned-outcome expectation | Already carried by the ported commit: `diagnostic-commission` no longer sets `$expectedFailure`/`$expectedAdaptation`, so it expects the remediated success path |
+
+The proof fails closed. `Assert-DispatchEvidencePresent` runs before any aggregate count is read, so
+a run with missing dispatch evidence is rejected rather than passing on row counts that happen to
+look right.
+
+Where the application offers no barrier — between the acquisition CAS and the fenced `IN_FLIGHT`
+update — the two checkpoints are sampled rather than held, and the evidence says which it relied on.
+The mandatory proof is durable rather than sampled: only the acquisition CAS increments `fence`, so
+`fence = 1` on the final row proves ownership was granted exactly once, and
+`ownership_acquired_at <= invocation_started_at` orders the transitions. A redispatch leaves
+`fence > 1` whether or not the sampler ever caught it.
+
+Two offline suites cover it: `dispatch-ownership-proof.tests.ps1` (two positive controls, one
+negative control per fail-closed condition, and a mutation control proving that deleting the
+single-winner proof makes the harness accept two winners) and `dispatch-capture.tests.ps1` (capture
+helpers lifted from the harness AST and exercised against synthetic snapshots).
+
 ## Status
 
-Phase 2 has not run. It should not run until the harness change above is reviewed and merged, at
-which point the scenario can be executed against the already-attested candidate without rebuilding
-or repinning anything.
+Phase 2 has still not run. The harness is now capable of proving the state machine, but the change
+is unreviewed. Once it is reviewed and merged, the scenario can be executed against the
+already-attested candidate without rebuilding or repinning anything.

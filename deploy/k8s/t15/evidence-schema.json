@@ -134,6 +134,86 @@
         }
       }
     },
+    "dispatchCheckpoint": {
+      "type": "object",
+      "required": ["name", "state", "providerInvocationCount"],
+      "properties": {
+        "name": {
+          "enum": [
+            "after-commission-before-death",
+            "after-death-before-reclaim",
+            "replacement-held",
+            "after-dispatch-acquisition",
+            "in-flight-before-provider",
+            "final"
+          ]
+        },
+        "capturedAtUtc": { "type": "string" },
+        "state": {
+          "enum": ["", "AVAILABLE", "DISPATCH_OWNED", "IN_FLIGHT", "LEGACY_INDETERMINATE"]
+        },
+        "ownerToken": { "type": "string" },
+        "fence": { "type": "string" },
+        "providerInvocationCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "dispatchProof": {
+      "type": "object",
+      "description": "Durable proof of the diagnostic dispatch-ownership state machine. Required for a passing diagnostic-commission scenario: aggregate row counts alone are never accepted as evidence of recovery.",
+      "required": [
+        "schema",
+        "result",
+        "requestId",
+        "commissionEventId",
+        "contextId",
+        "contextAsOf",
+        "ownerToken",
+        "fence",
+        "finalState",
+        "ownershipAcquiredAt",
+        "invocationStartedAt",
+        "acquisitionEvidence",
+        "inFlightEvidence",
+        "observedStateSequence",
+        "providerInvocations",
+        "checkpoints",
+        "checks"
+      ],
+      "properties": {
+        "schema": { "const": "m2-t15.dispatch-ownership-proof.v1" },
+        "result": { "const": "PASS" },
+        "requestId": { "$ref": "#/$defs/nonEmpty" },
+        "commissionEventId": { "$ref": "#/$defs/nonEmpty" },
+        "contextId": { "$ref": "#/$defs/nonEmpty" },
+        "contextAsOf": { "$ref": "#/$defs/nonEmpty" },
+        "ownerToken": { "$ref": "#/$defs/nonEmpty" },
+        "fence": { "type": "integer", "minimum": 1, "maximum": 1 },
+        "finalState": { "const": "IN_FLIGHT" },
+        "ownershipAcquiredAt": { "$ref": "#/$defs/nonEmpty" },
+        "invocationStartedAt": { "$ref": "#/$defs/nonEmpty" },
+        "acquisitionEvidence": { "enum": ["sampled", "durable-reconstruction"] },
+        "inFlightEvidence": { "enum": ["sampled", "durable-reconstruction"] },
+        "observedStateSequence": { "type": "array", "items": { "type": "string" } },
+        "workflowTokenA": { "$ref": "#/$defs/nonEmpty" },
+        "workflowTokenB": { "$ref": "#/$defs/nonEmpty" },
+        "attemptA": { "type": "integer", "minimum": 1, "maximum": 1 },
+        "attemptB": { "type": "integer", "minimum": 2, "maximum": 2 },
+        "podUidA": { "$ref": "#/$defs/nonEmpty" },
+        "podUidB": { "$ref": "#/$defs/nonEmpty" },
+        "providerInvocations": { "type": "integer", "minimum": 1, "maximum": 1 },
+        "checkpoints": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/dispatchCheckpoint" }
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/check" }
+        }
+      }
+    },
     "contentionClaimAttempt": {
       "type": "object",
       "required": [
@@ -515,7 +595,12 @@
         },
         "observedInvariant": {
           "type": "object"
-        }
+        },
+        "dispatchProof": {
+          "oneOf": [{ "$ref": "#/$defs/dispatchProof" }, { "type": "null" }]
+        },
+        "dispatchCheckpoints": { "type": ["array", "null"] },
+        "dispatchSamples": { "type": ["array", "null"] }
       },
       "allOf": [
         {
@@ -536,6 +621,21 @@
               "claimInstrumentation": {
                 "type": "object"
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "scenarioId": { "const": "diagnostic-commission" },
+              "result": { "const": "PASS" }
+            },
+            "required": ["scenarioId", "result"]
+          },
+          "then": {
+            "required": ["dispatchProof"],
+            "properties": {
+              "dispatchProof": { "$ref": "#/$defs/dispatchProof" }
             }
           }
         }
