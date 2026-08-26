@@ -574,97 +574,148 @@ function New-ProvenanceGuardMutation {
   return $mutatedPath
 }
 
+function New-SyntheticDescendantRef {
+  param([Parameter(Mandatory = $true)][string]$CandidateCommit)
+
+  $candidate = Resolve-GitCommit $CandidateCommit
+  $candidateTree = (Invoke-Checked "git" @(
+      "rev-parse", "--verify", "$candidate^{tree}")).Trim().ToLowerInvariant()
+  $temporaryRef = "refs/ramals/t15-selftest/" + [guid]::NewGuid().ToString("N")
+  $syntheticCommit = (Invoke-Checked "git" @(
+      "-c", "user.name=RAMALS T15 provenance self-test",
+      "-c", "user.email=ramals-t15-selftest@invalid.example",
+      "commit-tree", $candidateTree,
+      "-p", $candidate,
+      "-m", "M2-T15 candidate-integrity synthetic descendant")).Trim().ToLowerInvariant()
+  if ($syntheticCommit -notmatch '^[0-9a-f]{40}$') {
+    throw "provenance self-test did not create a valid synthetic descendant commit"
+  }
+
+  $zeroCommit = "0" * 40
+  Invoke-Checked "git" @("update-ref", $temporaryRef, $syntheticCommit, $zeroCommit) | Out-Null
+  try {
+    $resolvedRef = Resolve-GitCommit $temporaryRef
+    if ($resolvedRef -ne $syntheticCommit) {
+      throw "provenance self-test temporary ref did not resolve to its synthetic commit"
+    }
+    if (-not (Test-CommitReachable $candidate $resolvedRef)) {
+      throw "provenance self-test synthetic commit is not a descendant of candidate $candidate"
+    }
+    if (Test-CommitReachable $resolvedRef $candidate) {
+      throw "provenance self-test candidate unexpectedly contains its synthetic descendant"
+    }
+    return [pscustomobject]@{
+      Candidate = $candidate
+      Commit = $resolvedRef
+      Tree = $candidateTree
+      Ref = $temporaryRef
+    }
+  } catch {
+    Invoke-Checked "git" @("update-ref", "-d", $temporaryRef, $syntheticCommit) | Out-Null
+    throw
+  }
+}
+
+function Remove-SyntheticDescendantRef {
+  param([Parameter(Mandatory = $true)]$SyntheticDescendant)
+
+  $resolvedRef = Resolve-GitCommit ([string]$SyntheticDescendant.Ref)
+  if ($resolvedRef -ne [string]$SyntheticDescendant.Commit) {
+    throw "provenance self-test refuses to remove a temporary ref whose target changed"
+  }
+  Invoke-Checked "git" @(
+      "update-ref", "-d", [string]$SyntheticDescendant.Ref, [string]$SyntheticDescendant.Commit) |
+    Out-Null
+  $null = & git show-ref --verify --quiet ([string]$SyntheticDescendant.Ref) 2>&1
+  if ($LASTEXITCODE -eq 0) {
+    throw "provenance self-test temporary ref still exists after cleanup"
+  }
+  if ($LASTEXITCODE -ne 1) {
+    throw "git could not verify provenance self-test temporary ref cleanup"
+  }
+}
+
 function Run-SelfTests {
   param([Parameter(Mandatory = $true)]$Lock)
   $tests = [System.Collections.Generic.List[object]]::new()
   $selfRoot = Join-Path $EvidenceDirectory "candidate-drift-self-tests"
 
   $candidateA = $ApprovedCommit.ToLowerInvariant()
-  $candidateB = ""
-  $headCommit = Resolve-GitCommit "HEAD"
-  if ($headCommit -ne $candidateA -and (Test-CommitReachable $candidateA $headCommit)) {
-    $candidateB = $headCommit
-  } else {
-    $descendantsText = Invoke-Checked "git" @("rev-list", "--all", "--ancestry-path", "$candidateA..")
-    foreach ($descendant in @($descendantsText -split "`r?`n" | Where-Object { $_ -match '^[0-9a-fA-F]{40}$' })) {
-      $normalized = $descendant.ToLowerInvariant()
-      if ($normalized -ne $candidateA -and (Test-CommitReachable $candidateA $normalized)) {
-        $candidateB = $normalized
-        break
-      }
-    }
-  }
-  if ([string]::IsNullOrWhiteSpace($candidateB)) {
-    throw "provenance self-test requires a descendant commit B for candidate $candidateA"
-  }
-  $candidateBTree = (Invoke-Checked "git" @("rev-parse", "--verify", "$candidateB^{tree}")).Trim().ToLowerInvariant()
-  $originMainCommit = Resolve-GitCommit "origin/main"
-  $sameCandidateRef = if ($originMainCommit -eq $candidateA) { "origin/main" } else { $candidateA }
-  $originMainIsDescendant = $originMainCommit -ne $candidateA -and
-    (Test-CommitReachable $candidateA $originMainCommit)
-  $descendantCandidateRef = if ($originMainIsDescendant) { "origin/main" } else { $candidateB }
-
-  $provenanceFixture = New-DriftFixture "provenance-reachability" $Lock
+  $syntheticDescendant = New-SyntheticDescendantRef $candidateA
   try {
-    [void]$tests.Add((Run-ExpectedGatePass "candidate-a-ref-a" $provenanceFixture.Root $provenanceFixture.Lock `
-        (Join-Path $selfRoot "candidate-a-ref-a") `
-        -CandidateCommit $candidateA -CandidateRef $sameCandidateRef))
-    $descendantTestName = if ($originMainIsDescendant) {
-      "post-merge-lock-candidate-a-origin-main-descendant-b"
-    } else {
-      "candidate-a-ref-descendant-b"
-    }
-    $descendantManifestRoot = if ($originMainIsDescendant) { $ManifestRoot } else { $provenanceFixture.Root }
-    $descendantLockPath = if ($originMainIsDescendant) { $LockPath } else { $provenanceFixture.Lock }
-    [void]$tests.Add((Run-ExpectedGatePass $descendantTestName $descendantManifestRoot $descendantLockPath `
-        (Join-Path $selfRoot $descendantTestName) `
-        -CandidateCommit $candidateA -CandidateRef $descendantCandidateRef))
-  } finally {
-    Remove-Item -LiteralPath $provenanceFixture.Root -Recurse -Force -ErrorAction SilentlyContinue
-  }
+    $candidateB = [string]$syntheticDescendant.Commit
+    $candidateBTree = [string]$syntheticDescendant.Tree
+    $originMainCommit = Resolve-GitCommit "origin/main"
+    $sameCandidateRef = if ($originMainCommit -eq $candidateA) { "origin/main" } else { $candidateA }
+    $originMainIsDescendant = $originMainCommit -ne $candidateA -and
+      (Test-CommitReachable $candidateA $originMainCommit)
+    $descendantCandidateRef = if ($originMainIsDescendant) { "origin/main" } else { [string]$syntheticDescendant.Ref }
 
-  $unreachableFixture = New-DriftFixture "candidate-not-reachable" $Lock `
-    -MutateLock {
-      param($value)
-      $value.sourceCommit = $candidateB
-      $value.sourceTree = $candidateBTree
-    }
-  try {
-    # This is the adversarial case: the lock and candidate agree on B, but approved ref A
-    # cannot contain B. The ancestry check must be the first failing authority check.
-    [void]$tests.Add((Run-ExpectedDriftFailure "candidate-not-reachable-from-approved-ref" `
-        $unreachableFixture.Root $unreachableFixture.Lock `
-        (Join-Path $selfRoot "candidate-not-reachable-from-approved-ref") `
-        "approved commit is reachable from approved ref" `
-        -CandidateCommit $candidateB -CandidateRef $candidateA))
-
-    # Mutation proof: if the ancestry guard is bypassed, this otherwise valid live fixture
-    # passes. That makes the negative test sensitive to removal of the provenance protection.
-    $mutatedGatePath = New-ProvenanceGuardMutation
+    $provenanceFixture = New-DriftFixture "provenance-reachability" $Lock
     try {
-      $perturbed = Invoke-GateForSelfTest `
-        -TempManifestRoot $unreachableFixture.Root `
-        -TempLock $unreachableFixture.Lock `
-        -OutputDirectory (Join-Path $selfRoot "candidate-not-reachable-guard-perturbed") `
-        -CandidateCommit $candidateB `
-        -CandidateRef $candidateA `
-        -GateScriptPath $mutatedGatePath
-      if ($perturbed.exitCode -ne 0) {
-        throw "provenance guard perturbation did not isolate the reachability check: $($perturbed.output -join "`n")"
+      [void]$tests.Add((Run-ExpectedGatePass "candidate-a-ref-a" $provenanceFixture.Root $provenanceFixture.Lock `
+          (Join-Path $selfRoot "candidate-a-ref-a") `
+          -CandidateCommit $candidateA -CandidateRef $sameCandidateRef))
+      [void]$tests.Add((Run-ExpectedGatePass "candidate-a-ref-synthetic-descendant-b" `
+          $provenanceFixture.Root $provenanceFixture.Lock `
+          (Join-Path $selfRoot "candidate-a-ref-synthetic-descendant-b") `
+          -CandidateCommit $candidateA -CandidateRef ([string]$syntheticDescendant.Ref)))
+      $descendantTestName = if ($originMainIsDescendant) {
+        "post-merge-lock-candidate-a-origin-main-descendant-b"
+      } else {
+        "candidate-a-ref-descendant-b"
       }
-      [void]$tests.Add([ordered]@{
-          name = "candidate-not-reachable-provenance-guard-perturbation"
-          result = "PASS"
-          expected = "unreachable candidate fails only when ancestry guard is active"
-          observedOriginalExitCode = 1
-          observedPerturbedExitCode = $perturbed.exitCode
-        })
+      $descendantManifestRoot = if ($originMainIsDescendant) { $ManifestRoot } else { $provenanceFixture.Root }
+      $descendantLockPath = if ($originMainIsDescendant) { $LockPath } else { $provenanceFixture.Lock }
+      [void]$tests.Add((Run-ExpectedGatePass $descendantTestName $descendantManifestRoot $descendantLockPath `
+          (Join-Path $selfRoot $descendantTestName) `
+          -CandidateCommit $candidateA -CandidateRef $descendantCandidateRef))
     } finally {
-      Remove-Item -LiteralPath $mutatedGatePath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $provenanceFixture.Root -Recurse -Force -ErrorAction SilentlyContinue
     }
-  } finally {
-    Remove-Item -LiteralPath $unreachableFixture.Root -Recurse -Force -ErrorAction SilentlyContinue
-  }
+
+    $unreachableFixture = New-DriftFixture "candidate-not-reachable" $Lock `
+      -MutateLock {
+        param($value)
+        $value.sourceCommit = $candidateB
+        $value.sourceTree = $candidateBTree
+      }
+    try {
+      # This is the adversarial case: the lock and candidate agree on B, but approved ref A
+      # cannot contain B. The ancestry check must be the first failing authority check.
+      [void]$tests.Add((Run-ExpectedDriftFailure "candidate-not-reachable-from-approved-ref" `
+          $unreachableFixture.Root $unreachableFixture.Lock `
+          (Join-Path $selfRoot "candidate-not-reachable-from-approved-ref") `
+          "approved commit is reachable from approved ref" `
+          -CandidateCommit $candidateB -CandidateRef $candidateA))
+
+      # Mutation proof: if the ancestry guard is bypassed, this otherwise valid live fixture
+      # passes. That makes the negative test sensitive to removal of the provenance protection.
+      $mutatedGatePath = New-ProvenanceGuardMutation
+      try {
+        $perturbed = Invoke-GateForSelfTest `
+          -TempManifestRoot $unreachableFixture.Root `
+          -TempLock $unreachableFixture.Lock `
+          -OutputDirectory (Join-Path $selfRoot "candidate-not-reachable-guard-perturbed") `
+          -CandidateCommit $candidateB `
+          -CandidateRef $candidateA `
+          -GateScriptPath $mutatedGatePath
+        if ($perturbed.exitCode -ne 0) {
+          throw "provenance guard perturbation did not isolate the reachability check: $($perturbed.output -join "`n")"
+        }
+        [void]$tests.Add([ordered]@{
+            name = "candidate-not-reachable-provenance-guard-perturbation"
+            result = "PASS"
+            expected = "unreachable candidate fails only when ancestry guard is active"
+            observedOriginalExitCode = 1
+            observedPerturbedExitCode = $perturbed.exitCode
+          })
+      } finally {
+        Remove-Item -LiteralPath $mutatedGatePath -Force -ErrorAction SilentlyContinue
+      }
+    } finally {
+      Remove-Item -LiteralPath $unreachableFixture.Root -Recurse -Force -ErrorAction SilentlyContinue
+    }
 
   $commitDrift = New-DriftFixture "lock-source-commit-differs" $Lock `
     -MutateLock { param($value) $value.sourceCommit = "0" * 40 }
@@ -733,7 +784,10 @@ function Run-SelfTests {
   } finally {
     Remove-Item -LiteralPath $manifestDrift.Root -Recurse -Force -ErrorAction SilentlyContinue
   }
-  return @($tests)
+    return @($tests)
+  } finally {
+    Remove-SyntheticDescendantRef $syntheticDescendant
+  }
 }
 
 $lock = $null
