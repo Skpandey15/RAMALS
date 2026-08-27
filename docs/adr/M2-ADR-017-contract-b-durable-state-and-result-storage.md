@@ -193,16 +193,18 @@ must be satisfied and recorded before the first Contract B implementation PR:
    ADR.
 3. **A data-classification sign-off** for storing a normalized model result about a learner,
    naming the accountable owner, covering the encryption mechanism and the audit surface in §2.
-   **Still open.** [M2-ADR-018](M2-ADR-018-contract-b-result-classification-and-encryption.md) supplies the classification, the owner *role*, the access matrix, isolation
-   and audit rules — everything the sign-off would approve — but a sign-off is a human act and that
-   ADR does not manufacture one. It is marked PENDING HUMAN SIGN-OFF there, and requires a named
-   individual with authority to accept the risk of storing learner-derived model output.
+   **Satisfied for the MVP/research environment, 2026-08-27.** [M2-ADR-018](M2-ADR-018-contract-b-result-classification-and-encryption.md) carries the classification,
+   access matrix, isolation and audit rules, and records the sign-off: Sunil Pandey as Platform
+   Data Owner, classification `RESTRICTED — LEARNER-DERIVED MODEL OUTPUT`. **Not satisfied for
+   organisational or production deployment**, which requires reassignment and re-approval under the
+   deploying organisation's governance.
 4. **The encryption-at-rest mechanism is chosen and reviewable** — key custody, rotation, and what
-   happens to stored results when a key is rotated. **Satisfied on mechanism, open on custody.**
+   happens to stored results when a key is rotated. **Satisfied for the MVP/research environment.**
    [M2-ADR-018](M2-ADR-018-contract-b-result-classification-and-encryption.md) chooses application-layer envelope encryption (AES-256-GCM, request-identity AAD), rejects
    `pgcrypto` with reasons, and defines the envelope format, key versioning, rotation, the
-   decrypt-old/encrypt-new decision and fail-closed semantics. *Who holds the key material* is an
-   operational-ownership decision and is PENDING HUMAN SIGN-OFF there.
+   decrypt-old/encrypt-new decision and fail-closed semantics. **Custody is now assigned for the
+   MVP/research environment** — Sunil Pandey as interim Key Custodian — and remains open for
+   production, where the custodian should not also be the Data Owner.
 5. **The purge mechanism exists and is testable**, both the on-adoption delete and the ceiling
    sweep. `V023` set the precedent: a policy with no mechanism is *"a comment pretending to be a
    control"*. Note that the platform still has no scheduler, so the ceiling sweep is a function an

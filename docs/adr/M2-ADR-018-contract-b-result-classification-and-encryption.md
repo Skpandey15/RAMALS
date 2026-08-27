@@ -1,11 +1,11 @@
 # M2-ADR-018: Classification, access and encryption at rest for the Contract B result
 
-- **Status:** **Proposed — technical content complete, sign-off outstanding.** Two items require a
-  human decision this ADR does not make (see [Pending human sign-off](#pending-human-sign-off)).
-  **`V037` remains blocked** until they are recorded.
-- **Date:** 2026-08-27
-- **Satisfies:** the technical content of M2-ADR-017 §6 prerequisites 3 and 4. It does not by itself
-  discharge them.
+- **Status:** **Accepted for the RAMALS MVP/research environment — 2026-08-27.** Signed off by
+  Sunil Pandey (see [Governance approval](#governance-approval)). **Not approved for
+  organisational or production deployment**, which requires reassignment and re-approval under the
+  deploying organisation's own governance process.
+- **Date:** 2026-08-27 (proposed and approved the same day; the approval is recorded below)
+- **Satisfies:** M2-ADR-017 §6 prerequisites 3 and 4, **within the MVP/research scope only**.
 - **Relates to:** M2-ADR-017 (which requires this), M2-ADR-016, M1-ADR-005, M2-ADR-012, V021, V023,
   V035, V036
 - **Originates here**, on the same basis as M2-ADR-016 and M2-ADR-017.
@@ -235,32 +235,62 @@ above. Errors reference the `request_id` and the key id; they never carry the re
 it, or its length. The existing log-redaction test is the precedent, and this extends it rather than
 relying on reviewer vigilance.
 
-## Pending human sign-off
+## Governance approval
 
-Two items are **not** decided by this ADR and must not be recorded as complete. Marking them so is
-the point: an ADR that manufactured an approval would be worse than one that admits it lacks one.
+Recorded 2026-08-27. This ADR was Proposed with two items marked PENDING HUMAN SIGN-OFF, because
+neither is an engineering decision. Both are now signed off, for one scope.
 
-1. **PENDING HUMAN SIGN-OFF — the data-classification approval itself.** M2-ADR-017 §6 prerequisite
-   3 requires a sign-off *naming an accountable owner*. This ADR supplies the classification, the
-   owner **role**, and everything the sign-off would approve. The signature, the named individual
-   filling the RAMALS Platform Data Owner role, and the mapping onto any organisational
-   classification scheme require a human with the authority to accept the risk of storing
-   learner-derived model output. **Prerequisite 3 is therefore not satisfied.**
-2. **PENDING HUMAN SIGN-OFF — key custodian assignment.** The mechanism, format, rotation procedure
-   and failure semantics are decided here. *Who holds the key material*, who may rotate it, and who
-   is called when it is unavailable are operational-ownership decisions. **Prerequisite 4 is
-   satisfied on mechanism and outstanding on custody.**
+| Item | Assignment |
+| --- | --- |
+| **Platform Data Owner** | **Sunil Pandey** |
+| **Interim Contract-B Key Custodian** | **Sunil Pandey** |
+| **Scope** | **RAMALS MVP / research environment only** |
+| **Data classification approved** | `RESTRICTED — LEARNER-DERIVED MODEL OUTPUT` |
 
-Until both are recorded, **`V037` remains blocked.** Nothing in this ADR authorizes a migration.
+**What was approved.** The classification in §1, the access matrix in §3 including the prohibition
+on reporting, analytics, evaluation and AI-plane access, the tenant and learner isolation rules in
+§4, the audit requirements in §5, the application-layer envelope-encryption model in §7, the key
+lifecycle in §8, and the retention and purge rules in §9 — as already written, without amendment.
+
+**What this approval is not.** It is **not valid for organisational or production deployment**, and
+must not be cited as such. A production deployment requires the deploying organisation to reassign
+both roles under its own governance process and to re-approve the classification against its own
+scheme. This ADR's mapping onto an organisational classification vocabulary remains open, and is a
+revisit trigger rather than a settled question.
+
+**One role, two hats — named rather than glossed over.** The Platform Data Owner and the Key
+Custodian are the same individual. In a production deployment that would be a segregation-of-duties
+finding: the person who approves what may be stored is also the person who holds the key that
+protects it, so there is no independent check on either. In a single-maintainer MVP/research
+environment there is no second party to hold the other role, and the alternative — leaving Contract
+B blocked indefinitely — buys no real separation. It is accepted here **because the scope is
+research and the reassignment requirement above is binding**, not because the concern does not
+apply. Any deployment that outgrows the single-maintainer assumption inherits this as an open item.
+
+### Prerequisite status after this approval
+
+| Prerequisite | MVP / research | Organisational / production |
+| --- | --- | --- |
+| **3 — data-classification sign-off** | ✅ **Satisfied** — owner named, classification approved | ❌ Not satisfied — requires reassignment and re-approval |
+| **4 — encryption mechanism and custody** | ✅ **Satisfied** — mechanism decided in §7–§8, custodian named | ❌ Custody not satisfied — requires a production custodian, and should not be the Data Owner |
+
+`V037` is **no longer blocked on governance for the MVP/research environment**. It remains blocked
+on the engineering acceptance criteria below, and this ADR still authorizes no migration: approving
+the model is not the same as building it.
 
 ## Acceptance criteria that unblock V037
 
-`V037` may proceed when all of the following are true. The first two are the pending items; the rest
-are engineering work this ADR now specifies well enough to do.
+`V037` may proceed when all of the following are true. The first two are governance and are now
+satisfied for the MVP/research scope; the rest are engineering work this ADR specifies well enough
+to do, and none of it has been done.
 
-1. The classification in §1, the owner role in §2 and the access matrix in §3 are **signed off by a
-   named individual** in the RAMALS Platform Data Owner role, recorded in this ADR.
-2. The **key custodian is named**, with the rotation and unavailability escalation paths recorded.
+1. ~~The classification in §1, the owner role in §2 and the access matrix in §3 are **signed off by
+   a named individual** in the RAMALS Platform Data Owner role, recorded in this ADR.~~
+   ✅ **Satisfied for MVP/research 2026-08-27** — Sunil Pandey, recorded above.
+2. ~~The **key custodian is named**, with the rotation and unavailability escalation paths
+   recorded.~~ ✅ **Satisfied for MVP/research 2026-08-27** — Sunil Pandey as interim custodian.
+   The escalation path is the single maintainer, which is a consequence of the scope and is
+   recorded as such rather than presented as an on-call rotation.
 3. A `ResultEncryptionKeyProvider` port exists with an environment-backed adapter, and **no
    vendor-specific KMS dependency** is introduced.
 4. The envelope format of §7 is implemented with AES-256-GCM and request-identity AAD, and a test
@@ -306,6 +336,9 @@ are engineering work this ADR now specifies well enough to do.
 
 ## Revisit triggers
 
+- **RAMALS is deployed beyond the MVP/research environment.** The approval above does not travel
+  with it: both roles must be reassigned under the deploying organisation's governance, and the
+  Data Owner and Key Custodian should then be different people.
 - The organisation adopts a formal data-classification scheme this must map into.
 - The platform commits to a key-management service, which replaces the environment-backed adapter.
 - The 30-day retention ceiling changes, which invalidates the rotation simplification.
