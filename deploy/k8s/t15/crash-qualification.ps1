@@ -3699,8 +3699,15 @@ function Assert-Scenario {
     [int]$ExpectedGateCount = -1,
     # The DIAGNOSE attempt count, separated from $ExpectedTargetAttempt because Contract A changed
     # it independently of everything else the target-step attempt governs. -1 keeps the pre-#160
-    # derivation, so no existing scenario is affected; Get-ExpectedDiagnoseAttempt resolves it to 1
-    # for the fail-closed scenarios and explains why there.
+    # derivation, so no existing scenario is affected.
+    #
+    # Resolution is by Get-ExpectedDiagnoseAttempt, which holds an explicit per-scenario override
+    # map -- NOT a shared rule over the fail-closed scenarios. The two of them deliberately resolve
+    # to different attempts, because the count depends on which worker the fault kills rather than
+    # on the terminal status they share: diagnostic-provider is 1 (the AI worker dies, the platform
+    # worker survives and terminates its own first attempt) and diagnostic-in-flight is 2 (the
+    # platform worker dies, and a replacement claims attempt 2 to close the IN_FLIGHT row without
+    # redispatching). The justification for each number lives with the map.
     [int]$ExpectedDiagnoseAttempt = -1,
     [Parameter(Mandatory = $true)]$Crash
   )
@@ -4579,7 +4586,8 @@ function Run-Scenario {
   $expectedDiagnosticStatus = ""
   $expectedGateCount = -1
   # -1 defers to Get-ExpectedDiagnoseAttempt, which keeps the pre-#160 derivation for every
-  # scenario except the two Contract A fail-closed ones.
+  # scenario that carries no entry in its per-scenario override map. The two overridden scenarios
+  # resolve to different attempts from each other, not to a shared fail-closed value.
   $expectedDiagnoseAttempt = -1
   $expectedDiagnosticErrorCode = ""
   $expectedDiagnoseReason = ""
