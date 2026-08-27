@@ -35,6 +35,21 @@ limits, retention beyond the existing 400-day execution policy, and confidence t
 must be configuration with deterministic tests and must be recorded in the implementing task's
 evidence. Changing the authority, delivery, state-ownership, or replay semantics requires a new ADR.
 
+## Decisions originating in this repository
+
+Numbered into the same sequence so a reader looking for MVP-2 decisions finds them, but **not part
+of the accepted package above** and not covered by its acceptance. Each carries its own status.
+
+| ADR | Decision | Status | Gates |
+| --- | --- | --- | --- |
+| [M2-ADR-016](M2-ADR-016-provider-execution-contract-capability.md) | Provider capability profile for execution contracts: the synchronous Messages API is Contract B unsupported; Message Batches satisfies every mandatory row except replay-safe admission; execution contract binds to a route and never silently degrades to Contract A or to redispatch. | **Proposed** — carries one unresolved decision | T15.2, and any future Contract B task |
+
+M2-ADR-016 is the capability gate the Contract B design document requires before implementation. It
+is deliberately not Accepted: it records an open product decision — whether a Contract-B `DIAGNOSE`
+may become asynchronous — and no Contract B schema, endpoint, route or worker should be implemented
+until that question is answered by a named owner. It changes nothing about Contract A, which remains
+the only implemented execution contract.
+
 ## Supersession and compatibility
 
 - M2-ADR-002 supersedes `AFTER_COMMIT` as the correctness boundary for agent delivery. An
