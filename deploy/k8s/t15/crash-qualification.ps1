@@ -33,6 +33,7 @@ Set-Location $repositoryRoot
 . (Join-Path $scriptRoot "after-claim-proof.ps1")
 . (Join-Path $scriptRoot "dispatch-ownership-proof.ps1")
 . (Join-Path $scriptRoot "in-flight-indeterminate-proof.ps1")
+. (Join-Path $scriptRoot "contract-a-expectations.ps1")
 $qualificationManifestRoot = if ([string]::IsNullOrWhiteSpace($ManifestRoot)) {
   $scriptRoot
 } else {
@@ -3696,6 +3697,11 @@ function Assert-Scenario {
     # preserve the pre-#160 expectations exactly, so every existing scenario is unchanged.
     [string]$ExpectedDiagnosticStatus = "",
     [int]$ExpectedGateCount = -1,
+    # The DIAGNOSE attempt count, separated from $ExpectedTargetAttempt because Contract A changed
+    # it independently of everything else the target-step attempt governs. -1 keeps the pre-#160
+    # derivation, so no existing scenario is affected; Get-ExpectedDiagnoseAttempt resolves it to 1
+    # for the fail-closed scenarios and explains why there.
+    [int]$ExpectedDiagnoseAttempt = -1,
     [Parameter(Mandatory = $true)]$Crash
   )
   $row = Get-Scalar @"
@@ -3792,7 +3798,13 @@ FROM run;
   Assert-Equal "$Name mastery status" $fields[3] $expectedMasteryStatus
   Assert-Equal "$Name mastery attempts" $fields[4] $(if ($TargetStep -eq "RECOMPUTE_MASTERY") { "$ExpectedTargetAttempt" } else { "1" })
   Assert-Equal "$Name diagnose status" $fields[5] $expectedDiagStatus
-  Assert-Equal "$Name diagnose attempts" $fields[6] $(if ($TargetStep -eq "DIAGNOSE") { "$ExpectedTargetAttempt" } else { "1" })
+  $diagnoseAttempt = if ($ExpectedDiagnoseAttempt -ge 0) {
+    $ExpectedDiagnoseAttempt
+  } else {
+    Get-ExpectedDiagnoseAttempt -ScenarioName $Name `
+      -DefaultAttempt $(if ($TargetStep -eq "DIAGNOSE") { $ExpectedTargetAttempt } else { 1 })
+  }
+  Assert-Equal "$Name diagnose attempts" $fields[6] "$diagnoseAttempt"
   Assert-Equal "$Name adaptation step status" $fields[7] $expectedAdaptStatus
   Assert-Equal "$Name adaptation step attempts" $fields[8] $(if ($ExpectedFailure) { "0" } elseif ($TargetStep -eq "ADAPT") { "$ExpectedTargetAttempt" } else { "1" })
   Assert-Equal "$Name evidence lineage count" $fields[9] "1"
@@ -4298,14 +4310,24 @@ function Assert-CursorHistory {
   }
 }
 
+# Writes one scenario's complete evidence directory.
+#
+# $Result and $FailureMessage exist so this can run on the FAIL path too. A scenario that throws an
+# assertion and preserves nothing is worse than useless: S3 failed on one stale expectation and left
+# no pre/post state, no pod identity and no logs, so the production behaviour that actually mattered
+# had to be reconstructed by hand from PostgreSQL afterwards.
+#
+# $Assertions is nullable for the same reason -- the pre-assertion capture has none yet.
 function Capture-ScenarioEvidence {
   param(
     [Parameter(Mandatory = $true)]$Fixture,
     [Parameter(Mandatory = $true)][string]$Name,
     [Parameter(Mandatory = $true)]$Crash,
     [Parameter(Mandatory = $true)][string[]]$History,
-    [Parameter(Mandatory = $true)]$Assertions,
-    [Parameter(Mandatory = $true)]$ExpectedInvariant
+    [AllowNull()]$Assertions,
+    [Parameter(Mandatory = $true)]$ExpectedInvariant,
+    [ValidateSet("PASS", "FAIL")][string]$Result = "PASS",
+    [AllowEmptyString()][string]$FailureMessage = ""
   )
   $directory = Join-Path $EvidenceRoot $Name
   New-Item -ItemType Directory -Path $directory -Force | Out-Null
@@ -4389,7 +4411,8 @@ function Capture-ScenarioEvidence {
   $scenario = [ordered]@{
     schema = "m2-t15.scenario-evidence.v1"
     scenarioId = $Name
-    result = "PASS"
+    result = $Result
+    error = if ([string]::IsNullOrWhiteSpace($FailureMessage)) { $null } else { $FailureMessage }
     candidate = $script:CandidateIdentity.candidate
     initialState = "pre-state.json"
     perturbation = $Crash.Perturbation
@@ -4555,6 +4578,9 @@ function Run-Scenario {
   # set them, so no existing scenario changes behaviour.
   $expectedDiagnosticStatus = ""
   $expectedGateCount = -1
+  # -1 defers to Get-ExpectedDiagnoseAttempt, which keeps the pre-#160 derivation for every
+  # scenario except the two Contract A fail-closed ones.
+  $expectedDiagnoseAttempt = -1
   $expectedDiagnosticErrorCode = ""
   $expectedDiagnoseReason = ""
   $expectedInvariant = [ordered]@{
@@ -4700,7 +4726,11 @@ function Run-Scenario {
     }
     "diagnostic-provider" {
       $targetStep = "DIAGNOSE"
-      $expectedTargetAttempt = 2
+      # 1, not the pre-#160 value of 2. Contract A terminates DIAGNOSE at attempt 1 once an
+      # authorized provider submission becomes ambiguous: the step result is terminal and is not
+      # retried, because retrying is what could reach the provider twice for one logical request.
+      # Get-ExpectedDiagnoseAttempt pins this independently, so the two cannot drift apart.
+      $expectedTargetAttempt = 1
       $expectedFailure = $true
       $expectedAdaptation = $false
       # Contract A (#160): the AI pod dies inside the provider call, so the platform never learns
@@ -4714,7 +4744,11 @@ function Run-Scenario {
     }
     "diagnostic-in-flight" {
       $targetStep = "DIAGNOSE"
-      $expectedTargetAttempt = 2
+      # 1, not the pre-#160 value of 2. Contract A terminates DIAGNOSE at attempt 1 once an
+      # authorized provider submission becomes ambiguous: the step result is terminal and is not
+      # retried, because retrying is what could reach the provider twice for one logical request.
+      # Get-ExpectedDiagnoseAttempt pins this independently, so the two cannot drift apart.
+      $expectedTargetAttempt = 1
       $expectedFailure = $true
       $expectedAdaptation = $false
       $expectedDiagnosticStatus = "INDETERMINATE"
@@ -4770,6 +4804,21 @@ function Run-Scenario {
   if ($history.Count -eq 0) {
     $history = @($crash.Terminal.History)
   }
+
+  # The Contract A fail-closed scenarios capture their evidence BEFORE any assertion can throw.
+  # Everything the evidence needs -- pre/post PostgreSQL state, pod identities, logs, correlation
+  # ids, the dispatch captures -- already exists on $crash at this point, and an assertion failure
+  # must not be able to discard it. The record is rewritten with the real verdict below, on both
+  # the success and the failure path.
+  #
+  # Scoped to these two scenarios deliberately: the already-qualified scenarios keep their existing
+  # bespoke FAIL writers untouched, so nothing that has already passed changes behaviour here.
+  if (Test-IsFailClosedScenario $Name) {
+    Capture-ScenarioEvidence -Fixture $fixture -Name $Name -Crash $crash -History $history `
+      -Assertions $null -ExpectedInvariant $expectedInvariant `
+      -Result "FAIL" -FailureMessage "assertions did not complete; evidence captured pre-assertion"
+  }
+
   try {
     if ($Name -eq "diagnostic-commission") {
       Assert-DiagnosticCommissionRecoveryProof $fixture $crash
@@ -4784,7 +4833,8 @@ function Run-Scenario {
       -ExpectedAdaptation $expectedAdaptation `
       -ExpectedAdaptationAbandoned $expectedAdaptationAbandoned `
       -ExpectedDiagnosticStatus $expectedDiagnosticStatus `
-      -ExpectedGateCount $expectedGateCount -Crash $crash
+      -ExpectedGateCount $expectedGateCount `
+      -ExpectedDiagnoseAttempt $expectedDiagnoseAttempt -Crash $crash
     $script:DiagnosticFailClosedProof = Assert-DiagnosticFailClosedTerminal `
       -Fixture $fixture -Name $Name -ExpectedErrorCode $expectedDiagnosticErrorCode `
       -ExpectedDiagnoseReason $expectedDiagnoseReason
@@ -4870,9 +4920,24 @@ function Run-Scenario {
       } | ConvertTo-Json -Depth 30 |
         Set-Content -LiteralPath (Join-Path $EvidenceRoot "$Name/scenario.json") -Encoding utf8
     }
+    # Rewrite the fail-closed record with the real failure, now that there is one. This runs after
+    # the scenario-specific writers above so it is the last word for these two scenarios, and it
+    # preserves the full evidence set rather than the handful of fields a bespoke FAIL writer
+    # carries. Guarded: a fault inside evidence capture must not replace the assertion failure
+    # that is the actual news.
+    if (Test-IsFailClosedScenario $Name) {
+      try {
+        Capture-ScenarioEvidence -Fixture $fixture -Name $Name -Crash $crash -History $history `
+          -Assertions $assertions -ExpectedInvariant $expectedInvariant `
+          -Result "FAIL" -FailureMessage $_.Exception.Message
+      } catch {
+        Write-Host "WARN could not capture FAIL evidence for ${Name}: $($_.Exception.Message)"
+      }
+    }
     throw
   }
-  Capture-ScenarioEvidence $fixture $Name $crash $history $assertions $expectedInvariant
+  Capture-ScenarioEvidence -Fixture $fixture -Name $Name -Crash $crash -History $history `
+    -Assertions $assertions -ExpectedInvariant $expectedInvariant -Result "PASS"
   $script:Summary.Add(
     "$Name|PASS|run=$($fixture.RunId)|pod=$($crash.Pod)|podUid=$($crash.PodUid)|staleWorkflowCas=$($assertions.StaleWorkflowCas)|staleOutboxCas=$($assertions.StaleOutboxCas)"
   )

@@ -287,6 +287,37 @@ committed shape is `m2-t15.in-flight-indeterminate-proof.v1` in
 [`evidence-schema.json`](evidence-schema.json), which requires the block for any passing
 `diagnostic-in-flight` scenario.
 
+### DIAGNOSE terminates at attempt 1, not 2
+
+Before #160 an AI-side death surfaced to the workflow as an ordinary transport failure: the step
+failed *retryably*, the bounded attempt policy ran DIAGNOSE again, and these scenarios legitimately
+expected attempt 2.
+
+Contract A deliberately removed that second attempt. Once provider dispatch is authorized and the
+outcome becomes ambiguous, `DiagnosticAssessmentService` records `INDETERMINATE` and rethrows it,
+and `DiagnosticAgentStep` maps that to a **terminal** result — which is not retried, because
+retrying is exactly what could reach the provider a second time for one logical request.
+
+So attempt 1 is not a weaker outcome than attempt 2 here; it *is* the guarantee. An expectation of
+2 asserts that the platform retried an ambiguous provider call, which is the defect Contract A
+exists to prevent. `Get-ExpectedDiagnoseAttempt` in
+[`contract-a-expectations.ps1`](contract-a-expectations.ps1) pins the two fail-closed scenarios to
+1 and leaves every other scenario on its existing default.
+
+This is a real defect the harness shipped: S3 failed on this stale expectation against a candidate
+whose production behaviour satisfied every Contract A invariant.
+
+### Evidence survives a failing assertion
+
+The fail-closed scenarios write their full evidence directory **before** any assertion can throw,
+and rewrite it with the real verdict afterwards on both the success and the failure path. The
+previous behaviour preserved almost nothing on failure — S3 left a `SUMMARY.tsv` line and no
+pre/post state, pod identity or logs, so the production behaviour that actually mattered had to be
+reconstructed by querying PostgreSQL by hand.
+
+Scoped to these two scenarios deliberately: the already-qualified scenarios keep their existing
+bespoke FAIL writers untouched, so nothing that has already passed changes behaviour.
+
 Neither scenario has been executed. Only the offline self-tests below have run.
 
 Two harness-level test suites run offline and execute no crash scenario:
