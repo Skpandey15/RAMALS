@@ -44,6 +44,7 @@ of the accepted package above** and not covered by its acceptance. Each carries 
 | --- | --- | --- | --- |
 | [M2-ADR-016](M2-ADR-016-provider-execution-contract-capability.md) | Provider capability profile for execution contracts: the synchronous Messages API is Contract B unsupported; Message Batches satisfies every mandatory row except replay-safe admission; execution contract binds to a route and never silently degrades to Contract A or to redispatch; a Contract-B `DIAGNOSE` may be asynchronous, a Contract-A `DIAGNOSE` may not. | **Accepted** 2026-08-27 | T15.2, and any future Contract B task |
 | [M2-ADR-017](M2-ADR-017-contract-b-durable-state-and-result-storage.md) | Contract B durable state lives in Spring/PostgreSQL under Flyway and RAMALS-AI stays stateless; only a normalized `diagnostic-proposal.v1` result may be persisted, in dedicated tables rather than `core.ai_execution*`, encrypted at rest, deleted on adoption with a 30-day ceiling, and never containing chain-of-thought or raw provider responses. | **Accepted** 2026-08-27 | Any future Contract B task; gates `V037` |
+| [M2-ADR-018](M2-ADR-018-contract-b-result-classification-and-encryption.md) | Contract B result classification, access matrix and encryption at rest: RESTRICTED learner-derived model output, owned by the RAMALS Platform Data Owner role, no reporting/analytics/AI-plane grant, application-layer AES-256-GCM envelope encryption with `pgcrypto` rejected, key access behind a port with no vendor KMS wired, delete-on-adoption with a 30-day ceiling, fail-closed throughout. | **Proposed** — two items PENDING HUMAN SIGN-OFF | Gates `V037` |
 
 M2-ADR-016 is the capability gate the Contract B design document requires before implementation. It
 was Proposed pending one product decision — whether a Contract-B `DIAGNOSE` may become asynchronous
@@ -70,6 +71,15 @@ prohibits chain-of-thought and raw provider responses outright; and requires enc
 deletion in the adoption transaction, and a 30-day ceiling chosen against the provider's own
 retention window. It authorizes no schema and no code: its §6 lists seven prerequisites, of which
 1–5 gate `V037` and 6–7 gate any route activation.
+
+**Contract B status as of 2026-08-27: `V037` is blocked on two human decisions, not on
+engineering.** Prerequisite 2 is satisfied by the [amended Definition of
+Done](../release/mvp2-contract-b-definition-of-done.md). M2-ADR-018 supplies the full technical
+content of prerequisites 3 and 4 — classification, access matrix, isolation, audit, encryption
+architecture, key lifecycle, retention and failure semantics — and stops short of two things an
+engineer cannot supply: the classification sign-off by a named accountable individual, and the key
+custodian assignment. Both are marked PENDING HUMAN SIGN-OFF there, and M2-ADR-018's acceptance
+criteria list exactly what unblocks the migration once they are recorded.
 
 **Contract A remains the default and current execution contract.** Every route is on Contract A, it
 stays correct and supported for routes that never move, and this decision neither deprecates it nor
