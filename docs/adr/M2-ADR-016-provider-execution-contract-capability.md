@@ -5,6 +5,9 @@
   authorize*).
 - **Date:** 2026-08-27 (proposed and accepted the same day; the open question was answered on review
   of PR #161)
+- **Amended:** 2026-08-27 — Addendum A records the OpenAI Responses background-mode evaluation that
+  the second revisit trigger called for. It adds evidence and reverses no decision: the selected
+  Contract B provider path is unchanged, and §2 through §6 stand as written.
 - **Relates to:** M2-ADR-001, M2-ADR-003, M2-ADR-008, M2-ADR-011, M2-ADR-012, M2-ADR-013,
   M2-ADR-014, M1-ADR-001, M1-ADR-008, M2-T09, M2-T15.2
 - **Sources:** `docs/MVP02/ContractAandB/RAMALS_Contract_A_Single_Submission_Fail_Closed_Implementation.docx`,
@@ -332,10 +335,124 @@ This ADR is documentation and carries no implementation. Its claims are verifiab
 - Anthropic publishes documented replay-safe admission for a synchronous path.
 - A different approved provider on an existing route is verified against the mandatory rows in §1.
   The route table already approves an alternate binding, and this ADR makes no claim about any
-  provider it has not verified.
+  provider it has not verified. **Fired 2026-08-27 for OpenAI — see Addendum A.** It remains live
+  for any provider not yet evaluated there.
 - RAMALS accepts operating a durable intermediary that supplies admission idempotency, which moves
   the guarantee inside our own failure domain and makes that intermediary's durability the new gate.
 - The asynchronous grant in §6 is withdrawn, narrowed, or extended beyond Contract-B routes. Any of
   the three changes what a route may do and needs a new decision, not an amendment here.
 - A Contract-B production route is proposed for activation. §6 rule 6 makes that a separate decision;
   this ADR is its precondition, not its authority.
+
+## Addendum A — OpenAI Responses background mode, evaluated 2026-08-27
+
+Recorded because the second revisit trigger above fired: `gpt-4.1-2025-04-14` is already an
+approved alternate binding in the route table, so "why not OpenAI, it is already approved?" is a
+question this ADR will be asked. It is answered here once, with evidence, rather than re-derived.
+
+**This addendum adds evidence and reverses nothing.** §2 through §6 stand as written, and the
+selected Contract B provider path remains the Anthropic Message Batches API.
+
+Verified against `developers.openai.com` documentation on 2026-08-27.
+
+### Capability matrix
+
+| Requirement | OpenAI Responses (`background: true`) | Anthropic Message Batches |
+| --- | --- | --- |
+| Durable execution identity | ✅ `resp_…` — **only in the create acknowledgement** | ✅ `msgbatch_…` — only in the create acknowledgement |
+| Asynchronous execution | ✅ `queued` → `in_progress` → terminal | ✅ batch-shaped |
+| Status lookup | ✅ `GET /v1/responses/{id}` | ✅ `processing_status` by batch id |
+| Result retrieval after process death | ⚠️ conditional on `store` | ✅ unconditional, via `results_url` |
+| Cancellation | ✅ documented idempotent | ✅ |
+| Result retention | ⚠️ ≥30 days when `store=true`; **roughly 10 minutes when `store` is false or omitted**, which is how documented background requests from zero-data-retention projects run | ✅ 29 days; 24-hour processing expiry |
+| **Replay-safe admission** | ❌ **not documented** | ❌ **not documented** |
+| Lookup by caller request identity | ❌ caller-supplied `metadata` **is** accepted (16 pairs), but no response enumeration or search endpoint was found, so it cannot be used to discover an orphan | ⚠️ partial — `custom_id` per record, plus batch enumeration |
+| Cost | Standard pricing | 50% discount |
+| Latency | Seconds to minutes; no documented SLA | Most within 1 hour; 24-hour ceiling |
+| Fit for one learner `DIAGNOSE` | ✅ built for exactly this shape | ⚠️ a batch of one, at batch latency |
+
+### Neither provider offers documented replay-safe admission
+
+OpenAI documents an `Idempotency-Key` header on other product surfaces — Agentic Commerce and
+Workspace Agent triggers, with a `409 idempotency_conflict` on body mismatch. **It is not
+documented for `POST /v1/responses`**, and this ADR does not generalise it there. A header
+documented on a commerce endpoint is not a guarantee on the inference endpoint, and §3's rule
+applies unchanged: an undocumented behaviour is not a contract, however plausible.
+
+So the §1 mandatory row that Message Batches fails is failed by OpenAI too. Nothing in this
+addendum weakens the conclusion that **RAMALS cannot claim provider-level exactly-once or
+replay-safe admission on any evaluated path.**
+
+### The discriminator is what survives a lost acknowledgement
+
+Both providers return their durable execution identity *only* in the create acknowledgement. The
+question is what a replacement worker can do when that acknowledgement never arrives.
+
+**OpenAI: nothing usable.** The request *can* carry a caller-supplied correlation value —
+`POST /v1/responses` accepts a `metadata` object of up to 16 key-value pairs — so the orphan is
+labelled. It is simply not findable: the Responses resource offers `create`, `retrieve`, `delete`,
+`cancel`, `stream`, `parse` and `compact`, and **no enumeration or search**. A response can be
+fetched only by the `resp_…` identifier that the lost acknowledgement carried away.
+
+Labelling without enumeration buys nothing here. There is no idempotency key to replay and no way
+to ask *"which response carries my requestId?"*, so the execution runs, bills, and is
+**permanently unreachable**. A resubmission produces a duplicate that cannot be detected
+afterwards, because nothing can be queried to detect it.
+
+**Anthropic: ambiguous, but workable.** `custom_id` is client-supplied and travels with each record
+in the batch results, and batches can be enumerated. A replacement worker can sweep the batch list
+over the admission window and match on `custom_id`. The window remains **unbounded by contract** —
+the create-to-visibility lag is undocumented, exactly as §3 records — so this is a client-side
+reconciliation heuristic and never provider idempotency. But recovery is possible and duplicates
+are **detectable**.
+
+### Why detectability decides it
+
+Contract B's Definition of Done cannot promise that a lost acknowledgement creates no duplicate
+(§3). What it can promise is that a duplicate is *detected from durable usage evidence*. That
+restatement is only honest if detection is actually achievable.
+
+On OpenAI it is not. The T15 crash matrix requires a cost-evidence scenario proving that one
+logical request produced exactly one billed provider execution across induced faults — and on a
+path where executions cannot be enumerated, **that scenario cannot be built**. It is not enough
+that each execution carries a `metadata` label; the scenario has to *find* every execution
+attributable to one request identity, and there is no query that returns them. M2-ADR-017's audit
+requirements have the same problem: an execution that can only be reached by an identifier nobody
+kept cannot be audited.
+
+A guarantee that cannot be qualified is not a guarantee, and Contract A's completed qualification
+is the standard Contract B is held to.
+
+### What OpenAI wins, and why it does not change the decision
+
+OpenAI background mode is the better fit for the *use case*. It is designed for a single
+long-running request rather than a batch of one; its latency is seconds to minutes against
+Anthropic's hour; its operational surface is one identifier and one poll; and the route table
+already approves the model, so no new vendor governance is required. Had recoverability been
+equal, it would win.
+
+It is not equal. Two further risks compound the discriminator above:
+
+- **Retention depends on organisation configuration as well as on the request.** Background mode is
+  documented as available to zero-data-retention projects, whose background requests run with
+  `store=false` and whose response data is held for roughly 10 minutes to support polling. A
+  request cannot raise that: under zero data retention `store` is treated as false even when the
+  request sets it true. So the recovery window is 30 days or ten minutes depending on a setting
+  outside the codebase, and Contract B recoverability could change without a code change or a
+  deployment. Worth stating precisely rather than as a coercion: it is documented behaviour, not a
+  silent override, and background execution itself remains supported.
+- **`store=true` sits against M2-ADR-017's posture**, which keeps model output only until adoption.
+  Requiring the *provider* to retain learner-derived output for 30 days to enable our recovery is
+  the opposite trade.
+
+### Decision
+
+**The Anthropic Message Batches API remains the selected Contract B provider path.** OpenAI
+Responses background mode is recorded as evaluated and not selected, for the reason above rather
+than for capability breadth.
+
+One consequence should travel with this choice rather than be discovered later: Anthropic's
+roughly one-hour latency makes the `PENDING` requirement of §6 rule 2 load-bearing rather than
+theoretical. OpenAI background mode would have made the asynchrony nearly invisible to a learner.
+Anthropic will not, and that cost belongs in front of the product owner when the first Contract-B
+`DIAGNOSE` is proposed for a route.
