@@ -9,6 +9,7 @@ param(
     "after-mastery-effect",
     "diagnostic-commission",
     "diagnostic-provider",
+    "diagnostic-in-flight",
     "diagnostic-outcome-commit",
     "adaptation-handoff",
     "adaptation-commission",
@@ -31,6 +32,7 @@ Set-Location $repositoryRoot
 . (Join-Path $scriptRoot "stale-worker-proof.ps1")
 . (Join-Path $scriptRoot "after-claim-proof.ps1")
 . (Join-Path $scriptRoot "dispatch-ownership-proof.ps1")
+. (Join-Path $scriptRoot "in-flight-indeterminate-proof.ps1")
 $qualificationManifestRoot = if ([string]::IsNullOrWhiteSpace($ManifestRoot)) {
   $scriptRoot
 } else {
@@ -2930,6 +2932,169 @@ function Invoke-DiagnosticProviderCrash {
   }
 }
 
+# S4 -- learning-platform death while the provider call is in flight.
+#
+# The application offers no fault window between markProviderInvocationStarted and the provider
+# response, so this boundary cannot be armed from the platform side. It does not need to be. The
+# existing AI-side provider pause holds ramals-ai inside the provider call, and the platform is
+# synchronously blocked in that HTTP request for as long as it is held -- which is exactly the
+# state in which core.ai_execution_dispatch is durably IN_FLIGHT with a live fence.
+#
+# So the window is produced by pausing the AI and killing the PLATFORM. No application code,
+# migration or fault window is added; only the pod that dies is different from diagnostic-provider.
+#
+# What this proves that diagnostic-commission and diagnostic-provider cannot: a replacement
+# platform worker that finds an IN_FLIGHT row must close it indeterminate and must never
+# redispatch it. diagnostic-commission kills at AVAILABLE, before any dispatch exists;
+# diagnostic-provider kills the AI process, leaving the original platform worker alive to record
+# the outcome itself.
+function Invoke-DiagnosticInFlightPlatformCrash {
+  param([Parameter(Mandatory = $true)]$Fixture)
+  Wait-DeploymentReady "ramals-ai" 0 "ramals-ai"
+  Set-BackendFault $false "" "" "" 120000
+  Set-AiQualification $true $true $Fixture.DiagnosticRequestId 300000
+  Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
+  Wait-DeploymentReady "learning-platform" 0 "learning-platform"
+  Seed-ScenarioFixture $Fixture
+  Wait-DeploymentReady "learning-platform" 1 "learning-platform"
+
+  # The AI pod logging its provider boundary is the signal that the platform has already committed
+  # IN_FLIGHT and is now blocked in the HTTP call.
+  $providerPod = Wait-AiProviderBoundary $Fixture.DiagnosticRequestId
+  $claim = Get-StepClaim $Fixture.RunId "DIAGNOSE"
+  if ([string]::IsNullOrWhiteSpace($claim.Token)) {
+    throw "provider boundary was logged without a live diagnostic claim token"
+  }
+
+  # Fails closed before the kill. Killing a platform pod whose dispatch row is not durably
+  # IN_FLIGHT would produce a scenario that looks like S4 and proves something weaker.
+  $preDeathDispatch = Get-InFlightDispatchRow $Fixture.DiagnosticRequestId
+  if ([string]$preDeathDispatch.state -ne "IN_FLIGHT") {
+    throw "diagnostic dispatch was '$([string]$preDeathDispatch.state)' at the provider boundary; S4 requires a durable IN_FLIGHT row before the platform is killed"
+  }
+  if ([string]$preDeathDispatch.fence -ne "1") {
+    throw "diagnostic dispatch fence was '$([string]$preDeathDispatch.fence)' before the kill; S4 requires exactly one acquisition"
+  }
+  if ([string]::IsNullOrWhiteSpace([string]$preDeathDispatch.invocationStartedAt)) {
+    throw "diagnostic dispatch has no invocation_started_at at the provider boundary"
+  }
+  $preProviderInvocations = Get-DiagnosticProviderInvocationCount $Fixture.DiagnosticRequestId
+
+  $boundaryCursor = Format-CursorObservation (Get-WorkflowState $Fixture.RunId)
+  $preState = Get-ScenarioDbSnapshot $Fixture
+
+  # The platform is scaled to exactly one replica above, so the pod blocked in the provider call is
+  # unambiguous. Resolved by name rather than from the claim row, which carries no pod identity.
+  $platformPods = @(Get-PodNames "learning-platform")
+  if ($platformPods.Count -ne 1) {
+    throw "S4 requires exactly one learning-platform pod at the provider boundary but found $($platformPods.Count)"
+  }
+  $platformPod = $platformPods[0]
+  $preLogs = Get-SafePodLogText $platformPod $Fixture
+  $podUid = Get-PodUid $platformPod
+  $deletion = Force-DeletePod $platformPod
+  Wait-DeploymentReady "learning-platform" 0 "learning-platform"
+  $deletedObservedAt = (Get-Date).ToUniversalTime().ToString("o")
+  $afterDeathDispatch = Get-InFlightDispatchRow $Fixture.DiagnosticRequestId
+
+  # Release the provider hold and restore both planes so the replacement recovers through the
+  # ordinary production path rather than against a still-armed fault.
+  Set-AiQualification $true $false "" 120000
+  Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
+  # The workflow claim lease is expired the same way every other backend crash driver expires it.
+  # S4's invariant is the dispatch fence, not the claim lease; natural lease expiry is already
+  # proven by diagnostic-commission and is not re-proven here.
+  Expire-WorkflowClaim $Fixture.RunId "DIAGNOSE"
+  Wait-DeploymentReady "learning-platform" 1 "learning-platform"
+  $replacement = Wait-ReplacementPod "learning-platform" $podUid
+  $terminal = Wait-WorkflowTerminal $Fixture.RunId
+  $finalDispatch = Get-InFlightDispatchRow $Fixture.DiagnosticRequestId
+  $postProviderInvocations = Get-DiagnosticProviderInvocationCount $Fixture.DiagnosticRequestId
+  $postState = Get-ScenarioDbSnapshot $Fixture
+
+  $observation = [ordered]@{
+    schema = "m2-t15.in-flight-indeterminate-observation.v1"
+    requestId = $Fixture.DiagnosticRequestId
+    runId = $Fixture.RunId
+    preDeath = $preDeathDispatch
+    afterDeath = $afterDeathDispatch
+    final = $finalDispatch
+    providerInvocationsBeforeDeath = $preProviderInvocations
+    providerInvocationsFinal = $postProviderInvocations
+    deletedPod = $platformPod
+    deletedPodUid = $podUid
+    replacementPod = $replacement.Name
+    replacementPodUid = $replacement.Uid
+    aiProviderPod = $providerPod
+    workflowTokenA = $claim.Token
+    attemptA = $claim.AttemptCount
+  }
+
+  [pscustomobject]@{
+    Pod = $platformPod
+    PodUid = $podUid
+    ReplacementPod = $replacement.Name
+    ReplacementPodUid = $replacement.Uid
+    DeletedObservedAtUtc = $deletedObservedAt
+    Deletion = $deletion
+    PreState = $preState
+    PostState = $postState
+    PreDeletionLogs = $preLogs
+    InFlightObservation = $observation
+    Perturbation = [ordered]@{
+      type = "learning-platform-pod-death"
+      boundary = "DIAGNOSTIC_PROVIDER_IN_FLIGHT"
+      targetRequestId = $Fixture.DiagnosticRequestId
+      deletedPod = $platformPod
+      deletedPodUid = $podUid
+      aiProviderPod = $providerPod
+      command = $deletion.operation
+      requestedAtUtc = $deletion.requestedAtUtc
+      deletedObservedAtUtc = $deletedObservedAt
+    }
+    OldToken = $claim.Token
+    OldAttempt = $claim.AttemptCount
+    Terminal = $terminal
+    CursorHistory = @($boundaryCursor) + @($terminal.History)
+    StaleOutboxId = ""
+    StaleOutboxOwner = ""
+  }
+}
+
+# One dispatch row read live from PostgreSQL, in the shape the S4 proof reads.
+#
+# Distinct from Get-DiagnosticDispatchRow, which projects an already-captured snapshot for the
+# dispatch-ownership proof. This one issues its own query, because S4 has to observe the row at
+# three moments the scenario snapshots do not cover -- while the platform is blocked mid-provider
+# call, immediately after it is killed, and after the replacement has recovered.
+function Get-InFlightDispatchRow {
+  param([Parameter(Mandatory = $true)][string]$RequestId)
+  $line = Get-Scalar @"
+SELECT COALESCE(state, '') || '|' || COALESCE(fence::text, '') || '|' ||
+       COALESCE(owner_token::text, '') || '|' ||
+       COALESCE(to_char(ownership_acquired_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') || '|' ||
+       COALESCE(to_char(invocation_started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '')
+  FROM core.ai_execution_dispatch WHERE request_id = '$RequestId';
+"@
+  if ([string]::IsNullOrWhiteSpace($line)) {
+    throw "no core.ai_execution_dispatch row exists for $RequestId"
+  }
+  $parts = $line -split '\|', 5
+  return [ordered]@{
+    capturedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+    state = $parts[0]
+    fence = $parts[1]
+    ownerToken = $parts[2]
+    ownershipAcquiredAt = $parts[3]
+    invocationStartedAt = $parts[4]
+  }
+}
+
+function Get-DiagnosticProviderInvocationCount {
+  param([Parameter(Mandatory = $true)][string]$RequestId)
+  return [int](Get-Scalar "SELECT COUNT(*) FROM core.ai_execution_event WHERE request_id = '$RequestId' AND event_type = 'STARTED';")
+}
+
 function Get-ClaimedOutboxForInteraction {
   param([Parameter(Mandatory = $true)][string]$InteractionId)
   $line = Get-Scalar "SELECT id::text || '|' || request_id || '|' || COALESCE(lease_owner, '') || '|' || attempt_count::text FROM core.agent_work_outbox WHERE interaction_id = '$InteractionId' AND status = 'CLAIMED' ORDER BY created_at DESC LIMIT 1;"
@@ -3524,6 +3689,13 @@ function Assert-Scenario {
     [bool]$ExpectedFailure = $false,
     [bool]$ExpectedAdaptation = $true,
     [bool]$ExpectedAdaptationAbandoned = $false,
+    # Contract A (#160) split "the call failed" from "nobody ever heard back". Before V036 a
+    # fail-closed diagnostic could only be recorded as FAILED, so $ExpectedFailure alone decided
+    # the expected terminal status. It no longer can: an ambiguous provider outcome is
+    # INDETERMINATE and is a different fact with a different operator response. Left empty, these
+    # preserve the pre-#160 expectations exactly, so every existing scenario is unchanged.
+    [string]$ExpectedDiagnosticStatus = "",
+    [int]$ExpectedGateCount = -1,
     [Parameter(Mandatory = $true)]$Crash
   )
   $row = Get-Scalar @"
@@ -3557,7 +3729,12 @@ SELECT
   COALESCE((SELECT string_agg(aggregate_version::text, ',' ORDER BY aggregate_version) FROM snapshot), ''),
   (SELECT COUNT(*)::text FROM diag),
   (SELECT COUNT(*)::text FROM core.ai_execution_event WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND event_type = 'STARTED'),
-  (SELECT COUNT(*)::text FROM core.ai_execution_event WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND event_type IN ('SUCCEEDED', 'FAILED')),
+  -- V036 made INDETERMINATE a terminal diagnostic event alongside SUCCEEDED and FAILED. Counting
+  -- only the older two would read a Contract A fail-closed outcome as an unterminated execution,
+  -- so a genuinely correct run would fail this assertion. INDETERMINATE is added here and NOT to
+  -- the adaptation count below: only the diagnostic path can record it, and widening the
+  -- adaptation count would turn an adaptation defect into a silent pass.
+  (SELECT COUNT(*)::text FROM core.ai_execution_event WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND event_type IN ('SUCCEEDED', 'FAILED', 'INDETERMINATE')),
   COALESCE((SELECT status FROM diag), ''),
   (SELECT COUNT(*)::text FROM ledger.proposal_gate_decision WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND proposal_type = 'DIAGNOSTIC'),
   (SELECT COUNT(*)::text FROM rec),
@@ -3624,8 +3801,18 @@ FROM run;
   Assert-Equal "$Name diagnostic execution count" $fields[12] "1"
   Assert-Equal "$Name diagnostic commission event count" $fields[13] "1"
   Assert-Equal "$Name diagnostic terminal event count" $fields[14] "1"
-  Assert-Equal "$Name diagnostic execution status" $fields[15] $(if ($ExpectedFailure) { "FAILED" } else { "SUCCEEDED" })
-  Assert-Equal "$Name diagnostic gate decision count" $fields[16] $(if ($ExpectedFailure) { "0" } else { "1" })
+  $diagnosticStatus = if ([string]::IsNullOrWhiteSpace($ExpectedDiagnosticStatus)) {
+    if ($ExpectedFailure) { "FAILED" } else { "SUCCEEDED" }
+  } else {
+    $ExpectedDiagnosticStatus
+  }
+  Assert-Equal "$Name diagnostic execution status" $fields[15] $diagnosticStatus
+  $gateCount = if ($ExpectedGateCount -lt 0) {
+    if ($ExpectedFailure) { "0" } else { "1" }
+  } else {
+    "$ExpectedGateCount"
+  }
+  Assert-Equal "$Name diagnostic gate decision count" $fields[16] $gateCount
   Assert-Equal "$Name recommendation decision count" $fields[17] $(if ($ExpectedAdaptation) { "1" } else { "0" })
   Assert-Equal "$Name adaptation outbox count" $fields[18] $(if ($ExpectedAdaptation) { "1" } else { "0" })
   if ($ExpectedAdaptation) {
@@ -3658,6 +3845,125 @@ FROM run;
     StaleWorkflowCas = $staleWorkflow
     StaleOutboxCas = $staleOutbox
   }
+}
+
+# Contract A fail-closed terminal facts that the 27-field invariant row does not carry.
+#
+# Deliberately a separate query rather than two more fields on that row: the row's field order is
+# load-bearing for every existing scenario, and widening it to serve two new scenarios would put
+# every previously-qualified assertion at risk of an off-by-one for no benefit.
+#
+# Asserts the two facts that distinguish a fail-closed outcome from an ordinary failure -- the
+# execution error code, and the workflow step's terminal reason. A run that recorded INDETERMINATE
+# with a provider-failure reason code would satisfy the status assertion and still be wrong.
+function Assert-DiagnosticFailClosedTerminal {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExpectedErrorCode,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExpectedDiagnoseReason
+  )
+  if ([string]::IsNullOrWhiteSpace($ExpectedErrorCode) -and
+      [string]::IsNullOrWhiteSpace($ExpectedDiagnoseReason)) {
+    return $null
+  }
+  $row = Get-Scalar @"
+SELECT COALESCE((SELECT error_code FROM core.ai_execution
+                  WHERE request_id = '$($Fixture.DiagnosticRequestId)'), '') || '|' ||
+       COALESCE((SELECT reason_code FROM core.learning_workflow_step
+                  WHERE run_id = '$($Fixture.RunId)' AND step_name = 'DIAGNOSE'), '') || '|' ||
+       (SELECT COUNT(*)::text FROM core.ai_execution
+         WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND status = 'SUCCEEDED') || '|' ||
+       (SELECT COUNT(*)::text FROM core.ai_execution_event
+         WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND event_type = 'INDETERMINATE');
+"@
+  $fields = $row -split '\|', 4
+  if ($fields.Count -lt 4) {
+    throw "could not parse fail-closed terminal row for ${Name}: $row"
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedErrorCode)) {
+    Assert-Equal "$Name diagnostic execution error code" $fields[0] $ExpectedErrorCode
+    # A fail-closed outcome and a recorded success are mutually exclusive facts. Asserted
+    # explicitly rather than inferred from the status field, because "no SUCCEEDED execution
+    # exists" is the claim Contract A actually makes.
+    Assert-Equal "$Name diagnostic succeeded execution count" $fields[2] "0"
+    Assert-Equal "$Name diagnostic indeterminate terminal event count" $fields[3] "1"
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedDiagnoseReason)) {
+    Assert-Equal "$Name diagnose terminal reason" $fields[1] $ExpectedDiagnoseReason
+  }
+  return [ordered]@{
+    diagnosticErrorCode = $fields[0]
+    diagnoseReasonCode = $fields[1]
+    succeededExecutions = $fields[2]
+    indeterminateTerminalEvents = $fields[3]
+  }
+}
+
+# Reads the terminal facts the S4 proof needs, and hands them to the pure proof in
+# in-flight-indeterminate-proof.ps1. Kept here because it queries; the deciding is kept there
+# because it must be testable without a cluster.
+function Assert-DiagnosticInFlightProof {
+  param(
+    [Parameter(Mandatory = $true)]$Fixture,
+    [Parameter(Mandatory = $true)]$Crash
+  )
+  $observation = $Crash.InFlightObservation
+  if ($null -eq $observation) {
+    throw "diagnostic-in-flight scenario produced no dispatch observation"
+  }
+  $row = Get-Scalar @"
+SELECT COALESCE((SELECT status FROM core.ai_execution
+                  WHERE request_id = '$($Fixture.DiagnosticRequestId)'), '') || '|' ||
+       COALESCE((SELECT error_code FROM core.ai_execution
+                  WHERE request_id = '$($Fixture.DiagnosticRequestId)'), '') || '|' ||
+       (SELECT COUNT(*)::text FROM core.ai_execution
+         WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND status = 'SUCCEEDED') || '|' ||
+       (SELECT COUNT(*)::text FROM core.ai_execution_event
+         WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND event_type = 'STARTED') || '|' ||
+       (SELECT COUNT(*)::text FROM core.ai_execution_event
+         WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND event_type = 'INDETERMINATE') || '|' ||
+       (SELECT COUNT(*)::text FROM ledger.proposal_gate_decision
+         WHERE request_id = '$($Fixture.DiagnosticRequestId)' AND proposal_type = 'DIAGNOSTIC') || '|' ||
+       COALESCE((SELECT status FROM core.learning_workflow_step
+                  WHERE run_id = '$($Fixture.RunId)' AND step_name = 'ADAPT'), '') || '|' ||
+       (SELECT COUNT(*)::text FROM ledger.evidence
+         WHERE lineage_key = 'EVALUATION_DECISION:$($Fixture.EvaluationRequestId):SKILL:$($Fixture.SkillId)') || '|' ||
+       (SELECT COUNT(*)::text FROM ledger.mastery_snapshot
+         WHERE learner_id = '$($Fixture.LearnerId)' AND skill_id = '$($Fixture.SkillId)'
+           AND curriculum_version_id = '$($Fixture.CurriculumVersionId)');
+"@
+  $fields = $row -split '\|', 9
+  if ($fields.Count -lt 9) {
+    throw "could not parse in-flight durable row: $row"
+  }
+  $durable = [ordered]@{
+    executionStatus = $fields[0]
+    errorCode = $fields[1]
+    succeededExecutions = $fields[2]
+    startedEvents = $fields[3]
+    indeterminateEvents = $fields[4]
+    gateDecisions = $fields[5]
+    adaptStatus = $fields[6]
+    evidenceRows = $fields[7]
+    masterySnapshots = $fields[8]
+  }
+  # The raw observation is written before the proof runs, so a FAIL still leaves the evidence that
+  # explains it on disk rather than only in the exception message.
+  $directory = Join-Path $EvidenceRoot "diagnostic-in-flight"
+  if (-not (Test-Path -LiteralPath $directory)) {
+    [void](New-Item -ItemType Directory -Path $directory -Force)
+  }
+  $persisted = [ordered]@{
+    observation = $observation
+    durable = $durable
+  }
+  $persisted | ConvertTo-Json -Depth 40 |
+    Set-Content -LiteralPath (Join-Path $directory "in-flight-observation.json") -Encoding utf8
+  $script:DiagnosticInFlightProof = Assert-InFlightIndeterminateProof $observation $durable
+  $script:DiagnosticInFlightProof | ConvertTo-Json -Depth 40 |
+    Set-Content -LiteralPath (Join-Path $directory "in-flight-proof.json") -Encoding utf8
+  return $script:DiagnosticInFlightProof
 }
 
 function Assert-ContentionProof {
@@ -4217,6 +4523,19 @@ function Capture-ScenarioEvidence {
     expectedInvariant = $ExpectedInvariant
     observedInvariant = $Assertions
     dispatchProof = $script:DiagnosticDispatchProof
+    inFlightProof = $script:DiagnosticInFlightProof
+    failClosedTerminal = $script:DiagnosticFailClosedProof
+    inFlightEvidence = if ($Name -ne "diagnostic-in-flight") {
+      $null
+    } else {
+      [ordered]@{
+        rawObservation = "in-flight-observation.json"
+        proof = "in-flight-proof.json"
+        dispatchCaptures = "preDeath / afterDeath / final, in in-flight-observation.json"
+        deletedPlatformPod = "deleted-pod-correlation.log"
+        replacementPod = "backend-*.log"
+      }
+    }
   }
   $scenario | ConvertTo-Json -Depth 50 |
     Set-Content -LiteralPath (Join-Path $directory "scenario.json") -Encoding utf8
@@ -4232,6 +4551,12 @@ function Run-Scenario {
   $expectedFailure = $false
   $expectedAdaptation = $true
   $expectedAdaptationAbandoned = $false
+  # Empty/-1 mean "keep the pre-#160 expectation". Only the two Contract A fail-closed scenarios
+  # set them, so no existing scenario changes behaviour.
+  $expectedDiagnosticStatus = ""
+  $expectedGateCount = -1
+  $expectedDiagnosticErrorCode = ""
+  $expectedDiagnoseReason = ""
   $expectedInvariant = [ordered]@{
     authoritativeEvidenceRows = 1
     masterySnapshots = 1
@@ -4378,7 +4703,25 @@ function Run-Scenario {
       $expectedTargetAttempt = 2
       $expectedFailure = $true
       $expectedAdaptation = $false
+      # Contract A (#160): the AI pod dies inside the provider call, so the platform never learns
+      # whether the provider ran. That is INDETERMINATE, not FAILED. The pre-#160 expectation of
+      # FAILED would now reject a correct run.
+      $expectedDiagnosticStatus = "INDETERMINATE"
+      $expectedDiagnosticErrorCode = "AI_EXECUTION_OUTCOME_INDETERMINATE"
+      $expectedGateCount = 0
+      $expectedDiagnoseReason = "DIAGNOSIS_EXECUTION_INDETERMINATE"
       $crash = Invoke-DiagnosticProviderCrash $fixture
+    }
+    "diagnostic-in-flight" {
+      $targetStep = "DIAGNOSE"
+      $expectedTargetAttempt = 2
+      $expectedFailure = $true
+      $expectedAdaptation = $false
+      $expectedDiagnosticStatus = "INDETERMINATE"
+      $expectedDiagnosticErrorCode = "AI_EXECUTION_OUTCOME_INDETERMINATE"
+      $expectedGateCount = 0
+      $expectedDiagnoseReason = "DIAGNOSIS_EXECUTION_INDETERMINATE"
+      $crash = Invoke-DiagnosticInFlightPlatformCrash $fixture
     }
     "diagnostic-outcome-commit" {
       Wait-DeploymentReady "ramals-ai" 2 "ramals-ai"
@@ -4431,8 +4774,20 @@ function Run-Scenario {
     if ($Name -eq "diagnostic-commission") {
       Assert-DiagnosticCommissionRecoveryProof $fixture $crash
     }
-    $assertions = Assert-Scenario $fixture $Name $targetStep $expectedTargetAttempt `
-      $expectedFailure $expectedAdaptation $expectedAdaptationAbandoned $crash
+    if ($Name -eq "diagnostic-in-flight") {
+      [void](Assert-DiagnosticInFlightProof $fixture $crash)
+    }
+    # Named rather than positional: the Contract A expectations were added ahead of -Crash, and a
+    # positional call would silently bind $crash to the wrong parameter.
+    $assertions = Assert-Scenario -Fixture $fixture -Name $Name -TargetStep $targetStep `
+      -ExpectedTargetAttempt $expectedTargetAttempt -ExpectedFailure $expectedFailure `
+      -ExpectedAdaptation $expectedAdaptation `
+      -ExpectedAdaptationAbandoned $expectedAdaptationAbandoned `
+      -ExpectedDiagnosticStatus $expectedDiagnosticStatus `
+      -ExpectedGateCount $expectedGateCount -Crash $crash
+    $script:DiagnosticFailClosedProof = Assert-DiagnosticFailClosedTerminal `
+      -Fixture $fixture -Name $Name -ExpectedErrorCode $expectedDiagnosticErrorCode `
+      -ExpectedDiagnoseReason $expectedDiagnoseReason
     if ($Name -eq "contention") {
       Assert-ContentionProof $fixture $crash
     }
@@ -4554,6 +4909,7 @@ try {
     "after-mastery-effect",
     "diagnostic-commission",
     "diagnostic-provider",
+    "diagnostic-in-flight",
     "diagnostic-outcome-commit",
     "adaptation-handoff",
     "adaptation-commission",

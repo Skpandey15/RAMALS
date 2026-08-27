@@ -234,6 +234,61 @@ committed shape is `m2-t15.dispatch-ownership-proof.v1` in
 [`evidence-schema.json`](evidence-schema.json), which requires the block for any passing
 `diagnostic-commission` scenario.
 
+## Contract A fail-closed proofs — M2-T15.2 (S3/S4)
+
+#160 made an ambiguous provider outcome `INDETERMINATE` rather than `FAILED`, and V036 added it to
+both terminal CHECK constraints. Two harness changes follow from that, and neither touches the
+application.
+
+**Terminal-event counting.** The diagnostic terminal-event count accepts `INDETERMINATE` alongside
+`SUCCEEDED` and `FAILED`. Counting only the older two read a correct fail-closed run as an
+unterminated execution, so a genuinely passing candidate would have failed the assertion. The
+adaptation count is deliberately *not* widened: only the diagnostic path can record
+`INDETERMINATE`, and widening the adaptation count would turn an adaptation defect into a silent
+pass.
+
+**`diagnostic-provider` expectations.** The AI pod dies inside the provider call, so the platform
+never learns whether the provider ran. That is `INDETERMINATE` with error code
+`AI_EXECUTION_OUTCOME_INDETERMINATE`, gate count `0`, and DIAGNOSE reason
+`DIAGNOSIS_EXECUTION_INDETERMINATE`. The pre-#160 expectation of `FAILED` would now reject a
+correct run.
+
+### `diagnostic-in-flight` — platform death mid-provider-call
+
+```text
+commission -> AVAILABLE -> DISPATCH_OWNED -> IN_FLIGHT -> the PLATFORM dies mid-provider-call
+  -> replacement observes IN_FLIGHT -> closes it INDETERMINATE without redispatching
+  -> no SUCCEEDED execution, no gate decision, ADAPT skipped, effects still exactly-once
+```
+
+This is the one Contract A guarantee the other scenarios cannot reach.
+`diagnostic-commission` kills at `AVAILABLE`, before any dispatch ownership exists;
+`diagnostic-provider` kills the AI process and leaves the original platform worker alive to record
+the outcome itself. Only this scenario forces a *different* worker to resolve an `IN_FLIGHT` row.
+
+The application offers no fault window between `markProviderInvocationStarted` and the provider
+response, and none is added. It is not needed: the existing AI-side provider pause holds
+`ramals-ai` inside the provider call, and the platform is synchronously blocked in that HTTP
+request for as long as it is held — which is precisely when `core.ai_execution_dispatch` is
+durably `IN_FLIGHT` with a live fence. The scenario pauses the AI and kills the **platform**. The
+driver fails closed before the kill if the row is not `IN_FLIGHT` at fence `1` with a non-null
+`invocation_started_at`, so a mistimed run cannot masquerade as this proof.
+
+The load-bearing fact is the fence. Only the acquisition CAS increments it, so an unchanged
+`fence = 1` across the death is itself the proof that no replacement redispatched. Provider
+invocation counts corroborate; they do not replace it.
+
+[`in-flight-indeterminate-proof.ps1`](in-flight-indeterminate-proof.ps1) holds the assertions as
+pure functions over one captured observation, the same way the dispatch-ownership proof does. A
+passing run writes `inFlightProof` into `scenario.json` and `in-flight-proof.json`, with the raw
+three-point dispatch capture in `in-flight-observation.json`. The raw observation is written
+*before* the proof runs, so a FAIL still leaves the evidence that explains it on disk. The
+committed shape is `m2-t15.in-flight-indeterminate-proof.v1` in
+[`evidence-schema.json`](evidence-schema.json), which requires the block for any passing
+`diagnostic-in-flight` scenario.
+
+Neither scenario has been executed. Only the offline self-tests below have run.
+
 Two harness-level test suites run offline and execute no crash scenario:
 
 ```powershell

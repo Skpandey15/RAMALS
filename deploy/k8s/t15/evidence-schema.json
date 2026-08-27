@@ -157,6 +157,77 @@
         "providerInvocationCount": { "type": "integer", "minimum": 0 }
       }
     },
+    "inFlightProof": {
+      "type": "object",
+      "description": "Durable proof that a learning-platform death while the dispatch row was IN_FLIGHT was resolved as INDETERMINATE by a different worker, with no redispatch. Required for a passing diagnostic-in-flight scenario. The unchanged fence is the load-bearing fact: only the acquisition CAS increments it, so fence=1 across the death is itself the proof that no replacement redispatched.",
+      "required": [
+        "schema",
+        "result",
+        "requestId",
+        "runId",
+        "fence",
+        "ownerToken",
+        "preDeathState",
+        "finalState",
+        "providerInvocations",
+        "deletedPodUid",
+        "replacementPodUid",
+        "durable",
+        "checks"
+      ],
+      "properties": {
+        "schema": { "const": "m2-t15.in-flight-indeterminate-proof.v1" },
+        "result": { "enum": ["PASS", "FAIL"] },
+        "requestId": { "type": "string", "minLength": 1 },
+        "runId": { "type": "string", "minLength": 1 },
+        "fence": { "type": "string", "const": "1" },
+        "ownerToken": { "type": "string", "minLength": 1 },
+        "preDeathState": { "type": "string", "const": "IN_FLIGHT" },
+        "finalState": { "type": "string", "const": "IN_FLIGHT" },
+        "providerInvocations": { "type": "integer", "minimum": 1, "maximum": 1 },
+        "deletedPodUid": { "type": "string", "minLength": 1 },
+        "replacementPodUid": { "type": "string", "minLength": 1 },
+        "workflowTokenA": { "type": ["string", "null"] },
+        "durable": {
+          "type": "object",
+          "required": [
+            "executionStatus",
+            "errorCode",
+            "succeededExecutions",
+            "startedEvents",
+            "indeterminateEvents",
+            "gateDecisions",
+            "adaptStatus",
+            "evidenceRows",
+            "masterySnapshots"
+          ],
+          "properties": {
+            "executionStatus": { "const": "INDETERMINATE" },
+            "errorCode": { "const": "AI_EXECUTION_OUTCOME_INDETERMINATE" },
+            "succeededExecutions": { "const": "0" },
+            "startedEvents": { "const": "1" },
+            "indeterminateEvents": { "const": "1" },
+            "gateDecisions": { "const": "0" },
+            "adaptStatus": { "const": "SKIPPED" },
+            "evidenceRows": { "const": "1" },
+            "masterySnapshots": { "const": "1" }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "result", "observed"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "result": { "enum": ["PASS", "FAIL"] },
+              "observed": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "dispatchProof": {
       "type": "object",
       "description": "Durable proof of the diagnostic dispatch-ownership state machine. Required for a passing diagnostic-commission scenario: aggregate row counts alone are never accepted as evidence of recovery.",
@@ -599,6 +670,11 @@
         "dispatchProof": {
           "oneOf": [{ "$ref": "#/$defs/dispatchProof" }, { "type": "null" }]
         },
+        "inFlightProof": {
+          "oneOf": [{ "$ref": "#/$defs/inFlightProof" }, { "type": "null" }]
+        },
+        "failClosedTerminal": { "type": ["object", "null"] },
+        "inFlightEvidence": { "type": ["object", "null"] },
         "dispatchCheckpoints": { "type": ["array", "null"] },
         "dispatchSamples": { "type": ["array", "null"] }
       },
@@ -636,6 +712,21 @@
             "required": ["dispatchProof"],
             "properties": {
               "dispatchProof": { "$ref": "#/$defs/dispatchProof" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "scenarioId": { "const": "diagnostic-in-flight" },
+              "result": { "const": "PASS" }
+            },
+            "required": ["scenarioId", "result"]
+          },
+          "then": {
+            "required": ["inFlightProof"],
+            "properties": {
+              "inFlightProof": { "$ref": "#/$defs/inFlightProof" }
             }
           }
         }
