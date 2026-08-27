@@ -220,12 +220,29 @@ def test_the_refusal_is_a_gateway_error_the_caller_must_handle() -> None:
         require_durable_execution_support(FakeProvider())
 
 
-def test_no_adapter_in_the_service_currently_supports_contract_b() -> None:
+def test_exactly_one_adapter_supports_contract_b_and_it_is_the_durable_one() -> None:
     """The standing assertion. Changing it is a decision, not a refactor.
 
-    When an adapter does gain Contract B support, this test fails -- and it should, because that
-    change is gated on the M2-ADR-017 §6 prerequisites rather than on someone's judgement in a
-    code review.
+    It previously read "no adapter supports Contract B" and was the deliberate signal that adding
+    one is gated. That signal fired when the Anthropic Batches adapter arrived, so the assertion is
+    updated rather than deleted: the Contract A adapters must still refuse, and the set of adapters
+    that do not must not grow quietly.
     """
-    for adapter in (FakeProvider(), LiteLLMProvider()):
-        assert resolve_durable_capability(adapter).supported is False
+    from ramals_ai.gateway.providers.anthropic_batches_adapter import AnthropicBatchesProvider
+
+    for contract_a in (FakeProvider(), LiteLLMProvider()):
+        assert resolve_durable_capability(contract_a).supported is False
+    assert resolve_durable_capability(AnthropicBatchesProvider()).supported is True
+
+
+def test_the_durable_adapter_still_refuses_to_claim_replay_safe_admission() -> None:
+    """Supported is not the same as safe, and this is the row that says so.
+
+    An adapter could pass every other capability row and still be wrong about this one -- and this
+    is the row whose overstatement M2-ADR-016 was written to prevent.
+    """
+    from ramals_ai.gateway.providers.anthropic_batches_adapter import AnthropicBatchesProvider
+
+    capability = resolve_durable_capability(AnthropicBatchesProvider())
+    assert capability.supported is True
+    assert capability.replay_safe_admission is False
