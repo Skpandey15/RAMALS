@@ -89,7 +89,7 @@ Verified against `platform.claude.com/docs` on 2026-08-27:
 | Replay-safe admission | **Absent** | `POST /v1/messages/batches` accepts no idempotency key. A lost acknowledgement leaves us without the batch id. |
 | Durable execution identifier | Present | `msgbatch_…`, returned in the create response only. |
 | Status lookup | Present | `GET /v1/messages/batches/{id}` → `processing_status` (`in_progress` → `ended`). |
-| Result retrieval after process death | Present | `results_url`, streamed JSONL, each record keyed by the client-supplied `custom_id`. |
+| Result retrieval after process death | Present | Batch-result retrieval with individual results correlated by `custom_id`: `results_url` streams the whole batch as JSONL, and each record carries the client-supplied `custom_id` it was submitted under. Retrieval is addressed by batch id, not by `custom_id`. |
 | Retention window | Present | Results available **29 days** after creation. A batch that has not completed within **24 hours** expires. |
 | Cancellation | Present | Cancel endpoint; cancelled batches end `ended` with partial results. |
 | Callbacks | Absent | No webhooks. Reconciliation is poll-only. |
@@ -114,13 +114,30 @@ Two consequences follow, and both are binding on any future Contract B work:
   restated before the DoD is used as an acceptance gate. The achievable form is: *duplicate provider
   execution is detectable from durable usage evidence and bounded by policy.* Detection is real and
   provable — `core.ai_execution` already records usage and cost per request identity, so a
-  qualification scenario can prove one logical request produced one billed execution across N
-  induced crashes. Prevention is not available and must not be claimed.
-- The strongest guarantee Contract B may claim on this provider is **at-most-once provider execution
-  with durable result recovery**. Not exactly-once. Exactly-once across an external boundary requires
-  the provider to participate in our commit, and no model provider does. This preserves M2-ADR-003's
-  distinction exactly: exactly-once applies to *business effects*, which we own; at-most-once applies
-  to *provider execution*, which we do not.
+  qualification scenario can prove *whether* one logical request produced exactly one billed
+  execution across N induced crashes, and surface it when it did not. Prevention is not available
+  and must not be claimed.
+- The strongest guarantee Contract B may claim on this provider is **single-intent provider
+  submission with detectable duplicate provider execution, and exactly-one authoritative outcome
+  adoption in RAMALS.** Each part is load-bearing:
+  - *Single-intent provider submission* — one submission is ever intended per request identity, and
+    none is issued speculatively. It does not say one is ever *executed*: a lost acknowledgement can
+    leave behind a provider execution we did not intend and cannot recall.
+  - *Detectable duplicate provider execution* — the honest ceiling on duplicates. They are found in
+    durable usage evidence after the fact; they are not prevented before it.
+  - *Exactly-one authoritative outcome adoption* — the guarantee that does hold. At most one
+    provider result is ever adopted as the RAMALS outcome for a request identity, and adopting it
+    commits the execution row and the gate decision together. Duplicate provider executions, where
+    they occur, cost money and produce evidence; they never produce a second authoritative outcome.
+
+  **Neither at-most-once nor at-least-once describes provider execution here, and neither may be
+  used of it.** At-most-once asserts a duplicate cannot occur, which this section has just said this
+  provider cannot promise. At-least-once asserts one always occurs, which is equally untrue —
+  admission can fail before any submission is made. Both would be false claims in the one document
+  later readers will trust.
+
+  This preserves M2-ADR-003's split exactly: **exactly-once still applies to business effects, which
+  we own**; nothing stronger than detection applies to provider execution, which we do not.
 
 ### 4. Execution contract is bound to a route, and never silently degrades
 
@@ -224,9 +241,11 @@ owner and the answer recorded here.
   that API as documented on 2026-08-27, not a backlog item.
 - **Contract A remains the only implemented execution contract**, and remains correct for every
   route. Nothing in this ADR asks it to change.
-- **Any future Contract B work inherits the honesty constraint above.** "Exactly-once provider
-  execution" is not claimable; "at-most-once provider execution with durable result recovery" is, and
-  only on a path that passes the mandatory rows in §1.
+- **Any future Contract B work inherits the honesty constraint above.** Neither "exactly-once
+  provider execution" nor "at-most-once provider execution" is claimable. What is claimable, and
+  only on a path that passes the mandatory rows in §1, is **single-intent provider submission with
+  detectable duplicate provider execution, and exactly-one authoritative outcome adoption in
+  RAMALS**.
 - **Any future Contract B durable state is owned by Spring/PostgreSQL under Flyway.** The Contract B
   design document places a durable execution ledger inside RAMALS-AI, which conflicts with
   M2-ADR-012's state ownership and with the AI plane's deliberate exclusion of every PostgreSQL
