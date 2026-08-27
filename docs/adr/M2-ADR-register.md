@@ -43,6 +43,7 @@ of the accepted package above** and not covered by its acceptance. Each carries 
 | ADR | Decision | Status | Gates |
 | --- | --- | --- | --- |
 | [M2-ADR-016](M2-ADR-016-provider-execution-contract-capability.md) | Provider capability profile for execution contracts: the synchronous Messages API is Contract B unsupported; Message Batches satisfies every mandatory row except replay-safe admission; execution contract binds to a route and never silently degrades to Contract A or to redispatch; a Contract-B `DIAGNOSE` may be asynchronous, a Contract-A `DIAGNOSE` may not. | **Accepted** 2026-08-27 | T15.2, and any future Contract B task |
+| [M2-ADR-017](M2-ADR-017-contract-b-durable-state-and-result-storage.md) | Contract B durable state lives in Spring/PostgreSQL under Flyway and RAMALS-AI stays stateless; only a normalized `diagnostic-proposal.v1` result may be persisted, in dedicated tables rather than `core.ai_execution*`, encrypted at rest, deleted on adoption with a 30-day ceiling, and never containing chain-of-thought or raw provider responses. | **Accepted** 2026-08-27 | Any future Contract B task; gates `V037` |
 
 M2-ADR-016 is the capability gate the Contract B design document requires before implementation. It
 was Proposed pending one product decision — whether a Contract-B `DIAGNOSE` may become asynchronous
@@ -50,10 +51,17 @@ was Proposed pending one product decision — whether a Contract-B `DIAGNOSE` ma
 grant. Asynchrony is confined to Contract-B routes and is not a relaxation of M1-ADR-001.
 
 **Acceptance authorizes design and construction, not traffic and not schema.** No Contract-B
-production route is activated, and no durable execution ledger may be built until two further
-decisions are taken: where Contract B durable state lives, given M2-ADR-008 and M2-ADR-012, and
-whether model output may be stored at all, given the `V035` invariant. Both are recorded as
-consequences in M2-ADR-016 and each needs its own ADR.
+production route is activated. The two further decisions M2-ADR-016 recorded as consequences —
+where Contract B durable state lives, given M2-ADR-008 and M2-ADR-012, and whether model output may
+be stored at all, given the `V035` invariant — are **both closed by M2-ADR-017**.
+
+M2-ADR-017 keeps the AI plane stateless and puts Contract B durable state in Spring/PostgreSQL
+under Flyway; permits only a normalized `diagnostic-proposal.v1` result, in dedicated tables that
+leave every `core.ai_execution*` and `V035` structural-redaction guarantee literally intact;
+prohibits chain-of-thought and raw provider responses outright; and requires encryption at rest,
+deletion in the adoption transaction, and a 30-day ceiling chosen against the provider's own
+retention window. It authorizes no schema and no code: its §6 lists seven prerequisites, of which
+1–5 gate `V037` and 6–7 gate any route activation.
 
 **Contract A remains the default and current execution contract.** Every route is on Contract A, it
 stays correct and supported for routes that never move, and this decision neither deprecates it nor
