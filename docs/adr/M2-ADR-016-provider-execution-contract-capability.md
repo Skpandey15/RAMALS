@@ -301,7 +301,9 @@ accountable name should be substituted here if this ADR is cited in an external 
   both stand unqualified. This is a genuine conflict of principles, not an oversight, and it needs
   its own decision with a retention, encryption and purge policy.
 - **The Contract B design document's Definition of Done requires amendment** before it is used as an
-  acceptance gate — specifically the lost-acknowledgement line identified in §3.
+  acceptance gate — specifically the lost-acknowledgement line identified in §3. **Done 2026-08-27:
+  the [amended Definition of Done](../release/mvp2-contract-b-definition-of-done.md) supersedes §18 for acceptance purposes.** Amending it surfaced four further criteria
+  the accepted decisions had already superseded, not just the one this ADR named.
 - **The provider capability profile is versioned and re-verified.** The tables in §2 and §3 are
   point-in-time readings of a third-party contract. A provider that later publishes replay-safe
   admission changes this decision, and that is a revisit trigger rather than a silent improvement: no
