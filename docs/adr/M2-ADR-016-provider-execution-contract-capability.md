@@ -364,9 +364,9 @@ Verified against `developers.openai.com` documentation on 2026-08-27.
 | Status lookup | ✅ `GET /v1/responses/{id}` | ✅ `processing_status` by batch id |
 | Result retrieval after process death | ⚠️ conditional on `store` | ✅ unconditional, via `results_url` |
 | Cancellation | ✅ documented idempotent | ✅ |
-| Result retention | ⚠️ ≥30 days when `store=true`; **~10 minutes under zero data retention**, which forces `store=false` regardless of the request | ✅ 29 days; 24-hour processing expiry |
+| Result retention | ⚠️ ≥30 days when `store=true`; **roughly 10 minutes when `store` is false or omitted**, which is how documented background requests from zero-data-retention projects run | ✅ 29 days; 24-hour processing expiry |
 | **Replay-safe admission** | ❌ **not documented** | ❌ **not documented** |
-| Lookup by caller request identity | ❌ **none found** — no caller-supplied `metadata` and no enumeration endpoint | ⚠️ partial — `custom_id` per record, plus batch enumeration |
+| Lookup by caller request identity | ❌ caller-supplied `metadata` **is** accepted (16 pairs), but no response enumeration or search endpoint was found, so it cannot be used to discover an orphan | ⚠️ partial — `custom_id` per record, plus batch enumeration |
 | Cost | Standard pricing | 50% discount |
 | Latency | Seconds to minutes; no documented SLA | Most within 1 hour; 24-hour ceiling |
 | Fit for one learner `DIAGNOSE` | ✅ built for exactly this shape | ⚠️ a batch of one, at batch latency |
@@ -388,10 +388,16 @@ replay-safe admission on any evaluated path.**
 Both providers return their durable execution identity *only* in the create acknowledgement. The
 question is what a replacement worker can do when that acknowledgement never arrives.
 
-**OpenAI: nothing.** There is no idempotency key to replay, no caller-supplied correlation field on
-the request, and no enumeration endpoint sufficient to find the orphan. The execution runs, bills,
-and is **permanently unreachable**. A resubmission produces a duplicate that cannot be detected
-afterwards, because there is nothing to detect it *by*.
+**OpenAI: nothing usable.** The request *can* carry a caller-supplied correlation value —
+`POST /v1/responses` accepts a `metadata` object of up to 16 key-value pairs — so the orphan is
+labelled. It is simply not findable: the Responses resource offers `create`, `retrieve`, `delete`,
+`cancel`, `stream`, `parse` and `compact`, and **no enumeration or search**. A response can be
+fetched only by the `resp_…` identifier that the lost acknowledgement carried away.
+
+Labelling without enumeration buys nothing here. There is no idempotency key to replay and no way
+to ask *"which response carries my requestId?"*, so the execution runs, bills, and is
+**permanently unreachable**. A resubmission produces a duplicate that cannot be detected
+afterwards, because nothing can be queried to detect it.
 
 **Anthropic: ambiguous, but workable.** `custom_id` is client-supplied and travels with each record
 in the batch results, and batches can be enumerated. A replacement worker can sweep the batch list
@@ -408,8 +414,11 @@ restatement is only honest if detection is actually achievable.
 
 On OpenAI it is not. The T15 crash matrix requires a cost-evidence scenario proving that one
 logical request produced exactly one billed provider execution across induced faults — and on a
-path with no enumeration and no caller correlation, **that scenario cannot be built**. M2-ADR-017's
-audit requirements have the same problem: an execution nothing can name cannot be audited.
+path where executions cannot be enumerated, **that scenario cannot be built**. It is not enough
+that each execution carries a `metadata` label; the scenario has to *find* every execution
+attributable to one request identity, and there is no query that returns them. M2-ADR-017's audit
+requirements have the same problem: an execution that can only be reached by an identifier nobody
+kept cannot be audited.
 
 A guarantee that cannot be qualified is not a guarantee, and Contract A's completed qualification
 is the standard Contract B is held to.
@@ -424,9 +433,14 @@ equal, it would win.
 
 It is not equal. Two further risks compound the discriminator above:
 
-- **Retention is a function of organisation configuration, not of code.** A project with zero data
-  retention silently collapses the recovery window from 30 days to roughly 10 minutes, and the
-  request cannot override it. Contract B would break with no code change and no deployment.
+- **Retention depends on organisation configuration as well as on the request.** Background mode is
+  documented as available to zero-data-retention projects, whose background requests run with
+  `store=false` and whose response data is held for roughly 10 minutes to support polling. A
+  request cannot raise that: under zero data retention `store` is treated as false even when the
+  request sets it true. So the recovery window is 30 days or ten minutes depending on a setting
+  outside the codebase, and Contract B recoverability could change without a code change or a
+  deployment. Worth stating precisely rather than as a coercion: it is documented behaviour, not a
+  silent override, and background execution itself remains supported.
 - **`store=true` sits against M2-ADR-017's posture**, which keeps model output only until adoption.
   Requiring the *provider* to retain learner-derived output for 30 days to enable our recovery is
   the opposite trade.

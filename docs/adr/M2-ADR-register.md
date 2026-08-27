@@ -53,9 +53,9 @@ grant. Asynchrony is confined to Contract-B routes and is not a relaxation of M1
 **Addendum A (2026-08-27)** records the OpenAI Responses background-mode evaluation its second
 revisit trigger called for, since `gpt-4.1-2025-04-14` is already an approved alternate binding.
 Neither provider documents replay-safe admission. OpenAI loses on the lost-acknowledgement path:
-it offers no caller correlation field and no enumeration, so an unacknowledged execution is
-permanently unreachable and a duplicate is undetectable — which makes the T15 cost-evidence
-scenario unbuildable. Anthropic Message Batches remains the selected path, and still provides no
+its requests can carry a caller-supplied `metadata` label, but responses cannot be enumerated or
+searched, so an unacknowledged execution is permanently unreachable and a duplicate is
+undetectable — which makes the T15 cost-evidence scenario unbuildable. Anthropic Message Batches remains the selected path, and still provides no
 provider-level exactly-once. The addendum adds evidence and reverses no decision.
 
 **Acceptance authorizes design and construction, not traffic and not schema.** No Contract-B
