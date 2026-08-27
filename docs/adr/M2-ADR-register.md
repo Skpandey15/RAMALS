@@ -42,13 +42,22 @@ of the accepted package above** and not covered by its acceptance. Each carries 
 
 | ADR | Decision | Status | Gates |
 | --- | --- | --- | --- |
-| [M2-ADR-016](M2-ADR-016-provider-execution-contract-capability.md) | Provider capability profile for execution contracts: the synchronous Messages API is Contract B unsupported; Message Batches satisfies every mandatory row except replay-safe admission; execution contract binds to a route and never silently degrades to Contract A or to redispatch. | **Proposed** — carries one unresolved decision | T15.2, and any future Contract B task |
+| [M2-ADR-016](M2-ADR-016-provider-execution-contract-capability.md) | Provider capability profile for execution contracts: the synchronous Messages API is Contract B unsupported; Message Batches satisfies every mandatory row except replay-safe admission; execution contract binds to a route and never silently degrades to Contract A or to redispatch; a Contract-B `DIAGNOSE` may be asynchronous, a Contract-A `DIAGNOSE` may not. | **Accepted** 2026-08-27 | T15.2, and any future Contract B task |
 
 M2-ADR-016 is the capability gate the Contract B design document requires before implementation. It
-is deliberately not Accepted: it records an open product decision — whether a Contract-B `DIAGNOSE`
-may become asynchronous — and no Contract B schema, endpoint, route or worker should be implemented
-until that question is answered by a named owner. It changes nothing about Contract A, which remains
-the only implemented execution contract.
+was Proposed pending one product decision — whether a Contract-B `DIAGNOSE` may become asynchronous
+— which was answered on review of PR #161 and is recorded in its §6 with the six rules bounding the
+grant. Asynchrony is confined to Contract-B routes and is not a relaxation of M1-ADR-001.
+
+**Acceptance authorizes design and construction, not traffic and not schema.** No Contract-B
+production route is activated, and no durable execution ledger may be built until two further
+decisions are taken: where Contract B durable state lives, given M2-ADR-008 and M2-ADR-012, and
+whether model output may be stored at all, given the `V035` invariant. Both are recorded as
+consequences in M2-ADR-016 and each needs its own ADR.
+
+**Contract A remains the default and current execution contract.** Every route is on Contract A, it
+stays correct and supported for routes that never move, and this decision neither deprecates it nor
+schedules its removal.
 
 ## Supersession and compatibility
 
