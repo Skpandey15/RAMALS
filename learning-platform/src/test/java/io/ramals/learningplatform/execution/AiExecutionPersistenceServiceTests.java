@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import io.ramals.learningplatform.ai.contract.AgentType;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
+import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.ai.contract.Validation;
 import java.time.Instant;
@@ -75,7 +76,7 @@ class AiExecutionPersistenceServiceTests {
     when(transactionManager.getTransaction(any())).thenReturn(status);
     AiExecutionDispatchClaim expected =
         AiExecutionDispatchClaim.acquired(
-            UUID.fromString("01900000-0000-7000-8000-0000000000f2"), 1);
+            UUID.fromString("01900000-0000-7000-8000-0000000000f2"), 1, "b".repeat(64));
     when(repository.acquireDiagnosticDispatch("request-123")).thenReturn(expected);
     when(repository.markDiagnosticProviderInvocationStarted("request-123", expected))
         .thenReturn(true);
@@ -89,6 +90,49 @@ class AiExecutionPersistenceServiceTests {
     assertThat(marked).isTrue();
     verify(transactionManager, times(2)).getTransaction(any());
     verify(transactionManager, times(2)).commit(status);
+  }
+
+  @Test
+  void recordsIndeterminateDiagnosticOutcomeInRequiresNewTransaction() {
+    AiExecutionRepository repository = mock(AiExecutionRepository.class);
+    PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    TransactionStatus status = mock(TransactionStatus.class);
+    when(transactionManager.getTransaction(any())).thenReturn(status);
+    DiagnosticAssessmentRequest request = mock(DiagnosticAssessmentRequest.class);
+    when(request.requestId()).thenReturn("request-123");
+    when(request.interactionId()).thenReturn("interaction-123");
+    AiExecution expected = mock(AiExecution.class);
+    when(expected.status()).thenReturn("INDETERMINATE");
+    when(repository.insertDiagnosticAssessmentIndeterminate(
+            request, "AI_EXECUTION_OUTCOME_INDETERMINATE", START, END))
+        .thenReturn(expected);
+
+    AiExecution actual =
+        new AiExecutionPersistenceService(repository, transactionManager)
+            .recordIndeterminate(
+                request, "AI_EXECUTION_OUTCOME_INDETERMINATE", START, END);
+
+    assertThat(actual.status()).isEqualTo("INDETERMINATE");
+    verify(transactionManager).commit(status);
+  }
+
+  @Test
+  void closingAnAmbiguousDispatchUsesTheIndependentTerminalCas() {
+    AiExecutionRepository repository = mock(AiExecutionRepository.class);
+    PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    TransactionStatus status = mock(TransactionStatus.class);
+    when(transactionManager.getTransaction(any())).thenReturn(status);
+    when(repository.closeIndeterminateExecution(
+            "request-123", "AI_EXECUTION_OUTCOME_INDETERMINATE"))
+        .thenReturn(true);
+
+    boolean closed =
+        new AiExecutionPersistenceService(repository, transactionManager)
+            .closeIndeterminateExecution(
+                "request-123", "AI_EXECUTION_OUTCOME_INDETERMINATE");
+
+    assertThat(closed).isTrue();
+    verify(transactionManager).commit(status);
   }
 
   private static AiRequestEnvelope request() {

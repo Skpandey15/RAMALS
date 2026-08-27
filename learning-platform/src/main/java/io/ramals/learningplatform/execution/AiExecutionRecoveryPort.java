@@ -29,6 +29,8 @@ public interface AiExecutionRecoveryPort {
     LEGACY_INDETERMINATE,
     /** The call was made and failed. The error code is durable. */
     FAILED,
+    /** Provider outcome is unknowable after authorized dispatch; terminal and never redispatched. */
+    INDETERMINATE,
     /**
      * The call succeeded. Note that the proposal itself is not retained -- only its digest -- so a
      * success recorded without its gate decision cannot be re-gated from this row.
@@ -58,4 +60,7 @@ public interface AiExecutionRecoveryPort {
    * @return false when the request already had a terminal record, so nothing was changed
    */
   boolean closeAbandonedExecution(String requestId, String errorCode);
+
+  /** Closes an ambiguous diagnostic dispatch without claiming provider success or failure. */
+  boolean closeIndeterminateExecution(String requestId, String errorCode);
 }

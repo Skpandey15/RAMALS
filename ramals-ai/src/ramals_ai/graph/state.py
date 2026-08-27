@@ -19,6 +19,7 @@ from typing import Any
 
 from ramals_ai.contracts.generated import AgentType, InteractionClass
 from ramals_ai.gateway.budget import Deadline
+from ramals_ai.gateway.gateway import GatewayExecutionPolicy
 from ramals_ai.graph.limits import CeilingExceeded, Ceilings
 from ramals_ai.prompting.templates import BuiltPrompt, PromptTemplateId
 from ramals_ai.telemetry.correlation import new_agent_run_id
@@ -60,6 +61,7 @@ class AgentState:
 
     ceilings: Ceilings
     interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI
+    execution_policy: GatewayExecutionPolicy = GatewayExecutionPolicy.STANDARD
 
     agent_run_id: str = field(default_factory=new_agent_run_id)
     """One orchestrated execution of the graph (Observability HLD §9).
@@ -93,6 +95,7 @@ class AgentState:
     node_execution_count: int = 0
     repair_cycle_count: int = 0
     model_call_count: int = 0
+    provider_submission_count: int = 0
 
     # -- accumulated work -------------------------------------------------------------------------
     tool_results: list[dict[str, Any]] = field(default_factory=list)
@@ -146,6 +149,17 @@ class AgentState:
             raise CeilingExceeded(
                 "model call", self.ceilings.max_model_calls, self.model_call_count + 1
             )
+
+    def authorize_provider_submission(self) -> None:
+        """Counts external side-effect authorization before the request can leave RAMALS-AI."""
+        limit = (
+            1
+            if self.execution_policy is GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED
+            else self.ceilings.max_model_calls
+        )
+        if self.provider_submission_count >= limit:
+            raise CeilingExceeded("provider submission", limit, self.provider_submission_count + 1)
+        self.provider_submission_count += 1
 
     def record_model_call(
         self,

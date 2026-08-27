@@ -240,6 +240,25 @@ class MigrationScriptContractTests {
         .doesNotContain("model_output");
   }
 
+  @Test
+  void contractAFailClosedMigrationMakesAmbiguityTerminalAndReceiptsAuditOnly()
+      throws IOException {
+    String migration = statements("/db/migration/V036__contract_a_fail_closed_ai_execution.sql");
+
+    assertThat(migration)
+        .contains("ADD COLUMN provider_request_id VARCHAR(128)")
+        .contains("ADD COLUMN provider_message_id VARCHAR(128)")
+        .contains("ADD COLUMN response_digest CHAR(64)")
+        .contains("'SUCCEEDED', 'FAILED', 'INDETERMINATE'")
+        .contains("'STARTED', 'SUCCEEDED', 'FAILED', 'INDETERMINATE'")
+        .doesNotContain("DROP CONSTRAINT ck_ai_execution_error")
+        .doesNotContain("DROP CONSTRAINT ck_ai_execution_event_error")
+        .doesNotContain("ck_ai_execution_provider_receipt")
+        .doesNotContain("ck_ai_execution_event_provider_receipt")
+        .doesNotContain("idempotency")
+        .doesNotContain("redispatch");
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");

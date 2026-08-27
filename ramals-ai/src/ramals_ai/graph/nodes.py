@@ -117,6 +117,7 @@ def model_or_tool(
         # post-dispatch check in record_model_call remains as a defensive invariant for callers that
         # record directly, but this guard is the one that protects the external side effect.
         state.ensure_model_call_permitted()
+        state.authorize_provider_submission()
         try:
             result = gateway.complete(
                 route=route,
@@ -129,6 +130,8 @@ def model_or_tool(
                 interaction_class=state.interaction_class,
                 request_cost_budget_usd=state.cost_budget_usd,
                 request_cost_spent_usd=state.cost_spent_usd,
+                request_id=state.request_id,
+                execution_policy=state.execution_policy,
             )
         except GatewayError as failure:
             # The gateway has already classified this. Recording it as a validation error rather
@@ -155,6 +158,9 @@ def model_or_tool(
             "routeVersion": result.route_table_version,
             "promptVersion": result.prompt_version,
             "promptTemplateId": result.prompt_template_id.value,
+            "providerRequestId": result.provider_request_id,
+            "providerMessageId": result.provider_message_id,
+            "responseDigest": result.response_digest,
         }
         logger.info(
             "graph made a model call",

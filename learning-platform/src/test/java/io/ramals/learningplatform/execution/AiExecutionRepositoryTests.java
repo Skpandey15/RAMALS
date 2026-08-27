@@ -50,6 +50,23 @@ class AiExecutionRepositoryTests {
         .doesNotThrowAnyException();
   }
 
+  @Test
+  void differentIndeterminateCodeConflictsWithoutBeingCalledAProviderFailure() {
+    AiExecution indeterminate =
+        execution("INDETERMINATE", "AI_EXECUTION_OUTCOME_INDETERMINATE", null);
+
+    assertThatThrownBy(
+            () ->
+                AiExecutionRepository.validateTerminalCompatibility(
+                    indeterminate,
+                    "INDETERMINATE",
+                    "AI_EXECUTION_STATE_UNKNOWN",
+                    indeterminate.requestDigest(),
+                    null))
+        .isInstanceOf(AiExecutionRepository.AiExecutionConflictException.class)
+        .hasMessageContaining("different indeterminate code");
+  }
+
   private static AiExecution execution(String status, String errorCode, String proposalDigest) {
     return new AiExecution(UUID.randomUUID(), "request-123", "interaction-123", "ASSESSMENT", "1.0",
         "agent-v1", "run-1", "ASSESSMENT_ITEM", "prompt-v1", "ci-fake", null, status,

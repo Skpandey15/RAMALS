@@ -54,9 +54,11 @@ public class AiExecutionRepository {
     if (terminal.isPresent()) {
       AiExecution execution = terminal.orElseThrow();
       AiExecutionRecoveryPort.ExecutionState state =
-          "SUCCEEDED".equals(execution.status())
-              ? AiExecutionRecoveryPort.ExecutionState.SUCCEEDED
-              : AiExecutionRecoveryPort.ExecutionState.FAILED;
+          switch (execution.status()) {
+            case "SUCCEEDED" -> AiExecutionRecoveryPort.ExecutionState.SUCCEEDED;
+            case "INDETERMINATE" -> AiExecutionRecoveryPort.ExecutionState.INDETERMINATE;
+            default -> AiExecutionRecoveryPort.ExecutionState.FAILED;
+          };
       return new AiExecutionRecoveryPort.RecordedExecution(state, execution.errorCode());
     }
     Optional<DispatchLedgerState> dispatchState =
@@ -97,33 +99,46 @@ public class AiExecutionRepository {
    * by an abandonment. The unique constraint on request_id makes the insert safe under a race.
    */
   public boolean closeAbandonedExecution(String requestId, String errorCode) {
+    return closeUnresolvedExecution(requestId, errorCode, "FAILED", false);
+  }
+
+  /** Closes an ambiguous diagnostic dispatch without claiming a provider success or failure. */
+  public boolean closeIndeterminateExecution(String requestId, String errorCode) {
+    return closeUnresolvedExecution(requestId, errorCode, "INDETERMINATE", true);
+  }
+
+  private boolean closeUnresolvedExecution(
+      String requestId, String errorCode, String status, boolean diagnosticOnly) {
     Integer closed =
         jdbc.update(
             """
             INSERT INTO core.ai_execution
             (id, request_id, interaction_id, agent_type, contract_version, status, error_code,
              request_digest, trace_id, started_at, completed_at)
-            SELECT ?, event.request_id, event.interaction_id, event.agent_type,
-                   event.contract_version, 'FAILED', ?, event.request_digest, ?,
-                   event.occurred_at, CURRENT_TIMESTAMP
+             SELECT ?, event.request_id, event.interaction_id, event.agent_type,
+                    event.contract_version, ?, ?, event.request_digest, ?,
+                    event.occurred_at, CURRENT_TIMESTAMP
               FROM core.ai_execution_event event
              WHERE event.request_id = ? AND event.event_type = 'STARTED'
-               AND (
-                 event.agent_type <> 'DIAGNOSTIC'
-                 OR EXISTS (
-                   SELECT 1
-                     FROM core.ai_execution_dispatch dispatch
-                    WHERE dispatch.request_id = event.request_id
-                      AND dispatch.state IN
-                        ('DISPATCH_OWNED', 'IN_FLIGHT', 'LEGACY_INDETERMINATE')
-                 )
-               )
+                AND (
+                  (? = FALSE AND event.agent_type <> 'DIAGNOSTIC')
+                  OR
+                  (event.agent_type = 'DIAGNOSTIC' AND EXISTS (
+                    SELECT 1
+                      FROM core.ai_execution_dispatch dispatch
+                     WHERE dispatch.request_id = event.request_id
+                       AND dispatch.state IN
+                         ('DISPATCH_OWNED', 'IN_FLIGHT', 'LEGACY_INDETERMINATE')
+                  ))
+                )
              ON CONFLICT (request_id) DO NOTHING
-             """,
+            """,
             UuidV7.generate(),
+            status,
             errorCode,
             currentTraceId(),
-            requestId);
+            requestId,
+            diagnosticOnly);
     if (closed != null && closed > 0) {
       // Recovery is also part of the append-only lifecycle stream. Without this event a
       // commissioned request would look terminal in ai_execution but would have no terminal event,
@@ -134,15 +149,17 @@ public class AiExecutionRepository {
             (id, request_id, interaction_id, agent_type, contract_version, event_type,
              error_code, request_digest, proposal_digest, occurred_at, started_at, completed_at)
           SELECT ?, execution.request_id, execution.interaction_id, execution.agent_type,
-                 execution.contract_version, 'FAILED', execution.error_code,
+                  execution.contract_version, ?, execution.error_code,
                  execution.request_digest, execution.proposal_digest, CURRENT_TIMESTAMP,
                  execution.started_at, execution.completed_at
             FROM core.ai_execution execution
-           WHERE execution.request_id = ? AND execution.status = 'FAILED'
+            WHERE execution.request_id = ? AND execution.status = ?
           ON CONFLICT (request_id, event_type) DO NOTHING
           """,
           UuidV7.generate(),
-          requestId);
+          status,
+          requestId,
+          status);
     }
     return closed != null && closed > 0;
   }
@@ -232,23 +249,27 @@ public class AiExecutionRepository {
     Optional<AiExecutionDispatchClaim> acquired =
         jdbc.query(
                 """
-                UPDATE core.ai_execution_dispatch dispatch
-                   SET state = 'DISPATCH_OWNED',
-                       owner_token = ?,
-                       fence = dispatch.fence + 1,
-                       ownership_acquired_at = CURRENT_TIMESTAMP
-                 WHERE dispatch.request_id = ?
-                   AND dispatch.state = 'AVAILABLE'
+                 UPDATE core.ai_execution_dispatch dispatch
+                    SET state = 'DISPATCH_OWNED',
+                        owner_token = ?,
+                        fence = dispatch.fence + 1,
+                        ownership_acquired_at = CURRENT_TIMESTAMP
+                   FROM core.ai_execution_event commission
+                  WHERE dispatch.request_id = ?
+                    AND commission.id = dispatch.commission_event_id
+                    AND dispatch.state = 'AVAILABLE'
                    AND NOT EXISTS (
                      SELECT 1
                        FROM core.ai_execution execution
                       WHERE execution.request_id = dispatch.request_id
                    )
-                RETURNING owner_token, fence
+                 RETURNING dispatch.owner_token, dispatch.fence, commission.request_digest
                 """,
                 (row, number) ->
-                    AiExecutionDispatchClaim.acquired(
-                        row.getObject("owner_token", UUID.class), row.getLong("fence")),
+                     AiExecutionDispatchClaim.acquired(
+                         row.getObject("owner_token", UUID.class),
+                         row.getLong("fence"),
+                         row.getString("request_digest")),
                 ownerToken,
                 requestId)
             .stream()
@@ -361,7 +382,8 @@ public class AiExecutionRepository {
 
   public AiExecution insertFailure(AiRequestEnvelope request, String agentType, String errorCode,
       Instant startedAt, Instant completedAt) {
-    return insertFailure(metadata(request), request, agentType, errorCode, startedAt, completedAt);
+    return insertFailure(
+        metadata(request), request, agentType, "FAILED", errorCode, startedAt, completedAt);
   }
 
   public AiExecution insertDiagnosticAssessmentFailure(
@@ -370,7 +392,28 @@ public class AiExecutionRepository {
       Instant startedAt,
       Instant completedAt) {
     return insertFailure(
-        metadata(request), request, "DIAGNOSTIC", errorCode, startedAt, completedAt);
+        metadata(request),
+        request,
+        "DIAGNOSTIC",
+        "FAILED",
+        errorCode,
+        startedAt,
+        completedAt);
+  }
+
+  public AiExecution insertDiagnosticAssessmentIndeterminate(
+      DiagnosticAssessmentRequest request,
+      String errorCode,
+      Instant startedAt,
+      Instant completedAt) {
+    return insertFailure(
+        metadata(request),
+        request,
+        "DIAGNOSTIC",
+        "INDETERMINATE",
+        errorCode,
+        startedAt,
+        completedAt);
   }
 
   private AiExecution insertSuccess(
@@ -395,6 +438,9 @@ public class AiExecutionRepository {
             proposal.modelId(),
             proposal.routeVersion(),
             traceId(request.interactionId()),
+            proposal.providerRequestId(),
+            proposal.providerMessageId(),
+            proposal.responseDigest(),
             "SUCCEEDED",
             null,
             requestDigest,
@@ -410,6 +456,7 @@ public class AiExecutionRepository {
       RequestMetadata request,
       Object requestBody,
       String agentType,
+      String status,
       String errorCode,
       Instant startedAt,
       Instant completedAt) {
@@ -419,7 +466,7 @@ public class AiExecutionRepository {
     // worse than one that admits it got nothing.
     AiExecution execution = insert(request, agentType,
         null, null, null, null, null, null, null, null, traceId(request.interactionId()),
-        "FAILED", errorCode, requestDigest, null, null, startedAt, completedAt);
+        null, null, null, status, errorCode, requestDigest, null, null, startedAt, completedAt);
     appendCompletion(execution);
     return execution;
   }
@@ -429,17 +476,19 @@ public class AiExecutionRepository {
       jdbc.update("""
           INSERT INTO core.ai_execution_event
             (id, request_id, interaction_id, agent_type, contract_version, event_type,
-             error_code, request_digest, proposal_digest, occurred_at, started_at, completed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+             error_code, request_digest, proposal_digest, provider_request_id,
+             provider_message_id, response_digest, occurred_at, started_at, completed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
           """, UuidV7.generate(), execution.requestId(), execution.interactionId(),
           execution.agentType(), execution.contractVersion(), execution.status(), execution.errorCode(),
-          execution.requestDigest(), execution.proposalDigest(), timestamp(execution.startedAt()),
+          execution.requestDigest(), execution.proposalDigest(), execution.providerRequestId(),
+          execution.providerMessageId(), execution.responseDigest(), timestamp(execution.startedAt()),
           timestamp(execution.completedAt()));
     } catch (DuplicateKeyException duplicate) {
       TerminalEvent existing = jdbc.query("""
           SELECT event_type, request_digest, proposal_digest, error_code
             FROM core.ai_execution_event
-           WHERE request_id = ? AND event_type IN ('SUCCEEDED', 'FAILED')
+           WHERE request_id = ? AND event_type IN ('SUCCEEDED', 'FAILED', 'INDETERMINATE')
           """, (r, n) -> new TerminalEvent(r.getString("event_type"), r.getString("request_digest"),
               r.getString("proposal_digest"), r.getString("error_code")), execution.requestId())
           .stream().findFirst()
@@ -451,6 +500,7 @@ public class AiExecutionRepository {
   private AiExecution insert(RequestMetadata request, String agentType, String agentVersion,
       String agentRunId, String promptTemplateId, String promptVersion, String modelRoute,
       String resolvedProvider, String modelId, String routeVersion, String traceId,
+      String providerRequestId, String providerMessageId, String responseDigest,
       String status, String errorCode,
       String requestDigest, String proposalDigest, Usage usage, Instant startedAt, Instant completedAt) {
     UUID id = UuidV7.generate();
@@ -460,13 +510,15 @@ public class AiExecutionRepository {
             (id, request_id, interaction_id, agent_type, contract_version, agent_version,
              agent_run_id, prompt_template_id, prompt_version, model_route, model_id, status,
              resolved_provider, route_version, trace_id,
+             provider_request_id, provider_message_id, response_digest,
              error_code, request_digest,
              proposal_digest, input_tokens, cached_input_tokens, output_tokens, estimated_cost_usd,
              latency_ms, started_at, completed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           """, id, request.requestId(), request.interactionId(), agentType, request.contractVersion(),
           agentVersion, agentRunId, promptTemplateId, promptVersion, modelRoute, modelId, status,
-          resolvedProvider, routeVersion, traceId, errorCode, requestDigest,
+          resolvedProvider, routeVersion, traceId, providerRequestId, providerMessageId,
+          responseDigest, errorCode, requestDigest,
           proposalDigest, usage == null ? null : usage.inputTokens(),
           usage == null ? null : usage.cachedInputTokens(), usage == null ? null : usage.outputTokens(),
           cost(usage), usage == null ? null : usage.latencyMs(),
@@ -513,6 +565,7 @@ public class AiExecutionRepository {
              agent_run_id, prompt_template_id,
              prompt_version, model_route, model_id, status, error_code, request_digest,
              resolved_provider, route_version, trace_id,
+             provider_request_id, provider_message_id, response_digest,
              proposal_digest, input_tokens, cached_input_tokens, output_tokens, estimated_cost_usd,
              latency_ms, started_at, completed_at
         FROM core.ai_execution
@@ -525,6 +578,8 @@ public class AiExecutionRepository {
       r.getString("prompt_version"), r.getString("model_route"),
       r.getString("resolved_provider"), r.getString("model_id"),
       r.getString("route_version"), r.getString("trace_id"),
+      r.getString("provider_request_id"), r.getString("provider_message_id"),
+      r.getString("response_digest"),
       r.getString("status"), r.getString("error_code"), r.getString("request_digest"),
       r.getString("proposal_digest"), (Integer) r.getObject("input_tokens"),
       (Integer) r.getObject("cached_input_tokens"), (Integer) r.getObject("output_tokens"),
@@ -580,10 +635,12 @@ public class AiExecutionRepository {
         && !existing.proposalDigest().equals(attemptedProposalDigest)) {
       throw new AiExecutionConflictException("requestId was reused with a different proposal digest");
     }
-    if ("FAILED".equals(attemptedStatus)
+    if (("FAILED".equals(attemptedStatus) || "INDETERMINATE".equals(attemptedStatus))
         && existing.errorCode() != null
         && !existing.errorCode().equals(attemptedErrorCode)) {
-      throw new AiExecutionConflictException("requestId was reused with a different failure code");
+      String kind = "FAILED".equals(attemptedStatus) ? "failure" : "indeterminate";
+      throw new AiExecutionConflictException(
+          "requestId was reused with a different " + kind + " code");
     }
   }
 

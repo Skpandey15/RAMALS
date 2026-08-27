@@ -28,7 +28,7 @@ from opentelemetry import metrics
 from ramals_ai.config.settings import ModelRoute
 from ramals_ai.contracts.generated import AgentType, InteractionClass
 from ramals_ai.gateway.budget import Deadline
-from ramals_ai.gateway.gateway import LLMGateway
+from ramals_ai.gateway.gateway import GatewayExecutionPolicy, LLMGateway
 from ramals_ai.graph import nodes
 from ramals_ai.graph.limits import REPAIR_ROUTE_RESERVE, CeilingExceeded, Ceilings
 from ramals_ai.graph.state import AgentState
@@ -61,6 +61,13 @@ def route_for_validation(state: AgentState) -> str:
     time or a random value could not be.
     """
     if not state.validation_errors:
+        return FINALIZE
+    if (
+        state.execution_policy is GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED
+        and state.provider_submission_count >= 1
+    ):
+        # Contract A forbids using bounded repair as a second external submission. The invalid
+        # first response remains explicit in the envelope; Spring's gate/API boundary rejects it.
         return FINALIZE
     if state.repair_cycle_count >= state.ceilings.max_repair_cycles:
         # Out of repairs. Finalizing with the errors recorded beats looping, and beats raising:
@@ -124,6 +131,7 @@ class GraphRun:
         policy_constraints: dict[str, Any] | None = None,
         agent_version: str = "V1",
         interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI,
+        execution_policy: GatewayExecutionPolicy = GatewayExecutionPolicy.STANDARD,
     ) -> AgentState:
         """Resolves the ceilings and budgets for a run before it starts.
 
@@ -153,6 +161,7 @@ class GraphRun:
             deadline=deadline,
             ceilings=Ceilings.for_agent(agent_type),
             interaction_class=interaction_class,
+            execution_policy=execution_policy,
             token_budget=config.max_output_tokens,
             cost_budget_usd=config.hard_cost_ceiling_usd,
         )

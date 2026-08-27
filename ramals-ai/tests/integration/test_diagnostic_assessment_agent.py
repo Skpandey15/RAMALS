@@ -319,12 +319,15 @@ def test_e03_single_variable_perturbation_moves_only_the_changed_skill() -> None
 
 def test_e04_malformed_json_is_rejected_and_emits_no_diagnosis() -> None:
     """Rejected, with no diagnosis surviving into the payload."""
-    envelope = propose(agent_for(ScriptedProvider("not json at all")), context())
+    provider = ScriptedProvider("not json at all")
+    envelope = propose(agent_for(provider), context())
 
     assert envelope.validation.schemaValid is False
     assert "SCHEMA_NOT_JSON" in [code.root for code in envelope.reasonCodes]
     assert envelope.proposal["diagnoses"] == []
     assert envelope.trustLevel is TrustLevel.NON_AUTHORITATIVE
+    assert envelope.validation.repairAttempts == 0
+    assert len(provider.prompts) == 1, "Contract A must not repair by redispatching"
 
 
 def test_e04_schema_valid_json_missing_evidence_is_rejected() -> None:

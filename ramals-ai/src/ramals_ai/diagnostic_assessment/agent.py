@@ -29,7 +29,7 @@ from ramals_ai.contracts.generated import (
 from ramals_ai.diagnostic_assessment import prompt
 from ramals_ai.diagnostic_assessment.validation import validate
 from ramals_ai.gateway.budget import Deadline
-from ramals_ai.gateway.gateway import LLMGateway
+from ramals_ai.gateway.gateway import GatewayExecutionPolicy, LLMGateway
 from ramals_ai.graph.runtime import GraphRun
 from ramals_ai.graph.state import AgentState
 from ramals_ai.grounding.contracts import ContextAuthority, GroundedContext, SourceType
@@ -78,6 +78,8 @@ class DiagnosticAssessmentAgent:
         request_id: str,
         deadline: Deadline,
         interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI,
+        dispatch_fence: int | None = None,
+        request_digest: str | None = None,
     ) -> AIProposalEnvelope:
         """Runs one bounded graph execution over the supplied context.
 
@@ -114,9 +116,14 @@ class DiagnosticAssessmentAgent:
             proposal_id=request_id,
             prompt=built,
             minimized_learning_context=projection,
-            policy_constraints={"contextId": context.contextId},
+            policy_constraints={
+                "contextId": context.contextId,
+                "dispatchFence": dispatch_fence,
+                "requestDigest": request_digest,
+            },
             agent_version=self.agent_version,
             interaction_class=interaction_class,
+            execution_policy=GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED,
         )
         return self._to_envelope(run.run(state, route=self._route))
 
@@ -146,6 +153,9 @@ class DiagnosticAssessmentAgent:
             resolvedProvider=(state.final_proposal or {}).get("resolvedProvider"),
             modelId=(state.final_proposal or {}).get("modelId"),
             routeVersion=(state.final_proposal or {}).get("routeVersion"),
+            providerRequestId=(state.final_proposal or {}).get("providerRequestId"),
+            providerMessageId=(state.final_proposal or {}).get("providerMessageId"),
+            responseDigest=(state.final_proposal or {}).get("responseDigest"),
             trustLevel=TrustLevel.NON_AUTHORITATIVE,
             reasonCodes=[ReasonCode(code) for code in dict.fromkeys(state.validation_errors)][:16]
             or None,

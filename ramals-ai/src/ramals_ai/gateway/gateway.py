@@ -16,11 +16,13 @@ requested route would be worse than reporting nothing, because it reads as trust
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 
 from opentelemetry import metrics
 
@@ -75,6 +77,13 @@ MAX_ATTEMPTS_PER_ROUTE = 2
 _RETRY_BACKOFF_MS = 200.0
 
 
+class GatewayExecutionPolicy(StrEnum):
+    """Whether a graph run may authorize more than one external provider submission."""
+
+    STANDARD = "STANDARD"
+    SINGLE_SUBMISSION_FAIL_CLOSED = "SINGLE_SUBMISSION_FAIL_CLOSED"
+
+
 @dataclass(frozen=True)
 class GatewayResult:
     """What a call cost and what produced it.
@@ -117,6 +126,9 @@ class GatewayResult:
 
     attempts: int
     fell_back: bool
+    provider_request_id: str | None = None
+    provider_message_id: str | None = None
+    response_digest: str | None = None
 
     @property
     def cost_string(self) -> str:
@@ -154,6 +166,8 @@ class LLMGateway:
         interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI,
         request_cost_budget_usd: Decimal | None = None,
         request_cost_spent_usd: Decimal = Decimal("0.000000"),
+        request_id: str | None = None,
+        execution_policy: GatewayExecutionPolicy = GatewayExecutionPolicy.STANDARD,
     ) -> GatewayResult:
         """Runs one governed model call, retrying and falling back only where policy allows.
 
@@ -175,12 +189,14 @@ class LLMGateway:
                     max_output_tokens,
                     request_cost_budget_usd,
                     request_cost_spent_usd,
+                    request_id,
+                    execution_policy,
                 )
             except GatewayError as failure:
                 attempts += getattr(failure, "attempts_used", 1)
                 self._record_failure(config, failure)
 
-                fallback = self._eligible_fallback(config, failure, deadline)
+                fallback = self._eligible_fallback(config, failure, deadline, execution_policy)
                 if fallback is None:
                     raise
 
@@ -225,6 +241,9 @@ class LLMGateway:
             latency_ms=int((self._clock() - started) * 1000),
             attempts=attempts,
             fell_back=config.route is not requested,
+            provider_request_id=response.provider_request_id,
+            provider_message_id=response.provider_message_id,
+            response_digest=hashlib.sha256(response.text.encode("utf-8")).hexdigest(),
         )
         self._record_success(result)
         return result
@@ -239,6 +258,8 @@ class LLMGateway:
         max_output_tokens: int | None,
         request_cost_budget_usd: Decimal | None,
         request_cost_spent_usd: Decimal,
+        request_id: str | None,
+        execution_policy: GatewayExecutionPolicy,
     ) -> tuple[ProviderResponse, int]:
         """Enforces this route's budgets, then calls it, retrying within the caller's deadline.
 
@@ -285,11 +306,15 @@ class LLMGateway:
                 max_output_tokens=output_ceiling,
                 # The provider gets what is left of the caller's budget, not a fixed timeout.
                 timeout_seconds=deadline.remaining_ms() / 1000.0,
+                request_id=request_id,
+                single_submission=(
+                    execution_policy is GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED
+                ),
             )
             try:
                 return self._adapter.complete(request), attempt
             except GatewayError as failure:
-                if not self._may_retry(failure, attempt, deadline, config):
+                if not self._may_retry(failure, attempt, deadline, config, execution_policy):
                     failure.attempts_used = attempt  # type: ignore[attr-defined]
                     raise
                 logger.info(
@@ -309,7 +334,10 @@ class LLMGateway:
         attempt: int,
         deadline: budget.Deadline,
         config: RouteConfig,
+        execution_policy: GatewayExecutionPolicy,
     ) -> bool:
+        if execution_policy is GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED:
+            return False
         if not failure.retryable or attempt >= MAX_ATTEMPTS_PER_ROUTE:
             return False
         # A retry must be able to *finish*, not merely to start. Beginning work that the deadline
@@ -325,11 +353,14 @@ class LLMGateway:
         config: RouteConfig,
         failure: GatewayError,
         deadline: budget.Deadline,
+        execution_policy: GatewayExecutionPolicy,
     ) -> RouteConfig | None:
         """The single place that decides whether a different route may serve this request.
 
         Returns ``None`` far more often than not, and every one of those refusals is deliberate.
         """
+        if execution_policy is GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED:
+            return None
         if not failure.fallback_eligible:
             return None
         if config.fallback_route is None:
@@ -384,6 +415,9 @@ class LLMGateway:
                 "latencyMs": result.latency_ms,
                 "attempts": result.attempts,
                 "fellBack": result.fell_back,
+                "providerRequestId": result.provider_request_id,
+                "providerMessageId": result.provider_message_id,
+                "responseDigest": result.response_digest,
                 "outcome": "SUCCESS",
             },
         )
@@ -415,6 +449,7 @@ def build_gateway(settings_route: ModelRoute, adapter: ProviderAdapter) -> LLMGa
 __all__ = [
     "GatewayError",
     "GatewayErrorCode",
+    "GatewayExecutionPolicy",
     "GatewayResult",
     "LLMGateway",
     "MAX_ATTEMPTS_PER_ROUTE",

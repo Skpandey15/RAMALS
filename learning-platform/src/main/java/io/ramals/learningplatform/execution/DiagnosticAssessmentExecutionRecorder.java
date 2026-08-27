@@ -30,4 +30,10 @@ public interface DiagnosticAssessmentExecutionRecorder {
       String errorCode,
       Instant startedAt,
       Instant completedAt);
+
+  AiExecution recordIndeterminate(
+      DiagnosticAssessmentRequest request,
+      String errorCode,
+      Instant startedAt,
+      Instant completedAt);
 }

@@ -73,6 +73,8 @@ class FakeProvider:
             # have exceeded a budget the real path would have enforced.
             output_tokens=min(len(text) // _CHARS_PER_TOKEN, request.max_output_tokens),
             cached_input_tokens=0,
+            provider_request_id=f"ci-request-{digest[:24]}",
+            provider_message_id=f"ci-message-{digest[24:48]}",
         )
 
     def _qualification_text(self, request: ProviderRequest) -> str | None:

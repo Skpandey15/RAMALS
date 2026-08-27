@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.orchestration;
 
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentService;
+import io.ramals.learningplatform.ai.AiUnavailableException;
 import io.ramals.learningplatform.execution.AiExecutionRecoveryPort;
 import io.ramals.learningplatform.execution.AiExecutionRecoveryPort.RecordedExecution;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort;
@@ -28,6 +29,8 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
   private static final Logger LOGGER = LoggerFactory.getLogger(DiagnosticAgentStep.class);
 
   static final String ABANDONED = "AI_EXECUTION_ABANDONED";
+  static final String INDETERMINATE = DiagnosticAssessmentService.INDETERMINATE;
+  static final String INDETERMINATE_REASON = "DIAGNOSIS_EXECUTION_INDETERMINATE";
   static final String UNRECOVERABLE = "DIAGNOSIS_RESULT_UNRECOVERABLE";
 
   private final DiagnosticAssessmentService diagnostics;
@@ -81,6 +84,7 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
       case ABSENT, COMMISSIONED -> dispatch(run, requestId);
       case DISPATCH_OWNED, IN_FLIGHT, LEGACY_INDETERMINATE ->
           closeIndeterminate(run, requestId);
+      case INDETERMINATE -> adoptIndeterminate(run, requestId);
       case FAILED -> adoptFailure(run, requestId, execution.errorCode());
       case SUCCEEDED -> unrecoverableSuccess(run, requestId);
     };
@@ -94,8 +98,15 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
       // -- rather than this adapter -- decides when to give up.
       return Result.failed("DIAGNOSIS_LEARNER_INACTIVE", null);
     }
-    DiagnosticAssessmentService.Outcome outcome =
-        diagnostics.assess(subject, run.curriculumVersionId(), requestId);
+    DiagnosticAssessmentService.Outcome outcome;
+    try {
+      outcome = diagnostics.assess(subject, run.curriculumVersionId(), requestId);
+    } catch (AiUnavailableException failure) {
+      if (INDETERMINATE.equals(failure.code())) {
+        return adoptIndeterminate(run, requestId);
+      }
+      throw failure;
+    }
     return outcome.accepted()
         ? Result.accepted("DIAGNOSIS_ACCEPTED", requestId)
         : Result.rejected("DIAGNOSIS_PROPOSAL_REJECTED", requestId);
@@ -113,9 +124,9 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
    * reporting abandonment over a real verdict would be the worst possible answer here.
    */
   private Result closeIndeterminate(Run run, String requestId) {
-    if (executions.closeAbandonedExecution(requestId, ABANDONED)) {
-      log(run, requestId, "abandoned", ABANDONED);
-      return Result.terminal("DIAGNOSIS_EXECUTION_ABANDONED", requestId);
+    if (executions.closeIndeterminateExecution(requestId, INDETERMINATE)) {
+      log(run, requestId, "indeterminate", INDETERMINATE);
+      return Result.terminal(INDETERMINATE_REASON, requestId);
     }
     return resolveAfterLostRace(run, requestId);
   }
@@ -142,6 +153,7 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
     RecordedExecution execution = executions.findExecutionState(requestId);
     return switch (execution.state()) {
       case FAILED -> adoptFailureAfterRace(run, requestId, execution.errorCode());
+      case INDETERMINATE -> adoptIndeterminate(run, requestId);
       case SUCCEEDED -> unrecoverableSuccess(run, requestId);
       // Still not terminal. Bounded by MAX_STEP_ATTEMPTS through the ordinary retry path, which is
       // where a wait belongs; ABSENT cannot follow COMMISSIONED, so it is treated the same way
@@ -177,6 +189,11 @@ public class DiagnosticAgentStep implements WorkflowAgentStep.Diagnostic {
   private Result adoptFailure(Run run, String requestId, String errorCode) {
     log(run, requestId, "adopted-failure", errorCode);
     return Result.terminal("DIAGNOSIS_EXECUTION_FAILED", requestId);
+  }
+
+  private Result adoptIndeterminate(Run run, String requestId) {
+    log(run, requestId, "adopted-indeterminate", INDETERMINATE);
+    return Result.terminal(INDETERMINATE_REASON, requestId);
   }
 
   /**
