@@ -1,7 +1,10 @@
 # M2-ADR-016: Provider execution-contract capability profile, and the gate Contract B must pass
 
-- **Status:** Proposed — carries one unresolved decision (see [Unresolved decision](#unresolved-decision)). Not accepted.
-- **Date:** 2026-08-27
+- **Status:** Accepted — 2026-08-27. Authorizes design and construction of Contract B; authorizes no
+  production route and no durable execution schema (see §6, *What acceptance does and does not
+  authorize*).
+- **Date:** 2026-08-27 (proposed and accepted the same day; the open question was answered on review
+  of PR #161)
 - **Relates to:** M2-ADR-001, M2-ADR-003, M2-ADR-008, M2-ADR-011, M2-ADR-012, M2-ADR-013,
   M2-ADR-014, M1-ADR-001, M1-ADR-008, M2-T09, M2-T15.2
 - **Sources:** `docs/MVP02/ContractAandB/RAMALS_Contract_A_Single_Submission_Fail_Closed_Implementation.docx`,
@@ -178,41 +181,71 @@ Contract B applies only to executions admitted after a Contract-B-capable route 
 not a migration convenience; a row made to look recoverable when it is not would cause a recovery
 worker to poll for an execution that no provider has ever heard of.
 
-## Unresolved decision
+### 6. A Contract-B `DIAGNOSE` may be asynchronous; a Contract-A `DIAGNOSE` may not
 
-**May a Contract-B `DIAGNOSE` become asynchronous?**
+**Decided 2026-08-27, on review of PR #161. This ADR was Proposed pending exactly this question and
+carried no other open question; the answer is recorded below and the ADR is now Accepted.**
 
-This is deliberately not decided here, because it is not an architecture decision — it is a product
-decision with an architectural consequence, and it is not this ADR's to make.
+The question was whether a Contract-B diagnostic may return before its outcome exists. It had to be
+answered outside this document because it is a product decision — a learner sees a pending
+diagnostic rather than a result — with an architectural consequence, and no architecture document
+has standing to accept a product cost.
 
-The facts that force the question:
+The facts that forced it, unchanged:
 
 - Diagnostic assessment runs today as `InteractionClass.INTERACTIVE_AI` under a 12-second budget
   (`DiagnosticAssessmentService.DEADLINE_MS`), and M1-ADR-001 makes that deadline binding.
 - The Message Batches API — the only Anthropic path that satisfies the retrieval requirements — is
   asynchronous. Most batches complete within an hour; a batch expires at 24 hours.
-- The two cannot be reconciled. There is no configuration, no ceiling and no timeout that makes a
-  batch answer inside an interactive deadline.
+- The two cannot be reconciled. No configuration, ceiling or timeout makes a batch answer inside an
+  interactive deadline.
 
-So Contract B on this provider requires the diagnostic path to become genuinely asynchronous: the
-learner-facing call returns a pending state, and the workflow adopts the outcome later through
-reconciliation. The Contract B design already anticipates this in its observability section, where
-the interactive SLA and the eventual-execution SLA are separate — but it does not decide whether
-RAMALS is willing to pay it.
+**The answer is yes, and it is bounded by the six rules below.** Asynchrony is granted to Contract B
+alone and is not a platform-wide relaxation of M1-ADR-001. Each rule is binding on every subsequent
+Contract B task.
 
-**What each answer means:**
+1. **Asynchronous behaviour binds to Contract-B routes only.** It is a property of the execution
+   contract resolved from the route, per rule 1 of §4 — never of a request, a header, a caller
+   preference or a runtime condition. A route on Contract A cannot become asynchronous by any means
+   short of moving it to Contract B, which is a reviewed configuration change.
 
-| Answer | Consequence |
-| --- | --- |
-| **Yes** — diagnostic may be asynchronous | Contract B is buildable on Message Batches, subject to §3's residual duplicate window and its honest labelling. The remaining roadmap proceeds. |
-| **No** — diagnostic must stay interactive | Contract B is unreachable on the current provider path. It stays deferred until a synchronous provider path with documented replay-safe admission and result retrieval is qualified, or a RAMALS-operated durable intermediary supplies admission idempotency the provider does not. |
+2. **The learner-facing API must support `PENDING` as a first-class outcome.** A Contract-B
+   diagnostic returns a pending state when its result does not yet exist, and the workflow adopts
+   the outcome later through reconciliation. `PENDING` is a real state with its own representation,
+   not an error, not an empty success, and not a timeout wearing a different name. It carries the
+   request identity the eventual outcome will be found under.
 
-**Until this is decided, no Contract B schema, endpoint, route or worker should be implemented.** The
-scope of every subsequent piece of work depends on the answer, and a durable execution ledger built
-for a contract that is then declined is a schema that has to be migrated away.
+3. **The interactive HTTP deadline and the eventual execution SLA are separate budgets, and neither
+   bounds the other.** The HTTP deadline continues to govern how long a caller waits for an
+   *admission* response and remains binding under M1-ADR-001. The eventual execution SLA governs how
+   long the platform may take to produce and adopt the *outcome*, and is bounded by the provider's
+   own expiry and retention windows rather than by an interaction class. Reporting one as the other
+   — an admission latency presented as a diagnostic latency — would make both unreadable.
 
-**Owner:** unassigned. This ADR cannot be moved to Accepted until the question is answered by a named
-owner and the answer recorded here.
+4. **No Contract-B request may fall back to Contract A**, silently or otherwise. This restates §4
+   rule 3 for the case the asynchronous decision creates: a Contract-B request whose reconciliation
+   is unavailable fails as a Contract-B request. It does not become a synchronous single submission,
+   because doing so would produce a row that looks recoverable and is not. Asynchrony does not
+   introduce a fallback; it removes the excuse for one.
+
+5. **Contract A remains the default and the current execution contract.** Every route is on
+   Contract A today and stays there. Contract B is opt-in per route, reviewed like any other route
+   change under M2-ADR-014, and Contract A remains correct and supported for routes that never move.
+   This decision does not deprecate Contract A and does not schedule its removal.
+
+6. **No Contract-B production route is activated by this decision.** Acceptance authorizes design
+   and construction; it does not authorize traffic. A production route may move to Contract B only
+   after the qualification and cost evidence that a later task defines, and that activation is a
+   separate decision from this one.
+
+**What acceptance does and does not authorize.** Accepting this ADR settles the capability gate and
+the asynchronous question. It does **not** authorize building the durable execution ledger, because
+two prerequisites named in the Consequences below are still open and each needs its own ADR: where
+Contract B durable state lives, and whether model output may be stored at all. A reader who takes
+"Accepted" as licence to write a migration has read this section without reading that one.
+
+**Decision owner.** Recorded from the review of PR #161 by the repository owner. The individual
+accountable name should be substituted here if this ADR is cited in an external approval record.
 
 ## Alternatives rejected
 
@@ -229,8 +262,14 @@ owner and the answer recorded here.
   it is not written down.
 - **Let a Contract-B adapter fall back to Contract A when reconciliation is unavailable.** Produces
   an execution that appears recoverable and is not. See rule 3 above.
-- **Decide the asynchronous question in this ADR.** It has a product cost — a learner sees a pending
-  diagnostic rather than a result — that no architecture document has standing to accept.
+- **Settle the asynchronous question by architectural reasoning alone.** It has a product cost — a
+  learner sees a pending diagnostic rather than a result — that no architecture document has standing
+  to accept on its own. §6 records an answer given by the decision owner on review; it does not
+  derive one. Had the answer been no, §2 and §3 would be unchanged and Contract B would simply have
+  stayed unreachable on this provider.
+- **Grant asynchrony platform-wide rather than to Contract-B routes.** Simpler to state, and it would
+  quietly relax M1-ADR-001 for every interaction class that never asked for it. §6 rule 1 confines
+  the grant to the routes that need it.
 - **Implement Contract B against the synchronous Messages API anyway, accepting partial coverage.**
   Contract B's value is the recovery path; a Contract B with no result retrieval is Contract A plus a
   larger schema and a false name.
@@ -275,12 +314,18 @@ This ADR is documentation and carries no implementation. Its claims are verifiab
   gateway's refusal of retry and fallback under `SINGLE_SUBMISSION_FAIL_CLOSED`, and the graph
   runtime's refusal of a repair cycle once a provider submission has occurred, are all covered by
   existing tests merged with PR #160.
-- **§4 and §5** — enforced by no test today, because no Contract B code exists. When it does, the
-  never-degrade rule and the never-reinterpret rule each require a standing test rather than a review
-  convention; §4's three rules are the specification for those tests.
-- **The unresolved decision** — verified by this ADR remaining in Proposed status. It may not be
-  moved to Accepted while the question is open, and moving it without answering the question is the
-  failure mode that section exists to prevent.
+- **§4, §5 and §6** — enforced by no test today, because no Contract B code exists. When it does,
+  each rule requires a standing test rather than a review convention: §4's three rules and §6's
+  rules 1, 4 and 5 are the specification for those tests. Rule 4 in particular must be a test and
+  not a code review, because a fallback to Contract A is the kind of change that gets added under
+  incident pressure and looks like a fix.
+- **§6 rule 6** — verified by every route remaining on Contract A. A route table in which any route
+  resolves to Contract B contradicts this ADR until the separate activation decision it names is
+  taken and recorded.
+- **The status transition itself** — this ADR was Proposed pending one question and carried no
+  other. Acceptance is verifiable by that question being answered in §6 with its date and the review
+  it came from. A future reader who finds an Accepted ADR whose §6 records no answer should treat
+  the acceptance as invalid rather than the question as moot.
 
 ## Revisit triggers
 
@@ -290,4 +335,7 @@ This ADR is documentation and carries no implementation. Its claims are verifiab
   provider it has not verified.
 - RAMALS accepts operating a durable intermediary that supplies admission idempotency, which moves
   the guarantee inside our own failure domain and makes that intermediary's durability the new gate.
-- The asynchronous-diagnostic question is answered either way.
+- The asynchronous grant in §6 is withdrawn, narrowed, or extended beyond Contract-B routes. Any of
+  the three changes what a route may do and needs a new decision, not an amendment here.
+- A Contract-B production route is proposed for activation. §6 rule 6 makes that a separate decision;
+  this ADR is its precondition, not its authority.
