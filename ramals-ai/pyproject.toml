@@ -36,6 +36,10 @@ dependencies = [
 # pip-audit input, so an advisory here fails the build whether or not the group is installed.
 provider = [
   "litellm==1.97.0",
+  # Contract B durable recoverable execution (M2-ADR-016). Direct rather than through LiteLLM,
+  # which at 1.97.0 cannot create, cancel or list an Anthropic batch and drops results_url when it
+  # retrieves one -- so it cannot reach the results at all. Addendum A records the evaluation.
+  "anthropic==1.1.0",
 ]
 dev = [
   # Contract tooling (M1-ADR-002). datamodel-code-generator emits the Python models from the
@@ -72,11 +76,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [[tool.mypy.overrides]]
-# The provider SDK is an optional extra and is deliberately absent from the dev and CI
-# environments, which run the gateway on the deterministic `ci-fake` route. Type checking the
-# adapter's call into it is not possible without installing it, and installing it in CI would
+# The provider SDKs are optional extras and are deliberately absent from the dev and CI
+# environments, which run the gateway on the deterministic `ci-fake` route. Type checking an
+# adapter's call into one is not possible without installing it, and installing them in CI would
 # defeat the point of the extra.
-module = ["litellm", "litellm.*"]
+#
+# Both adapters are listed rather than the providers package being exempted wholesale: the override
+# should name the libraries that are genuinely absent, so a typo in some *other* import inside an
+# adapter is still a type error rather than silently ignored.
+module = ["litellm", "litellm.*", "anthropic", "anthropic.*"]
 ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]

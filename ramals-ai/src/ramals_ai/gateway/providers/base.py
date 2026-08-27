@@ -157,8 +157,14 @@ class DurableProviderAdapter(Protocol):
         """Reads authoritative status for an execution this process may not have started."""
         ...
 
-    def get_result(self, provider_execution_id: str) -> DurableResult:
-        """Retrieves the terminal result, after the submitting process may be long gone."""
+    def get_result(self, provider_execution_id: str, custom_id: str | None = None) -> DurableResult:
+        """Retrieves one terminal result, after the submitting process may be long gone.
+
+        ``custom_id`` selects the record within a provider execution that carries several. It is
+        optional because a provider whose execution maps one-to-one to a result does not need it;
+        it is present because the batch-shaped providers do, and correlating by position rather
+        than by the caller's own key is how results get attributed to the wrong request.
+        """
         ...
 
 
@@ -175,10 +181,35 @@ class DurableSubmissionRequest:
 
 
 @dataclass(frozen=True)
+class DurableExecutionCounts:
+    """Per-state request counts, kept at the provider's granularity.
+
+    Five fields rather than the three an OpenAI-shaped batch reports, because ``expired`` and
+    ``canceled`` are distinct terminal facts Contract B has to record honestly -- an execution that
+    hit the provider's processing deadline is not one that errored, and collapsing them would make
+    the reconciliation record say something untrue.
+    """
+
+    processing: int = 0
+    succeeded: int = 0
+    errored: int = 0
+    canceled: int = 0
+    expired: int = 0
+
+
+@dataclass(frozen=True)
 class DurableSubmission:
+    """The acknowledgement. Everything here is needed again after a worker death."""
+
     provider_execution_id: str
     state: str
     provider_request_id: str | None = None
+    custom_id: str | None = None
+    """The caller-supplied correlation key, echoed back. The reconciliation handle."""
+
+    created_at: str | None = None
+    expires_at: str | None = None
+    """When the provider stops processing. Distinct from how long results are retained."""
 
 
 @dataclass(frozen=True)
@@ -186,15 +217,38 @@ class DurableStatus:
     provider_execution_id: str
     state: str
     retry_after_ms: int | None = None
+    native_status: str | None = None
+    """The provider's own status string, unnormalized. Recorded because a normalized status is a
+    lossy summary of it, and the transition ledger is forensic evidence rather than a dashboard."""
+
+    counts: DurableExecutionCounts | None = None
+    results_available: bool = False
+    created_at: str | None = None
+    expires_at: str | None = None
+    ended_at: str | None = None
+    cancel_initiated_at: str | None = None
 
 
 @dataclass(frozen=True)
 class DurableResult:
+    """One correlated record, not a whole batch.
+
+    ``outcome`` is required and ``text`` is optional, in that order deliberately: an expired or
+    cancelled record has no text, and a result type that made text mandatory would force an adapter
+    to invent an empty string and lose the distinction.
+    """
+
     provider_execution_id: str
-    text: str
-    input_tokens: int
-    output_tokens: int
+    outcome: str
+    """One of ``succeeded``, ``errored``, ``canceled``, ``expired``."""
+
+    custom_id: str | None = None
+    text: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
     cached_input_tokens: int = 0
+    provider_message_id: str | None = None
+    error_code: str | None = None
 
 
 def resolve_durable_capability(adapter: object) -> DurableExecutionCapability:
