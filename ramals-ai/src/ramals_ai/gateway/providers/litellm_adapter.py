@@ -15,7 +15,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
-from ramals_ai.gateway.providers.base import Message, ProviderRequest, ProviderResponse
+from ramals_ai.gateway.providers.base import (
+    DurableExecutionCapability,
+    Message,
+    ProviderRequest,
+    ProviderResponse,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import shape only
     pass
@@ -50,6 +55,33 @@ class LiteLLMProvider:
             litellm.suppress_debug_info = True
             self._litellm = litellm
         return self._litellm
+
+    def durable_capability(self) -> DurableExecutionCapability:
+        """Declares Contract B unsupported on the synchronous path, and says which rows fail.
+
+        Verified against the published Anthropic contract on 2026-08-27 and recorded in
+        M2-ADR-016 §2: the Messages API documents no idempotency key, no status endpoint, and no
+        GET for a previously created message. Four of five mandatory rows fail.
+
+        Stated rather than probed. This is a property of the provider's published contract, not of
+        this process, so there is nothing to discover at runtime -- and a probe that imported the
+        SDK would make asking the question require the optional ``provider`` extra, on a path whose
+        whole purpose is to refuse before anything is loaded.
+
+        Contract B on this provider needs the Message Batches API, which is a different submission
+        surface this adapter does not implement. When it does, this method changes with it; until
+        then the honest answer is no.
+        """
+        return DurableExecutionCapability.unsupported(
+            "the synchronous Messages API documents no replay-safe admission, no status lookup "
+            "and no result retrieval; Contract B requires all three",
+            replay_safe_admission=False,
+            durable_execution_id=False,
+            status_lookup=False,
+            result_retrieval=False,
+            cancellation=False,
+            result_retention_days=0,
+        )
 
     def ensure_available(self) -> None:
         """Imports the SDK now, so a build that cannot reach a provider says so at startup.

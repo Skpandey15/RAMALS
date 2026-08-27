@@ -42,6 +42,11 @@ class GatewayErrorCode(StrEnum):
     # The model answered, but not in a shape the caller can use.
     INVALID_STRUCTURED_OUTPUT = "INVALID_STRUCTURED_OUTPUT"
 
+    # The route asked for durable recoverable execution (Contract B) and the adapter cannot honour
+    # it. Refused before any provider is contacted. Never retryable and never fallback eligible --
+    # see the policy note below, which is the whole point of the code.
+    CONTRACT_B_UNSUPPORTED = "CONTRACT_B_UNSUPPORTED"
+
 
 # Handling policy per code, from M1-ADR-008. Kept as data next to the codes so the policy is
 # readable in one place rather than inferred from scattered `if` statements.
@@ -63,6 +68,14 @@ _POLICY: dict[GatewayErrorCode, tuple[bool, bool]] = {
     GatewayErrorCode.ROUTE_NOT_CONFIGURED: (False, False),
     # Repair is bounded and happens on the same route.
     GatewayErrorCode.INVALID_STRUCTURED_OUTPUT: (True, False),
+    # (False, False) is load-bearing rather than conservative. `fallback_eligible = True` would let
+    # a Contract B request be served by a different route, and the only routes that exist are
+    # Contract A ones -- which is precisely the silent degradation M2-ADR-016 forbids. A durable
+    # execution that quietly completed as a synchronous single submission would leave a row that
+    # looks recoverable and is not. `retryable = True` would be no better: the adapter's inability
+    # is a property of its published contract, not a transient fault, so a second attempt asks the
+    # same question and gets the same answer.
+    GatewayErrorCode.CONTRACT_B_UNSUPPORTED: (False, False),
 }
 
 
