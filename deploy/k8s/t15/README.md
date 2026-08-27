@@ -287,6 +287,31 @@ committed shape is `m2-t15.in-flight-indeterminate-proof.v1` in
 [`evidence-schema.json`](evidence-schema.json), which requires the block for any passing
 `diagnostic-in-flight` scenario.
 
+### DIAGNOSE attempt: 1 for `diagnostic-provider`, 2 for `diagnostic-in-flight`
+
+The expected attempt is **per scenario**, decided by *which worker the fault kills* — not by the
+terminal status the scenarios share.
+
+| Scenario | Attempt | Why |
+| --- | --- | --- |
+| `diagnostic-provider` | **1** | The AI worker dies. The original platform worker **survives**, catches the failure, records `INDETERMINATE` in-process and returns a terminal result. A terminal result is not retried, so its first attempt is its only one. |
+| `diagnostic-in-flight` | **2** | The **platform** worker dies, and attempt 1 dies with it. A replacement claims attempt 2, observes the durable `IN_FLIGHT` row, and closes it `INDETERMINATE` without redispatching. Attempt 2 *is* the recovery this scenario proves. |
+
+Attempt 2 in `diagnostic-in-flight` is not a retry of the provider call, and the attempt count is
+not what proves it. `fence = 1` and `providerInvocations = 1` are — durably, from the dispatch row.
+
+**Both numbers are transcribed from observed run evidence, not derived.** Reasoning about what the
+application ought to do produced the wrong answer twice: #164 left `diagnostic-provider` on the
+pre-#160 value of 2 and failed S3 on a correct candidate; #165 then pinned *both* scenarios to 1 by
+inventing a shared "fail-closed" rule, and failed S4 the same way. The fail-closed set governs
+evidence preservation only; `Get-ScenarioDiagnoseAttemptOverrides` in
+[`contract-a-expectations.ps1`](contract-a-expectations.ps1) is an explicit per-scenario map, so a
+future scenario gets its own entry and its own justification rather than inheriting a number from a
+category it happens to share.
+
+<details>
+<summary>Superseded: the #165 shared rule</summary>
+
 ### DIAGNOSE terminates at attempt 1, not 2
 
 Before #160 an AI-side death surfaced to the workflow as an ordinary transport failure: the step
@@ -306,6 +331,12 @@ exists to prevent. `Get-ExpectedDiagnoseAttempt` in
 
 This is a real defect the harness shipped: S3 failed on this stale expectation against a candidate
 whose production behaviour satisfied every Contract A invariant.
+
+The reasoning above is correct for `diagnostic-provider` and **wrong for `diagnostic-in-flight`**,
+where the platform worker itself dies and the recovery attempt is legitimately the second. See the
+per-scenario table above.
+
+</details>
 
 ### Evidence survives a failing assertion
 

@@ -59,34 +59,60 @@ function Test-Case {
 
 Write-Host "Contract A expectation self-tests"
 
-# -- 1. fail-closed scenarios terminate at DIAGNOSE attempt 1 -----------------------------------
+# -- 1. DIAGNOSE attempt is per scenario, keyed on which worker dies -----------------------------
+#
+# Both numbers are transcribed from observed run evidence, not derived:
+#   S3 diagnostic-provider,  run 4771fbba-8d33-4ecc-a998-c5ca661ba366 -> DIAGNOSE FAILED, attempt 1
+#   S4 diagnostic-in-flight, run c15dc674-0b4b-4314-a4cf-fe422a890985 -> DIAGNOSE FAILED, attempt 2
+#
+# Reasoning about what the application ought to do produced the wrong answer twice: #164 left
+# diagnostic-provider on the pre-#160 value of 2, and #165 then pinned both scenarios to 1. These
+# assertions exist so the evidence is the specification.
 
-Write-Host " attempt expectations"
+Write-Host " attempt expectations (S3 = 1, S4 = 2)"
 
-Test-Value "diagnostic-provider expects attempt 1" `
+# S3: the AI worker dies, the original platform worker survives and terminates its own attempt 1.
+Test-Value "S3 diagnostic-provider expects attempt 1" `
   (Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-provider" -DefaultAttempt 2) 1
 
-Test-Value "diagnostic-in-flight expects attempt 1" `
-  (Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-in-flight" -DefaultAttempt 2) 1
+# S4: the platform worker dies, so attempt 1 dies with it and the replacement claims attempt 2.
+Test-Value "S4 diagnostic-in-flight expects attempt 2" `
+  (Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-in-flight" -DefaultAttempt 2) 2
 
-# The stale expectation itself: 2 is what #164 left behind and what failed S3 on a correct
-# candidate. It must never be what these scenarios resolve to again.
-Test-Value "diagnostic-provider does not resolve to the stale attempt 2" `
+# The two failures already seen, asserted as failures so neither can return.
+Test-Value "S3 does not resolve to 2 (the #164 defect that failed S3)" `
   ((Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-provider" -DefaultAttempt 2) -eq 2) $false
 
-Test-Value "diagnostic-in-flight does not resolve to the stale attempt 2" `
-  ((Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-in-flight" -DefaultAttempt 2) -eq 2) $false
+Test-Value "S4 does not resolve to 1 (the #165 defect that failed S4)" `
+  ((Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-in-flight" -DefaultAttempt 2) -eq 1) $false
 
-# A fail-closed scenario is pinned to 1 regardless of what default is handed in, so a future edit
-# to an unrelated default cannot quietly reintroduce a retry expectation.
-Test-Value "fail-closed pinning ignores a default of 3" `
+# The scenarios must not share an attempt expectation. #165 gave them one and S4 failed for it.
+Test-Value "the two fail-closed scenarios do NOT share an attempt expectation" `
+  ((Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-provider" -DefaultAttempt 2) -eq
+   (Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-in-flight" -DefaultAttempt 2)) $false
+
+# Each override is pinned regardless of the default handed in, so an unrelated edit to a default
+# cannot quietly move either one.
+Test-Value "S3 pinning ignores a default of 3" `
   (Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-provider" -DefaultAttempt 3) 1
+Test-Value "S4 pinning ignores a default of 3" `
+  (Get-ExpectedDiagnoseAttempt -ScenarioName "diagnostic-in-flight" -DefaultAttempt 3) 2
+
+# Fail-closed classification governs evidence preservation only. It must never again be read as an
+# attempt rule -- that conflation is the #165 defect.
+Test-Value "both scenarios are still fail-closed for evidence purposes" `
+  ((Test-IsFailClosedScenario "diagnostic-provider") -and
+   (Test-IsFailClosedScenario "diagnostic-in-flight")) $true
+
+Test-Value "exactly two scenarios carry an attempt override" `
+  (Get-ScenarioDiagnoseAttemptOverrides).Count 2
 
 # -- 2. every other scenario keeps its existing expectation --------------------------------------
 
 Write-Host " legacy and default expectations are unchanged"
 
 foreach ($legacy in @(
+    # S2 and S1 respectively -- both already PASSED on the frozen candidate and must be untouched.
     @{ Name = "diagnostic-commission"; Default = 2 },
     @{ Name = "diagnostic-outcome-commit"; Default = 2 },
     @{ Name = "after-claim"; Default = 2 },
@@ -106,6 +132,10 @@ Test-Value "an unknown scenario keeps its default" `
   (Get-ExpectedDiagnoseAttempt -ScenarioName "some-future-scenario" -DefaultAttempt 2) 2
 
 Test-Value "only two scenarios are fail-closed" (Get-FailClosedScenarioNames).Count 2
+Test-Value "S1 diagnostic-outcome-commit has no attempt override" `
+  (Get-ScenarioDiagnoseAttemptOverrides).ContainsKey("diagnostic-outcome-commit") $false
+Test-Value "S2 diagnostic-commission has no attempt override" `
+  (Get-ScenarioDiagnoseAttemptOverrides).ContainsKey("diagnostic-commission") $false
 Test-Value "diagnostic-commission is not fail-closed" `
   (Test-IsFailClosedScenario "diagnostic-commission") $false
 Test-Value "diagnostic-outcome-commit is not fail-closed" `

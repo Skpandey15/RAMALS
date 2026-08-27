@@ -6,7 +6,11 @@
 # S3 on a candidate that was behaving correctly.
 
 # The Contract A fail-closed scenarios: an authorized provider submission whose outcome becomes
-# ambiguous. Both terminate at DIAGNOSE attempt 1.
+# ambiguous. Both terminate INDETERMINATE, and both must preserve their evidence on failure.
+#
+# This set says nothing about DIAGNOSE attempt counts. Treating it as if it did is the #165 defect:
+# fail-closed describes the terminal *semantics*, and the attempt count is decided by something
+# else entirely -- which worker died. Get-ExpectedDiagnoseAttempt below keys on that instead.
 function Get-FailClosedScenarioNames {
   return @("diagnostic-provider", "diagnostic-in-flight")
 }
@@ -16,28 +20,48 @@ function Test-IsFailClosedScenario {
   return (Get-FailClosedScenarioNames) -contains $ScenarioName
 }
 
-# Why 1 and not 2.
+# Expected DIAGNOSE attempt, per scenario, keyed on which worker dies.
 #
-# Before #160 an AI-side death surfaced to the workflow as an ordinary transport failure. The step
-# failed *retryably*, the bounded attempt policy ran DIAGNOSE again, and the scenario legitimately
-# expected attempt 2.
+# There is no shared rule here, and #165 failed because it invented one. Both Contract A
+# fail-closed scenarios end INDETERMINATE, so it looked as though both must end at attempt 1. They
+# do not, and the difference is not the terminal status -- it is whose worker the fault kills.
 #
-# Contract A deliberately removed that second attempt. Once provider dispatch is authorized and the
-# outcome becomes ambiguous, DiagnosticAssessmentService records INDETERMINATE and rethrows it;
-# DiagnosticAgentStep maps that to a terminal result, and a terminal result is not retried. Retrying
-# is precisely what Contract A forbids after an authorized submission, because a retry could reach
-# the provider a second time for one logical request.
+#   diagnostic-provider  -> 1. The AI worker dies. The original platform worker SURVIVES, catches
+#                           the failure, records INDETERMINATE in-process and returns a terminal
+#                           result. A terminal result is not retried, so its first and only attempt
+#                           is the one that resolves the request. Observed in the S3 evidence:
+#                           DIAGNOSE FAILED, attempt 1.
 #
-# So attempt 1 is not a weaker outcome than attempt 2 here -- it is the guarantee. An expectation of
-# 2 asserts that the platform retried an ambiguous provider call, which is the defect Contract A
-# exists to prevent.
+#   diagnostic-in-flight -> 2. The PLATFORM worker dies, and attempt 1 dies with it. A replacement
+#                           worker claims the step as attempt 2, observes the durable IN_FLIGHT
+#                           row, and closes it INDETERMINATE without redispatching. Attempt 2 is
+#                           the recovery attempt -- it is the guarantee this scenario exists to
+#                           prove, not a retry of the provider call. That no second submission
+#                           occurred on it is proven separately and durably by fence = 1 and
+#                           providerInvocations = 1. Observed in the S4 evidence: DIAGNOSE FAILED,
+#                           attempt 2.
+#
+# Both numbers are transcribed from observed run evidence rather than derived from reasoning about
+# what the application ought to do. Reasoning is what produced the wrong answer twice: #164 left
+# diagnostic-provider on the pre-#160 value of 2, and #165 then pinned both scenarios to 1.
+#
+# An explicit per-scenario map, deliberately. A future scenario gets its own entry and its own
+# justification; it does not inherit a number from a category it happens to share.
+function Get-ScenarioDiagnoseAttemptOverrides {
+  return @{
+    "diagnostic-provider" = 1
+    "diagnostic-in-flight" = 2
+  }
+}
+
 function Get-ExpectedDiagnoseAttempt {
   param(
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ScenarioName,
     [Parameter(Mandatory = $true)][int]$DefaultAttempt
   )
-  if (Test-IsFailClosedScenario $ScenarioName) {
-    return 1
+  $overrides = Get-ScenarioDiagnoseAttemptOverrides
+  if ($overrides.ContainsKey($ScenarioName)) {
+    return $overrides[$ScenarioName]
   }
   return $DefaultAttempt
 }

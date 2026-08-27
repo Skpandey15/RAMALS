@@ -4726,10 +4726,10 @@ function Run-Scenario {
     }
     "diagnostic-provider" {
       $targetStep = "DIAGNOSE"
-      # 1, not the pre-#160 value of 2. Contract A terminates DIAGNOSE at attempt 1 once an
-      # authorized provider submission becomes ambiguous: the step result is terminal and is not
-      # retried, because retrying is what could reach the provider twice for one logical request.
-      # Get-ExpectedDiagnoseAttempt pins this independently, so the two cannot drift apart.
+      # 1. The AI worker dies, but this platform worker survives it: it catches the failure,
+      # records INDETERMINATE in-process and returns a terminal result, which is not retried. Its
+      # first attempt is the only one. Get-ExpectedDiagnoseAttempt pins this independently, so the
+      # declared value and the resolved one cannot drift apart.
       $expectedTargetAttempt = 1
       $expectedFailure = $true
       $expectedAdaptation = $false
@@ -4744,11 +4744,12 @@ function Run-Scenario {
     }
     "diagnostic-in-flight" {
       $targetStep = "DIAGNOSE"
-      # 1, not the pre-#160 value of 2. Contract A terminates DIAGNOSE at attempt 1 once an
-      # authorized provider submission becomes ambiguous: the step result is terminal and is not
-      # retried, because retrying is what could reach the provider twice for one logical request.
-      # Get-ExpectedDiagnoseAttempt pins this independently, so the two cannot drift apart.
-      $expectedTargetAttempt = 1
+      # 2, and unlike diagnostic-provider that is not a retry of the provider call. The platform
+      # worker dies here, so attempt 1 dies with it and a replacement claims attempt 2, observes
+      # the durable IN_FLIGHT row and closes it INDETERMINATE without redispatching. Attempt 2 is
+      # the recovery attempt this scenario exists to prove. That nothing was resubmitted on it is
+      # proven durably by fence = 1 and providerInvocations = 1, not by the attempt count.
+      $expectedTargetAttempt = 2
       $expectedFailure = $true
       $expectedAdaptation = $false
       $expectedDiagnosticStatus = "INDETERMINATE"
