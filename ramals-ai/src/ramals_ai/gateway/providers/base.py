@@ -34,6 +34,12 @@ class ProviderRequest:
     timeout_seconds: float
     """Derived from the caller's remaining deadline, never a fixed per-hop value."""
 
+    request_id: str | None = None
+    """Stable RAMALS request identity for correlation; not a provider idempotency claim."""
+
+    single_submission: bool = False
+    """When true, the adapter must disable every controllable provider-SDK retry."""
+
 
 @dataclass(frozen=True)
 class ProviderResponse:
@@ -43,6 +49,8 @@ class ProviderResponse:
     input_tokens: int
     output_tokens: int
     cached_input_tokens: int = 0
+    provider_request_id: str | None = None
+    provider_message_id: str | None = None
 
 
 @runtime_checkable

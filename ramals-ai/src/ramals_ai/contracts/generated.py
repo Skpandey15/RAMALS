@@ -183,6 +183,27 @@ class AIProposalEnvelope(BaseModel):
             max_length=256,
         ),
     ] = None
+    providerRequestId: Annotated[
+        str | None,
+        Field(
+            description='Provider-issued request identifier for audit/support correlation only.',
+            max_length=128,
+        ),
+    ] = None
+    providerMessageId: Annotated[
+        str | None,
+        Field(
+            description='Provider-issued completion/message identifier for audit/support correlation only.',
+            max_length=128,
+        ),
+    ] = None
+    responseDigest: Annotated[
+        str | None,
+        Field(
+            description='SHA-256 of provider response text; never a replay or recovery credential.',
+            pattern='^[0-9a-f]{64}$',
+        ),
+    ] = None
     trustLevel: TrustLevel
     confidence: Annotated[
         DecimalString | None,
@@ -279,7 +300,11 @@ class DiagnosticAssessmentRequest(BaseModel):
         str, Field(description='Logical learner action. Stable across safe retries.', max_length=64)
     ]
     requestId: Annotated[
-        str, Field(description='One transport attempt. New per retry.', max_length=64)
+        str,
+        Field(
+            description='Stable deterministic identity of this logical diagnostic execution.',
+            max_length=64,
+        ),
     ]
     constraints: Constraints
     groundedContext: GroundedContextEnvelope

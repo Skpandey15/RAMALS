@@ -207,6 +207,17 @@ paths:
         mandatory here and meaningless on the MVP-1 operations, and an optional field carrying that
         distinction would leave every existing operation with an ambiguous "is it required for me?"
         semantic that no schema states.
+      parameters:
+        - name: X-RAMALS-Dispatch-Fence
+          in: header
+          required: true
+          description: PostgreSQL-issued monotonic authority for this request's sole provider dispatch.
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: X-RAMALS-Request-Digest
+          in: header
+          required: true
+          description: SHA-256 identity of the durably commissioned diagnostic request.
+          schema: { type: string, pattern: '^[0-9a-f]{64}$' }
       requestBody:
         required: true
         content:
@@ -586,6 +597,18 @@ components:
           type: string
           maxLength: 256
           description: Version/configuration stamp of the route resolution used for this execution.
+        providerRequestId:
+          type: string
+          maxLength: 128
+          description: Provider-issued request identifier for audit/support correlation only.
+        providerMessageId:
+          type: string
+          maxLength: 128
+          description: Provider-issued completion/message identifier for audit/support correlation only.
+        responseDigest:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: SHA-256 of provider response text; never a replay or recovery credential.
         trustLevel: { $ref: '#/components/schemas/TrustLevel' }
         confidence:
           $ref: '#/components/schemas/DecimalString'
@@ -680,7 +703,7 @@ components:
         requestId:
           type: string
           maxLength: 64
-          description: One transport attempt. New per retry.
+          description: Stable deterministic identity of this logical diagnostic execution.
         constraints: { $ref: '#/components/schemas/Constraints' }
         groundedContext: { $ref: '#/components/schemas/GroundedContextEnvelope' }
 

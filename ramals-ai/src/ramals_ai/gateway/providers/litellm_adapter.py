@@ -79,12 +79,23 @@ class LiteLLMProvider:
     def complete(self, request: ProviderRequest) -> ProviderResponse:
         litellm = self._module()
         try:
+            arguments: dict[str, Any] = {
+                "model": request.model,
+                "messages": [
+                    {"role": message.role, "content": message.content}
+                    for message in request.messages
+                ],
+                "max_tokens": request.max_output_tokens,
+                "timeout": request.timeout_seconds,
+                "api_key": self._api_key,
+            }
+            if request.single_submission:
+                # LiteLLM otherwise owns a retry policy below RAMALS' gateway. Contract A permits
+                # one intended external submission after durable IN_FLIGHT and therefore has to
+                # disable that hidden layer as well as the gateway's own retry/fallback paths.
+                arguments["num_retries"] = 0
             completion = litellm.completion(
-                model=request.model,
-                messages=[{"role": m.role, "content": m.content} for m in request.messages],
-                max_tokens=request.max_output_tokens,
-                timeout=request.timeout_seconds,
-                api_key=self._api_key,
+                **arguments,
             )
         except Exception as failure:  # noqa: BLE001 - the point of this method is to classify them
             raise self._normalize(failure) from None
@@ -112,7 +123,28 @@ class LiteLLMProvider:
             input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
             output_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
             cached_input_tokens=cached,
+            provider_request_id=LiteLLMProvider._provider_request_id(completion),
+            provider_message_id=LiteLLMProvider._provider_message_id(completion),
         )
+
+    @staticmethod
+    def _provider_message_id(completion: Any) -> str | None:
+        """Returns the provider completion/message identity when LiteLLM exposes one."""
+        value = getattr(completion, "id", None)
+        return str(value)[:128] if value else None
+
+    @staticmethod
+    def _provider_request_id(completion: Any) -> str | None:
+        """Reads a provider request identifier for audit only, never for replay/recovery."""
+        hidden = getattr(completion, "_hidden_params", None)
+        if not isinstance(hidden, dict):
+            return None
+        headers = hidden.get("additional_headers")
+        if not isinstance(headers, dict):
+            return None
+        normalized = {str(key).lower(): value for key, value in headers.items()}
+        value = normalized.get("request-id") or normalized.get("x-request-id")
+        return str(value)[:128] if value else None
 
     def _normalize(self, failure: Exception) -> GatewayError:
         """Maps a provider exception onto the fixed taxonomy.

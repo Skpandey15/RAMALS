@@ -58,6 +58,11 @@ public class AiExecutionPersistenceService
   }
 
   @Override
+  public boolean closeIndeterminateExecution(String requestId, String errorCode) {
+    return independent(() -> repository.closeIndeterminateExecution(requestId, errorCode));
+  }
+
+  @Override
   public AiExecution recordSuccess(AiRequestEnvelope request, AiProposalEnvelope proposal,
       Instant startedAt, Instant completedAt) {
     try {
@@ -213,6 +218,41 @@ public class AiExecutionPersistenceService
           request.interactionId(),
           "DIAGNOSTIC",
           "FAILED",
+          errorCode,
+          failure);
+      throw failure;
+    }
+  }
+
+  @Override
+  public AiExecution recordIndeterminate(
+      DiagnosticAssessmentRequest request,
+      String errorCode,
+      Instant startedAt,
+      Instant completedAt) {
+    try {
+      AiExecution execution =
+          independent(
+              () ->
+                  repository.insertDiagnosticAssessmentIndeterminate(
+                      request, errorCode, startedAt, completedAt));
+      BusinessEventLogger.info(
+          LOGGER,
+          "ai.execution.indeterminate_persisted",
+          "AI execution outcome recorded as indeterminate",
+          Map.of(
+              "requestId", request.requestId(),
+              "interactionId", request.interactionId(),
+              "agentType", "DIAGNOSTIC",
+              "status", execution.status(),
+              "errorCode", errorCode));
+      return execution;
+    } catch (RuntimeException failure) {
+      logPersistenceFailure(
+          request.requestId(),
+          request.interactionId(),
+          "DIAGNOSTIC",
+          "INDETERMINATE",
           errorCode,
           failure);
       throw failure;

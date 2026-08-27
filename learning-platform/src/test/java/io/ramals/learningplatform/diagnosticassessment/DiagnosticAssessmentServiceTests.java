@@ -10,6 +10,7 @@ import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
+import io.ramals.learningplatform.ai.contract.DiagnosticDispatchAuthorization;
 import io.ramals.learningplatform.ai.contract.TrustLevel;
 import io.ramals.learningplatform.grounding.AuthorizedGroundingFacts;
 import io.ramals.learningplatform.grounding.GroundedContext;
@@ -234,7 +235,7 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service =
         new DiagnosticAssessmentService(
             retrieval(),
-            (request, deadlineMillis) -> {
+            (request, authorization, deadlineMillis) -> {
               throw new AiUnavailableException(
                   "AI_DEADLINE_EXCEEDED", "no time remained for diagnostic assessment");
             },
@@ -246,18 +247,21 @@ class DiagnosticAssessmentServiceTests {
     assertThatThrownBy(() -> service.assess("subject-1", CURRICULUM, "r-1"))
         .isInstanceOf(AiUnavailableException.class);
     assertThat(decisions.appended).isEmpty();
-    assertThat(executions.failureCodes).containsExactly("AI_DEADLINE_EXCEEDED");
+    assertThat(executions.indeterminateCodes)
+        .containsExactly(DiagnosticAssessmentService.INDETERMINATE);
     assertThat(executions.successfulRequests).isEmpty();
   }
 
   @Test
   void theRequestCarriesTheContextSpringBuiltAndNoLearnerIdentifierOfItsOwn() {
     List<DiagnosticAssessmentRequest> sent = new ArrayList<>();
+    List<DiagnosticDispatchAuthorization> authorizations = new ArrayList<>();
     DiagnosticAssessmentService service =
         new DiagnosticAssessmentService(
             retrieval(),
-            (request, deadlineMillis) -> {
+            (request, authorization, deadlineMillis) -> {
               sent.add(request);
+              authorizations.add(authorization);
               return envelopeAccepting(request.groundedContext().contextId());
             },
             gate,
@@ -271,6 +275,8 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentRequest request = sent.get(0);
     assertThat(request.groundedContext()).isNotNull();
     assertThat(request.contractVersion()).isEqualTo(DiagnosticAssessmentRequest.CONTRACT_VERSION);
+    assertThat(authorizations)
+        .containsExactly(new DiagnosticDispatchAuthorization(1, "a".repeat(64)));
     // The only learner identity that crosses is the opaque reference inside the context.
     assertThat(request.groundedContext().learnerRef()).isNotBlank();
     assertThat(executions.successfulRequests).containsExactly(request);
@@ -288,7 +294,7 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service =
         new DiagnosticAssessmentService(
             retrieval(),
-            (request, deadlineMillis) -> {
+            (request, authorization, deadlineMillis) -> {
               sent.add(request);
               return envelopeAccepting();
             },
@@ -324,7 +330,7 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service =
         new DiagnosticAssessmentService(
             retrieval(),
-            (request, deadlineMillis) -> {
+            (request, authorization, deadlineMillis) -> {
               sent.add(request);
               return envelopeAccepting();
             },
@@ -350,7 +356,7 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service =
         new DiagnosticAssessmentService(
             retrieval(),
-            (request, deadlineMillis) -> {
+            (request, authorization, deadlineMillis) -> {
               sent.add(request);
               return envelopeAccepting();
             },
@@ -375,7 +381,7 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service =
         new DiagnosticAssessmentService(
             retrieval(),
-            (request, deadlineMillis) -> {
+            (request, authorization, deadlineMillis) -> {
               sent.add(request);
               return envelopeAccepting();
             },
@@ -400,7 +406,7 @@ class DiagnosticAssessmentServiceTests {
     DiagnosticAssessmentService service =
         new DiagnosticAssessmentService(
             retrieval(),
-            (request, deadlineMillis) -> {
+            (request, authorization, deadlineMillis) -> {
               sent.add(request);
               return envelopeAccepting();
             },
@@ -449,7 +455,7 @@ class DiagnosticAssessmentServiceTests {
 
   private DiagnosticAssessmentService service(AiProposalEnvelope envelope) {
     return new DiagnosticAssessmentService(
-        retrieval(), (request, deadlineMillis) -> envelope, gate,
+        retrieval(), (request, authorization, deadlineMillis) -> envelope, gate,
         executions,
         recordingWriter(),
         Clock.fixed(NOW, ZoneOffset.UTC));
@@ -595,13 +601,14 @@ class DiagnosticAssessmentServiceTests {
     private AiExecutionCommission commission = AiExecutionCommission.claimed();
     private AiExecutionDispatchClaim dispatch =
         AiExecutionDispatchClaim.acquired(
-            UUID.fromString("01900000-0000-7000-8000-0000000000f1"), 1);
+            UUID.fromString("01900000-0000-7000-8000-0000000000f1"), 1, "a".repeat(64));
     private boolean markStarted = true;
     private Optional<DiagnosticCommissionContext> recoverable = Optional.empty();
     private final List<String> acquiredRequestIds = new ArrayList<>();
     private final List<String> markedRequestIds = new ArrayList<>();
     private final List<DiagnosticAssessmentRequest> successfulRequests = new ArrayList<>();
     private final List<String> failureCodes = new ArrayList<>();
+    private final List<String> indeterminateCodes = new ArrayList<>();
 
     @Override
     public AiExecutionCommission commission(DiagnosticAssessmentRequest request) {
@@ -643,6 +650,16 @@ class DiagnosticAssessmentServiceTests {
         Instant startedAt,
         Instant completedAt) {
       failureCodes.add(errorCode);
+      return null;
+    }
+
+    @Override
+    public AiExecution recordIndeterminate(
+        DiagnosticAssessmentRequest request,
+        String errorCode,
+        Instant startedAt,
+        Instant completedAt) {
+      indeterminateCodes.add(errorCode);
       return null;
     }
   }

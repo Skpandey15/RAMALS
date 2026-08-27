@@ -14,8 +14,9 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -124,7 +125,10 @@ def build_internal_router() -> APIRouter:
 
     @router.post("/diagnostic-assessment/propose", response_model=AIProposalEnvelope)
     def diagnostic_assessment_propose(
-        request: Request, payload: DiagnosticAssessmentRequest
+        request: Request,
+        payload: DiagnosticAssessmentRequest,
+        dispatch_fence: Annotated[int | None, Header(alias="X-RAMALS-Dispatch-Fence")] = None,
+        request_digest: Annotated[str | None, Header(alias="X-RAMALS-Request-Digest")] = None,
     ) -> AIProposalEnvelope | JSONResponse:
         """M2-T09. Consumes the context Spring built; Spring's gate decides what it means.
 
@@ -134,6 +138,18 @@ def build_internal_router() -> APIRouter:
         the ones that fail closed.
         """
         agent: DiagnosticAssessmentAgent = request.app.state.agents["diagnostic_assessment"]
+        if dispatch_fence is None or dispatch_fence < 1:
+            return _problem(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "DIAGNOSTIC_DISPATCH_FENCE_INVALID",
+                "A positive durable dispatch fence is required.",
+            )
+        if request_digest is None or re.fullmatch(r"[0-9a-f]{64}", request_digest) is None:
+            return _problem(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "DIAGNOSTIC_REQUEST_DIGEST_INVALID",
+                "A durable SHA-256 request identity is required.",
+            )
         try:
             context = GroundedContext.model_validate(
                 payload.groundedContext.model_dump(mode="json")
@@ -155,6 +171,8 @@ def build_internal_router() -> APIRouter:
                 request_id=payload.requestId,
                 deadline=deadline,
                 interaction_class=payload.constraints.interactionClass,
+                dispatch_fence=dispatch_fence,
+                request_digest=request_digest,
             )
         )
 

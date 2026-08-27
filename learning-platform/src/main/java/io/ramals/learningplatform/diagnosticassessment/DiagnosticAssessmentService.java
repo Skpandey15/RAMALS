@@ -5,6 +5,7 @@ import io.ramals.learningplatform.ai.AiUnavailableException;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
+import io.ramals.learningplatform.ai.contract.DiagnosticDispatchAuthorization;
 import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.grounding.GroundedContext;
 import io.ramals.learningplatform.grounding.GroundedContextItem.SourceType;
@@ -46,6 +47,7 @@ import org.slf4j.MDC;
 public class DiagnosticAssessmentService {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(DiagnosticAssessmentService.class);
+  public static final String INDETERMINATE = "AI_EXECUTION_OUTCOME_INDETERMINATE";
 
   /** The diagnostic budget. The caller's remaining time still binds when it is shorter. */
   static final long DEADLINE_MS = 12_000;
@@ -158,10 +160,17 @@ public class DiagnosticAssessmentService {
     Instant startedAt = clock.instant();
     AiProposalEnvelope envelope;
     try {
-      envelope = agent.requestDiagnosticAssessment(request, DEADLINE_MS);
+      envelope =
+          agent.requestDiagnosticAssessment(
+              request,
+              new DiagnosticDispatchAuthorization(dispatch.fence(), dispatch.requestDigest()),
+              DEADLINE_MS);
     } catch (AiUnavailableException failure) {
-      executions.recordFailure(request, failure.code(), startedAt, clock.instant());
-      throw failure;
+      executions.recordIndeterminate(request, INDETERMINATE, startedAt, clock.instant());
+      throw new AiUnavailableException(
+          INDETERMINATE,
+          "The diagnostic provider outcome is indeterminate; automatic redispatch is forbidden.",
+          failure.origin());
     }
     Instant completedAt = clock.instant();
 

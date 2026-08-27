@@ -2,6 +2,7 @@ package io.ramals.learningplatform.ai;
 
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
+import io.ramals.learningplatform.ai.contract.DiagnosticDispatchAuthorization;
 import io.ramals.learningplatform.observability.CorrelationContext;
 import io.ramals.learningplatform.observability.CorrelationHeaders;
 import org.slf4j.Logger;
@@ -18,6 +19,9 @@ import org.springframework.web.client.RestClientException;
  * M1-ADR-001 exists to prevent, and a second client is a second place to reintroduce it.
  */
 public class RamalsAiDiagnosticAssessmentClient implements DiagnosticAssessmentPort {
+
+  static final String DISPATCH_FENCE_HEADER = "X-RAMALS-Dispatch-Fence";
+  static final String REQUEST_DIGEST_HEADER = "X-RAMALS-Request-Digest";
 
   private static final Logger LOGGER =
       LoggerFactory.getLogger(RamalsAiDiagnosticAssessmentClient.class);
@@ -37,7 +41,9 @@ public class RamalsAiDiagnosticAssessmentClient implements DiagnosticAssessmentP
 
   @Override
   public AiProposalEnvelope requestDiagnosticAssessment(
-      DiagnosticAssessmentRequest request, long deadlineMillis) {
+      DiagnosticAssessmentRequest request,
+      DiagnosticDispatchAuthorization authorization,
+      long deadlineMillis) {
     if (TransactionSynchronizationManager.isActualTransactionActive()) {
       throw new IllegalStateException("An AI call must not run inside a database transaction.");
     }
@@ -58,9 +64,11 @@ public class RamalsAiDiagnosticAssessmentClient implements DiagnosticAssessmentP
                             .uri("/internal/v1/diagnostic-assessment/propose")
                             // Workload identity per M1-ADR-003, never the learner's token.
                             .header("Authorization", "Bearer " + tokenProvider.accessToken())
-                            .header(
-                                CorrelationHeaders.INTERACTION_ID,
-                                CorrelationContext.currentInteractionId())
+                             .header(
+                                 CorrelationHeaders.INTERACTION_ID,
+                                 CorrelationContext.currentInteractionId())
+                            .header(DISPATCH_FENCE_HEADER, Long.toString(authorization.fence()))
+                            .header(REQUEST_DIGEST_HEADER, authorization.requestDigest())
                             .body(request)
                             .retrieve()
                             .body(AiProposalEnvelope.class);

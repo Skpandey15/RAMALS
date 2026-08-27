@@ -51,7 +51,11 @@ def client(app: FastAPI) -> TestClient:
     return TestClient(app)
 
 
-AUTH = {"Authorization": "Bearer good-token"}
+AUTH = {
+    "Authorization": "Bearer good-token",
+    "X-RAMALS-Dispatch-Fence": "1",
+    "X-RAMALS-Request-Digest": "a" * 64,
+}
 
 
 def context(*, minutes: int = 10, items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -112,6 +116,38 @@ def test_a_learner_token_shape_is_not_accepted(client: TestClient) -> None:
         PATH, json=request_body(), headers={"Authorization": "Bearer learner-token"}
     )
     assert response.status_code == 401
+
+
+def test_dispatch_fence_is_required_after_workload_authentication(client: TestClient) -> None:
+    headers = {key: value for key, value in AUTH.items() if key != "X-RAMALS-Dispatch-Fence"}
+
+    response = client.post(PATH, json=request_body(), headers=headers)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "DIAGNOSTIC_DISPATCH_FENCE_INVALID"
+
+
+def test_durable_request_digest_is_required_after_workload_authentication(
+    client: TestClient,
+) -> None:
+    headers = {key: value for key, value in AUTH.items() if key != "X-RAMALS-Request-Digest"}
+
+    response = client.post(PATH, json=request_body(), headers=headers)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "DIAGNOSTIC_REQUEST_DIGEST_INVALID"
+
+
+@pytest.mark.parametrize("digest", ["A" * 64, "a" * 63, "not-a-digest"])
+def test_durable_request_digest_must_be_canonical_sha256(client: TestClient, digest: str) -> None:
+    response = client.post(
+        PATH,
+        json=request_body(),
+        headers={**AUTH, "X-RAMALS-Request-Digest": digest},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "DIAGNOSTIC_REQUEST_DIGEST_INVALID"
 
 
 # -- fail closed on a context that should not be accepted ----------------------------------------

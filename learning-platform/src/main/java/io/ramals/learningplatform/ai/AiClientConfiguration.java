@@ -139,7 +139,7 @@ public class AiClientConfiguration {
     if (!configured(baseUrl, identity)) {
       // The same unconfigured behaviour every other agent gets: a deployment without an AI plane
       // must start and serve, and refuse the call it cannot make rather than fail at wiring time.
-      return (request, deadlineMillis) -> {
+      return (request, authorization, deadlineMillis) -> {
         throw new AiUnavailableException("AI_NOT_CONFIGURED",
             "Diagnostic assessment is not enabled in this environment.", FailureOrigin.CALLER);
       };

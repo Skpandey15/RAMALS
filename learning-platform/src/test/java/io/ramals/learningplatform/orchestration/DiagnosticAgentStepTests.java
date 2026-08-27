@@ -8,6 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import io.ramals.learningplatform.ai.AiUnavailableException;
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentService;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort;
 import io.ramals.learningplatform.grounding.ProposalGateDecisionPort.RecordedDecision;
@@ -153,6 +154,57 @@ class DiagnosticAgentStepTests {
   }
 
   @Test
+  void aTerminalIndeterminateExecutionIsAdoptedWithoutRedispatch() {
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.INDETERMINATE,
+            DiagnosticAssessmentService.INDETERMINATE));
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.succeeded()).isFalse();
+    assertThat(result.retryable()).isFalse();
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_EXECUTION_INDETERMINATE");
+    verify(diagnostics, never()).assess(anyString(), any(), anyString());
+    verify(executions, never()).closeIndeterminateExecution(anyString(), anyString());
+  }
+
+  @Test
+  void anAmbiguousOutcomeOnTheCurrentAttemptStopsWithoutWorkflowRedispatch() {
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState(anyString())).thenReturn(RecordedExecution.absent());
+    when(learners.findActiveSubjectById(LEARNER)).thenReturn(Optional.of("subject-1"));
+    when(diagnostics.assess(anyString(), any(), anyString()))
+        .thenThrow(
+            new AiUnavailableException(
+                DiagnosticAssessmentService.INDETERMINATE, "provider outcome is unknown"));
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.succeeded()).isFalse();
+    assertThat(result.retryable()).isFalse();
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_EXECUTION_INDETERMINATE");
+    verify(diagnostics).assess("subject-1", run().curriculumVersionId(), "wf-diag-" + RUN_ID);
+  }
+
+  @Test
+  void anInFlightRecoveryClosesAsIndeterminateAndNeverCallsTheProvider() {
+    when(decisions.findDecision(anyString(), any())).thenReturn(Optional.empty());
+    when(executions.findExecutionState("wf-diag-" + RUN_ID))
+        .thenReturn(new RecordedExecution(ExecutionState.IN_FLIGHT, null));
+    when(executions.closeIndeterminateExecution(
+            "wf-diag-" + RUN_ID, DiagnosticAssessmentService.INDETERMINATE))
+        .thenReturn(true);
+
+    WorkflowAgentStep.Result result = step.diagnose(run());
+
+    assertThat(result.retryable()).isFalse();
+    assertThat(result.reasonCode()).isEqualTo("DIAGNOSIS_EXECUTION_INDETERMINATE");
+    verify(diagnostics, never()).assess(anyString(), any(), anyString());
+    verify(executions, never()).closeAbandonedExecution(anyString(), anyString());
+  }
+
+  @Test
   void state4_aSucceededExecutionWithNoDecisionIsReportedAsUnrecoverable() {
     // core.ai_execution keeps a proposal digest, not the proposal, so there is nothing to re-gate.
     // Its own reason code makes the state countable instead of hidden in a generic failure.
@@ -177,6 +229,7 @@ class DiagnosticAgentStepTests {
           ExecutionState.IN_FLIGHT,
           ExecutionState.LEGACY_INDETERMINATE,
           ExecutionState.FAILED,
+          ExecutionState.INDETERMINATE,
           ExecutionState.SUCCEEDED
         }) {
       when(executions.findExecutionState(anyString()))

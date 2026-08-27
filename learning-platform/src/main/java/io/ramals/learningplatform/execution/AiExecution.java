@@ -28,6 +28,9 @@ public record AiExecution(
     String modelId,
     String routeVersion,
     String traceId,
+    String providerRequestId,
+    String providerMessageId,
+    String responseDigest,
     String status,
     String errorCode,
     String requestDigest,
@@ -47,8 +50,8 @@ public record AiExecution(
       Integer outputTokens, BigDecimal estimatedCostUsd, Integer latencyMs, Instant startedAt,
       Instant completedAt) {
     this(id, requestId, interactionId, agentType, contractVersion, agentVersion, agentRunId,
-        promptTemplateId, promptVersion, modelRoute, null, modelId, null, null, status, errorCode,
-        requestDigest, proposalDigest, inputTokens, cachedInputTokens, outputTokens,
-        estimatedCostUsd, latencyMs, startedAt, completedAt);
+        promptTemplateId, promptVersion, modelRoute, null, modelId, null, null, null, null, null,
+        status, errorCode, requestDigest, proposalDigest, inputTokens, cachedInputTokens,
+        outputTokens, estimatedCostUsd, latencyMs, startedAt, completedAt);
   }
 }

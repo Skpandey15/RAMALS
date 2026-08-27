@@ -6,9 +6,12 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
 import io.ramals.learningplatform.ai.contract.Constraints;
+import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
+import io.ramals.learningplatform.ai.contract.DiagnosticDispatchAuthorization;
 import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.ai.contract.LearnerRef;
 import io.ramals.learningplatform.ai.contract.LearningContext;
+import io.ramals.learningplatform.grounding.GroundedContext;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -42,7 +45,8 @@ class AiWorkloadAuthenticationContractTests {
 
   private static final String TOKEN = "test-workload-token";
 
-  private record Captured(String path, String authorization) {}
+  private record Captured(
+      String path, String authorization, String dispatchFence, String requestDigest) {}
 
   /** A stand-in for the AI plane that refuses an unauthenticated request the way the real one does. */
   private static HttpServer aiPlane(List<Captured> received) throws IOException {
@@ -50,7 +54,8 @@ class AiWorkloadAuthenticationContractTests {
     for (String path : List.of(
         "/internal/v1/tutor/respond",
         "/internal/v1/adaptation/propose",
-        "/internal/v1/assessment/propose")) {
+        "/internal/v1/assessment/propose",
+        "/internal/v1/diagnostic-assessment/propose")) {
       server.createContext(path, exchange -> respond(exchange, received));
     }
     server.setExecutor(null);
@@ -60,7 +65,12 @@ class AiWorkloadAuthenticationContractTests {
 
   private static void respond(HttpExchange exchange, List<Captured> received) throws IOException {
     String authorization = exchange.getRequestHeaders().getFirst("Authorization");
-    received.add(new Captured(exchange.getRequestURI().getPath(), authorization));
+    received.add(
+        new Captured(
+            exchange.getRequestURI().getPath(),
+            authorization,
+            exchange.getRequestHeaders().getFirst("X-RAMALS-Dispatch-Fence"),
+            exchange.getRequestHeaders().getFirst("X-RAMALS-Request-Digest")));
 
     if (authorization == null || !authorization.startsWith("Bearer ")) {
       byte[] refusal = ("{\"type\":\"about:blank\",\"title\":\"Unauthorized\",\"status\":401,"
@@ -160,6 +170,30 @@ class AiWorkloadAuthenticationContractTests {
         .satisfies(captured -> assertThat(captured.authorization()).isEqualTo("Bearer " + TOKEN));
   }
 
+  @Test
+  @DisplayName("the diagnostic call binds its durable dispatch fence and request digest")
+  void theDiagnosticAssessmentClientBindsDispatchAuthorization() throws IOException {
+    List<Captured> received = new CopyOnWriteArrayList<>();
+    HttpServer server = aiPlane(received);
+    String digest = "a".repeat(64);
+    try {
+      new RamalsAiDiagnosticAssessmentClient(clientFor(server), guard(), () -> TOKEN)
+          .requestDiagnosticAssessment(
+              diagnosticRequest(), new DiagnosticDispatchAuthorization(7, digest), 8_000);
+    } finally {
+      server.stop(0);
+    }
+
+    assertThat(received)
+        .singleElement()
+        .satisfies(
+            captured -> {
+              assertThat(captured.authorization()).isEqualTo("Bearer " + TOKEN);
+              assertThat(captured.dispatchFence()).isEqualTo("7");
+              assertThat(captured.requestDigest()).isEqualTo(digest);
+            });
+  }
+
   // -- and the learner's own token is never the one presented ----------------------------------------
 
   @Test
@@ -186,5 +220,22 @@ class AiWorkloadAuthenticationContractTests {
     } catch (NullPointerException expected) {
       return true;
     }
+  }
+
+  private static DiagnosticAssessmentRequest diagnosticRequest() {
+    Instant asOf = Instant.parse("2026-08-27T10:00:00Z");
+    return new DiagnosticAssessmentRequest(
+        "1.0",
+        UUID.randomUUID().toString(),
+        "wf-diag-contract-a",
+        new Constraints(InteractionClass.INTERACTIVE_AI, 8_000, null, null, null),
+        new GroundedContext(
+            "1.0",
+            "ctx-contract-a",
+            "opaque-learner-ref-001",
+            asOf,
+            asOf.plusSeconds(300),
+            "GROUNDING_RETRIEVAL_V1",
+            List.of()));
   }
 }

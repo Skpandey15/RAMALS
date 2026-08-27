@@ -26,7 +26,11 @@ from ramals_ai.contracts.generated import InteractionClass
 from ramals_ai.gateway import budget
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
-from ramals_ai.gateway.gateway import MAX_ATTEMPTS_PER_ROUTE, LLMGateway
+from ramals_ai.gateway.gateway import (
+    MAX_ATTEMPTS_PER_ROUTE,
+    GatewayExecutionPolicy,
+    LLMGateway,
+)
 from ramals_ai.gateway.providers.base import Message, ProviderRequest, ProviderResponse
 from ramals_ai.gateway.providers.fake import FakeProvider
 from ramals_ai.gateway.routes import (
@@ -472,6 +476,24 @@ def test_an_auth_failure_is_not_retried() -> None:
     assert adapter.calls == 1
 
 
+def test_contract_a_never_retries_a_retryable_provider_failure() -> None:
+    """The first authorized submission is also the last, even for a transient failure."""
+    adapter = FlakyProvider(GatewayErrorCode.PROVIDER_RATE_LIMITED, failures=1)
+    gateway, clock = build(adapter)
+
+    with pytest.raises(GatewayError) as failure:
+        gateway.complete(
+            route=ModelRoute.CI_FAKE,
+            prompt=PROMPT,
+            deadline=deadline_for(clock, 60000),
+            request_id="wf-diag-contract-a",
+            execution_policy=GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED,
+        )
+
+    assert failure.value.code is GatewayErrorCode.PROVIDER_RATE_LIMITED
+    assert adapter.calls == 1
+
+
 # -- fallback eligibility (required test) ---------------------------------------------------------
 
 
@@ -513,6 +535,63 @@ def test_an_approved_fallback_serves_the_request_and_is_recorded() -> None:
     assert result.requested_route is ModelRoute.ASSESSMENT_DEFAULT
     assert result.route is ModelRoute.CI_FAKE, "the effective route must be the one that served it"
     assert result.fell_back
+
+
+def test_contract_a_never_falls_back_after_the_first_provider_submission() -> None:
+    """A route fallback is another external submission and is forbidden on DIAGNOSE."""
+    registry = registry_with_fallback(ModelRoute.ASSESSMENT_DEFAULT, ModelRoute.CI_FAKE)
+    adapter = FlakyProvider(GatewayErrorCode.PROVIDER_UNAVAILABLE, failures=99)
+    gateway, clock = build(adapter, registry=registry)
+
+    with pytest.raises(GatewayError) as failure:
+        gateway.complete(
+            route=ModelRoute.ASSESSMENT_DEFAULT,
+            prompt=PROMPT,
+            deadline=deadline_for(clock, 60000),
+            request_id="wf-diag-contract-a",
+            execution_policy=GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED,
+        )
+
+    assert failure.value.code is GatewayErrorCode.PROVIDER_UNAVAILABLE
+    assert adapter.calls == 1
+
+
+def test_contract_a_binds_request_identity_and_records_provider_receipts() -> None:
+    class ReceiptProvider(CountingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.request: ProviderRequest | None = None
+
+        def complete(self, request: ProviderRequest) -> ProviderResponse:
+            self.calls += 1
+            self.request = request
+            return ProviderResponse(
+                text="provider response",
+                input_tokens=10,
+                output_tokens=4,
+                provider_request_id="provider-request-1",
+                provider_message_id="provider-message-1",
+            )
+
+    adapter = ReceiptProvider()
+    gateway, clock = build(adapter)
+
+    result = gateway.complete(
+        route=ModelRoute.CI_FAKE,
+        prompt=PROMPT,
+        deadline=deadline_for(clock, 5000),
+        request_id="wf-diag-contract-a",
+        execution_policy=GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED,
+    )
+
+    assert adapter.request is not None
+    assert adapter.request.request_id == "wf-diag-contract-a"
+    assert adapter.request.single_submission is True
+    assert result.provider_request_id == "provider-request-1"
+    assert result.provider_message_id == "provider-message-1"
+    assert result.response_digest == (
+        "f38f2e9d676772ca71593fded6eb1537250567df195a74bb0e1e883d7f84dcd9"
+    )
 
 
 def test_fallback_cannot_bypass_the_remaining_request_budget() -> None:

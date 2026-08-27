@@ -44,6 +44,9 @@ public record AiProposalEnvelope(
     String resolvedProvider,
     String modelId,
     String routeVersion,
+    String providerRequestId,
+    String providerMessageId,
+    String responseDigest,
     TrustLevel trustLevel,
     String confidence,
     List<String> reasonCodes,
@@ -56,7 +59,49 @@ public record AiProposalEnvelope(
       String modelRoute, TrustLevel trustLevel, String confidence, List<String> reasonCodes,
       Map<String, Object> proposal, Validation validation, Usage usage) {
     this(contractVersion, proposalId, agentType, agentVersion, agentRunId, promptTemplateId,
-        promptVersion, modelRoute, null, null, null, trustLevel, confidence, reasonCodes, proposal,
-        validation, usage);
+        promptVersion, modelRoute, null, null, null, null, null, null, trustLevel, confidence,
+        reasonCodes, proposal, validation, usage);
+  }
+
+  /** Source-compatible constructor for provenance-v2 proposals without Contract A receipts. */
+  public AiProposalEnvelope(
+      String contractVersion,
+      String proposalId,
+      AgentType agentType,
+      String agentVersion,
+      String agentRunId,
+      String promptTemplateId,
+      String promptVersion,
+      String modelRoute,
+      String resolvedProvider,
+      String modelId,
+      String routeVersion,
+      TrustLevel trustLevel,
+      String confidence,
+      List<String> reasonCodes,
+      Map<String, Object> proposal,
+      Validation validation,
+      Usage usage) {
+    this(
+        contractVersion,
+        proposalId,
+        agentType,
+        agentVersion,
+        agentRunId,
+        promptTemplateId,
+        promptVersion,
+        modelRoute,
+        resolvedProvider,
+        modelId,
+        routeVersion,
+        null,
+        null,
+        null,
+        trustLevel,
+        confidence,
+        reasonCodes,
+        proposal,
+        validation,
+        usage);
   }
 }

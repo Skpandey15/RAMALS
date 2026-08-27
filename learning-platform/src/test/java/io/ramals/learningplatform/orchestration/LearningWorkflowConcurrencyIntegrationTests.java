@@ -553,6 +553,20 @@ class LearningWorkflowConcurrencyIntegrationTests {
                 Integer.class,
                 requestId))
         .isEqualTo(1);
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT provider_request_id, provider_message_id, response_digest FROM core.ai_execution WHERE request_id = ?",
+                requestId))
+        .containsEntry("provider_request_id", "provider-request-" + requestId)
+        .containsEntry("provider_message_id", "provider-message-" + requestId)
+        .containsEntry("response_digest", "b".repeat(64));
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT provider_request_id, provider_message_id, response_digest FROM core.ai_execution_event WHERE request_id = ? AND event_type = 'SUCCEEDED'",
+                requestId))
+        .containsEntry("provider_request_id", "provider-request-" + requestId)
+        .containsEntry("provider_message_id", "provider-message-" + requestId)
+        .containsEntry("response_digest", "b".repeat(64));
   }
 
   @Test
@@ -627,6 +641,7 @@ class LearningWorkflowConcurrencyIntegrationTests {
         claims.stream().filter(claim -> !claim.acquired()).findFirst().orElseThrow();
     assertThat(winner.ownerToken()).isNotNull();
     assertThat(winner.fence()).isEqualTo(1);
+    assertThat(winner.requestDigest()).isEqualTo("f".repeat(64));
     assertThat(loser.state())
         .isEqualTo(AiExecutionDispatchClaim.DispatchState.DISPATCH_OWNED);
     assertThat(executionRepository(jdbc).markDiagnosticProviderInvocationStarted(requestId, loser))
@@ -641,6 +656,52 @@ class LearningWorkflowConcurrencyIntegrationTests {
                 requestId))
         .as("the deterministic request identity remains the single dispatch key")
         .isEqualTo(1);
+  }
+
+  @Test
+  void anInFlightDiagnosticCanOnlyCloseAsOneTerminalIndeterminateExecution() throws Exception {
+    JdbcTemplate jdbc = runtimeJdbc();
+    String requestId = "wf-diag-contract-a-indeterminate";
+    inFlightCommission(jdbc, requestId);
+
+    List<Boolean> outcomes =
+        race(
+            () ->
+                executionRepository(runtimeJdbc())
+                    .closeIndeterminateExecution(
+                        requestId, "AI_EXECUTION_OUTCOME_INDETERMINATE"),
+            () ->
+                executionRepository(runtimeJdbc())
+                    .closeIndeterminateExecution(
+                        requestId, "AI_EXECUTION_OUTCOME_INDETERMINATE"));
+
+    assertThat(outcomes).filteredOn(Boolean::booleanValue).hasSize(1);
+    assertThat(executionRepository(jdbc).findExecutionState(requestId).state())
+        .isEqualTo(
+            io.ramals.learningplatform.execution.AiExecutionRecoveryPort.ExecutionState
+                .INDETERMINATE);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution WHERE request_id = ? AND status = 'INDETERMINATE'",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM core.ai_execution_event WHERE request_id = ? AND event_type = 'INDETERMINATE'",
+                Integer.class,
+                requestId))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ledger.proposal_gate_decision WHERE request_id = ?",
+                Integer.class,
+                requestId))
+        .as("an unknowable provider outcome must not invent a gate decision")
+        .isZero();
+    assertThat(executionRepository(jdbc).acquireDiagnosticDispatch(requestId).acquired())
+        .as("terminal ambiguity must never become dispatchable again")
+        .isFalse();
   }
 
   @Test
@@ -1063,6 +1124,12 @@ class LearningWorkflowConcurrencyIntegrationTests {
         "DIAGNOSE",
         "DIAGNOSE_V1",
         "diagnostic-default",
+        "ci-fake",
+        "ci-fake-deterministic-v1",
+        "ROUTE_TABLE_V1",
+        "provider-request-" + requestId,
+        "provider-message-" + requestId,
+        "b".repeat(64),
         io.ramals.learningplatform.ai.contract.TrustLevel.NON_AUTHORITATIVE,
         null,
         List.of(),
