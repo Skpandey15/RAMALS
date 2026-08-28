@@ -212,8 +212,10 @@ must be satisfied and recorded before the first Contract B implementation PR:
    decrypt-old/encrypt-new decision and fail-closed semantics. **Custody is now assigned for the
    MVP/research environment** — Sunil Pandey as interim Key Custodian — and remains open for
    production, where the custodian should not also be the Data Owner.
-5. **The purge mechanism exists and is testable**, both the on-adoption delete and the ceiling
-   sweep. **Still open — see [M2-ADR-019](M2-ADR-019-contract-b-purge-semantics.md)**, which found that this prerequisite as written is
+5. ~~**The purge mechanism exists and is testable**, both the on-adoption delete and the ceiling
+   sweep.~~ ✅ **Satisfied for the MVP/research environment, 2026-08-27** — see the [executable purge proof](../release/mvp2-contract-b-purge-proof.md).
+   Eight behaviours proven and five negative controls caught against an isolated throwaway schema,
+   per the resolution in M2-ADR-019 §6. Originally recorded as: **see [M2-ADR-019](M2-ADR-019-contract-b-purge-semantics.md)**, which found that this prerequisite as written is
    unsatisfiable: `V023`'s named precedent creates the purge function *inside* the migration, so
    the mechanism this gates on lives in `V037`. That ADR fixes purge scope, state machine,
    authorization, concurrency and crypto-deletion, and resolves the ordering by requiring an

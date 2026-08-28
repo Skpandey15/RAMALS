@@ -95,8 +95,13 @@ capability only**: Anthropic still documents no replay-safe admission, cancellat
 attempted and must not be represented as proven, and the lost-acknowledgement window was not
 exercised.
 
-`V037` remains blocked on prerequisite 5 (a testable purge mechanism) and on M2-ADR-018's seven
-engineering acceptance criteria, none of which is done. Approving the model is not the same as
+**Prerequisite 5 was satisfied on 2026-08-27** by an [executable purge
+proof](../release/mvp2-contract-b-purge-proof.md) — eight behaviours proven and five negative
+controls caught against an isolated throwaway schema, per M2-ADR-019 §6.
+
+`V037` remains blocked on M2-ADR-018 criteria 3, 4, 5 and 9 (the key-provider port, the envelope
+format, fail-closed behaviour and log hygiene), none of which is done. Criteria 6, 7 and 8 were
+reclassified by M2-ADR-019 as `V037` completion criteria. Approving the model is not the same as
 building it.
 
 **Contract A remains the default and current execution contract.** Every route is on Contract A, it
