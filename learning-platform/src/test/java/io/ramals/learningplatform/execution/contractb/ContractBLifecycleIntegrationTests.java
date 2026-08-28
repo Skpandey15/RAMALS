@@ -163,12 +163,88 @@ class ContractBLifecycleIntegrationTests {
 
     assertThat(service.submit(requestId, command(requestId)))
         .isEqualTo(DurableExecutionState.FAILED);
-    // A refusal is a definite fact: nothing was accepted, so nothing is running. FAILED is true
-    // here in a way it would not be after a timeout.
+    // A classified refusal is a definite fact: the far side chose a status, so nothing was accepted
+    // and nothing is running. FAILED is true here in a way it would not be after a timeout, and in
+    // a way it would not be after an exception nobody classified.
     assertThat(state(requestId)).isEqualTo("FAILED");
     assertThat(providerExecutionId(requestId)).isNull();
     assertThat(results.exists(requestId)).isFalse();
     assertThat(ledgerReasons(requestId)).contains("SUBMIT_REFUSED");
+  }
+
+  @Test
+  @DisplayName("only a classified refusal becomes FAILED: an unclassified failure never does")
+  void anUnclassifiedFailureIsNeverFailed() {
+    String requestId = "req-unclass-000001";
+    var port = new FakeDurableExecutionPort().unclassifiedSubmitFailure();
+    var service = serviceWith(port);
+    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
+        "anthropic", "claude-sonnet-5", "diagnostic");
+
+    // The failure carries no diagnosis, so it cannot prove the provider created nothing. Recording
+    // FAILED here would assert knowledge the code does not have, and would hide a live execution.
+    assertThat(service.submit(requestId, command(requestId)))
+        .isEqualTo(DurableExecutionState.UNKNOWN_TERMINAL);
+    assertThat(state(requestId))
+        .as("an undiagnosed failure must never be recorded as a definite failure")
+        .isNotEqualTo("FAILED")
+        .isEqualTo("UNKNOWN_TERMINAL");
+    assertThat(ledgerReasons(requestId)).contains("SUBMIT_UNCLASSIFIED");
+
+    // And it is terminal, so nothing resubmits it -- the outcome that would duplicate live work.
+    assertThat(serviceWith(port).submit(requestId, command(requestId)))
+        .isEqualTo(DurableExecutionState.UNKNOWN_TERMINAL);
+    assertThat(serviceWith(port).reconcile(requestId))
+        .isEqualTo(DurableExecutionState.UNKNOWN_TERMINAL);
+    assertThat(port.submissions)
+        .as("exactly one provider call, whatever the failure was")
+        .hasSize(1);
+  }
+
+  @Test
+  @DisplayName("the three submission outcomes are distinct, and only one may be FAILED")
+  void submissionOutcomesAreClassifiedSeparately() {
+    // Read as a table: same call site, three exception classes, three durable outcomes. The middle
+    // and last rows agree, and that agreement is the fail-closed rule rather than a coincidence.
+    record Case(String requestId, FakeDurableExecutionPort port, DurableExecutionState expected) {}
+    List<Case> cases = List.of(
+        new Case("req-cls-refused-01", new FakeDurableExecutionPort().refusedSubmit(),
+            DurableExecutionState.FAILED),
+        new Case("req-cls-ambig-0001", new FakeDurableExecutionPort().ambiguousSubmit(),
+            DurableExecutionState.UNKNOWN_TERMINAL),
+        new Case("req-cls-unclass-01", new FakeDurableExecutionPort().unclassifiedSubmitFailure(),
+            DurableExecutionState.UNKNOWN_TERMINAL));
+
+    for (Case scenario : cases) {
+      var service = serviceWith(scenario.port());
+      service.admit(scenario.requestId(), "idem-" + scenario.requestId(),
+          "custom-" + scenario.requestId(), "anthropic", "claude-sonnet-5", "diagnostic");
+
+      assertThat(service.submit(scenario.requestId(), command(scenario.requestId())))
+          .as("%s", scenario.requestId())
+          .isEqualTo(scenario.expected());
+      assertThat(state(scenario.requestId())).isEqualTo(scenario.expected().name());
+      assertThat(scenario.port().submissions)
+          .as("%s must reach the provider exactly once", scenario.requestId())
+          .hasSize(1);
+      // Nothing was stored on any of the three paths.
+      assertThat(results.exists(scenario.requestId())).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName("transport ambiguity is INDETERMINATE and submits exactly once")
+  void transportAmbiguityIsIndeterminate() {
+    String requestId = "req-transport-0001";
+    var port = new FakeDurableExecutionPort().ambiguousSubmit();
+    var service = serviceWith(port);
+    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
+        "anthropic", "claude-sonnet-5", "diagnostic");
+
+    assertThat(service.submit(requestId, command(requestId)))
+        .isEqualTo(DurableExecutionState.UNKNOWN_TERMINAL);
+    assertThat(state(requestId)).isNotEqualTo("FAILED");
+    assertThat(port.submissions).hasSize(1);
   }
 
   @Test

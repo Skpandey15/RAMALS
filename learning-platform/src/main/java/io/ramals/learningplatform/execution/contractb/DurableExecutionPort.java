@@ -18,8 +18,14 @@ public interface DurableExecutionPort {
   /**
    * Submits once.
    *
-   * @throws DurableSubmissionAmbiguousException when the outcome of the call cannot be established —
-   *     a timeout, a dropped connection, an unreadable response. Never conflated with a refusal
+   * <p>An implementation must classify its own failures, because the caller cannot. Only these two
+   * types carry a diagnosis; anything else that escapes is, by definition, a failure nobody
+   * anticipated, and the caller is obliged to assume the worst about it.
+   *
+   * @throws DurableExecutionRefusedException when the far side deliberately refused and created
+   *     nothing. The <strong>only</strong> failure that permits a definite {@code FAILED}
+   * @throws DurableSubmissionAmbiguousException when the outcome cannot be established — a timeout,
+   *     a dropped connection, an unreadable response. Never conflated with a refusal
    */
   DurableSubmissionAck submit(DurableSubmissionCommand command);
 

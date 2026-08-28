@@ -43,8 +43,21 @@ public final class FakeDurableExecutionPort implements DurableExecutionPort {
     return this;
   }
 
+  /** The far side chose a status: it decided against the request and created nothing. */
   FakeDurableExecutionPort refusedSubmit() {
-    this.submitFailure = new IllegalStateException("scripted refusal");
+    this.submitFailure = new DurableExecutionRefusedException("test", 400);
+    return this;
+  }
+
+  /**
+   * A failure nobody classified, of the kind a mapping bug or an interceptor throws.
+   *
+   * <p>Deliberately a plain {@code RuntimeException} and deliberately thrown from the same place a
+   * real one would be: after the call has begun, where it cannot prove the provider created
+   * nothing.
+   */
+  FakeDurableExecutionPort unclassifiedSubmitFailure() {
+    this.submitFailure = new IllegalStateException("scripted unclassified failure");
     return this;
   }
 

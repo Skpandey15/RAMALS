@@ -83,10 +83,26 @@ public class ContractBExecutionService {
    *   <li>Record the identity <em>immediately</em>, fenced on the claim.
    * </ol>
    *
-   * <p>An ambiguous call ends the execution at {@code UNKNOWN_TERMINAL}. This is the honest outcome
-   * and not a placeholder for a better one: the provider may hold a live execution RAMALS cannot
-   * name, and neither resubmitting nor declaring failure would be true. M2-ADR-016 forbids inferring
-   * replay-safe admission, so there is no key to submit under that would make a retry safe.
+   * <p><strong>Only an explicitly classified refusal may become {@code FAILED}.</strong> The three
+   * outcomes are not symmetric and the asymmetry is deliberate:
+   *
+   * <ul>
+   *   <li>{@link DurableExecutionRefusedException} — the far side chose a status, so it decided
+   *       against the request and created nothing. {@code FAILED} is true.
+   *   <li>{@link DurableSubmissionAmbiguousException} — a diagnosed unknown. {@code UNKNOWN_TERMINAL}.
+   *   <li>anything else — an undiagnosed failure, which can be thrown after the request reached the
+   *       provider. It cannot prove nothing was created, so it is also {@code UNKNOWN_TERMINAL}.
+   * </ul>
+   *
+   * <p>The last row is the one that is easy to get wrong, and getting it wrong fails open: a bug in
+   * a mapping layer or an interceptor becomes a tidy {@code FAILED} that hides a live provider
+   * execution. The rule is that a definite outcome requires definite evidence, and only a classified
+   * exception carries any.
+   *
+   * <p>Neither unknown is a placeholder for a better answer. The provider may hold an execution
+   * RAMALS cannot name, and neither resubmitting nor declaring failure would be true. M2-ADR-016
+   * forbids inferring replay-safe admission, so there is no key to submit under that would make a
+   * retry safe.
    *
    * @return the state the execution now holds
    */
@@ -105,19 +121,36 @@ public class ContractBExecutionService {
     DurableSubmissionAck ack;
     try {
       ack = provider.submit(command);
+    } catch (DurableExecutionRefusedException refused) {
+      // The ONLY failure that may become FAILED. The far side answered with a status it chose, so
+      // it processed the request and decided against it: nothing was accepted, nothing is running,
+      // and FAILED is a true statement rather than a guess.
+      ledger.record(requestId, DurableExecutionState.SUBMITTED, DurableExecutionState.FAILED,
+          "SUBMITTER", fence, "SUBMIT_REFUSED");
+      executions.finish(requestId, DurableExecutionState.FAILED, null, null);
+      LOGGER.warn("contract B submission refused by the provider [requestId={}, status={}]",
+          requestId, refused.status().value());
+      return DurableExecutionState.FAILED;
     } catch (DurableSubmissionAmbiguousException ambiguous) {
       // Fail closed, loudly, and terminally. The provider may or may not be running this work.
       return indeterminate(requestId, fence, "SUBMIT_AMBIGUOUS",
           "the submission outcome could not be established");
-    } catch (RuntimeException refused) {
-      // A definite refusal is different from an ambiguous one and is recorded as such: nothing was
-      // accepted, so nothing is running, and FAILED is a true statement rather than a guess.
-      ledger.record(requestId, DurableExecutionState.SUBMITTED, DurableExecutionState.FAILED,
-          "SUBMITTER", fence, "SUBMIT_REFUSED");
-      executions.finish(requestId, DurableExecutionState.FAILED, null, null);
-      LOGGER.warn("contract B submission refused by the provider [requestId={}, error={}]",
-          requestId, refused.getClass().getSimpleName());
-      return DurableExecutionState.FAILED;
+    } catch (RuntimeException unexpected) {
+      // Anything else, and the point is that we do not know what it was.
+      //
+      // Catching this as a refusal was the original defect here, and it failed open in the one
+      // place it must not: an exception nobody anticipated -- a bug in the client's own mapping, a
+      // serializer, an interceptor -- can be thrown *after* the request reached the provider, which
+      // means a provider execution may exist. Recording FAILED would say RAMALS knows none does.
+      //
+      // Only a classified exception carries a diagnosis. An unclassified one is exactly the case
+      // where the code cannot prove nothing was created, so it fails closed and the operator sees
+      // an execution that needs looking at rather than a tidy failure that hides one.
+      LOGGER.error("contract B submission failed unclassified [requestId={}, error={}]. "
+          + "Treated as INDETERMINATE: this exception cannot prove the provider created nothing.",
+          requestId, unexpected.getClass().getName());
+      return indeterminate(requestId, fence, "SUBMIT_UNCLASSIFIED",
+          "an unclassified failure after the submission began");
     }
 
     if (!ack.usable()) {

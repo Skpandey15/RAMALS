@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -177,19 +176,4 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
     return body.get(key) instanceof Number number ? number.intValue() : 0;
   }
 
-  /** A refusal the far side chose. Distinct from ambiguity, which is the point of both types. */
-  public static class DurableExecutionRefusedException extends RuntimeException {
-    private static final long serialVersionUID = 1L;
-
-    private final transient HttpStatusCode status;
-
-    DurableExecutionRefusedException(String requestId, int status) {
-      super("contract B call refused [requestId=" + requestId + ", status=" + status + "]");
-      this.status = HttpStatusCode.valueOf(status);
-    }
-
-    public HttpStatusCode status() {
-      return status;
-    }
-  }
 }
