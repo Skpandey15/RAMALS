@@ -280,9 +280,10 @@ the model is not the same as building it.
 
 ## Acceptance criteria that unblock V037
 
-`V037` may proceed when all of the following are true. The first two are governance and are now
-satisfied for the MVP/research scope; the rest are engineering work this ADR specifies well enough
-to do, and none of it has been done.
+`V037` may proceed when all of the following are true. The first two are governance and are
+satisfied for the MVP/research scope; criteria 3, 4, 5 and 9 are the engineering preconditions and
+are now satisfied; criteria 6, 7 and 8 describe `V037`'s own content and are completion criteria for
+it rather than preconditions for starting it.
 
 1. ~~The classification in §1, the owner role in §2 and the access matrix in §3 are **signed off by
    a named individual** in the RAMALS Platform Data Owner role, recorded in this ADR.~~
@@ -291,18 +292,30 @@ to do, and none of it has been done.
    recorded.~~ ✅ **Satisfied for MVP/research 2026-08-27** — Sunil Pandey as interim custodian.
    The escalation path is the single maintainer, which is a consequence of the scope and is
    recorded as such rather than presented as an on-call rotation.
-3. A `ResultEncryptionKeyProvider` port exists with an environment-backed adapter, and **no
-   vendor-specific KMS dependency** is introduced.
-4. The envelope format of §7 is implemented with AES-256-GCM and request-identity AAD, and a test
-   proves a ciphertext moved between rows **fails to authenticate**.
-5. Fail-closed behaviour is proven by test for every row of §10 — in particular that an
-   undecryptable result is never treated as absent.
+3. ~~A `ResultEncryptionKeyProvider` port exists with an environment-backed adapter, and **no
+   vendor-specific KMS dependency** is introduced.~~ ✅ **Satisfied 2026-08-28** — `#177`. Recorded
+   here late: the criterion was met when that PR merged.
+4. ~~The envelope format of §7 is implemented with AES-256-GCM and request-identity AAD, and a test
+   proves a ciphertext moved between rows **fails to authenticate**.~~ ✅ **Satisfied 2026-08-28** —
+   `ResultEnvelopeCodec`, proven by `ResultEnvelopeCodecTests`.
+5. ~~Fail-closed behaviour is proven by test for every row of §10 — in particular that an
+   undecryptable result is never treated as absent.~~ ✅ **Satisfied 2026-08-28** for the three
+   **crypto** rows of §10. The schema-validation and purge rows are not crypto and are not in the
+   codec's reach; they belong to `V037` and the adoption path, and remain open.
 6. `V037` grants exactly the access matrix of §3, with a migration-contract test asserting that no
    reporting, analytics, evaluation or AI-plane role holds any grant on the result table.
 7. Delete-on-adoption is proven transactional: a test showing the result row is gone in the same
    transaction that commits the gate decision, and still present if that transaction rolls back.
 8. The purge function exists, is invokable, and is tested against the 30-day ceiling.
-9. A test proves no plaintext reaches logs on any success or failure path.
+9. ~~A test proves no plaintext reaches logs on any success or failure path.~~ ✅ **Satisfied
+   2026-08-28** for the encryption layer — the codec holds no logger, and the proof carries a
+   negative control so the capture is shown able to fail rather than merely observed not to. The
+   obligation is not discharged for code `V037` has yet to introduce: every caller that handles a
+   decrypted result inherits it.
+
+**Criteria 3, 4, 5 and 9 are satisfied as of 2026-08-28**, which leaves no open precondition:
+`V037` is unblocked. What that unblocks is the migration, not Contract B — no route is active, no
+provider is called, and criteria 6, 7 and 8 below must still hold before `V037` is complete.
 
 **Criteria 6, 7 and 8 are `V037` completion criteria, not preconditions** — reclassified by
 [M2-ADR-019](M2-ADR-019-contract-b-purge-semantics.md). Each describes `V037`'s own content: its grants, its adoption transaction, its purge
@@ -330,8 +343,10 @@ preconditions.
 
 ## Consequences
 
-- **`V037` remains blocked**, now on two precisely-stated human decisions rather than on an
-  unscoped prerequisite. The engineering work is fully specified and can be reviewed in advance.
+- **`V037` is no longer blocked.** It was gated on two human decisions and four engineering
+  preconditions; all six are satisfied. Unblocking the migration is not the same as enabling
+  Contract B — the encryption layer exists and is unused, no route is active, and criteria 6, 7
+  and 8 still bound when `V037` may be called complete.
 - **The result table becomes the only encrypted column in the schema**, and the only one whose key
   handling matters. That singularity is deliberate — one governed exception is auditable.
 - **Rotation correctness depends on the retention ceiling.** If the 30-day ceiling is ever raised,
