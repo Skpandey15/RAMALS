@@ -321,9 +321,7 @@ class AnthropicBatchesProvider:
             limit_reached=limit_reached,
         )
 
-    def _inspect(
-        self, batch: Any, custom_id: str
-    ) -> tuple[bool, DurableExecutionMatch | None]:
+    def _inspect(self, batch: Any, custom_id: str) -> tuple[bool, DurableExecutionMatch | None]:
         """Opens one batch's results and looks for the key.
 
         Returns ``(readable, match)``. Two values rather than an optional because there are three

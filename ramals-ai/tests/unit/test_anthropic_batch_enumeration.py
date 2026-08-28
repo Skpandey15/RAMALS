@@ -12,6 +12,7 @@ are about the real traversal rather than a convenient one.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -63,9 +64,13 @@ class _Succeeded:
 class _FakeBatches:
     """Pages newest-first through a fixed corpus, exactly as the SDK's cursor does."""
 
-    def __init__(self, batches: list[_Batch], contents: dict[str, list[str]],
-                 unreadable: set[str] | None = None) -> None:
-        self._batches = batches
+    def __init__(
+        self,
+        batches: Sequence[_Batch],
+        contents: dict[str, Sequence[str]],
+        unreadable: set[str] | None = None,
+    ) -> None:
+        self._batches = list(batches)
         self._contents = contents
         self._unreadable = unreadable or set()
         self.list_calls = 0
@@ -73,16 +78,16 @@ class _FakeBatches:
         self.create_calls = 0
         self.list_failure: Exception | None = None
 
-    def list(self, *, limit: int = 100, before_id: str | None = None) -> list[_Batch]:
+    def list(self, *, limit: int = 100, before_id: str | None = None) -> Sequence[_Batch]:
         self.list_calls += 1
         if self.list_failure is not None:
             raise self.list_failure
         start = 0
         if before_id is not None:
             start = next(i for i, b in enumerate(self._batches) if b.id == before_id) + 1
-        return self._batches[start:start + limit]
+        return self._batches[start : start + limit]
 
-    def results(self, batch_id: str) -> list[_Record]:
+    def results(self, batch_id: str) -> Sequence[_Record]:
         self.result_calls.append(batch_id)
         if batch_id in self._unreadable:
             raise RuntimeError("results stream failed")
@@ -102,16 +107,14 @@ def _provider(fake: _FakeBatches) -> AnthropicBatchesProvider:
 def _corpus(target_index: int | None, size: int = 250) -> tuple[_FakeBatches, list[_Batch]]:
     """`size` in-window batches, newest first, with the target at `target_index` if given."""
     batches = [_Batch(f"msgbatch_{i:04d}", IN_WINDOW) for i in range(size)]
-    contents = {b.id: ["custom-someone-else"] for b in batches}
+    contents: dict[str, Sequence[str]] = {b.id: ["custom-someone-else"] for b in batches}
     if target_index is not None:
         contents[batches[target_index].id] = ["custom-other", TARGET]
     return _FakeBatches(batches, contents), batches
 
 
 def _search(fake: _FakeBatches, **kwargs: Any) -> Any:
-    return _provider(fake).find_executions_by_custom_id(
-        TARGET, WINDOW_START, WINDOW_END, **kwargs
-    )
+    return _provider(fake).find_executions_by_custom_id(TARGET, WINDOW_START, WINDOW_END, **kwargs)
 
 
 # -- pagination ------------------------------------------------------------------------------------
