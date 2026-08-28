@@ -213,7 +213,13 @@ must be satisfied and recorded before the first Contract B implementation PR:
    MVP/research environment** — Sunil Pandey as interim Key Custodian — and remains open for
    production, where the custodian should not also be the Data Owner.
 5. **The purge mechanism exists and is testable**, both the on-adoption delete and the ceiling
-   sweep. `V023` set the precedent: a policy with no mechanism is *"a comment pretending to be a
+   sweep. **Still open — see [M2-ADR-019](M2-ADR-019-contract-b-purge-semantics.md)**, which found that this prerequisite as written is
+   unsatisfiable: `V023`'s named precedent creates the purge function *inside* the migration, so
+   the mechanism this gates on lives in `V037`. That ADR fixes purge scope, state machine,
+   authorization, concurrency and crypto-deletion, and resolves the ordering by requiring an
+   executable proof of the semantics against an isolated scratch schema before `V037` — stronger
+   than documentation, and achievable, which the literal reading is not.
+   `V023` set the precedent: a policy with no mechanism is *"a comment pretending to be a
    control"*. Note that the platform still has no scheduler, so the ceiling sweep is a function an
    operator or job runs, and shipping it as such is the honest form.
 6. **T15 scenario definitions for the Contract B crash matrix are agreed**, including the
