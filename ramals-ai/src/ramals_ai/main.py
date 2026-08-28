@@ -17,6 +17,7 @@ from ramals_ai import __version__
 from ramals_ai.adaptation.agent import AdaptationAgent
 from ramals_ai.api.capabilities import build_capabilities_router
 from ramals_ai.api.correlation import CorrelationMiddleware
+from ramals_ai.api.durable import build_durable_router
 from ramals_ai.api.health import ServiceState, build_health_router
 from ramals_ai.api.internal import build_internal_router
 from ramals_ai.assessment.agent import AssessmentAgent
@@ -26,6 +27,7 @@ from ramals_ai.diagnostic.agent import DiagnosticAgent
 from ramals_ai.diagnostic_assessment.agent import DiagnosticAssessmentAgent
 from ramals_ai.gateway.errors import GatewayError
 from ramals_ai.gateway.gateway import LLMGateway
+from ramals_ai.gateway.providers.anthropic_batches_adapter import AnthropicBatchesProvider
 from ramals_ai.gateway.providers.base import ProviderAdapter
 from ramals_ai.gateway.providers.fake import FakeProvider
 from ramals_ai.gateway.providers.litellm_adapter import LiteLLMProvider
@@ -114,6 +116,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Agent endpoints inherit this router's authentication, so a new endpoint is protected by
     # default rather than only when someone remembers to protect it.
     app.include_router(build_internal_router())
+    # Contract B's provider surface, present only where it is configured. Absent rather than
+    # present-and-refusing: while the path is unqualified, "there is no such endpoint" is a
+    # stronger statement than "there is one and it says no".
+    if resolved.durable_execution_enabled:
+        app.state.durable_adapter = AnthropicBatchesProvider(api_key=resolved.provider_api_key)
+        app.include_router(build_durable_router())
+    else:
+        app.state.durable_adapter = None
     app.state.service_state = state
     app.state.settings = resolved
     app.state.workload_verifier = build_verifier(resolved)
