@@ -70,6 +70,20 @@ DROP_DEFAULT_COLUMN = re.compile(
 )
 INDEX_TARGET = re.compile(r"\bON\s+(?:ONLY\s+)?([\w.]+)", re.IGNORECASE)
 
+# The tables a REVOKE takes privileges away from: REVOKE ... ON [TABLE] a, b FROM role.
+#
+# The negative lookahead after ON is the whole point. "ON ALL TABLES IN SCHEMA" reaches every table
+# in the schema, including ones this migration did not create, so it can never be cleared by "this
+# migration created it". The rest name something that is not a table at all. Matching either would
+# hand the exemption to a statement nobody reasoned about.
+REVOKE_TABLE_TARGETS = re.compile(
+    r"\bREVOKE\b.*?\bON\s+"
+    r"(?!ALL\b|SCHEMA\b|DATABASE\b|FUNCTION\b|ROUTINE\b|PROCEDURE\b|SEQUENCE\b"
+    r"|TYPE\b|DOMAIN\b|TABLESPACE\b|LARGE\b|FOREIGN\b)"
+    r"(?:TABLE\s+)?(?P<targets>[\w.]+(?:\s*,\s*[\w.]+)*)\s+FROM\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -411,6 +425,19 @@ def created_here(statements: list[Statement]) -> set[str]:
     return created
 
 
+def revoked_tables(text: str) -> set[str]:
+    """The tables one REVOKE narrows, or an empty set if it does not name tables directly.
+
+    Empty for ``ON ALL TABLES IN SCHEMA``, ``ON FUNCTION`` and the rest. The caller must therefore
+    test for emptiness before trusting a subset comparison: the empty set is a subset of everything,
+    so an unrecognised form would otherwise clear itself.
+    """
+    match = REVOKE_TABLE_TARGETS.search(text)
+    if not match:
+        return set()
+    return {name.strip().lower() for name in match.group("targets").split(",") if name.strip()}
+
+
 def columns_added_here(statements: list[Statement]) -> set[tuple[str, str]]:
     """Columns this migration adds, as (table, column).
 
@@ -440,9 +467,9 @@ def exempt(
 ) -> bool:
     """Whether this migration created the thing the rule is protecting.
 
-    No previously released image writes to a table that did not exist, or relies on the default of a
-    column it has never heard of. This is the same reasoning that keeps a NOT NULL column inside
-    CREATE TABLE from being a finding.
+    No previously released image writes to a table that did not exist, relies on the default of a
+    column it has never heard of, or holds a privilege on a table it never saw. This is the same
+    reasoning that keeps a NOT NULL column inside CREATE TABLE from being a finding.
     """
     altered = ALTER_TABLE.match(statement.text)
     if altered and altered.group(1).lower() in created:
@@ -451,6 +478,23 @@ def exempt(
     if rule.name == "create-unique-index":
         target = INDEX_TARGET.search(statement.text)
         return bool(target and target.group(1).lower() in created)
+
+    if rule.name == "revoke":
+        # A privilege the previous image never held cannot be one it loses. That image was built
+        # against a schema in which these tables did not exist, so the role it connects as has no
+        # grant on them to use. Narrowing the grant set of a table created in this same migration is
+        # the migration deciding what that set is, not taking something away from anybody.
+        #
+        # Not a formatting nicety: V002 sets ALTER DEFAULT PRIVILEGES granting SELECT, INSERT,
+        # UPDATE and DELETE on every future core table to ramals_core_runtime, so a newly created
+        # table arrives holding all four. A migration that wants a narrower matrix has no choice but
+        # to REVOKE, and there is no ordering of statements in which it could avoid one.
+        #
+        # Every named table must be new. A statement naming one fresh table and one pre-existing
+        # table stays a finding: the subset test refuses it rather than letting the fresh name carry
+        # the other through.
+        targets = revoked_tables(statement.text)
+        return bool(targets) and targets <= created
 
     if rule.name == "drop-default" and altered:
         column = DROP_DEFAULT_COLUMN.search(action)
