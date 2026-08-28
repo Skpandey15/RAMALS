@@ -99,10 +99,19 @@ exercised.
 proof](../release/mvp2-contract-b-purge-proof.md) — eight behaviours proven and five negative
 controls caught against an isolated throwaway schema, per M2-ADR-019 §6.
 
-`V037` remains blocked on M2-ADR-018 criteria 3, 4, 5 and 9 (the key-provider port, the envelope
-format, fail-closed behaviour and log hygiene), none of which is done. Criteria 6, 7 and 8 were
-reclassified by M2-ADR-019 as `V037` completion criteria. Approving the model is not the same as
-building it.
+~~`V037` remains blocked on M2-ADR-018 criteria 3, 4, 5 and 9 (the key-provider port, the envelope
+format, fail-closed behaviour and log hygiene), none of which is done.~~ Criteria 6, 7 and 8 were
+reclassified by M2-ADR-019 as `V037` completion criteria.
+
+**Superseded 2026-08-28.** All nine M2-ADR-018 criteria are satisfied and `V037` has shipped —
+the key-provider port in `#177`, the envelope and fail-closed behaviour in `#178`, and the grants,
+transactional adoption and purge in `#179`. The durable lifecycle followed in `#181` and its
+crash-recovery qualification in `#182`.
+
+`V037` shipping is not Contract B being available, and neither is the lifecycle. No route is bound
+to Contract B, the reconciliation worker is off, and four Definition-of-Done criteria remain unmet —
+see the [MVP-2 closure assessment](../release/mvp2-closure-assessment.md). Approving the model was
+not the same as building it; building it is not the same as qualifying it.
 
 **Contract A remains the default and current execution contract.** Every route is on Contract A, it
 stays correct and supported for routes that never move, and this decision neither deprecates it nor
