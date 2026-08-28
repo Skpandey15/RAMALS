@@ -302,20 +302,27 @@ it rather than preconditions for starting it.
    undecryptable result is never treated as absent.~~ ✅ **Satisfied 2026-08-28** for the three
    **crypto** rows of §10. The schema-validation and purge rows are not crypto and are not in the
    codec's reach; they belong to `V037` and the adoption path, and remain open.
-6. `V037` grants exactly the access matrix of §3, with a migration-contract test asserting that no
-   reporting, analytics, evaluation or AI-plane role holds any grant on the result table.
-7. Delete-on-adoption is proven transactional: a test showing the result row is gone in the same
-   transaction that commits the gate decision, and still present if that transaction rolls back.
-8. The purge function exists, is invokable, and is tested against the 30-day ceiling.
+6. ~~`V037` grants exactly the access matrix of §3, with a migration-contract test asserting that no
+   reporting, analytics, evaluation or AI-plane role holds any grant on the result table.~~
+   ✅ **Satisfied 2026-08-28** — `V037`. Asserted from `pg_class.relacl` rather than
+   `information_schema`, whose views are filtered to the querying role and would have returned only
+   the runtime role's own grants however wrong the rest were.
+7. ~~Delete-on-adoption is proven transactional: a test showing the result row is gone in the same
+   transaction that commits the gate decision, and still present if that transaction rolls back.~~
+   ✅ **Satisfied 2026-08-28** — `ContractBAdoption`, both directions proven.
+8. ~~The purge function exists, is invokable, and is tested against the 30-day ceiling.~~
+   ✅ **Satisfied 2026-08-28** — `core.purge_expired_ai_execution_results`, with terminal-state
+   protection, idempotency, floor and ceiling rejection, and ledger preservation.
 9. ~~A test proves no plaintext reaches logs on any success or failure path.~~ ✅ **Satisfied
    2026-08-28** for the encryption layer — the codec holds no logger, and the proof carries a
    negative control so the capture is shown able to fail rather than merely observed not to. The
    obligation is not discharged for code `V037` has yet to introduce: every caller that handles a
    decrypted result inherits it.
 
-**Criteria 3, 4, 5 and 9 are satisfied as of 2026-08-28**, which leaves no open precondition:
-`V037` is unblocked. What that unblocks is the migration, not Contract B — no route is active, no
-provider is called, and criteria 6, 7 and 8 below must still hold before `V037` is complete.
+**All nine criteria are satisfied as of 2026-08-28.** `V037` is shipped and complete by this
+ADR's own definition. That is not the same as Contract B being available: no route is bound to
+Contract B, no provider adapter is wired to the tables, and no reconciliation worker exists. What
+`V037` delivers is the persistence and the controls around it, empty and unused.
 
 **Criteria 6, 7 and 8 are `V037` completion criteria, not preconditions** — reclassified by
 [M2-ADR-019](M2-ADR-019-contract-b-purge-semantics.md). Each describes `V037`'s own content: its grants, its adoption transaction, its purge
@@ -343,10 +350,9 @@ preconditions.
 
 ## Consequences
 
-- **`V037` is no longer blocked.** It was gated on two human decisions and four engineering
-  preconditions; all six are satisfied. Unblocking the migration is not the same as enabling
-  Contract B — the encryption layer exists and is unused, no route is active, and criteria 6, 7
-  and 8 still bound when `V037` may be called complete.
+- **`V037` has shipped**, with all nine criteria satisfied. Enabling Contract B is a separate
+  and larger step: route binding, a durable provider adapter, a reconciliation worker and its
+  runtime qualification are all still ahead, and none of them is authorised by this ADR.
 - **The result table becomes the only encrypted column in the schema**, and the only one whose key
   handling matters. That singularity is deliberate — one governed exception is auditable.
 - **Rotation correctness depends on the retention ceiling.** If the 30-day ceiling is ever raised,

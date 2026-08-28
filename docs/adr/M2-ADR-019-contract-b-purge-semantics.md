@@ -1,6 +1,6 @@
 # M2-ADR-019: Contract B purge semantics, and the ordering defect in prerequisite 5
 
-- **Status:** Proposed — 2026-08-27.
+- **Status:** Accepted — 2026-08-27. Recorded 2026-08-28: the status line was left at Proposed when prerequisite 5 was declared satisfied, which acceptance criterion 1 below requires. Superseded in one respect by `V037`, which ships the production mechanism the §7 proof qualified.
 - **Decides:** what Contract B purge does, what survives it, who may invoke it, how it behaves under
   concurrency, and what "the purge mechanism exists and is testable" can mean before `V037` exists.
 - **Relates to:** M2-ADR-017 §6 prerequisite 5 (which this unblocks), M2-ADR-018 §3/§6/§8/§9 and its
