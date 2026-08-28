@@ -182,9 +182,16 @@ This ADR authorizes **no schema, no migration, no endpoint, no worker and no rou
 Accepting it settles ownership and storage policy; it does not start construction. Every item below
 must be satisfied and recorded before the first Contract B implementation PR:
 
-1. **Provider capability proven in a non-production environment**, against the M2-ADR-016 mandatory
-   rows, on the specific route proposed for Contract B — including the reconciliation sweep that
-   compensates for absent replay-safe admission, and its measured duplicate-detection behaviour.
+1. ~~**Provider capability proven in a non-production environment**, against the M2-ADR-016
+   mandatory rows, on the specific route proposed for Contract B.~~ ✅ **Satisfied for the
+   MVP/research environment, 2026-08-27** — see the [prerequisite 1 qualification evidence](../release/mvp2-contract-b-prerequisite-1-qualification.md). One real Anthropic Message Batch on
+   `claude-sonnet-5` via the #170 adapter: durable `msgbatch_…` identity, separate-process status
+   recovery by that identity alone, terminal result retrieval, exact `custom_id` correlation,
+   native lifecycle and count preservation, exactly one submission, no retry or resubmission.
+   **Two parts of that criterion remain unqualified and are not claimed**: the reconciliation
+   sweep's duplicate-detection behaviour was not exercised, because the create acknowledgement
+   arrived cleanly and the ambiguous window was never entered; and cancellation was not attempted.
+   Both belong to the Contract B crash matrix rather than to this run.
 2. ~~**The Contract B design document's Definition of Done is amended** to remove the
    lost-acknowledgement line M2-ADR-016 §3 identified as unachievable, restated as detection.~~
    **Satisfied 2026-08-27** — the [amended Definition of Done](../release/mvp2-contract-b-definition-of-done.md) supersedes §18. Five of its nine criteria were amended:
