@@ -60,6 +60,17 @@ public class ContractBProperties {
     /** Executions per pass. Bounded so one pass cannot hold a long transaction or a long deadline. */
     private int batchSize = 20;
 
+    /**
+     * How long a sent-but-unacknowledged submission is left alone before it is recorded
+     * {@code INDETERMINATE}.
+     *
+     * <p>Five minutes, chosen against one provider round trip rather than plucked. A submission in
+     * progress right now is indistinguishable from one whose acknowledgement was lost, so the only
+     * thing separating them is elapsed time — too short and the sweep terminates executions that are
+     * about to succeed, which is worse than leaving them briefly ambiguous.
+     */
+    private long unacknowledgedGraceMs = 300_000;
+
     public boolean isEnabled() {
       return enabled;
     }
@@ -90,6 +101,14 @@ public class ContractBProperties {
 
     public void setBatchSize(int batchSize) {
       this.batchSize = batchSize;
+    }
+
+    public long getUnacknowledgedGraceMs() {
+      return unacknowledgedGraceMs;
+    }
+
+    public void setUnacknowledgedGraceMs(long unacknowledgedGraceMs) {
+      this.unacknowledgedGraceMs = unacknowledgedGraceMs;
     }
   }
 }

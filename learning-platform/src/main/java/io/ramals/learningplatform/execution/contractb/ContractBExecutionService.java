@@ -310,7 +310,11 @@ public class ContractBExecutionService {
       commitDecision.run();
       return null;
     });
-    ledger.record(requestId, null, null, "ADOPTER", 0L, "ADOPTED");
+    // No ledger write here, deliberately. core.adopt_ai_execution_result records the adoption in
+    // the same statement as the delete, inside the transaction. A second entry from out here would
+    // be both redundant and non-atomic: a process dying between the commit and this line would
+    // leave adoption evidence that disagrees with itself about how many adoptions happened. Found
+    // by the K10 crash qualification.
     return result;
   }
 

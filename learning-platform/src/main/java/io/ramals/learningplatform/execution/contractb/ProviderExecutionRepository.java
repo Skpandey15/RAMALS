@@ -177,6 +177,54 @@ public class ProviderExecutionRepository {
         """, ProviderExecutionRepository::map, limit);
   }
 
+  /**
+   * Executions that are recoverable but have no work item, so nothing would ever drive them.
+   *
+   * <p>The work queue is an index onto the durable rows, not the record of them. A process that dies
+   * between recording a provider identity and enqueueing its work item leaves an execution that is
+   * perfectly recoverable and completely invisible — kill point 4. Reconciling the two is what makes
+   * the durable row authoritative rather than the queue.
+   */
+  public List<ProviderExecution> reconcilableWithoutWork(int limit) {
+    return jdbc.query("""
+        SELECT execution.request_id, execution.provider, execution.model,
+               execution.idempotency_key, execution.custom_id, execution.provider_execution_id,
+               execution.submit_fence, execution.state
+          FROM core.ai_provider_execution execution
+          LEFT JOIN core.ai_reconciliation_work work ON work.request_id = execution.request_id
+         WHERE execution.state IN ('SUBMITTED', 'RUNNING', 'RECONCILING')
+           AND execution.provider_execution_id IS NOT NULL
+           AND work.request_id IS NULL
+         ORDER BY execution.admitted_at
+         LIMIT ?
+        """, ProviderExecutionRepository::map, limit);
+  }
+
+  /**
+   * Submissions that were sent and never acknowledged, past the point where one could still be in
+   * flight.
+   *
+   * <p>Kill points 2 and 3: {@code SUBMITTED} with no provider identity. There is nothing to poll,
+   * so these can never leave that state on their own, and without this query they would sit
+   * indefinitely looking like live work. Their expected outcome is {@code UNKNOWN_TERMINAL}; this
+   * finds them so something can record it.
+   *
+   * <p>The age threshold is load-bearing rather than defensive. A submission in progress right now
+   * looks exactly like one whose acknowledgement was lost, so the window must comfortably exceed one
+   * provider round trip — resolving too early would terminate an execution that is about to succeed.
+   */
+  public List<String> sentWithoutAcknowledgement(long staleMillis, int limit) {
+    return jdbc.queryForList("""
+        SELECT request_id
+          FROM core.ai_provider_execution
+         WHERE state = 'SUBMITTED'
+           AND provider_execution_id IS NULL
+           AND submitted_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 millisecond')
+         ORDER BY submitted_at
+         LIMIT ?
+        """, String.class, staleMillis, limit);
+  }
+
   /** Enqueues reconciliation work. Idempotent: a row already queued is left as it stands. */
   public void enqueueReconciliation(String requestId) {
     jdbc.update("""
