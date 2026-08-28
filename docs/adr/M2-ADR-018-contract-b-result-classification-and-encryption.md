@@ -304,6 +304,13 @@ to do, and none of it has been done.
 8. The purge function exists, is invokable, and is tested against the 30-day ceiling.
 9. A test proves no plaintext reaches logs on any success or failure path.
 
+**Criteria 6, 7 and 8 are `V037` completion criteria, not preconditions** — reclassified by
+[M2-ADR-019](M2-ADR-019-contract-b-purge-semantics.md). Each describes `V037`'s own content: its grants, its adoption transaction, its purge
+function. No ordering can make them true before the migration exists, so gating the migration on
+them made it unsatisfiable. Nothing is dropped and no bar is lowered — all three must still hold,
+and `V037` is not complete until they do. Criteria 3, 4, 5 and 9 are unaffected and remain genuine
+preconditions.
+
 ## Alternatives rejected
 
 - **`pgcrypto` / PostgreSQL-native encryption.** Rejected in §7. The decisive objection is the key
