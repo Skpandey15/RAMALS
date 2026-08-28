@@ -1,0 +1,120 @@
+package io.ramals.learningplatform.execution.contractb;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * A scriptable provider plane, for tests only.
+ *
+ * <p>Counts submissions. That counter is the point of the class: "exactly one provider submission
+ * per owned durable execution" is a claim about how many times the provider was called, and the only
+ * way to test it is to count. A fake that merely returned the right answers would let a double
+ * submission pass unnoticed.
+ *
+ * <p>Every failure mode the real client can produce is scriptable here, including the one that
+ * matters most — an ambiguous submission, which is neither an acceptance nor a refusal.
+ */
+public final class FakeDurableExecutionPort implements DurableExecutionPort {
+
+  /** Every submission attempt, in order. Assert on its size, not just its content. */
+  final List<String> submissions = new ArrayList<>();
+
+  final AtomicInteger statusCalls = new AtomicInteger();
+  final AtomicInteger resultCalls = new AtomicInteger();
+
+  private String providerExecutionId = "msgbatch_fake0000000001";
+  private RuntimeException submitFailure;
+  private boolean acknowledgeWithoutIdentity;
+  private String state = "RUNNING";
+  private String nativeStatus = "in_progress";
+  private DurableResultRecord result;
+  private RuntimeException statusFailure;
+  private RuntimeException resultFailure;
+
+  FakeDurableExecutionPort providerExecutionId(String id) {
+    this.providerExecutionId = id;
+    return this;
+  }
+
+  /** The submission neither succeeds nor definitely fails. */
+  FakeDurableExecutionPort ambiguousSubmit() {
+    this.submitFailure = new DurableSubmissionAmbiguousException("test", "scripted ambiguity");
+    return this;
+  }
+
+  FakeDurableExecutionPort refusedSubmit() {
+    this.submitFailure = new IllegalStateException("scripted refusal");
+    return this;
+  }
+
+  /** A 2xx that carries no execution identity: an acknowledgement in form only. */
+  FakeDurableExecutionPort acknowledgeWithoutIdentity() {
+    this.acknowledgeWithoutIdentity = true;
+    return this;
+  }
+
+  FakeDurableExecutionPort state(String state, String nativeStatus) {
+    this.state = state;
+    this.nativeStatus = nativeStatus;
+    return this;
+  }
+
+  FakeDurableExecutionPort statusUnavailable() {
+    this.statusFailure = new IllegalStateException("scripted status outage");
+    return this;
+  }
+
+  FakeDurableExecutionPort resultUnavailable() {
+    this.resultFailure = new IllegalStateException("scripted result outage");
+    return this;
+  }
+
+  FakeDurableExecutionPort succeedsWith(String text, String customId) {
+    this.state = "SUCCEEDED";
+    this.nativeStatus = "ended";
+    this.result = new DurableResultRecord(providerExecutionId, "succeeded", customId, text,
+        16, 4, "msg_fake01", null);
+    return this;
+  }
+
+  FakeDurableExecutionPort recordOutcome(String outcome, String customId) {
+    this.state = "SUCCEEDED";
+    this.nativeStatus = "ended";
+    this.result = new DurableResultRecord(providerExecutionId, outcome, customId, null,
+        16, 0, null, "provider_error");
+    return this;
+  }
+
+  @Override
+  public DurableSubmissionAck submit(DurableSubmissionCommand command) {
+    submissions.add(command.requestId());
+    if (submitFailure != null) {
+      throw submitFailure;
+    }
+    return new DurableSubmissionAck(
+        acknowledgeWithoutIdentity ? null : providerExecutionId,
+        "ACCEPTED", command.idempotencyKey(), null, null);
+  }
+
+  @Override
+  public DurableStatusSnapshot status(String id) {
+    statusCalls.incrementAndGet();
+    if (statusFailure != null) {
+      throw statusFailure;
+    }
+    return new DurableStatusSnapshot(id, state, nativeStatus, result != null, null);
+  }
+
+  @Override
+  public DurableResultRecord result(String id, String customId) {
+    resultCalls.incrementAndGet();
+    if (resultFailure != null) {
+      throw resultFailure;
+    }
+    if (result == null) {
+      throw new IllegalStateException("no scripted result");
+    }
+    return result;
+  }
+}

@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     prompt_pins: dict[str, dict[str, str]] = Field(default_factory=dict)
     model_pins: dict[str, str] = Field(default_factory=dict)
 
+    # --- Contract B durable execution (M2-ADR-016, M2-ADR-017) ----------------------------------
+    # Off by default and separately from ai_enabled, because the two answer different questions:
+    # ai_enabled says whether this service may call a model at all, this says whether the durable
+    # provider surface exists. Leaving it off means the Contract B endpoints are absent rather than
+    # present-and-refusing, which is the stronger position while the path is unqualified.
+    #
+    # Turning it on requires a real credential for the same reason a live route does: the Message
+    # Batches API is the only durable path M2-ADR-016 accepts, and there is no fake that could prove
+    # recovery against a provider that is not there.
+    durable_execution_enabled: bool = False
+
     # --- workload identity (M1-ADR-003) ---------------------------------------------------------
     # Spring authenticates as itself with a Keycloak client-credentials token carrying the
     # `ramals-ai` audience. A learner token carries `ramals-api` and is rejected here.
@@ -102,6 +113,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"model route '{self.model_route}' requires RAMALS_AI_PROVIDER_API_KEY; "
                 "set RAMALS_AI_MODEL_ROUTE=ci-fake for local and CI runs"
+            )
+        if self.durable_execution_enabled and not self.provider_api_key:
+            raise ValueError(
+                "RAMALS_AI_DURABLE_EXECUTION_ENABLED requires RAMALS_AI_PROVIDER_API_KEY; "
+                "Contract B has no deterministic fake, because a fake cannot prove recovery"
             )
         return self
 
