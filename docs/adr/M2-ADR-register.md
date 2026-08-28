@@ -86,9 +86,17 @@ the Data Owner and Key Custodian should then be different people — they are th
 here, which M2-ADR-018 records as accepted for a single-maintainer research environment rather than
 as sound segregation of duties.
 
-`V037` remains blocked on prerequisite 1 (provider capability proven in a non-production
-environment) and on M2-ADR-018's seven engineering acceptance criteria, none of which is done.
-Approving the model is not the same as building it.
+**Prerequisite 1 was qualified on 2026-08-27** against the real Anthropic API — one Message Batch
+via the #170 adapter, with separate-process recovery by durable `msgbatch_…` identity, `custom_id`
+correlation and exactly one submission. See the [prerequisite 1 qualification
+evidence](../release/mvp2-contract-b-prerequisite-1-qualification.md). It qualifies **provider
+capability only**: Anthropic still documents no replay-safe admission, cancellation was not
+attempted and must not be represented as proven, and the lost-acknowledgement window was not
+exercised.
+
+`V037` remains blocked on prerequisite 5 (a testable purge mechanism) and on M2-ADR-018's seven
+engineering acceptance criteria, none of which is done. Approving the model is not the same as
+building it.
 
 **Contract A remains the default and current execution contract.** Every route is on Contract A, it
 stays correct and supported for routes that never move, and this decision neither deprecates it nor
