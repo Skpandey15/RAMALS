@@ -22,6 +22,9 @@ public final class CrashingDurableExecutionPort implements DurableExecutionPort 
     BEFORE_SUBMIT,
     /** After the provider accepted, before the caller could record anything. */
     AFTER_SUBMIT,
+    BEFORE_SEARCH,
+    /** After enumeration found the orphan, before the identity could be adopted. */
+    AFTER_SEARCH,
     BEFORE_STATUS,
     AFTER_STATUS,
     BEFORE_RESULT,
@@ -58,6 +61,16 @@ public final class CrashingDurableExecutionPort implements DurableExecutionPort 
     // acknowledgement is what is lost.
     crashIf(When.AFTER_SUBMIT);
     return ack;
+  }
+
+  @Override
+  public DurableExecutionSearch search(String customId, String from, String to) {
+    crashIf(When.BEFORE_SEARCH);
+    DurableExecutionSearch result = delegate.search(customId, from, to);
+    // After the delegate answered: the orphan was found and the process died before RAMALS could
+    // write the identity down. The next instance must find it again rather than assume it.
+    crashIf(When.AFTER_SEARCH);
+    return result;
   }
 
   @Override

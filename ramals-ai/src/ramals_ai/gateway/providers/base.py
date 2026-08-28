@@ -13,6 +13,7 @@ provider cannot arrive with its own private opinion about what a rate limit mean
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 
@@ -157,6 +158,28 @@ class DurableProviderAdapter(Protocol):
         """Reads authoritative status for an execution this process may not have started."""
         ...
 
+    def find_executions_by_custom_id(
+        self,
+        custom_id: str,
+        created_after: str,
+        created_before: str,
+        max_pages: int = 10,
+        max_inspections: int = 50,
+    ) -> DurableExecutionSearch:
+        """Finds every provider execution carrying ``custom_id`` within a creation-time window.
+
+        The recovery path for a lost acknowledgement (M2-ADR-020). Read-only: an implementation must
+        never create an execution while searching for one.
+
+        Correlation must be **proven from batch results**, never taken from list metadata, which
+        carries no ``custom_id``. An implementation matching on creation time would be guessing,
+        and the thing it would guess wrong is whose diagnosis this is.
+
+        Must return ``INCONCLUSIVE`` rather than ``ZERO`` whenever a candidate could not be
+        opened or a bound was hit. ``ZERO`` is a claim that the search finished.
+        """
+        ...
+
     def get_result(self, provider_execution_id: str, custom_id: str | None = None) -> DurableResult:
         """Retrieves one terminal result, after the submitting process may be long gone.
 
@@ -210,6 +233,64 @@ class DurableSubmission:
     created_at: str | None = None
     expires_at: str | None = None
     """When the provider stops processing. Distinct from how long results are retained."""
+
+
+class DurableSearchOutcome(StrEnum):
+    """What an enumeration search actually established.
+
+    Four values rather than three, and the fourth is the important one. A batch that has not ended
+    has no results to read, so it cannot be correlated at all -- and reporting that as ZERO would
+    assert no orphan exists at the moment one is most likely to be running. INCONCLUSIVE keeps
+    "we looked and found nothing" apart from "we could not finish looking" (M2-ADR-020 §2).
+    """
+
+    ZERO = "ZERO"
+    ONE = "ONE"
+    MULTIPLE = "MULTIPLE"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+@dataclass(frozen=True)
+class DurableExecutionMatch:
+    """One provider execution proven to carry the searched ``custom_id``.
+
+    Proven, not inferred. Correlation comes from reading the batch's results, because batch list
+    metadata carries no ``custom_id`` -- so every field here describes an execution that was
+    actually opened and inspected.
+    """
+
+    provider_execution_id: str
+    custom_id: str
+    outcome: str
+    """``succeeded``, ``errored``, ``canceled`` or ``expired``."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_input_tokens: int = 0
+    created_at: str | None = None
+    ended_at: str | None = None
+    native_status: str | None = None
+
+
+@dataclass(frozen=True)
+class DurableExecutionSearch:
+    """The result of enumerating for one ``custom_id``.
+
+    Carries the accounting as well as the answer: how many batches were listed, how many opened,
+    and which bound stopped the search. A caller deciding whether to believe ZERO needs to know
+    the search finished, and one deciding whether to retry needs to know why it did not.
+    """
+
+    outcome: DurableSearchOutcome
+    matches: tuple[DurableExecutionMatch, ...] = ()
+    batches_listed: int = 0
+    batches_inspected: int = 0
+    batches_uninspectable: int = 0
+    """In the window but impossible to correlate -- still processing, or results unreadable."""
+
+    pages_fetched: int = 0
+    limit_reached: str | None = None
+    """Which bound stopped the search, when one did: ``pages``, ``inspections``. None otherwise."""
 
 
 @dataclass(frozen=True)

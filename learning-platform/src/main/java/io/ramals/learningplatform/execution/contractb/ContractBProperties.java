@@ -27,6 +27,56 @@ public class ContractBProperties {
   private boolean enabled = false;
 
   private final Reconciliation reconciliation = new Reconciliation();
+  private final Recovery recovery = new Recovery();
+
+  public Recovery getRecovery() {
+    return recovery;
+  }
+
+  /**
+   * Lost-acknowledgement recovery bounds (M2-ADR-020 §1–§3).
+   *
+   * <p>Every value here trades search cost against the chance of missing an orphan, and the defaults
+   * are chosen against the provider's own timings rather than picked to look round.
+   */
+  public static class Recovery {
+
+    /**
+     * How far either side of {@code submitted_at} the enumeration window reaches.
+     *
+     * <p>One hour, which is far wider than any plausible clock difference between RAMALS and the
+     * provider or gap between the write-ahead claim and the request landing — and still narrow
+     * enough that the candidate set stays small, which matters because every candidate costs a
+     * results fetch.
+     */
+    private long searchSkewMs = 3_600_000;
+
+    /**
+     * How long an inconclusive search may keep being retried before the execution is recorded
+     * indeterminate.
+     *
+     * <p>26 hours: the provider's 24-hour processing deadline plus a two-hour margin. Past it every
+     * batch created in the window has necessarily ended, so a candidate that is still uninspectable
+     * is unreadable for some other reason and waiting longer cannot help.
+     */
+    private long searchHorizonMs = 93_600_000;
+
+    public long getSearchSkewMs() {
+      return searchSkewMs;
+    }
+
+    public void setSearchSkewMs(long searchSkewMs) {
+      this.searchSkewMs = searchSkewMs;
+    }
+
+    public long getSearchHorizonMs() {
+      return searchHorizonMs;
+    }
+
+    public void setSearchHorizonMs(long searchHorizonMs) {
+      this.searchHorizonMs = searchHorizonMs;
+    }
+  }
 
   public boolean isEnabled() {
     return enabled;

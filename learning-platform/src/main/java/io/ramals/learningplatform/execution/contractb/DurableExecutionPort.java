@@ -29,6 +29,22 @@ public interface DurableExecutionPort {
    */
   DurableSubmissionAck submit(DurableSubmissionCommand command);
 
+  /**
+   * Finds every provider execution carrying {@code customId} within a creation-time window.
+   *
+   * <p>The lost-acknowledgement recovery path (M2-ADR-020). <strong>Read-only</strong>: an
+   * implementation must never create an execution while searching for one — that would produce the
+   * duplicate the search exists to detect.
+   *
+   * <p>The window is the caller's because the caller holds the durable {@code submitted_at} that
+   * says when the lost call happened. Correlation must be proven from batch results, never taken
+   * from list metadata, which carries no correlation key at all.
+   *
+   * @param from window start, ISO-8601
+   * @param to window end, ISO-8601
+   */
+  DurableExecutionSearch search(String customId, String from, String to);
+
   /** Reads authoritative status for an execution this process may not have started. */
   DurableStatusSnapshot status(String providerExecutionId);
 

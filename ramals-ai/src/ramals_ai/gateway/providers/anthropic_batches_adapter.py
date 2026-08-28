@@ -25,7 +25,10 @@ from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.gateway.providers.base import (
     DurableExecutionCapability,
     DurableExecutionCounts,
+    DurableExecutionMatch,
+    DurableExecutionSearch,
     DurableResult,
+    DurableSearchOutcome,
     DurableStatus,
     DurableSubmission,
     DurableSubmissionRequest,
@@ -212,6 +215,140 @@ class AnthropicBatchesProvider:
             GatewayErrorCode.INVALID_STRUCTURED_OUTPUT,
             "the batch results contained no record for the requested correlation key",
         )
+
+    def find_executions_by_custom_id(
+        self,
+        custom_id: str,
+        created_after: str,
+        created_before: str,
+        max_pages: int = 10,
+        max_inspections: int = 50,
+    ) -> DurableExecutionSearch:
+        """Enumerates batches in a creation-time window and correlates them by ``custom_id``.
+
+        Two calls per candidate, and that shape is forced rather than chosen: ``GET
+        /v1/messages/batches`` returns no ``custom_id``, so the listing only narrows the field
+        and the correlation must come from opening each candidate's results. Everything bounded
+        here is bounded because of that second call.
+
+        Pages backwards from newest via ``before_id`` and stops once a whole page predates the
+        window. A lost acknowledgement is recovered soon after it happens; starting from the oldest
+        batch would page through the workspace's entire history to reach the relevant hour.
+
+        Never creates anything. This is the recovery path for an execution that may already exist,
+        and a create call here would produce the duplicate the search exists to detect.
+        """
+        batches = self._batches()
+        matches: list[DurableExecutionMatch] = []
+        listed = inspected = uninspectable = pages = 0
+        cursor: str | None = None
+        limit_reached: str | None = None
+        exhausted_window = False
+
+        while pages < max_pages and not exhausted_window:
+            try:
+                page = batches.list(limit=100, **({"before_id": cursor} if cursor else {}))
+                batch_list = list(page)
+            except Exception as failure:  # noqa: BLE001
+                raise self._normalize(failure) from None
+
+            pages += 1
+            if not batch_list:
+                exhausted_window = True
+                break
+
+            older_than_window = 0
+            for batch in batch_list:
+                listed += 1
+                created = _timestamp(getattr(batch, "created_at", None))
+                if created is None:
+                    uninspectable += 1
+                    continue
+                if created > created_before:
+                    # Newer than the window. Paging newest-first, so these precede the candidates.
+                    continue
+                if created < created_after:
+                    older_than_window += 1
+                    continue
+
+                # In the window. No results_url means the batch has not ended, so there is nothing
+                # to correlate against -- uninspectable, which is not "does not match".
+                if not getattr(batch, "results_url", None):
+                    uninspectable += 1
+                    continue
+
+                if inspected >= max_inspections:
+                    limit_reached = "inspections"
+                    break
+
+                inspected += 1
+                readable, found = self._inspect(batch, custom_id)
+                if not readable:
+                    uninspectable += 1
+                elif found is not None:
+                    matches.append(found)
+
+            if limit_reached:
+                break
+            # Every batch on this page predated the window, so every later page does too.
+            if older_than_window == len(batch_list):
+                exhausted_window = True
+                break
+            cursor = str(batch_list[-1].id)
+
+        if limit_reached is None and pages >= max_pages and not exhausted_window:
+            limit_reached = "pages"
+
+        if len(matches) > 1:
+            outcome = DurableSearchOutcome.MULTIPLE
+        elif len(matches) == 1:
+            outcome = DurableSearchOutcome.ONE
+        elif uninspectable or limit_reached:
+            # The distinction M2-ADR-020 section 2 turns on: nothing found, search unfinished.
+            # Reporting ZERO would claim no orphan exists on the strength of a search that could
+            # not see one.
+            outcome = DurableSearchOutcome.INCONCLUSIVE
+        else:
+            outcome = DurableSearchOutcome.ZERO
+
+        return DurableExecutionSearch(
+            outcome=outcome,
+            matches=tuple(matches),
+            batches_listed=listed,
+            batches_inspected=inspected,
+            batches_uninspectable=uninspectable,
+            pages_fetched=pages,
+            limit_reached=limit_reached,
+        )
+
+    def _inspect(self, batch: Any, custom_id: str) -> tuple[bool, DurableExecutionMatch | None]:
+        """Opens one batch's results and looks for the key.
+
+        Returns ``(readable, match)``. Two values rather than an optional because there are three
+        answers, and the third is the one that matters: a batch whose results would not stream has
+        told us nothing, and folding that into "no match" is the fail-open this design exists to
+        avoid.
+        """
+        provider_execution_id = str(batch.id)
+        try:
+            for record in self._batches().results(provider_execution_id):
+                if str(record.custom_id) != custom_id:
+                    continue
+                result = self._to_result(provider_execution_id, record)
+                return True, DurableExecutionMatch(
+                    provider_execution_id=provider_execution_id,
+                    custom_id=custom_id,
+                    outcome=result.outcome,
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
+                    cached_input_tokens=result.cached_input_tokens,
+                    created_at=_timestamp(getattr(batch, "created_at", None)),
+                    ended_at=_timestamp(getattr(batch, "ended_at", None)),
+                    native_status=str(getattr(batch, "processing_status", "")) or None,
+                )
+        except Exception:  # noqa: BLE001 - an unreadable candidate is unknown, never a non-match
+            return False, None
+        return True, None
 
     def cancel(self, provider_execution_id: str) -> DurableStatus:
         """Requests cancellation. The batch reaches ``ended`` and may carry partial results."""

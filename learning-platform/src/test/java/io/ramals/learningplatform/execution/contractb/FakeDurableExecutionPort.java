@@ -110,6 +110,35 @@ public final class FakeDurableExecutionPort implements DurableExecutionPort {
         "ACCEPTED", command.idempotencyKey(), null, null);
   }
 
+  /** Scripted enumeration outcome. Defaults to a conclusive empty search. */
+  private DurableExecutionSearch search =
+      new DurableExecutionSearch(DurableExecutionSearch.Outcome.ZERO, List.of(), 0, 0, 0, 1, null);
+
+  private RuntimeException searchFailure;
+
+  final AtomicInteger searchCalls = new AtomicInteger();
+
+  FakeDurableExecutionPort searchFinds(DurableExecutionSearch.Outcome outcome,
+      DiscoveredExecution... matches) {
+    this.search = new DurableExecutionSearch(outcome, List.of(matches), matches.length,
+        matches.length, outcome == DurableExecutionSearch.Outcome.INCONCLUSIVE ? 1 : 0, 1, null);
+    return this;
+  }
+
+  FakeDurableExecutionPort searchUnavailable() {
+    this.searchFailure = new IllegalStateException("scripted enumeration outage");
+    return this;
+  }
+
+  @Override
+  public DurableExecutionSearch search(String customId, String from, String to) {
+    searchCalls.incrementAndGet();
+    if (searchFailure != null) {
+      throw searchFailure;
+    }
+    return search;
+  }
+
   @Override
   public DurableStatusSnapshot status(String id) {
     statusCalls.incrementAndGet();

@@ -117,7 +117,8 @@ class ContractBCrashQualificationIntegrationTests {
         new ContractBTransitionLedger(jdbc),
         port,
         store,
-        new ContractBAdoption(jdbc, new DataSourceTransactionManager(source)));
+        new ContractBAdoption(jdbc, new DataSourceTransactionManager(source)),
+        new ContractBProperties());
   }
 
   private ContractBResultStore store() {
@@ -182,15 +183,18 @@ class ContractBCrashQualificationIntegrationTests {
         Boolean.class, requestId)).isTrue();
     assertThat(provider.delegate().submissions).hasSize(1);
 
-    // A fresh instance cannot tell this from an execution the provider is running right now. The
-    // expected outcome is INDETERMINATE, and no enumeration exists that would make anything else
-    // honest.
+    // A fresh instance enumerates by custom_id (M2-ADR-020) rather than guessing. Here the search
+    // is conclusive and empty, so INDETERMINATE is reached on evidence rather than on the absence
+    // of a way to look.
     assertThat(instance(provider.survive(), store()).reconcile(requestId))
         .isEqualTo(DurableExecutionState.UNKNOWN_TERMINAL);
+    assertThat(provider.delegate().searchCalls.get())
+        .as("recovery must actually look before concluding")
+        .isPositive();
     assertThat(provider.delegate().submissions)
         .as("a lost acknowledgement must never be resolved by submitting again")
         .hasSize(1);
-    assertThat(ledgerReasons(requestId)).contains("NO_PROVIDER_IDENTITY");
+    assertThat(ledgerReasons(requestId)).contains("SEARCH_FOUND_NOTHING");
   }
 
   // ================================================================================================
@@ -509,7 +513,7 @@ class ContractBCrashQualificationIntegrationTests {
     // Once it is older than one provider round trip, leaving it as live work would be the lie.
     worker(fake, 0L).poll();
     assertThat(state(requestId)).isEqualTo("UNKNOWN_TERMINAL");
-    assertThat(ledgerReasons(requestId)).contains("NO_PROVIDER_IDENTITY");
+    assertThat(ledgerReasons(requestId)).contains("SEARCH_FOUND_NOTHING");
     assertThat(fake.submissions)
         .as("a lost acknowledgement is resolved by recording it, never by sending again")
         .hasSize(1);
