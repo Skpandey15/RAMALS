@@ -122,8 +122,7 @@ class ContractBLifecycleIntegrationTests {
     var port = new FakeDurableExecutionPort().providerExecutionId("msgbatch_ok0000000001");
     var service = serviceWith(port);
 
-    assertThat(service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic")).isTrue();
+    assertThat(service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic")).isTrue();
     assertThat(state(requestId)).isEqualTo("ADMITTED");
 
     assertThat(service.submit(requestId, command(requestId)))
@@ -135,7 +134,7 @@ class ContractBLifecycleIntegrationTests {
     // Still working: stays non-terminal and comes back.
     assertThat(service.reconcile(requestId)).isEqualTo(DurableExecutionState.RUNNING);
 
-    port.succeedsWith(proposal(requestId), "custom-" + requestId);
+    port.succeedsWith(proposal(requestId), "idem-" + requestId);
     assertThat(service.reconcile(requestId)).isEqualTo(DurableExecutionState.SUCCEEDED);
 
     assertThat(state(requestId)).isEqualTo("SUCCEEDED");
@@ -159,8 +158,7 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-refused-000001";
     var port = new FakeDurableExecutionPort().refusedSubmit();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     assertThat(service.submit(requestId, command(requestId)))
         .isEqualTo(DurableExecutionState.FAILED);
@@ -179,8 +177,7 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-unclass-000001";
     var port = new FakeDurableExecutionPort().unclassifiedSubmitFailure();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     // The failure carries no diagnosis, so it cannot prove the provider created nothing. Recording
     // FAILED here would assert knowledge the code does not have, and would hide a live execution.
@@ -218,8 +215,8 @@ class ContractBLifecycleIntegrationTests {
 
     for (Case scenario : cases) {
       var service = serviceWith(scenario.port());
-      service.admit(scenario.requestId(), "idem-" + scenario.requestId(),
-          "custom-" + scenario.requestId(), "anthropic", "claude-sonnet-5", "diagnostic");
+      service.admit(scenario.requestId(), "idem-" + scenario.requestId(), "anthropic",
+          "claude-sonnet-5", "diagnostic");
 
       assertThat(service.submit(scenario.requestId(), command(scenario.requestId())))
           .as("%s", scenario.requestId())
@@ -239,8 +236,7 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-transport-0001";
     var port = new FakeDurableExecutionPort().ambiguousSubmit();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     assertThat(service.submit(requestId, command(requestId)))
         .isEqualTo(DurableExecutionState.UNKNOWN_TERMINAL);
@@ -254,11 +250,10 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-errored-000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
 
-    port.recordOutcome("errored", "custom-" + requestId);
+    port.recordOutcome("errored", "idem-" + requestId);
     assertThat(service.reconcile(requestId)).isEqualTo(DurableExecutionState.FAILED);
     assertThat(results.exists(requestId)).isFalse();
   }
@@ -269,13 +264,12 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-invalid-000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
 
     // A raw provider body carrying a reasoning trace. Validation happens before encryption, so this
     // never reaches a cipher and never reaches the column.
-    port.succeedsWith("{\"thinking\":\"" + CANARY + "\",\"diagnoses\":[]}", "custom-" + requestId);
+    port.succeedsWith("{\"thinking\":\"" + CANARY + "\",\"diagnoses\":[]}", "idem-" + requestId);
     assertThat(service.reconcile(requestId)).isEqualTo(DurableExecutionState.FAILED);
     assertThat(results.exists(requestId)).isFalse();
     assertThat(ledgerReasons(requestId)).contains("RESULT_SCHEMA_INVALID");
@@ -298,15 +292,14 @@ class ContractBLifecycleIntegrationTests {
     assertThat(beforeCrash.submissions).isEmpty();
 
     var service = serviceWith(beforeCrash);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
     assertThat(state(requestId)).isEqualTo("SUBMITTED");
 
     // The process dies here. Everything it knew is gone; the row and the ledger are not.
     var afterRestart = new FakeDurableExecutionPort()
         .providerExecutionId("msgbatch_restart00001");
-    afterRestart.succeedsWith(proposal(requestId), "custom-" + requestId);
+    afterRestart.succeedsWith(proposal(requestId), "idem-" + requestId);
     var recovered = serviceWith(afterRestart);
 
     assertThat(recovered.reconcile(requestId)).isEqualTo(DurableExecutionState.SUCCEEDED);
@@ -322,8 +315,7 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-unreach-000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
 
     var offline = new FakeDurableExecutionPort().statusUnavailable();
@@ -339,8 +331,7 @@ class ContractBLifecycleIntegrationTests {
   void aCrashDuringTheProviderCallIsIndeterminate() {
     String requestId = "req-midsubmit-0001";
     var service = serviceWith(new FakeDurableExecutionPort());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     // The exact state a process death during the provider call leaves behind, produced by the
     // write-ahead claim rather than simulated: handed over, no identity, nothing to poll.
@@ -379,8 +370,7 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-once-0000000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     service.submit(requestId, command(requestId));
     // A second caller, a retried message, a duplicated scheduler tick -- all the same to the row.
@@ -399,10 +389,9 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-dupe-0000000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    port.succeedsWith(proposal(requestId), "custom-" + requestId);
+    port.succeedsWith(proposal(requestId), "idem-" + requestId);
 
     assertThat(service.reconcile(requestId)).isEqualTo(DurableExecutionState.SUCCEEDED);
     int resultCallsAfterFirst = port.resultCalls.get();
@@ -422,10 +411,8 @@ class ContractBLifecycleIntegrationTests {
   void aProviderExecutionIdentityIsUnique() {
     var port = new FakeDurableExecutionPort().providerExecutionId("msgbatch_shared000001");
     var service = serviceWith(port);
-    service.admit("req-first-00000001", "idem-first", "custom-first",
-        "anthropic", "claude-sonnet-5", "diagnostic");
-    service.admit("req-second-0000001", "idem-second", "custom-second",
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit("req-first-00000001", "idem-first", "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit("req-second-0000001", "idem-second", "anthropic", "claude-sonnet-5", "diagnostic");
 
     service.submit("req-first-00000001", command("req-first-00000001"));
     // The same batch id coming back for a second request is exactly what a duplicate looks like.
@@ -444,8 +431,7 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-ambiguous-00001";
     var port = new FakeDurableExecutionPort().ambiguousSubmit();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     assertThat(service.submit(requestId, command(requestId)))
         .isEqualTo(DurableExecutionState.UNKNOWN_TERMINAL);
@@ -467,8 +453,7 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-noident-000001";
     var port = new FakeDurableExecutionPort().acknowledgeWithoutIdentity();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     // A 2xx that leaves RAMALS unable to poll is the same position as never having heard back.
     assertThat(service.submit(requestId, command(requestId)))
@@ -482,8 +467,7 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-expired-000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
 
     port.state("EXPIRED", "expired");
@@ -501,10 +485,9 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-crypto-000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    port.succeedsWith(proposal(requestId), "custom-" + requestId);
+    port.succeedsWith(proposal(requestId), "idem-" + requestId);
     service.reconcile(requestId);
 
     byte[] stored = jdbc.queryForObject(
@@ -527,10 +510,9 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-nocarry-000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    port.succeedsWith(proposal(requestId), "custom-" + requestId);
+    port.succeedsWith(proposal(requestId), "idem-" + requestId);
     service.reconcile(requestId);
 
     for (String table : List.of("ai_provider_execution", "ai_execution_transition",
@@ -552,10 +534,9 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-adopt-0000001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    port.succeedsWith(proposal(requestId), "custom-" + requestId);
+    port.succeedsWith(proposal(requestId), "idem-" + requestId);
     service.reconcile(requestId);
     assertThat(results.exists(requestId)).isTrue();
 
@@ -575,10 +556,9 @@ class ContractBLifecycleIntegrationTests {
     String requestId = "req-adoptfail-0001";
     var port = new FakeDurableExecutionPort();
     var service = serviceWith(port);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    port.succeedsWith(proposal(requestId), "custom-" + requestId);
+    port.succeedsWith(proposal(requestId), "idem-" + requestId);
     service.reconcile(requestId);
 
     assertThatThrownBy(() -> service.adopt(requestId, () -> {
@@ -594,8 +574,7 @@ class ContractBLifecycleIntegrationTests {
   void adoptingNothingIsSafe() {
     String requestId = "req-adoptnone-0001";
     var service = serviceWith(new FakeDurableExecutionPort());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     assertThat(service.adopt(requestId, () -> {
       throw new AssertionError("the decision must not run when there is nothing to adopt");

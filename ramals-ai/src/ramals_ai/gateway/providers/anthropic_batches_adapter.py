@@ -239,37 +239,51 @@ class AnthropicBatchesProvider:
         and a create call here would produce the duplicate the search exists to detect.
         """
         batches = self._batches()
-        matches: list[DurableExecutionMatch] = []
-        listed = inspected = uninspectable = pages = 0
-        cursor: str | None = None
+        matches: dict[str, DurableExecutionMatch] = {}
+        seen: set[str] = set()
+        listed = inspected = uninspectable = 0
         limit_reached: str | None = None
-        exhausted_window = False
+        consecutive_older = 0
+        max_listed = max_pages * 100
 
-        while pages < max_pages and not exhausted_window:
-            try:
-                page = batches.list(limit=100, **({"before_id": cursor} if cursor else {}))
-                batch_list = list(page)
-            except Exception as failure:  # noqa: BLE001
-                raise self._normalize(failure) from None
-
-            pages += 1
-            if not batch_list:
-                exhausted_window = True
-                break
-
-            older_than_window = 0
-            for batch in batch_list:
+        # The SDK's SyncPage auto-paginates on iteration, so this walks the whole listing without a
+        # manual cursor -- and must, because there is no correct manual cursor here. An earlier
+        # version paged with ``before_id``, which returns the page *immediately before* an object:
+        # with newest-first ordering that walks back toward NEWER items and re-yields batches
+        # already inspected. The same batch then appeared twice in the match list and the search
+        # reported MULTIPLE for a single real execution -- a false duplicate, which under
+        # M2-ADR-020 refuses adoption and strands a recoverable execution. Found by the W2
+        # real-provider run.
+        try:
+            for batch in batches.list(limit=100):
+                if listed >= max_listed:
+                    limit_reached = "pages"
+                    break
                 listed += 1
+
+                batch_id = str(batch.id)
+                if batch_id in seen:
+                    # Belt and braces. Nothing should yield a batch twice now, but a duplicate here
+                    # manufactures a duplicate provider execution out of nothing, so it is refused
+                    # rather than trusted.
+                    continue
+                seen.add(batch_id)
+
                 created = _timestamp(getattr(batch, "created_at", None))
                 if created is None:
                     uninspectable += 1
                     continue
                 if created > created_before:
-                    # Newer than the window. Paging newest-first, so these precede the candidates.
                     continue
                 if created < created_after:
-                    older_than_window += 1
+                    # Newest-first, so once several consecutive batches predate the window the rest
+                    # do too. Counted rather than broken on the first, because one out-of-order
+                    # timestamp should not truncate the search.
+                    consecutive_older += 1
+                    if consecutive_older >= 5:
+                        break
                     continue
+                consecutive_older = 0
 
                 # In the window. No results_url means the batch has not ended, so there is nothing
                 # to correlate against -- uninspectable, which is not "does not match".
@@ -286,38 +300,39 @@ class AnthropicBatchesProvider:
                 if not readable:
                     uninspectable += 1
                 elif found is not None:
-                    matches.append(found)
+                    matches[found.provider_execution_id] = found
+        except GatewayError:
+            raise
+        except Exception as failure:  # noqa: BLE001
+            raise self._normalize(failure) from None
 
-            if limit_reached:
-                break
-            # Every batch on this page predated the window, so every later page does too.
-            if older_than_window == len(batch_list):
-                exhausted_window = True
-                break
-            cursor = str(batch_list[-1].id)
-
-        if limit_reached is None and pages >= max_pages and not exhausted_window:
-            limit_reached = "pages"
-
+        incomplete = bool(uninspectable or limit_reached)
         if len(matches) > 1:
+            # Definitive whatever else was missed: two are already more than one.
             outcome = DurableSearchOutcome.MULTIPLE
+        elif incomplete:
+            # An unfinished search cannot conclude ANYTHING, and that applies to ONE exactly as it
+            # applies to ZERO. An uninspected candidate may be a second execution carrying the same
+            # key, so reporting ONE here would adopt on incomplete evidence and silently pick one
+            # of a duplicate pair.
+            #
+            # The first version applied this rule only to ZERO. The W2 real-provider run found it:
+            # two batches were induced under one custom_id, the second was still in_progress when
+            # the search ran, and the search said ONE -- so the lifecycle adopted the first and the
+            # duplicate went unreported. Exactly the outcome M2-ADR-020 section 4 forbids.
+            outcome = DurableSearchOutcome.INCONCLUSIVE
         elif len(matches) == 1:
             outcome = DurableSearchOutcome.ONE
-        elif uninspectable or limit_reached:
-            # The distinction M2-ADR-020 section 2 turns on: nothing found, search unfinished.
-            # Reporting ZERO would claim no orphan exists on the strength of a search that could
-            # not see one.
-            outcome = DurableSearchOutcome.INCONCLUSIVE
         else:
             outcome = DurableSearchOutcome.ZERO
 
         return DurableExecutionSearch(
             outcome=outcome,
-            matches=tuple(matches),
+            matches=tuple(matches.values()),
             batches_listed=listed,
             batches_inspected=inspected,
             batches_uninspectable=uninspectable,
-            pages_fetched=pages,
+            pages_fetched=max(1, (listed + 99) // 100),
             limit_reached=limit_reached,
         )
 

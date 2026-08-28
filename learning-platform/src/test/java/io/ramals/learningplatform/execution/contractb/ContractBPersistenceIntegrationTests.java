@@ -683,7 +683,8 @@ class ContractBPersistenceIntegrationTests {
                 CURRENT_TIMESTAMP - make_interval(days => ?),
                 CASE WHEN ? THEN CURRENT_TIMESTAMP - make_interval(days => ?) ELSE NULL END)
         """,
-        requestId, "idem-" + requestId, "custom-" + requestId,
+        // custom_id is the idempotency key, as the Definition of Done defines it.
+        requestId, "idem-" + requestId, "idem-" + requestId,
         "msgbatch_" + requestId, state, ageDays, ageDays, terminal, ageDays);
     migration.update("""
         INSERT INTO core.ai_execution_transition (request_id, to_state, actor, reason)

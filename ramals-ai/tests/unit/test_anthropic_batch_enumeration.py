@@ -78,14 +78,19 @@ class _FakeBatches:
         self.create_calls = 0
         self.list_failure: Exception | None = None
 
-    def list(self, *, limit: int = 100, before_id: str | None = None) -> Sequence[_Batch]:
+    def list(self, *, limit: int = 100) -> Sequence[_Batch]:  # noqa: ARG002 - SDK shape
+        """Auto-paginating, exactly as the SDK's SyncPage is.
+
+        The earlier fake took a ``before_id`` and returned one slice, modelling a cursor the SDK
+        does not require and a direction the API does not have. That fiction is what let a real
+        pagination defect through: ``before_id`` walks toward *newer* items, so the production loop
+        re-inspected batches and reported a false duplicate. A fake must not invent an interface
+        the real client does not present.
+        """
         self.list_calls += 1
         if self.list_failure is not None:
             raise self.list_failure
-        start = 0
-        if before_id is not None:
-            start = next(i for i, b in enumerate(self._batches) if b.id == before_id) + 1
-        return self._batches[start : start + limit]
+        return list(self._batches)
 
     def results(self, batch_id: str) -> Sequence[_Record]:
         self.result_calls.append(batch_id)
@@ -137,14 +142,38 @@ def test_the_target_is_found_wherever_it_sits_in_the_pages(position: str, index:
         assert result.pages_fetched > 1
 
 
-def test_pagination_uses_the_cursor_rather_than_refetching_the_first_page() -> None:
+def test_no_batch_is_ever_inspected_twice() -> None:
     fake, _ = _corpus(249)
 
     _search(fake, max_pages=10, max_inspections=300)
 
-    # 250 batches at 100 per page: three pages, then one empty page that ends the walk.
-    assert fake.list_calls in (3, 4)
+    # The regression that matters. Inspecting a batch twice puts it in the match list twice, and
+    # two entries for one real execution reports MULTIPLE -- a duplicate that does not exist, which
+    # refuses adoption and strands a recoverable execution.
     assert len(fake.result_calls) == len(set(fake.result_calls)), "no batch inspected twice"
+    assert fake.list_calls == 1, "the SDK page auto-paginates; a manual cursor re-walks it"
+
+
+def test_one_real_execution_is_never_reported_as_a_duplicate() -> None:
+    # The W2 finding, as a unit test: a single batch carrying the key must be ONE.
+    fake, batches = _corpus(7, size=45)
+
+    result = _search(fake)
+
+    assert result.outcome is DurableSearchOutcome.ONE
+    assert len(result.matches) == 1
+    assert result.matches[0].provider_execution_id == batches[7].id
+
+
+def test_a_repeated_batch_in_the_listing_cannot_manufacture_a_duplicate() -> None:
+    # Defensive: even if the provider yielded one batch twice, it is still one execution.
+    target = _Batch("msgbatch_repeated", IN_WINDOW)
+    fake = _FakeBatches([target, target], {target.id: [TARGET]})
+
+    result = _search(fake)
+
+    assert result.outcome is DurableSearchOutcome.ONE
+    assert len(result.matches) == 1
 
 
 def test_batches_outside_the_window_are_never_opened() -> None:
@@ -218,6 +247,43 @@ def test_an_unfinished_batch_makes_the_search_inconclusive_not_zero() -> None:
     assert running.id not in fake.result_calls, "an unfinished batch has nothing to open"
 
 
+def test_one_match_with_an_uninspectable_candidate_is_inconclusive_not_one() -> None:
+    # The W2 P4 finding. A candidate that has not ended may be a SECOND execution carrying the same
+    # key, so a single match found alongside one is not yet "exactly one" -- adopting on that
+    # evidence silently picks one of a duplicate pair.
+    found = _Batch("msgbatch_found", IN_WINDOW)
+    still_running = _Batch("msgbatch_running", IN_WINDOW, ended=False)
+    fake = _FakeBatches([found, still_running], {found.id: [TARGET]})
+
+    result = _search(fake)
+
+    assert result.outcome is DurableSearchOutcome.INCONCLUSIVE
+    assert result.batches_uninspectable == 1
+    # The match is still reported, so a caller can see what was found -- it just may not act on it.
+    assert len(result.matches) == 1
+
+
+def test_one_match_with_a_bound_hit_is_inconclusive_not_one() -> None:
+    fake, batches = _corpus(0, size=60)
+
+    result = _search(fake, max_inspections=5)
+
+    assert result.outcome is DurableSearchOutcome.INCONCLUSIVE
+    assert result.limit_reached == "inspections"
+
+
+def test_multiple_wins_even_when_the_search_was_incomplete() -> None:
+    # Two is already more than one, whatever else was missed. Definitive.
+    first = _Batch("msgbatch_dup_a", IN_WINDOW)
+    second = _Batch("msgbatch_dup_b", IN_WINDOW)
+    running = _Batch("msgbatch_running", IN_WINDOW, ended=False)
+    fake = _FakeBatches([first, second, running], {first.id: [TARGET], second.id: [TARGET]})
+
+    result = _search(fake)
+
+    assert result.outcome is DurableSearchOutcome.MULTIPLE
+
+
 def test_unreadable_results_make_the_search_inconclusive_not_zero() -> None:
     broken = _Batch("msgbatch_broken", IN_WINDOW)
     fake = _FakeBatches([broken], {}, unreadable={broken.id})
@@ -248,7 +314,9 @@ def test_hitting_the_page_bound_is_inconclusive_never_zero() -> None:
 
     assert result.outcome is DurableSearchOutcome.INCONCLUSIVE
     assert result.limit_reached == "pages"
-    assert fake.list_calls == 2
+    # max_pages bounds items listed (pages of 100): the SDK page auto-paginates, so there is no
+    # per-page call to count.
+    assert result.batches_listed == 200
 
 
 # -- failure and safety ----------------------------------------------------------------------------
