@@ -259,6 +259,93 @@ class MigrationScriptContractTests {
         .doesNotContain("redispatch");
   }
 
+  @Test
+  void contractBPersistenceGrantsOnlyTheRuntimeAndHoldsNoPlaintext() throws IOException {
+    // Statements only, and that matters more here than anywhere else in this class: V037 explains
+    // at length which roles must hold nothing, so an assertion read against the whole file would be
+    // satisfied by the explanation -- passing exactly when someone documents the matrix and then
+    // grants against it.
+    String migration = statements("/db/migration/V037__contract_b_durable_execution.sql");
+
+    assertThat(migration)
+        .contains("CREATE TABLE core.ai_provider_execution")
+        .contains("CREATE TABLE core.ai_execution_result")
+        .contains("CREATE TABLE core.ai_execution_transition")
+        .contains("CREATE TABLE core.ai_reconciliation_work")
+        .contains("normalized_result     BYTEA        NOT NULL")
+        .contains("CREATE FUNCTION core.adopt_ai_execution_result")
+        .contains("CREATE FUNCTION core.purge_expired_ai_execution_results");
+
+    // The access matrix of M2-ADR-018 §3, as written rather than as intended. The revoke on the
+    // result table is the load-bearing line: V002's ALTER DEFAULT PRIVILEGES grants all four
+    // privileges on every future core table to the runtime role, so UPDATE arrives on its own and
+    // a migration that only wrote GRANTs would ship it while appearing correct.
+    assertThat(migration)
+        .contains("REVOKE ALL ON TABLE core.ai_execution_result FROM ramals_core_runtime")
+        .contains("GRANT SELECT, INSERT, DELETE ON TABLE core.ai_execution_result "
+            + "TO ramals_core_runtime")
+        .contains("REVOKE ALL ON TABLE core.ai_execution_transition FROM ramals_core_runtime")
+        .contains("GRANT SELECT, INSERT ON TABLE core.ai_execution_transition "
+            + "TO ramals_core_runtime")
+        .contains("FROM ramals_ai_runtime")
+        .doesNotContain("GRANT UPDATE ON TABLE core.ai_execution_result")
+        .doesNotContain("GRANT DELETE ON TABLE core.ai_execution_transition")
+        .doesNotContain("TO ramals_ai_runtime");
+
+    // Both purge mechanisms exist, both are taken away from PUBLIC, and the sweep is bounded at
+    // both ends -- a floor so it cannot become "delete everything", a ceiling so it cannot become
+    // "keep them longer".
+    assertThat(migration)
+        .contains("REVOKE ALL ON FUNCTION core.adopt_ai_execution_result(VARCHAR) FROM PUBLIC")
+        .contains("REVOKE ALL ON FUNCTION core.purge_expired_ai_execution_results(INTEGER, "
+            + "INTEGER) FROM PUBLIC")
+        .contains("retention_days must be at least 1")
+        .contains("retention_days must not exceed the 30 day ceiling")
+        .contains("execution.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN_TERMINAL')")
+        .contains("LIMIT batch_limit");
+
+    assertThat(migration)
+        .contains("ck_ai_execution_result_envelope")
+        .contains("get_byte(normalized_result, 0) = 1")
+        .contains("ck_ai_execution_result_ceiling");
+
+    // Structural redaction, the V023 way, asserted over the table definitions rather than the
+    // file. Two reasons for the narrower scope. The migration's prose names the very things that
+    // must not be columns -- "never prompts, context or model output" -- so a file-wide
+    // doesNotContain would be failing on the explanation. And statements() strips from "--" to end
+    // of line, which also truncates the three COMMENT literals that contain "--", so a file-wide
+    // assertion here would be reading text mangled by the helper rather than the migration.
+    for (String table : new String[] {
+        "core.ai_provider_execution", "core.ai_execution_result",
+        "core.ai_execution_transition", "core.ai_reconciliation_work"}) {
+      String definition = block(migration, "CREATE TABLE " + table);
+      assertThat(definition)
+          .as("%s must have nowhere to put model output", table)
+          .doesNotContain("TEXT")
+          .doesNotContain("prompt")
+          .doesNotContain("thinking")
+          .doesNotContain("reasoning")
+          .doesNotContain("raw_response");
+    }
+    // And the one column that does hold model output holds bytes, not characters.
+    assertThat(block(migration, "CREATE TABLE core.ai_execution_result"))
+        .contains("normalized_result     BYTEA");
+
+    // Contract A's tables are not touched. M2-ADR-017 §3/§5: the S1-S4 qualification stays valid
+    // only while V037 alters nothing it exercised.
+    assertThat(migration)
+        .doesNotContain("ALTER TABLE core.ai_execution")
+        .doesNotContain("ALTER TABLE core.ai_execution_event")
+        .doesNotContain("ALTER TABLE core.ai_execution_dispatch");
+  }
+
+  /** One statement, from its opening keyword to the semicolon that ends it. */
+  private String block(String migration, String opening) {
+    int start = migration.indexOf(opening);
+    assertThat(start).as("statement %s", opening).isNotNegative();
+    return migration.substring(start, migration.indexOf(";", start));
+  }
+
   /** One migration with line comments removed, so an assertion reads DDL rather than prose. */
   private String statements(String path) throws IOException {
     return resource(path).replaceAll("(?m)--.*$", "");

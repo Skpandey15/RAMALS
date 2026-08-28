@@ -246,6 +246,60 @@ status="$(run_on 'ALTER TABLE core.foo ADD COLUMN value VARCHAR(64) DEFAULT '"'"
 ALTER TABLE core.foo ALTER COLUMN value DROP DEFAULT;')"
 check "dropping the default of a column added here is allowed" "0" "${status}"
 
+# -- narrowing a new table's grants is not narrowing anybody's -------------------------------------
+#
+# The distinction this block exists to hold: a REVOKE against a table the same migration creates
+# cannot take a privilege away from the previously released image, because that image was built when
+# the table did not exist and its role has no grant on it to lose. A REVOKE against a pre-existing
+# table is the opposite, and every case below that names one is still refused.
+#
+# The V037 idiom, and the reason the exemption is needed at all: V002 grants SELECT, INSERT, UPDATE
+# and DELETE on every future core table to ramals_core_runtime by default privilege, so a new table
+# arrives holding all four. A migration wanting a narrower matrix must REVOKE, and no ordering of
+# statements avoids it.
+status="$(run_on 'CREATE TABLE core.fresh (id UUID PRIMARY KEY, value VARCHAR(64));
+REVOKE ALL ON TABLE core.fresh FROM ramals_core_runtime;
+GRANT SELECT, INSERT ON TABLE core.fresh TO ramals_core_runtime;')"
+check "revoking on a table created here is allowed" "0" "${status}"
+
+status="$(run_on 'CREATE TABLE core.fresh (id UUID PRIMARY KEY);
+REVOKE UPDATE
+  ON TABLE core.fresh
+  FROM ramals_core_runtime;')"
+check "a wrapped revoke on a table created here is allowed" "0" "${status}"
+
+status="$(run_on 'CREATE TABLE core.fresh (id UUID PRIMARY KEY);
+REVOKE ALL ON core.fresh FROM ramals_core_runtime;')"
+check "revoke without the TABLE keyword on a table created here is allowed" "0" "${status}"
+
+status="$(run_on 'CREATE TABLE core.one (id UUID PRIMARY KEY);
+CREATE TABLE core.two (id UUID PRIMARY KEY);
+REVOKE ALL ON TABLE core.one, core.two FROM ramals_core_runtime;')"
+check "revoking on several tables all created here is allowed" "0" "${status}"
+
+# The edge the subset test exists for. One fresh name must not carry a pre-existing one through.
+status="$(run_on 'CREATE TABLE core.fresh (id UUID PRIMARY KEY);
+REVOKE ALL ON TABLE core.fresh, core.foo FROM ramals_core_runtime;')"
+check "revoking on a created and a pre-existing table together is refused" "1" "${status}"
+
+# A pre-existing table is still a finding even when the migration creates something else. Creating a
+# table must not become a blanket licence for every revoke in the file.
+status="$(run_on 'CREATE TABLE core.fresh (id UUID PRIMARY KEY);
+REVOKE UPDATE ON TABLE core.foo FROM ramals_core_runtime;')"
+check "revoking on a pre-existing table is still refused" "1" "${status}"
+
+# ON ALL TABLES IN SCHEMA reaches tables this migration did not create, so it can never be cleared
+# by having created one.
+status="$(run_on 'CREATE TABLE core.fresh (id UUID PRIMARY KEY);
+REVOKE ALL ON ALL TABLES IN SCHEMA core FROM ramals_core_runtime;')"
+check "revoking on all tables in a schema is still refused" "1" "${status}"
+
+# A table created by an earlier migration is not created "here". The exemption is file-scoped
+# because that is the only scope in which the claim is true.
+status="$(run_on_pair 'CREATE TABLE core.fresh (id UUID PRIMARY KEY);' \
+  'REVOKE ALL ON TABLE core.fresh FROM ramals_core_runtime;')"
+check "revoking on a table created by an earlier migration is refused" "1" "${status}"
+
 # -- statement scope must not become file scope -----------------------------------------------------
 #
 # One clause's DEFAULT must not excuse another clause's NOT NULL. Matching the whole statement in one

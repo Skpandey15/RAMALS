@@ -82,10 +82,10 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 36 with V036 (Contract A fail-closed provider execution). Asserting the count
+    // 37 with V037 (Contract B durable execution persistence). Asserting the count
     // rather than merely that the upgrade succeeds is what makes an accidentally unapplied
     // migration visible -- it caught V029 the first time it ran.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(36);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(37);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 

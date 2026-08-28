@@ -7,6 +7,10 @@
   design document's §18 disagree, the ADRs decide and this document records the result.
 - **Does not unblock:** anything. Prerequisites 3 and 4 — the data-classification sign-off and the
   encryption mechanism — remain open, and `V037` remains blocked on them.
+  *Updated 2026-08-28: all seven prerequisites are now satisfied and `V037` has shipped. The
+  original line is kept rather than rewritten because it records what was true when this document
+  was amended. None of the criteria below are affected — they are runtime-qualification criteria,
+  and `V037` is persistence with no route, no adapter and no reconciliation worker behind it.*
 
 ## Why §18 needed amending
 
