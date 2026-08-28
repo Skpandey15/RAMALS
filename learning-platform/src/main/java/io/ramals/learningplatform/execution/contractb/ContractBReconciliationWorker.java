@@ -59,6 +59,8 @@ public class ContractBReconciliationWorker {
    */
   @Scheduled(fixedDelayString = "${ramals.contract-b.reconciliation.interval-ms:30000}")
   public void poll() {
+    recoverOrphans();
+
     List<String> due;
     try {
       due = executions.leaseDue(owner, properties.getReconciliation().getLeaseMs(),
@@ -86,6 +88,55 @@ public class ContractBReconciliationWorker {
         executions.recordReconciliationAttempt(
             requestId, properties.getReconciliation().getBackoffMs());
       }
+    }
+  }
+
+  /**
+   * Enqueues executions that are durably recoverable but have no work item.
+   *
+   * <p>Without this the queue would decide what is recoverable, and it does not know: a process that
+   * dies between recording a provider identity and enqueueing its work item leaves an execution that
+   * every other mechanism can drive and nothing ever will. Kill points 2, 3 and 4 all produce rows in
+   * that position, and the crash qualification found them stranded.
+   *
+   * <p>Two populations, and they are separated because the age threshold applies to only one of
+   * them:
+   *
+   * <ul>
+   *   <li><strong>Acknowledged but unqueued</strong> — a provider identity exists, so this is
+   *       ordinary work that simply lost its index entry. Enqueued immediately; there is nothing to
+   *       wait for.
+   *   <li><strong>Sent but never acknowledged</strong> — no identity, nothing to poll, and the
+   *       expected outcome is {@code UNKNOWN_TERMINAL}. Enqueued only once it is too old to still be
+   *       in flight, because a submission happening right now is indistinguishable from one whose
+   *       acknowledgement was lost, and resolving it early would terminate an execution about to
+   *       succeed.
+   * </ul>
+   *
+   * <p>This never submits. It only makes an execution visible to reconciliation, which decides the
+   * outcome — and for the second population that decision is always indeterminate, because no
+   * enumeration exists that could establish anything better.
+   */
+  private void recoverOrphans() {
+    int batch = properties.getReconciliation().getBatchSize();
+    try {
+      for (ProviderExecution execution : executions.reconcilableWithoutWork(batch)) {
+        LOGGER.info("contract B execution had no work item; re-queuing [requestId={}, state={}]",
+            execution.requestId(), execution.state());
+        executions.enqueueReconciliation(execution.requestId());
+      }
+      for (String requestId : executions.sentWithoutAcknowledgement(
+          properties.getReconciliation().getUnacknowledgedGraceMs(), batch)) {
+        LOGGER.warn("contract B execution was sent and never acknowledged [requestId={}]. "
+            + "Queuing it to be recorded INDETERMINATE: the provider may hold an execution RAMALS "
+            + "cannot name, and no enumeration exists to recover it.", requestId);
+        executions.enqueueReconciliation(requestId);
+      }
+    } catch (RuntimeException unavailable) {
+      // Best effort. The ordinary lease loop below is the primary path, and a failure to sweep for
+      // orphans must not stop it.
+      LOGGER.warn("contract B orphan recovery scan failed [error={}]",
+          unavailable.getClass().getSimpleName());
     }
   }
 }

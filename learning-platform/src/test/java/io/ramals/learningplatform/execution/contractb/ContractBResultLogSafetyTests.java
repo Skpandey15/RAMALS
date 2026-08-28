@@ -2,6 +2,9 @@ package io.ramals.learningplatform.execution.contractb;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 
 import ch.qos.logback.classic.Level;
@@ -61,11 +64,17 @@ class ContractBResultLogSafetyTests {
   private Logger rootLogger;
   private Level originalLevel;
 
+  private JdbcTemplate jdbc;
+
   @BeforeEach
   void setUp() {
     var keys = new FakeResultEncryptionKeyProvider().with(KEY_V1).active(KEY_V1);
-    store = new ContractBResultStore(
-        mock(JdbcTemplate.class), new ResultEnvelopeCodec(keys), new ObjectMapper());
+    jdbc = mock(JdbcTemplate.class);
+    // One row inserted, which is what a first successful store does. A mock returning the default 0
+    // would silently exercise the idempotent-recovery branch instead, and the success-path
+    // assertions below would be describing a path they never took.
+    doReturn(1).when(jdbc).update(anyString(), any(Object[].class));
+    store = new ContractBResultStore(jdbc, new ResultEnvelopeCodec(keys), new ObjectMapper());
 
     // ROOT at TRACE, so anything logged by anything during these calls is captured -- including by
     // Jackson, the JCE provider, or a logger someone adds to the store later.
@@ -156,13 +165,28 @@ class ContractBResultLogSafetyTests {
   @Test
   @DisplayName("a missing key refuses the write and logs neither the result nor the key")
   void aMissingKeyRefusesTheWrite() {
-    var withoutKeys = new ContractBResultStore(mock(JdbcTemplate.class),
+    var withoutKeys = new ContractBResultStore(jdbc,
         new ResultEnvelopeCodec(new FakeResultEncryptionKeyProvider()), new ObjectMapper());
 
     assertThatThrownBy(() -> withoutKeys.store(REQUEST, "msgbatch_nokey0001", VALID))
         .isInstanceOf(ResultEncryptionKeyUnavailableException.class)
         .hasMessageNotContaining(CANARY);
     assertThat(capturedLogs()).doesNotContain(CANARY);
+  }
+
+  @Test
+  @DisplayName("storing a result that is already there logs the recovery, not a second write")
+  void anAlreadyStoredResultIsAnIdempotentNoOp() {
+    // Zero rows affected: the ON CONFLICT clause kept the existing row. This is the K8 recovery
+    // path -- a replacement finishing what a dead process started -- and it must be a quiet no-op
+    // rather than a failure, and must still say nothing about the content.
+    doReturn(0).when(jdbc).update(anyString(), any(Object[].class));
+
+    var stored = store.store(REQUEST, "msgbatch_idempotent", VALID);
+
+    String captured = capturedLogs();
+    assertThat(captured).contains("already stored").contains(REQUEST).contains(stored.digest());
+    assertThat(captured).doesNotContain(CANARY);
   }
 
   @Test

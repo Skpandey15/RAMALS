@@ -57,11 +57,25 @@ public class ContractBResultStore {
   /** The committed schema the stored document is validated against, recorded on the row. */
   public static final String RESULT_SCHEMA = "diagnostic-proposal.v1";
 
+  /**
+   * Idempotent by construction.
+   *
+   * <p>{@code ON CONFLICT DO NOTHING} rather than a check-then-insert, because the recovery this
+   * exists for is a race: a process dies after committing the ciphertext and before marking the
+   * execution terminal, so the replacement retrieves the same result and stores it again. Without
+   * this clause that second write is a primary-key violation and recovery becomes a crash loop --
+   * found by the K8 crash qualification, not by review.
+   *
+   * <p>Silently keeping the first row is the correct resolution and not merely the convenient one.
+   * A result is immutable once written (M2-ADR-018 §3), so the existing row is authoritative by
+   * definition; overwriting it would be the operation the whole design forbids.
+   */
   private static final String INSERT = """
       INSERT INTO core.ai_execution_result
         (request_id, provider_execution_id, normalized_result, encryption_key_id,
          result_digest, result_schema, stored_at, purge_after)
       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '30 days')
+      ON CONFLICT (request_id) DO NOTHING
       """;
 
   private static final String SELECT = """
@@ -117,11 +131,18 @@ public class ContractBResultStore {
       throw unavailable;
     }
 
-    jdbc.update(INSERT, requestId, providerExecutionId, sealed.envelope(), sealed.keyId(),
-        digest, RESULT_SCHEMA);
+    int inserted = jdbc.update(INSERT, requestId, providerExecutionId, sealed.envelope(),
+        sealed.keyId(), digest, RESULT_SCHEMA);
 
-    LOGGER.info("contract B result stored [requestId={}, keyId={}, digest={}, envelopeBytes={}]",
-        requestId, sealed.keyId(), digest, sealed.envelope().length);
+    if (inserted == 0) {
+      // A result was already stored for this request -- a replacement finishing what a dead process
+      // started. Worth a line, because it is evidence of a recovery rather than routine.
+      LOGGER.info("contract B result already stored, keeping the existing row "
+          + "[requestId={}, digest={}]", requestId, digest);
+    } else {
+      LOGGER.info("contract B result stored [requestId={}, keyId={}, digest={}, envelopeBytes={}]",
+          requestId, sealed.keyId(), digest, sealed.envelope().length);
+    }
     return new StoredResult(sealed.keyId(), digest);
   }
 
