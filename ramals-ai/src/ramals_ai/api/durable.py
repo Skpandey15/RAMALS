@@ -116,6 +116,53 @@ def build_durable_router() -> APIRouter:
         )
         return asdict(submission)
 
+    @router.get("/executions")
+    def search(
+        request: Request,
+        custom_id: Annotated[str, Query(min_length=1, max_length=128)],
+        created_after: Annotated[str, Query(min_length=1, max_length=40)],
+        created_before: Annotated[str, Query(min_length=1, max_length=40)],
+        max_pages: Annotated[int, Query(ge=1, le=50)] = 10,
+        max_inspections: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> dict[str, Any]:
+        """Finds every provider execution carrying a ``custom_id`` in a creation-time window.
+
+        The lost-acknowledgement recovery path (M2-ADR-020). **Read-only**: this endpoint never
+        creates an execution, which is the whole point -- it exists so that a lost acknowledgement
+        has an answer that is not a resubmission.
+
+        The window is the caller's, because the caller holds the durable ``submitted_at`` saying
+        when the lost call happened. This service remembers nothing and could not derive it.
+        """
+        result = _admitted(request).find_executions_by_custom_id(
+            custom_id, created_after, created_before, max_pages, max_inspections
+        )
+        business_event(
+            logger,
+            level=logging.WARNING if result.outcome != "ZERO" else logging.INFO,
+            operation="gateway.durable.search",
+            message="searched for a provider execution by correlation key",
+            fields={
+                "customId": custom_id,
+                "outcome": str(result.outcome),
+                "matches": len(result.matches),
+                "batchesListed": result.batches_listed,
+                "batchesInspected": result.batches_inspected,
+                "batchesUninspectable": result.batches_uninspectable,
+                "pagesFetched": result.pages_fetched,
+                "limitReached": result.limit_reached,
+            },
+        )
+        return {
+            "outcome": str(result.outcome),
+            "matches": [asdict(match) for match in result.matches],
+            "batches_listed": result.batches_listed,
+            "batches_inspected": result.batches_inspected,
+            "batches_uninspectable": result.batches_uninspectable,
+            "pages_fetched": result.pages_fetched,
+            "limit_reached": result.limit_reached,
+        }
+
     @router.get("/executions/{provider_execution_id}")
     def get_status(request: Request, provider_execution_id: str) -> dict[str, Any]:
         """Authoritative status for an execution this process did not necessarily start.

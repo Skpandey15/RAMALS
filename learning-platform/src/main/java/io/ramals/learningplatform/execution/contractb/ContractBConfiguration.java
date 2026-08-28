@@ -53,6 +53,11 @@ public class ContractBConfiguration {
     }
 
     @Override
+    public DurableExecutionSearch search(String customId, String from, String to) {
+      throw new IllegalStateException("no durable execution plane is configured");
+    }
+
+    @Override
     public DurableStatusSnapshot status(String providerExecutionId) {
       throw new IllegalStateException("no durable execution plane is configured");
     }

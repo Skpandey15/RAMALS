@@ -1,5 +1,6 @@
 package io.ramals.learningplatform.execution.contractb;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -109,6 +110,101 @@ public class ProviderExecutionRepository {
         """, providerExecutionId, requestId, fence) == 1;
   }
 
+  /**
+   * Writes a recovered provider identity onto an execution that lost its acknowledgement.
+   *
+   * <p>Fenced exactly as an ordinary submission is, and for the same reason: a worker that paused
+   * during a long enumeration and woke up holding a stale fence must not write its recovered
+   * identity over one another worker already adopted. {@code provider_execution_id IS NULL} is
+   * required as well, so this can only ever fill a gap and never replace an identity.
+   *
+   * <p>The row stays {@code SUBMITTED}. Recovery restores what the lost acknowledgement would have
+   * written and nothing more; ordinary reconciliation takes it from there, which is what keeps the
+   * recovered path and the normal path the same path.
+   *
+   * @return true when this caller's identity was the one adopted
+   */
+  public boolean adoptRecoveredIdentity(String requestId, long fence, String providerExecutionId) {
+    return jdbc.update("""
+        UPDATE core.ai_provider_execution
+           SET provider_execution_id = ?
+         WHERE request_id = ?
+           AND submit_fence = ?
+           AND state = 'SUBMITTED'
+           AND provider_execution_id IS NULL
+        """, providerExecutionId, requestId, fence) == 1;
+  }
+
+  /**
+   * Records one discovered provider execution, adopted or not.
+   *
+   * <p>{@code ON CONFLICT DO NOTHING} on {@code (request_id, provider_execution_id)}: a later sweep
+   * that finds the same duplicate has learned nothing new, and a count of observations must mean
+   * "how many executions exist" rather than "how many times we looked".
+   *
+   * @return true when this discovery was new
+   */
+  public boolean recordObservation(String requestId, DiscoveredExecution discovered,
+      String discoveredBy) {
+    return jdbc.update("""
+        INSERT INTO core.ai_provider_execution_observation
+          (request_id, provider_execution_id, custom_id, outcome, discovered_by,
+           input_tokens, output_tokens, cached_input_tokens,
+           provider_created_at, provider_ended_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz, ?::timestamptz)
+        ON CONFLICT (request_id, provider_execution_id) DO NOTHING
+        """,
+        requestId,
+        discovered.providerExecutionId(),
+        discovered.customId(),
+        outcomeOf(discovered.outcome()),
+        discoveredBy,
+        discovered.inputTokens(),
+        discovered.outputTokens(),
+        discovered.cachedInputTokens(),
+        discovered.providerCreatedAt(),
+        discovered.providerEndedAt()) == 1;
+  }
+
+  /** Every provider execution ever observed for a request. The duplicate evidence, in one query. */
+  public List<DiscoveredExecution> observations(String requestId) {
+    return jdbc.query("""
+        SELECT provider_execution_id, custom_id, outcome, input_tokens, output_tokens,
+               cached_input_tokens, provider_created_at, provider_ended_at
+          FROM core.ai_provider_execution_observation
+         WHERE request_id = ?
+         ORDER BY observed_at, id
+        """, (rs, row) -> new DiscoveredExecution(
+            rs.getString("provider_execution_id"),
+            rs.getString("custom_id"),
+            rs.getString("outcome"),
+            (Integer) rs.getObject("input_tokens"),
+            (Integer) rs.getObject("output_tokens"),
+            (Integer) rs.getObject("cached_input_tokens"),
+            String.valueOf(rs.getObject("provider_created_at")),
+            String.valueOf(rs.getObject("provider_ended_at")),
+            null), requestId);
+  }
+
+  /**
+   * Maps a provider outcome onto the column's permitted set.
+   *
+   * <p>An unrecognised value becomes {@code unknown} rather than failing the insert. Losing the
+   * observation entirely because its outcome string was unfamiliar would discard the evidence that a
+   * duplicate exists — which is the one thing this table is for.
+   */
+  private static String outcomeOf(String outcome) {
+    if (outcome == null) {
+      return "unknown";
+    }
+    String normalized = outcome.trim().toLowerCase(java.util.Locale.ROOT);
+    return switch (normalized) {
+      case "succeeded", "errored", "canceled", "expired" -> normalized;
+      case "cancelled" -> "canceled";
+      default -> "unknown";
+    };
+  }
+
   /** Moves between two non-terminal states, refusing when the row is not in the expected one. */
   public boolean transition(String requestId, DurableExecutionState from, DurableExecutionState to) {
     if (to.terminal()) {
@@ -143,6 +239,23 @@ public class ProviderExecutionRepository {
          WHERE request_id = ?
            AND state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN_TERMINAL')
         """, terminal.name(), inputTokens, outputTokens, requestId) == 1;
+  }
+
+  /**
+   * When the submission was handed over, or null.
+   *
+   * <p>The search anchor. Written by the write-ahead claim <em>before</em> the provider is called,
+   * which makes it the one timestamp that is definitely correct about when a lost call happened —
+   * and why the enumeration window is derived from it rather than from a scan of recent batches,
+   * whose width would depend on unrelated traffic.
+   */
+  public Instant submittedAt(String requestId) {
+    return jdbc.queryForObject(
+        "SELECT submitted_at FROM core.ai_provider_execution WHERE request_id = ?",
+        (rs, row) -> {
+          java.sql.Timestamp at = rs.getTimestamp("submitted_at");
+          return at == null ? null : at.toInstant();
+        }, requestId);
   }
 
   public Optional<ProviderExecution> find(String requestId) {

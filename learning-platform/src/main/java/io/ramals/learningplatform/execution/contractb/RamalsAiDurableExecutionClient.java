@@ -3,6 +3,7 @@ package io.ramals.learningplatform.execution.contractb;
 import io.ramals.learningplatform.ai.WorkloadToken;
 import io.ramals.learningplatform.observability.CorrelationContext;
 import io.ramals.learningplatform.observability.CorrelationHeaders;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -101,6 +102,49 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
   }
 
   @Override
+  public DurableExecutionSearch search(String customId, String from, String to) {
+    requireNoTransaction();
+    // Every parameter is encoded. custom_id is server-derived rather than caller-supplied, so this
+    // is not an injection boundary, but a correlation key travelling in a query string is exactly
+    // the sort of value that acquires a colon or a plus sign later.
+    Map<?, ?> response = get("/internal/v1/durable/executions"
+        + "?custom_id=" + encode(customId)
+        + "&created_after=" + encode(from)
+        + "&created_before=" + encode(to));
+    if (response == null) {
+      // An empty body is not an empty result set. Reporting ZERO here would let a caller conclude
+      // no orphan exists on the strength of a response nobody could read.
+      throw new IllegalStateException("contract B search response was empty");
+    }
+
+    List<DiscoveredExecution> matches = new ArrayList<>();
+    if (response.get("matches") instanceof List<?> raw) {
+      for (Object entry : raw) {
+        if (entry instanceof Map<?, ?> match) {
+          matches.add(new DiscoveredExecution(
+              string(match, "provider_execution_id"),
+              string(match, "custom_id"),
+              string(match, "outcome"),
+              boxedInt(match, "input_tokens"),
+              boxedInt(match, "output_tokens"),
+              boxedInt(match, "cached_input_tokens"),
+              string(match, "created_at"),
+              string(match, "ended_at"),
+              string(match, "native_status")));
+        }
+      }
+    }
+    return new DurableExecutionSearch(
+        DurableExecutionSearch.Outcome.of(string(response, "outcome")),
+        matches,
+        intOf(response, "batches_listed"),
+        intOf(response, "batches_inspected"),
+        intOf(response, "batches_uninspectable"),
+        intOf(response, "pages_fetched"),
+        string(response, "limit_reached"));
+  }
+
+  @Override
   public DurableStatusSnapshot status(String providerExecutionId) {
     requireNoTransaction();
     Map<?, ?> response = get("/internal/v1/durable/executions/" + encode(providerExecutionId));
@@ -174,6 +218,11 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
 
   private static int intOf(Map<?, ?> body, String key) {
     return body.get(key) instanceof Number number ? number.intValue() : 0;
+  }
+
+  /** Null rather than zero when absent: an unreported token count is not a count of nothing. */
+  private static Integer boxedInt(Map<?, ?> body, String key) {
+    return body.get(key) instanceof Number number ? number.intValue() : null;
   }
 
 }

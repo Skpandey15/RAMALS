@@ -107,7 +107,8 @@ class ContractBLifecycleIntegrationTests {
 
   /** A fresh service over the same database. This is what a restart looks like from here. */
   private ContractBExecutionService serviceWith(FakeDurableExecutionPort port) {
-    return new ContractBExecutionService(executions, ledger, port, results, adoption);
+    return new ContractBExecutionService(
+        executions, ledger, port, results, adoption, new ContractBProperties());
   }
 
   // ================================================================================================
@@ -353,14 +354,19 @@ class ContractBLifecycleIntegrationTests {
         .isTrue();
 
     // A replacement worker arrives. It must not submit: it cannot tell this from an execution the
-    // provider accepted and is running right now, and recovering it would need enumeration matched
-    // on custom_id, which is not implemented.
+    // provider accepted and is running right now. It enumerates by custom_id instead (M2-ADR-020),
+    // and here that search is conclusive and empty.
     var afterRestart = new FakeDurableExecutionPort();
     assertThat(serviceWith(afterRestart).reconcile(requestId))
         .isEqualTo(DurableExecutionState.UNKNOWN_TERMINAL);
     assertThat(afterRestart.submissions).isEmpty();
-    assertThat(afterRestart.statusCalls.get()).isZero();
-    assertThat(ledgerReasons(requestId)).contains("NO_PROVIDER_IDENTITY");
+    assertThat(afterRestart.searchCalls.get())
+        .as("the orphan is searched for, not guessed at")
+        .isPositive();
+    assertThat(afterRestart.statusCalls.get())
+        .as("there is still no identity to poll")
+        .isZero();
+    assertThat(ledgerReasons(requestId)).contains("SEARCH_FOUND_NOTHING");
   }
 
   // ================================================================================================

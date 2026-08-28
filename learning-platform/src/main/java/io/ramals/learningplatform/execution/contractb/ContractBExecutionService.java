@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.execution.contractb;
 
 import io.ramals.learningplatform.execution.crypto.ResultEncryptionKeyUnavailableException;
+import java.time.Instant;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,18 +37,23 @@ public class ContractBExecutionService {
   private final DurableExecutionPort provider;
   private final ContractBResultStore results;
   private final ContractBAdoption adoption;
+  private final long skewMillis;
+  private final long horizonMillis;
 
   public ContractBExecutionService(
       ProviderExecutionRepository executions,
       ContractBTransitionLedger ledger,
       DurableExecutionPort provider,
       ContractBResultStore results,
-      ContractBAdoption adoption) {
+      ContractBAdoption adoption,
+      ContractBProperties properties) {
     this.executions = executions;
     this.ledger = ledger;
     this.provider = provider;
     this.results = results;
     this.adoption = adoption;
+    this.skewMillis = properties.getRecovery().getSearchSkewMs();
+    this.horizonMillis = properties.getRecovery().getSearchHorizonMs();
   }
 
   /**
@@ -191,16 +197,134 @@ public class ContractBExecutionService {
       return execution.state();
     }
     if (!execution.hasProviderIdentity()) {
-      // "Sent, unacknowledged" -- the state the write-ahead claim exists to make visible. The
-      // provider may hold a live execution RAMALS cannot name.
-      //
-      // A worker must never resolve this by submitting. Recovering it would need enumeration of the
-      // provider's executions matched on custom_id, and no such lookup is implemented here, so the
-      // honest outcome is INDETERMINATE rather than a retry that could duplicate live work.
+      return recoverLostAcknowledgement(execution);
+    }
+    return pollAndAdvance(execution);
+  }
+
+  /**
+   * Searches for the provider execution whose acknowledgement was lost, and acts on what it finds.
+   *
+   * <p>M2-ADR-020. Before this existed, "sent, unacknowledged" was terminal by necessity: RAMALS held
+   * no name for what it had sent and no way to ask. Enumeration by {@code custom_id} gives it one.
+   *
+   * <p>Four outcomes, and only one of them adopts anything:
+   *
+   * <ul>
+   *   <li><strong>ONE</strong> — adopt the identity, fenced, and resume ordinary reconciliation. The
+   *       execution stops being an orphan.
+   *   <li><strong>ZERO</strong> — conclusive, so nothing was ever created and nothing more can be
+   *       found. Terminal.
+   *   <li><strong>MULTIPLE</strong> — the duplicate the Definition of Done exists to surface. Every
+   *       one is recorded, none is adopted, and an operator is required. Choosing would be the
+   *       tempting error: adopting the first attributes a diagnosis to an arbitrary execution, and
+   *       adopting the newest silently prefers a duplicate over the original.
+   *   <li><strong>INCONCLUSIVE</strong> — the search did not finish. Not an answer: retry, until the
+   *       horizon makes waiting pointless.
+   * </ul>
+   *
+   * <p>Every discovered execution is recorded whatever the outcome, because cost evidence has to
+   * account for executions RAMALS decided not to adopt just as much as for the one it did.
+   */
+  private DurableExecutionState recoverLostAcknowledgement(ProviderExecution execution) {
+    String requestId = execution.requestId();
+    Instant submittedAt = executions.submittedAt(requestId);
+    if (submittedAt == null) {
+      // No anchor, so no defensible window. Nothing to search against.
       return indeterminate(requestId, execution.submitFence(), "NO_PROVIDER_IDENTITY",
-          "the execution was sent but never acknowledged, so there is nothing to reconcile against");
+          "the execution carries no submission time to search against");
     }
 
+    boolean pastHorizon = Instant.now().isAfter(submittedAt.plusMillis(horizonMillis));
+    DurableExecutionSearch search;
+    try {
+      search = provider.search(
+          execution.customId(),
+          submittedAt.minusMillis(skewMillis).toString(),
+          submittedAt.plusMillis(skewMillis).toString());
+    } catch (RuntimeException unreachable) {
+      // The provider being unreachable says nothing about whether an orphan exists. Not terminal,
+      // unless we have waited long enough that waiting more cannot help.
+      LOGGER.warn("contract B enumeration failed [requestId={}, error={}]",
+          requestId, unreachable.getClass().getSimpleName());
+      return pastHorizon
+          ? indeterminate(requestId, execution.submitFence(), "SEARCH_HORIZON_EXHAUSTED",
+              "enumeration could not complete before the search horizon")
+          : DurableExecutionState.RECONCILING;
+    }
+
+    for (DiscoveredExecution discovered : search.matches()) {
+      if (executions.recordObservation(requestId, discovered, "ENUMERATION")) {
+        ledger.record(requestId, null, null, "RECONCILER", execution.submitFence(),
+            "OBSERVED_" + discovered.providerExecutionId());
+      }
+    }
+
+    return switch (search.outcome()) {
+      case ONE -> adoptRecovered(execution, search.matches().get(0));
+      case MULTIPLE -> duplicate(execution, search);
+      case ZERO -> indeterminate(requestId, execution.submitFence(), "SEARCH_FOUND_NOTHING",
+          "enumeration inspected every candidate and none carried this request");
+      case INCONCLUSIVE -> {
+        LOGGER.warn("contract B enumeration inconclusive [requestId={}, uninspectable={}, "
+            + "limitReached={}]. Not treated as absence.",
+            requestId, search.uninspectable(), search.limitReached());
+        yield pastHorizon
+            ? indeterminate(requestId, execution.submitFence(), "SEARCH_HORIZON_EXHAUSTED",
+                "the search never became conclusive before the horizon")
+            : DurableExecutionState.RECONCILING;
+      }
+    };
+  }
+
+  /** Adopts a recovered identity under the fence, then continues as an ordinary reconciliation. */
+  private DurableExecutionState adoptRecovered(
+      ProviderExecution execution, DiscoveredExecution recovered) {
+    String requestId = execution.requestId();
+    if (!executions.adoptRecoveredIdentity(
+        requestId, execution.submitFence(), recovered.providerExecutionId())) {
+      // The fence moved, or another worker adopted first. Either way this caller must not write its
+      // identity over theirs, and must not treat its own search as authoritative.
+      LOGGER.info("contract B recovered identity not adopted; another worker owns this execution "
+          + "[requestId={}]", requestId);
+      return executions.find(requestId).map(ProviderExecution::state)
+          .orElse(DurableExecutionState.RECONCILING);
+    }
+    ledger.record(requestId, DurableExecutionState.SUBMITTED, DurableExecutionState.SUBMITTED,
+        "RECONCILER", execution.submitFence(), "IDENTITY_RECOVERED");
+    executions.enqueueReconciliation(requestId);
+    LOGGER.warn("contract B recovered a lost acknowledgement [requestId={}, "
+        + "providerExecutionId={}]. The execution is no longer an orphan.",
+        requestId, recovered.providerExecutionId());
+
+    // Resume the ordinary path immediately, with the identity now durable.
+    return executions.find(requestId).map(this::pollAndAdvance)
+        .orElse(DurableExecutionState.RECONCILING);
+  }
+
+  /**
+   * Records a duplicate provider condition and refuses to resolve it.
+   *
+   * <p>Terminal and operator-visible. There is no rule that makes choosing among several executions
+   * carrying one correlation key correct, because the information needed to choose does not exist on
+   * this side — so the honest outcome is to record all of them and stop.
+   */
+  private DurableExecutionState duplicate(
+      ProviderExecution execution, DurableExecutionSearch search) {
+    String requestId = execution.requestId();
+    ledger.record(requestId, null, null, "RECONCILER", execution.submitFence(),
+        "DUPLICATE_PROVIDER_EXECUTION");
+    LOGGER.error("contract B found {} provider executions carrying one correlation key "
+        + "[requestId={}, customId={}]. None is adopted: there is no rule that makes choosing "
+        + "correct. This requires an operator.",
+        search.matches().size(), requestId, execution.customId());
+    return indeterminate(requestId, execution.submitFence(), "DUPLICATE_PROVIDER_EXECUTION",
+        "several provider executions carry this request's correlation key");
+  }
+
+  /** The ordinary poll-and-advance path, for an execution that has an identity. */
+  private DurableExecutionState pollAndAdvance(ProviderExecution execution) {
+    String requestId = execution.requestId();
     if (execution.state() == DurableExecutionState.SUBMITTED
         || execution.state() == DurableExecutionState.RUNNING) {
       // Marks the execution as being worked on, so the ledger shows a reconciliation was attempted
