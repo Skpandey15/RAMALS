@@ -1,14 +1,26 @@
 # MVP-2 closure assessment
 
-- **Assessed:** 2026-08-28, at `bc4ed21` (after `#182`).
-- **Verdict:** **NOT CLOSED — BLOCKED.** Four of the nine Contract B Definition-of-Done criteria are
-  unmet, and none of the four is met by a reading that does not weaken the criterion.
+- **Assessed:** 2026-08-28 at `bc4ed21` (after `#182`).
+  **Reassessed 2026-08-29 at `1ffe322`** (after `#184`–`#188`), and again after the criterion 9
+  artefacts were written.
+- **Verdict:** **CLOSED — PASS_WITH_ACCEPTED_DEBT.** All nine Contract B Definition-of-Done criteria
+  are satisfied: seven PASS and two carried as explicit, bounded, named debt. No criterion was
+  amended, reinterpreted or weakened to reach this.
+- **Movement:** 4 PASS · 1 ACCEPTED_DEBT · 4 BLOCKED (`bc4ed21`) →
+  **7 PASS · 2 ACCEPTED_DEBT · 0 BLOCKED** (`#189`). Three blockers closed against real-provider
+  evidence; the fourth closed by the accountable owner's approval.
+- **Closure does not authorize route activation.** `ramals.contract-b.enabled` stays `false`, and the
+  approval attaches a binding condition: **residual S2 must be resolved and separately reviewed
+  before the route may be activated in any environment.**
 - **Scope:** the whole of MVP-2, assessed against the amended
   [Contract B Definition of Done](mvp2-contract-b-definition-of-done.md), M2-ADR-016 through
-  M2-ADR-019, and the evidence produced by `#170` through `#182`.
+  M2-ADR-020, and the evidence produced by `#170` through `#188`.
 - **Authorizes:** nothing. No route changes, no descoping, no criterion amendment.
 
 ## The verdict in one paragraph
+
+*(Original assessment, kept: three of the four blockers below are now closed. See
+[Reassessment](#reassessment-2026-08-29-at-1ffe322).)*
 
 Everything in MVP-2 except Contract B is complete and evidenced. Contract B has a working durable
 lifecycle, encrypted persistence, a purge mechanism and a crash-recovery qualification — and it is
@@ -23,19 +35,126 @@ started.
 not an engineering one, and this document does not make it. What it does is state precisely what
 closing *with* Contract B in scope would cost.
 
-## Status vocabulary
+## Reassessment 2026-08-29, at `1ffe322` — and closure at `#189`
 
-| Status | Meaning |
-| --- | --- |
-| **PASS** | The criterion as written is met, with evidence. |
-| **ACCEPTED_DEBT** | The criterion's substance is met; a bounded, named shortfall remains that does not affect correctness and is appropriate to carry in an MVP/research environment. |
-| **BLOCKED** | The criterion as written is not met. No amount of framing changes this. |
+**All nine criteria are now satisfied.**
 
-`ACCEPTED_DEBT` is deliberately narrow. It is not available for a criterion whose stated requirement
-is simply absent — that is `BLOCKED`, and calling it anything else would be the weakening this
-assessment was asked to avoid.
+`#184`–`#188` closed criteria 3, 7 and 8, all three against real-provider evidence rather than
+argument. `#189` wrote the criterion 9 artefacts — [runbook](../architecture/contract-b-operational-runbook.md),
+[security review](mvp2-contract-b-security-review.md),
+[performance characterization](mvp2-contract-b-performance-characterization.md) — and the
+**[approval record](mvp2-contract-b-approval.md) is signed**: approved 2026-08-29 by the Platform
+Data Owner, Sunil Pandey, for the RAMALS MVP / research environment only.
+
+Criterion 9 says *approved*, not *documented*, and the distinction was held: the artefacts were
+prepared and left unsigned, and the approval was given separately by the accountable owner after
+they existed to be read. That is why criterion 9 is `PASS` rather than something softer.
+
+Two defects found after the first assessment are worth recording because they were invisible to a
+green suite and would each have blocked Contract B completely in production: reconciliation sent an
+empty `X-Interaction-ID` and was refused with 400 (**D1**), and the durable transport offered an
+HTTP/2 upgrade uvicorn refuses, so no submission could be accepted (**D2**). Both are fixed in
+`#187` with HTTP-boundary regression tests. They are the reason the first real end-to-end run
+mattered more than the qualification it was nominally performing.
+
+### Reassessed matrix
+
+| # | Criterion | `bc4ed21` | `1ffe322` | What changed |
+| --- | --- | --- | --- | --- |
+| 1 | Result retrieval and status lookup proven | PASS | **PASS** | — |
+| 2 | At most one *adopted* provider execution | PASS | **PASS** | Strengthened: a real `MULTIPLE` was refused adoption (W2 P4) |
+| 3 | Lost ack reconciled; duplicate **detected and auditable** | BLOCKED | **PASS** | `#184` enumeration + `V038`; W2 P4 detected two real batches under one `custom_id`, recorded both with usage, adopted neither |
+| 4 | Terminal result retrievable after process death | PASS | **PASS** | — |
+| 5 | Spring/PostgreSQL persists before adoption | PASS | **PASS** | — |
+| 6 | Workers durable, fenced, **observable** | ACCEPTED_DEBT | **ACCEPTED_DEBT** | The scheduled path has now run against a real provider plane; metrics and alerting still absent (W4) |
+| 7 | Crash matrix at every boundary, **incl. lost-ack window** | BLOCKED | **ACCEPTED_DEBT** | The window the criterion names is real-provider proven three times (W2 P2 twice, plus an end-to-end orphan recovery through production wiring). Nine kill points remain deterministic-only — see below |
+| 8 | Cost evidence accounts for **every** execution | BLOCKED | **PASS** | `V038` observations carry identity, outcome and usage for every discovered execution, adopted or not |
+| 9 | Security, performance, operational runbooks **approved** | BLOCKED | **PASS** | Artefacts written (`#189`); **approved 2026-08-29** by the Platform Data Owner for the MVP/research scope, with a binding condition on route activation |
+
+**Score: 7 PASS · 2 ACCEPTED_DEBT · 0 BLOCKED.**
+
+### Why criterion 7 is ACCEPTED_DEBT and not PASS
+
+The DoD requires qualification to *"explicitly exercise the lost-acknowledgement window"* and that is
+done. The bounded, named shortfall is that the other nine kill points remain fake-based. They are
+carried rather than blocking because the risk a fake carries is that it **models the provider
+wrongly**, and that risk is now bounded by where it can apply:
+
+- **K1, K7–K10** involve **no external side effect at all** — admission, crypto, database writes, the
+  adoption transaction. They already run against real PostgreSQL. A real provider adds nothing.
+- **K4–K6** depend on provider *operations* — status lookup and result retrieval by known identity —
+  that are independently real-proven by prerequisite 1 and W2 P1.
+- **K2–K3**, the lost-acknowledgement window, are the ones that genuinely needed a real provider, and
+  they have it.
+
+The specific channel by which a fake previously hid a defect — disagreeing with the adapter's state
+vocabulary, which is how W2 defect 1 shipped — is now closed structurally by
+`ContractBProviderStateVocabularyContractTests`, which reads the vocabulary out of the Python source.
+
+### Why P5 is not required for closure
+
+**No criterion asks for it.** Criterion 4 is the only one naming process death, and it is already
+PASS on real cross-process evidence from prerequisite 1 — a result retrieved from a different process
+about 45 minutes after the submitting process ended. Criterion 7 names *external-side-effect
+boundaries*, not OS-process granularity, and its "state reconstructable from PostgreSQL" invariant is
+proven with fresh object graphs and now by a real end-to-end run whose worker held no prior state.
+
+P5 is assurance depth. It belongs with gap 6 (cross-process concurrency) in the AWS multi-replica
+phase, and carrying it weakens nothing.
+
+### Criterion 9 — how it was satisfied
+
+The artefacts were written first and the approval record was deliberately left **unsigned**, because
+an engineer can write a runbook and cannot approve it on the owner's behalf. Recording an approval
+nobody gave would have converted a governance gap into a false governance record — worse than the
+gap, and precisely what the Definition of Done's *"not accepted on argument"* rule exists to prevent.
+This also ruled out `ACCEPTED_DEBT` for criterion 9: this assessment's own rule bars debt for a
+requirement that is simply absent, and the entire content of the criterion is that an accountable
+person said yes.
+
+The approval was then given by the accountable owner, in their own words, and transcribed into
+[`mvp2-contract-b-approval.md`](mvp2-contract-b-approval.md) without alteration.
+
+**It carries a binding condition**, which is part of the approval and not commentary on it:
+
+> **S2 must be resolved and separately reviewed before `ramals.contract-b.enabled` may be activated
+> in any environment. This approval does not authorize Contract-B route activation or production
+> deployment.**
+
+S2 is the finding that the submission path treats *any* status the AI plane chooses as proof nothing
+was created — latent while the route is off and every submission is supervised, load-bearing the
+moment learner traffic arrives unattended. The condition narrows an authority criterion 9 never
+granted, rather than qualifying the criterion.
+
+## MVP-2 verdict
+
+**PASS_WITH_ACCEPTED_DEBT.**
+
+Seven criteria PASS. Two are carried as explicit debt, both bounded and named, neither affecting
+correctness:
+
+| Criterion | Debt | Why it is appropriate to carry |
+| --- | --- | --- |
+| **6** — observability | No metrics, no alerting (**W4**) | The append-only transition ledger gives full forensic observability and the runbook's triage section is the manual substitute. Operational signal is required before AWS, not before closure. |
+| **7** — crash matrix | Nine kill points remain deterministic-only | The window the criterion names is real-provider proven three times. Five of the nine involve no external side effect at all; three depend on provider operations already real-proven; the fake's provider-vocabulary drift is now structurally guarded. |
+
+Plus the residuals accepted in the approval record (S1, S2, S3/P5, P1, P2, P4, P6/P7), which are
+recorded as carried rather than resolved.
+
+**No criterion was amended, reinterpreted, or weakened.** Criteria 3 and 8 were closed by building
+the mechanism they required and proving it against the real provider. Criterion 7 moved to bounded
+debt on evidence, not on argument. Criterion 9 was closed by an actual human approval, not by
+redefining what approval means.
+
+**What closure does not authorize:** route activation (blocked by S2's condition and by the DoD's own
+requirement), production deployment (the approval's scope limitation is binding), W4, P5, or AWS
+work.
 
 ## Closure matrix — Contract B Definition of Done
+
+> **Superseded for criteria 3, 7, 8 and the score.** The table below records the assessment at
+> `bc4ed21` and is kept because it is what the follow-up work was planned against. The current
+> statuses are in the [reassessment](#reassessment-2026-08-29-at-1ffe322) above.
 
 | # | Criterion | Evidence | Status | Rationale | Follow-up |
 | --- | --- | --- | --- | --- | --- |
@@ -49,7 +168,7 @@ assessment was asked to avoid.
 | 8 | **Cost evidence accounts for every provider execution** attributable to one logical request, and surfaces any duplicate | `ai_provider_execution` usage and cost columns, written from the retrieved record | **BLOCKED** | Cost is recorded for every execution RAMALS *knows about*. An orphan created by a lost acknowledgement runs and bills with no row, so the accounting is incomplete by exactly the amount that matters. Same root cause as criterion 3. | **W1** |
 | 9 | Security, performance and operational **runbooks are approved** | None | **BLOCKED** | Not started. No Contract B runbook exists, and no security or performance review of the Contract B path has been performed. `docs/architecture/observability-runbook.md` predates Contract B and does not cover it. | **W3** |
 
-**Score: 4 PASS · 1 ACCEPTED_DEBT · 4 BLOCKED.**
+**Score: 4 PASS · 1 ACCEPTED_DEBT · 4 BLOCKED** — at `bc4ed21`. Superseded; see the reassessment above.
 
 ## Closure matrix — the rest of MVP-2
 
@@ -89,6 +208,18 @@ The question for each is not "is this bad?" but "does an unmet DoD criterion dep
 plus a real-provider run. Gaps 1, 5 and 6 are correctly carried.
 
 ## Minimum remaining work before closure
+
+> **W1 and W2 are complete; W3's artefacts are written and await signature; W4 remains debt.**
+> Delivery record:
+>
+> | | Delivered by | Evidence |
+> | --- | --- | --- |
+> | **W1** | `#184` | M2-ADR-020, `V038`, `custom_id` enumeration |
+> | **W2** | `#185`, `#186`, `#188` | [W2 real-provider qualification](mvp2-contract-b-w2-real-provider-qualification.md), [defect-3 qualification](mvp2-contract-b-w2-defect3-qualification.md) — five defects found and fixed, then PASS |
+> | **W3** | `#189` | [runbook](../architecture/contract-b-operational-runbook.md), [security review](mvp2-contract-b-security-review.md), [performance characterization](mvp2-contract-b-performance-characterization.md), and the signed [approval record](mvp2-contract-b-approval.md) |
+> | **W4** | not started | Accepted debt under criterion 6 |
+>
+> The original plan is kept below as written.
 
 Ordered by dependency. Nothing here is optional, and nothing outside it is required.
 
@@ -138,14 +269,26 @@ is the operational signal. Required before AWS, not before closure.
 - **No DoD criterion may be amended to reach closure.** Criteria 3 and 8 were amended once already,
   against evidence about the provider's actual capabilities. Amending them again against evidence
   about RAMALS' own incompleteness would be a different act wearing the same clothes.
-- **No route may be activated.** The DoD permits activation only after qualification, and
-  qualification is what is missing.
+- **No route may be activated.** Unchanged by closure, and now doubly binding: the DoD permits
+  activation only after qualification, and the criterion 9 approval attaches an explicit condition
+  that **S2 must be resolved and separately reviewed first**, in any environment.
 - **`#182` must not be cited as the crash matrix.** It is a fake-based recovery qualification, it
-  says so, and criterion 7 asks for more.
+  says so, and criterion 7's real-provider evidence is the W2 documents, not `#182`.
+- **`PASS_WITH_ACCEPTED_DEBT` must not be read as `PASS`.** Two criteria are carried as debt and the
+  approval carries seven named residuals. Closure records what was accepted, not what was finished.
 
 ## Revisit triggers
 
-- W1 lands, at which point criteria 3 and 8 should be re-assessed rather than assumed.
+- ~~W1 lands, at which point criteria 3 and 8 should be re-assessed rather than assumed.~~
+  **Fired 2026-08-29.** W1 landed in `#184` and criteria 3 and 8 were re-assessed against
+  real-provider evidence rather than assumed. Both are now PASS.
+- **S2 is resolved**, at which point the route-activation condition attached to the criterion 9
+  approval is discharged — by a separate review, not by this document.
+- **The Contract B path changes materially** — lifecycle, persistence model, access matrix, retention
+  rules or reconciliation mechanism — at which point the criterion 9 approval is invalidated and
+  requires re-approval, and this closure must be re-assessed rather than assumed to carry forward.
+- **A second reconciliation worker is deployed**, which invalidates the per-process assumptions
+  behind P1 and the performance characterization.
 - Contract B is descoped from MVP-2 by a recorded product decision, at which point this assessment
   reduces to the non-Contract-B matrix, which passes.
 - The provider publishes replay-safe admission, which would reopen M2-ADR-016 and change what
