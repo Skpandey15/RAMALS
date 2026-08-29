@@ -7,6 +7,10 @@
 - **Binding condition attached to this approval:** residual **S2 must be resolved and separately
   reviewed before `ramals.contract-b.enabled` may be activated in any environment.** This approval
   does not authorize Contract-B route activation or production deployment.
+  **Status: discharged** — S2 is resolved and separately reviewed in
+  [`mvp2-contract-b-s2-submission-classification.md`](mvp2-contract-b-s2-submission-classification.md).
+  Discharging this condition removes one precondition of route activation; it does not authorize
+  activation, which remains a separate decision.
 - **Prepared:** 2026-08-29, at `main` `1ffe322edd4d5d75c90d6ff1551df1e4318ddb9e`.
 
 ## Why this document exists separately

@@ -192,3 +192,118 @@ def test_a_malformed_submission_never_reaches_the_provider(field: str, value: An
     assert response.status_code == 422
     # Validation happens before the adapter is touched, so a bad request costs nothing.
     assert adapter.submissions == []
+
+
+# -- submission disposition (residual S2) ----------------------------------------------------------
+#
+# The caller decides between a definite FAILED and an ambiguous INDETERMINATE on the marker these
+# tests assert, and nothing else. Getting it wrong in the optimistic direction records "no provider
+# execution exists" while one is running and billing -- and licenses a resubmission that duplicates
+# it. So the rule is: a deliberate, parsed rejection may say NOT_CREATED; everything else may not.
+
+
+class _FailingAdapter(_StubAdapter):
+    """Fails the submission with a chosen gateway code."""
+
+    def __init__(self, code: Any) -> None:
+        super().__init__()
+        self._code = code
+
+    def submit(self, request: Any) -> Any:  # noqa: ARG002 - the failure precedes any use of it
+        from ramals_ai.gateway.errors import GatewayError
+
+        raise GatewayError(self._code, "scripted submission failure")
+
+
+def _disposition(response: Any) -> str | None:
+    detail = response.json().get("detail")
+    return detail.get("submission") if isinstance(detail, dict) else None
+
+
+@pytest.mark.parametrize(
+    "code_name",
+    [
+        "CONTRACT_B_UNSUPPORTED",
+        "ROUTE_NOT_CONFIGURED",
+        "PROVIDER_INVALID_REQUEST",
+        "PROVIDER_AUTH_ERROR",
+        "PROVIDER_RATE_LIMITED",
+        "TOKEN_CEILING_EXCEEDED",
+        "COST_CEILING_EXCEEDED",
+        "DEADLINE_EXCEEDED",
+    ],
+)
+def test_a_parsed_rejection_rules_provider_creation_out(code_name: str) -> None:
+    from ramals_ai.gateway.errors import GatewayErrorCode
+
+    adapter = _FailingAdapter(getattr(GatewayErrorCode, code_name))
+    response = _client(adapter).post("/internal/v1/durable/executions", json=_submission())
+
+    # Each of these was decided by something that read the request and said no, so no batch exists
+    # and the caller may safely record a definite failure.
+    assert _disposition(response) == "NOT_CREATED"
+
+
+@pytest.mark.parametrize("code_name", ["PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE"])
+def test_a_transport_failure_never_rules_provider_creation_out(code_name: str) -> None:
+    from ramals_ai.gateway.errors import GatewayErrorCode
+
+    adapter = _FailingAdapter(getattr(GatewayErrorCode, code_name))
+    response = _client(adapter).post("/internal/v1/durable/executions", json=_submission())
+
+    # A timeout is the absence of an answer, never an answer; a reset can happen after the bytes
+    # were sent. Neither can prove the provider created nothing.
+    assert _disposition(response) == "MAY_EXIST"
+
+
+def test_an_unclassified_submission_failure_is_may_exist() -> None:
+    class _Exploding(_StubAdapter):
+        def submit(self, request: Any) -> Any:  # noqa: ARG002 - never reaches the request
+            raise RuntimeError("a failure nobody classified")
+
+    response = _client(_Exploding()).post("/internal/v1/durable/executions", json=_submission())
+
+    # The S2 case exactly: something failed inside the submission path and cannot prove where. It
+    # must not reach the caller as a bare 500 they have to interpret.
+    assert response.status_code == 502
+    assert _disposition(response) == "MAY_EXIST"
+
+
+def test_the_capability_gate_marks_its_refusal_as_not_created() -> None:
+    adapter = _StubAdapter(supported=False)
+    response = _client(adapter).post("/internal/v1/durable/executions", json=_submission())
+
+    # The gate runs before the adapter is called at all, so this one really is provable -- and the
+    # marker has to be present even though the refusal comes from our own code rather than a
+    # GatewayError, because the caller reads the marker and never the status.
+    assert response.status_code >= 400
+    assert adapter.submissions == []
+    assert _disposition(response) == "NOT_CREATED"
+
+
+def test_every_gateway_code_has_a_disposition_and_unknown_ones_fail_closed() -> None:
+    from ramals_ai.api.durable import _submission_disposition
+    from ramals_ai.gateway.errors import GatewayErrorCode
+
+    # A code added later must default to MAY_EXIST until someone decides otherwise, rather than
+    # silently inheriting "safe to retry".
+    for code in GatewayErrorCode:
+        assert _submission_disposition(code) in {"NOT_CREATED", "MAY_EXIST"}
+    assert _submission_disposition(GatewayErrorCode.INVALID_STRUCTURED_OUTPUT) == "MAY_EXIST"
+
+
+def test_a_logging_failure_never_loses_an_acknowledged_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ramals_ai.api.durable as durable
+
+    def _explode(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("the log sink is down")
+
+    monkeypatch.setattr(durable, "business_event", _explode)
+    response = _client(_StubAdapter()).post("/internal/v1/durable/executions", json=_submission())
+
+    # The batch exists by this point. Losing its identity to a logging fault would manufacture the
+    # exact orphan this endpoint exists to avoid.
+    assert response.status_code == 201
+    assert response.json()["provider_execution_id"] == "msgbatch_stub00000001"
