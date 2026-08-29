@@ -1,0 +1,12 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ramals-ai-no-database-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: ramals-ai}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}

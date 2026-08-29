@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ramals-dev
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - postgres.yaml
+  - keycloak.yaml
+  - learning-platform.yaml
+  - ramals-ai.yaml
+  - web-ui.yaml
+  - network-policy.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: ramals
+      ramals.io/environment: dev
+
+# Images are pinned to the git commit they were built from, served by the dedicated
+# k3d registry. `:local` is never a deploy target -- a tag that moves cannot be traced
+# back to a commit, which is the whole point of tagging by sha.
+images:
+  - name: ramals/postgres
+    newName: k3d-ramals-registry:5000/ramals-postgres
+    newTag: 57b0b71
+  - name: ramals/keycloak
+    newName: k3d-ramals-registry:5000/ramals-keycloak
+    newTag: 57b0b71
+  - name: ramals/learning-platform
+    newName: k3d-ramals-registry:5000/ramals-learning-platform
+    newTag: 57b0b71
+  - name: ramals/ramals-ai
+    newName: k3d-ramals-registry:5000/ramals-ai
+    newTag: 57b0b71
+  - name: ramals/web-ui
+    newName: k3d-ramals-registry:5000/ramals-web-ui
+    newTag: 57b0b71

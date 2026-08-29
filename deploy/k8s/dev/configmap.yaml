@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ramals-dev-config
+data:
+  SPRING_PROFILES_ACTIVE: shared
+  RAMALS_DB_URL: jdbc:postgresql://postgres:5432/ramals
+  RAMALS_DB_MIGRATION_USER: ramals_core_migration
+  RAMALS_OIDC_ISSUER_URI: http://keycloak:8080/realms/ramals
+  RAMALS_OIDC_AUDIENCE: ramals-api
+  RAMALS_WEB_ORIGIN: http://localhost:5173
+  RAMALS_AI_BASE_URL: http://ramals-ai:8000
+  RAMALS_AI_DISPATCHER_ENABLED: "false"
+  RAMALS_CONTRACT_B_ENABLED: "false"
+  RAMALS_CONTRACT_B_RECONCILIATION_ENABLED: "false"
+  RAMALS_CONTRACT_B_PURGE_ENABLED: "false"
+  RAMALS_ORCHESTRATION_ENABLED: "false"
+  RAMALS_TRACE_SAMPLE: "1.0"
