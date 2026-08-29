@@ -1,0 +1,139 @@
+# Terraform CI: format, validate, and lint every module.
+#
+# Credential-free by design. `validate` needs no AWS account, so this gate runs on every pull
+# request including from a fork, and catches the errors that are cheap to catch -- a malformed
+# expression, an undeclared variable, a module wired to the wrong output.
+#
+# `plan` is deliberately not here. It requires credentials and a bootstrapped backend, and a plan
+# job that silently no-ops without them is worse than an absent one: it reports success for a check
+# that never ran. Once the account exists, plan belongs in a separate workflow using the read-only
+# role in modules/cicd.
+
+name: Terraform CI
+
+on:
+  pull_request:
+    paths:
+      - 'infrastructure/terraform/**'
+      - '.github/workflows/terraform-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infrastructure/terraform/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: fmt and validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      # Formatting is checked across the whole tree at once, so a diff in any module fails here
+      # rather than in review.
+      - name: Check formatting
+        run: terraform fmt -check -recursive infrastructure/terraform
+
+      # Each module is validated on its own as well as through the environment that composes them.
+      # A module can be internally inconsistent in ways the environment hides by never setting the
+      # variable that would expose it.
+      - name: Validate modules
+        run: |
+          set -euo pipefail
+          for module in infrastructure/terraform/modules/*/; do
+            echo "::group::${module}"
+            terraform -chdir="${module}" init -backend=false -input=false >/dev/null
+            terraform -chdir="${module}" validate
+            echo "::endgroup::"
+          done
+
+      - name: Validate bootstrap
+        run: |
+          terraform -chdir=infrastructure/terraform/bootstrap init -backend=false -input=false >/dev/null
+          terraform -chdir=infrastructure/terraform/bootstrap validate
+
+      # -backend=false because the state bucket does not exist in CI and this check does not need it.
+      - name: Validate dev environment
+        run: |
+          terraform -chdir=infrastructure/terraform/environments/dev init -backend=false -input=false >/dev/null
+          terraform -chdir=infrastructure/terraform/environments/dev validate
+
+  guardrails:
+    name: contract-b and secret guardrails
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # The three switches must be false in committed infrastructure. Asserted in CI rather than
+      # trusted to review, because "who enabled Contract B in AWS" is a question worth being unable
+      # to answer with "nobody noticed".
+      - name: Contract B is disabled in infrastructure
+        run: |
+          set -euo pipefail
+          compute=infrastructure/terraform/modules/compute/main.tf
+          for flag in RAMALS_CONTRACT_B_ENABLED RAMALS_CONTRACT_B_RECONCILIATION_ENABLED RAMALS_CONTRACT_B_PURGE_ENABLED; do
+            if ! grep -q "name = \"${flag}\", value = \"false\"\|{ name = \"${flag}\", value = \"false\" }" "${compute}"; then
+              echo "::error::${flag} must be explicitly false in ${compute}"
+              exit 1
+            fi
+          done
+          if grep -q 'RAMALS_AI_DURABLE_EXECUTION_ENABLED", value = "true"' "${compute}"; then
+            echo "::error::the AI plane's durable surface must stay disabled"
+            exit 1
+          fi
+          echo "Contract B switches are all false."
+
+      # Terraform must never carry a secret value. The control is the absence of the resource that
+      # would hold one; this asserts that absence rather than relying on nobody adding it.
+      - name: No secret values in Terraform
+        run: |
+          set -euo pipefail
+          # --include='*.tf' and a non-comment anchor: the phrase appears in prose explaining why
+          # the resource is absent, and .terraform/ holds provider binaries that match almost
+          # anything. Matching those would make this gate cry wolf and then be ignored.
+          if grep -rn --include='*.tf' '^[^#]*aws_secretsmanager_secret_version' infrastructure/terraform; then
+            echo "::error::secret values must never be written by Terraform"
+            exit 1
+          fi
+          if grep -rEn --include='*.tf' --include='*.tfvars'                '(sk-ant-|sk-proj-|AKIA[0-9A-Z]{16})' infrastructure/terraform; then
+            echo "::error::a credential appears to be committed"
+            exit 1
+          fi
+          echo "No secret material in Terraform."
+
+      # publicly_accessible on RDS would defeat every security group in the estate, because the
+      # address would resolve publicly.
+      - name: Database is not public
+        run: |
+          set -euo pipefail
+          if grep -rn --include='*.tf' "publicly_accessible *= *true" infrastructure/terraform; then
+            echo "::error::the database must not be publicly accessible"
+            exit 1
+          fi
+          echo "Database is private."
+
+      # The invariant this whole estate is arranged around.
+      - name: AI plane has no path to the database
+        run: |
+          set -euo pipefail
+          security=infrastructure/terraform/modules/security/main.tf
+          # An egress rule on the ai group referencing the database group, in any order.
+          if grep -A4 'security_group_id *= *aws_security_group.ai.id' "${security}" \
+             | grep -q 'aws_security_group.database.id'; then
+            echo "::error::the AI plane must have no path to the authoritative database"
+            exit 1
+          fi
+          echo "No ai -> database rule exists."
