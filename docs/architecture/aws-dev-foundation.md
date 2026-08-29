@@ -147,6 +147,29 @@ No access keys. GitHub presents a signed token; AWS trades it for a session that
 `repo:*` — lets *any* GitHub repository assume the role, because every one of them can mint a token
 with that audience. The deploy role pins `repo:<owner>/<repo>:ref:refs/heads/main`.
 
+### The exact `sub` claims
+
+GitHub mints one of these per run, and the environment form **replaces** the ref form rather than
+accompanying it — a deploy job that gains an `environment:` key stops matching a ref-only policy:
+
+| Trigger | `sub` claim | Trusted by |
+| --- | --- | --- |
+| push to `main`, no environment | `repo:OWNER/REPO:ref:refs/heads/main` | deploy role |
+| job declaring `environment: dev` | `repo:OWNER/REPO:environment:dev` | deploy role |
+| pull request from a branch in this repo | `repo:OWNER/REPO:pull_request` | plan role |
+
+All matched with **`StringEquals` over an enumerated list**. No wildcards: `repo:OWNER/REPO:*` reads
+as repository-scoped and admits every branch, tag, environment and `pull_request_target` run.
+
+A pull request from a **fork** never reaches either role — GitHub refuses `id-token: write` to fork
+pull requests, so no token exists to present.
+
+> **Required manual step.** `repo:OWNER/REPO:environment:dev` encodes **no branch**. It is minted
+> for that environment from any ref, so the branch restriction must come from the GitHub
+> Environment's own **deployment branch policy**. Configure `dev` to allow only `main` before using
+> an environment-gated deploy; leaving it unset is the one way to widen this trust without editing
+> Terraform.
+
 The deploy role can push images, register task definitions and update the two named services. It
 **cannot** read a secret, reach the database, change a security group, or delete anything.
 `iam:PassRole` is scoped to exactly the three task roles and conditioned on
@@ -154,6 +177,11 @@ The deploy role can push images, register task definitions and update the two na
 
 A separate **read-only plan role** lets pull requests run `terraform plan` without holding any
 permission to change anything.
+
+Trust is asserted by `terraform test` (`modules/cicd/tests/trust.tftest.hcl`, mocked provider, no
+account needed): the two deploy subjects and the one plan subject exactly, no wildcard in any
+subject, every subject scoped to this repository, and two fail-closed cases — a wildcard ref and an
+empty allow-list are both refused by a module precondition rather than rendered.
 
 ## Health checks and rollback
 

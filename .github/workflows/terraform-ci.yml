@@ -59,6 +59,19 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Module tests where a module has them. These need no AWS account -- the provider is mocked --
+      # so they gate every pull request the same way validate does.
+      - name: Test modules
+        run: |
+          set -euo pipefail
+          for module in infrastructure/terraform/modules/*/; do
+            if [ -d "${module}tests" ]; then
+              echo "::group::test ${module}"
+              terraform -chdir="${module}" test
+              echo "::endgroup::"
+            fi
+          done
+
       - name: Validate bootstrap
         run: |
           terraform -chdir=infrastructure/terraform/bootstrap init -backend=false -input=false >/dev/null
@@ -124,6 +137,23 @@ jobs:
             exit 1
           fi
           echo "Database is private."
+
+      # OIDC trust must never be wildcarded. `terraform test` asserts this from the rendered
+      # subjects; this asserts it from the source, so the gate still holds if someone hand-writes a
+      # condition rather than going through the subject locals.
+      - name: OIDC trust is not wildcarded
+        run: |
+          set -euo pipefail
+          cicd=infrastructure/terraform/modules/cicd/main.tf
+          if grep -n 'repo:\${var.github_repository}:\*' "${cicd}"; then
+            echo "::error::OIDC trust must not use a wildcard subject"
+            exit 1
+          fi
+          if grep -n 'test *= *"StringLike"' "${cicd}" | grep -v 'aud'; then
+            echo "::error::trust subjects must use StringEquals over an enumerated list"
+            exit 1
+          fi
+          echo "OIDC trust subjects are enumerated."
 
       # The invariant this whole estate is arranged around.
       - name: AI plane has no path to the database

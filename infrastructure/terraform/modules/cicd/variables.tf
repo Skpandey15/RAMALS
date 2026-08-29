@@ -7,13 +7,44 @@ variable "github_repository" {
 
 variable "allowed_refs" {
   description = <<-EOT
-    Refs whose workflow runs may deploy.
+    Refs whose workflow runs may deploy, for jobs that declare no GitHub Environment.
 
-    Branch refs only, and deliberately not a wildcard. A fork's pull request runs with a workflow
-    file the fork controls; if it could match this condition it could deploy.
+    Produces `repo:OWNER/REPO:ref:<ref>`. Enumerated exactly; a wildcard here is refused by a
+    precondition rather than merely discouraged.
   EOT
   type        = list(string)
   default     = ["refs/heads/main"]
+}
+
+variable "allowed_environments" {
+  description = <<-EOT
+    GitHub Environments whose deploy jobs may assume the deploy role.
+
+    Produces `repo:OWNER/REPO:environment:<name>`. This form REPLACES the ref form in the token: a
+    job that gains an `environment:` key stops minting a `ref:` subject entirely, so both are
+    enumerated and a future move to Environments does not lock the pipeline out.
+
+    **The environment subject encodes no branch.** It is minted for that environment from any ref,
+    so the branch restriction must come from the Environment's own deployment-branch policy in
+    GitHub. Configuring that is a required step, not an optional hardening.
+  EOT
+  type        = list(string)
+  default     = ["dev"]
+}
+
+variable "plan_contexts" {
+  description = <<-EOT
+    Token contexts allowed to assume the read-only plan role.
+
+    `pull_request` is the subject GitHub mints for a PR raised from a branch in this repository. A
+    PR from a fork cannot reach here regardless: GitHub refuses `id-token: write` to fork pull
+    requests, so no token exists to present.
+
+    Deliberately not `ref:refs/heads/main`: the Terraform CI that runs on main is credential-free
+    validation and has no reason to assume any AWS role.
+  EOT
+  type        = list(string)
+  default     = ["pull_request"]
 }
 
 variable "create_oidc_provider" {

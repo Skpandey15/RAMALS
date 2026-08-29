@@ -30,10 +30,67 @@ locals {
     ? aws_iam_openid_connect_provider.github[0].arn
   : data.aws_iam_openid_connect_provider.github[0].arn)
 
-  # Exactly which workflow runs may deploy. Branch refs, not wildcards: a pull request from a fork
-  # runs with `pull_request` context and must never match, because a fork's workflow file is
-  # attacker-controlled.
-  allowed_subjects = [for ref in var.allowed_refs : "repo:${var.github_repository}:ref:${ref}"]
+  # The `sub` claim GitHub actually mints, per trigger. Getting these exactly right matters more
+  # than anything else in this file, because a subject that never matches locks the pipeline out and
+  # one that matches too much is the whole security control gone:
+  #
+  #   push to a branch, no environment      repo:OWNER/REPO:ref:refs/heads/main
+  #   job declaring `environment: dev`      repo:OWNER/REPO:environment:dev
+  #   pull_request event                    repo:OWNER/REPO:pull_request
+  #
+  # The environment form REPLACES the ref form -- it does not accompany it. A deploy job that gains
+  # an `environment:` key stops matching a ref-only trust policy and starts failing to assume the
+  # role, which is why both forms are enumerated rather than only the one in use today.
+  deploy_ref_subjects = [
+    for ref in var.allowed_refs : "repo:${var.github_repository}:ref:${ref}"
+  ]
+
+  # Environment subjects carry NO branch information. `repo:R:environment:dev` is minted for a job
+  # declaring that environment from *any* ref, so the branch restriction has to come from the
+  # GitHub Environment's own deployment-branch policy. That is a required configuration step and is
+  # recorded in docs/architecture/aws-dev-foundation.md; leaving it unset is the one way to widen
+  # this trust without editing Terraform.
+  deploy_environment_subjects = [
+    for environment in var.allowed_environments :
+    "repo:${var.github_repository}:environment:${environment}"
+  ]
+
+  deploy_subjects = concat(local.deploy_ref_subjects, local.deploy_environment_subjects)
+
+  # The plan role's contexts, enumerated rather than wildcarded. `pull_request` is the subject for a
+  # PR raised from a branch in this repository. A PR from a *fork* cannot reach here at all: GitHub
+  # refuses `id-token: write` to fork pull requests, so no token is minted to present.
+  plan_subjects = [
+    for context in var.plan_contexts : "repo:${var.github_repository}:${context}"
+  ]
+}
+
+# Fail closed rather than trust-nothing-by-accident. An empty subject list would render a condition
+# with no values, which IAM treats as unsatisfiable -- safe, but it fails at apply time with a
+# confusing error rather than here with a clear one.
+resource "terraform_data" "subject_guard" {
+  lifecycle {
+    precondition {
+      condition     = length(local.deploy_subjects) > 0
+      error_message = "At least one deploy ref or environment must be allowed; an empty list locks the pipeline out."
+    }
+
+    precondition {
+      condition     = length(local.plan_subjects) > 0 || !var.create_plan_role
+      error_message = "The plan role needs at least one context, or set create_plan_role = false."
+    }
+
+    # The rule this module exists to hold. A `*` anywhere in a subject widens trust in a way that is
+    # invisible in review -- `repo:owner/repo:*` reads as scoped and admits every branch, tag,
+    # environment and pull_request_target run in the repository.
+    precondition {
+      condition = alltrue([
+        for subject in concat(local.deploy_subjects, local.plan_subjects) :
+        !strcontains(subject, "*")
+      ])
+      error_message = "OIDC trust subjects must not contain wildcards; enumerate refs, environments and contexts."
+    }
+  }
 }
 
 data "aws_iam_policy_document" "assume" {
@@ -54,10 +111,13 @@ data "aws_iam_policy_document" "assume" {
 
     # The load-bearing condition. Without it the audience check alone would admit every repository
     # on GitHub, because every one of them can mint a token with that audience.
+    #
+    # StringEquals over an enumerated list, never StringLike: exact matching is what makes this
+    # reviewable, and a wildcard here would be indistinguishable from correct at a glance.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = local.allowed_subjects
+      values   = local.deploy_subjects
     }
   }
 }
@@ -166,12 +226,16 @@ data "aws_iam_policy_document" "plan_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Pull requests included here and nowhere else. A plan reveals resource names and shapes, which
-    # is why this role is read-only rather than merely "not apply".
+    # Was StringLike "repo:OWNER/REPO:*", which is repository-scoped and still far too wide: it
+    # admits every branch, every tag, every environment, and any `pull_request_target` run -- the
+    # last of which executes with base-repository permissions on attacker-authored content.
+    #
+    # Enumerated exactly, so the plan role can be assumed by a pull-request workflow and by nothing
+    # else in the repository.
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:*"]
+      values   = local.plan_subjects
     }
   }
 }
