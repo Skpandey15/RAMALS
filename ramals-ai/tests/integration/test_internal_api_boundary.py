@@ -149,7 +149,10 @@ def test_activated_endpoints_return_contract_proposals(
         json=request_payload,
         headers={
             "Authorization": "Bearer good-token",
-            "X-Interaction-ID": request_payload["interactionId"],
+            # str(), because request_payload is dict[str, object] and a header value must be a
+            # str. Latent since this test was written and surfaced by a newer Starlette whose
+            # TestClient.post types its headers strictly.
+            "X-Interaction-ID": str(request_payload["interactionId"]),
         },
     )
 

@@ -46,6 +46,19 @@ public class ProviderExecutionRepository {
    */
   public boolean admit(String requestId, String idempotencyKey,
       String provider, String model, String modelRoute) {
+    return admit(requestId, idempotencyKey, provider, model, modelRoute, null, null);
+  }
+
+  /**
+   * Admits an execution, recording the correlation of the request that asked for it.
+   *
+   * <p>Stored because reconciliation happens later, on a thread with no request behind it, and has
+   * to restore this before it can call the AI plane at all (V040). Following V025's outbox: work
+   * carries the correlation of its originating request so an asynchronous hand-off does not break
+   * the trail back to the learner.
+   */
+  public boolean admit(String requestId, String idempotencyKey,
+      String provider, String model, String modelRoute, String interactionId, String traceId) {
     try {
       // custom_id IS the idempotency key. Not a convention -- the Definition of Done says so:
       // "the custom_id submitted with the batch is the server-derived idempotency key for the
@@ -56,9 +69,10 @@ public class ProviderExecutionRepository {
       jdbc.update("""
           INSERT INTO core.ai_provider_execution
             (request_id, provider, model, model_route, idempotency_key, custom_id,
-             state, submit_fence, admitted_at)
-          VALUES (?, ?, ?, ?, ?, ?, 'ADMITTED', 0, CURRENT_TIMESTAMP)
-          """, requestId, provider, model, modelRoute, idempotencyKey, idempotencyKey);
+             state, submit_fence, admitted_at, interaction_id, trace_id)
+          VALUES (?, ?, ?, ?, ?, ?, 'ADMITTED', 0, CURRENT_TIMESTAMP, ?, ?)
+          """, requestId, provider, model, modelRoute, idempotencyKey, idempotencyKey,
+          blankToNull(interactionId), blankToNull(traceId));
       return true;
     } catch (DuplicateKeyException alreadyAdmitted) {
       return false;
@@ -495,6 +509,25 @@ public class ProviderExecutionRepository {
          WHERE work.request_id = due.request_id
         RETURNING work.request_id
         """, String.class, limit, owner, leaseMillis);
+  }
+
+  /**
+   * The correlation recorded when this execution was admitted, or null in both slots.
+   *
+   * <p>Null is a real answer, not a miss: an execution admitted before V040, or outside any request
+   * scope, genuinely has no originating correlation to restore. The caller generates a fresh one
+   * rather than fabricating provenance the row never had.
+   */
+  public String[] correlationOf(String requestId) {
+    List<String[]> found = jdbc.query(
+        "SELECT interaction_id, trace_id FROM core.ai_provider_execution WHERE request_id = ?",
+        (rs, row) -> new String[] {rs.getString(1), rs.getString(2)}, requestId);
+    return found.isEmpty() ? new String[] {null, null} : found.get(0);
+  }
+
+  /** Blank is not a value: an empty correlation is the defect V040 exists to prevent. */
+  private static String blankToNull(String value) {
+    return value == null || value.isBlank() ? null : value;
   }
 
   private static ProviderExecution map(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
