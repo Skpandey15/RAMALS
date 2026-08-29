@@ -1,5 +1,6 @@
 package io.ramals.learningplatform.execution.contractb;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
@@ -53,10 +54,16 @@ public class ContractBAdminController {
    * the idempotency key are server-derived, because the Definition of Done requires the
    * {@code custom_id} the provider sees to be server-derived — correlation a caller can choose is
    * correlation that can be aimed at another execution.
+   *
+   * <p>{@code @Valid} is on the parameter and has to be. A class-level {@code @Validated} enables
+   * method validation for constraints on the parameters themselves; it does not descend into a
+   * request body's fields, so without this annotation every constraint on {@link CommissionRequest}
+   * is decorative — the bounds would be documented and unenforced, which is worse than absent
+   * because a reader would believe them.
    */
   @PostMapping
   @ResponseStatus(HttpStatus.ACCEPTED)
-  CommissionResponse commission(@RequestBody CommissionRequest request) {
+  CommissionResponse commission(@Valid @RequestBody CommissionRequest request) {
     ContractBCommissioningService.Commissioned commissioned = commissioning.commission(
         request.model(), request.modelRoute(), request.prompt(), request.maxOutputTokens());
     return new CommissionResponse(commissioned.requestId(), commissioned.state().name());
