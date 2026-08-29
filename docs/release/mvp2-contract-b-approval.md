@@ -2,9 +2,11 @@
 
 - **Purpose:** the approval artefact for Contract B Definition-of-Done **criterion 9** — *"Security,
   performance and operational runbooks are approved."*
-- **Status:** **PENDING SIGN-OFF.** The three artefacts criterion 9 requires exist and are listed
-  below. **No approval has been given.** Criterion 9 remains **BLOCKED** until the block at the
-  bottom of this document is completed by the accountable owner.
+- **Status:** **APPROVED — 2026-08-29**, by the Platform Data Owner, for the RAMALS MVP / research
+  environment only. Criterion 9 is satisfied. See [Approval decision](#approval-decision).
+- **Binding condition attached to this approval:** residual **S2 must be resolved and separately
+  reviewed before `ramals.contract-b.enabled` may be activated in any environment.** This approval
+  does not authorize Contract-B route activation or production deployment.
 - **Prepared:** 2026-08-29, at `main` `1ffe322edd4d5d75c90d6ff1551df1e4318ddb9e`.
 
 ## Why this document exists separately
@@ -14,15 +16,16 @@ mechanism. Every other criterion is satisfied by evidence that a machine produce
 asserts. This one is satisfied by a named, accountable human saying yes, having read what they are
 saying yes to.
 
-That distinction is the reason this record is separate from the documents it approves, and the
-reason it is unsigned. An engineer can write a runbook. An engineer cannot approve it on the owner's
-behalf, and a document that recorded an approval nobody gave would be worse than no document — it
-would convert a governance gap into a false governance record, which is precisely the failure mode
-the Definition of Done's *"not accepted on argument"* rule exists to prevent.
+That distinction is the reason this record is separate from the documents it approves. An engineer
+can write a runbook; an engineer cannot approve it on the owner's behalf, and a document recording an
+approval nobody gave would be worse than no document — it would convert a governance gap into a false
+governance record, which is precisely the failure mode the Definition of Done's *"not accepted on
+argument"* rule exists to prevent.
 
-**M2-ADR-018 set the precedent.** It was recorded as *Proposed* with two items marked
-`PENDING HUMAN SIGN-OFF`, and was approved later, in the same document, by a named individual for a
-named scope. This record follows that shape exactly.
+**So this record was prepared unsigned and signed separately.** M2-ADR-018 set that precedent: it was
+recorded as *Proposed* with two items marked `PENDING HUMAN SIGN-OFF`, and approved later, in the
+same document, by a named individual for a named scope. The [approval decision](#approval-decision)
+below was given by the owner after the artefacts existed to be read.
 
 ## The accountable owner
 
@@ -34,7 +37,7 @@ That assignment is **not valid for organisational or production deployment**, wh
 reassignment and re-approval under the deploying organisation's own governance process. Any approval
 recorded below inherits that scope limitation and cannot be cited beyond it.
 
-## What is being submitted for approval
+## What was approved
 
 | Artefact | Location | Covers |
 | --- | --- | --- |
@@ -45,28 +48,30 @@ recorded below inherits that scope limitation and cannot be cited beyond it.
 All three are written against `main` at the SHA above and cite code, migrations and tests rather
 than asserting behaviour.
 
-## What approval would and would not mean
+## What the approval means
 
-**Would mean:** the owner has read the three artefacts, accepts the residual findings named in them
-as appropriate to carry in the MVP/research environment, and accepts operational responsibility for
-the procedures the runbook describes.
+**It means:** the owner has read the three artefacts, accepts the residual findings named below as
+appropriate to carry in the MVP/research environment, and accepts operational responsibility for the
+procedures the runbook describes.
 
-**Would not mean:**
+**It does not mean:**
 
 - **Not route activation.** Criterion 9 is one of nine. Approving these documents does not authorise
-  enabling `ramals.contract-b.enabled`, which remains a separate decision.
+  enabling `ramals.contract-b.enabled` — and the binding condition below forbids it outright until
+  S2 is resolved and separately reviewed.
 - **Not production readiness.** The scope limitation above is binding.
 - **Not acceptance of the residuals as closed.** They are carried, named, and listed below.
 
-## Residual findings the owner is being asked to accept
+## Residual findings accepted
 
-Carried forward from the two reviews. None is a defect in what criterion 9 asks for; each is a
-bounded item that would otherwise be invisible in an approval.
+Carried forward from the two reviews and **accepted as documented** by the approval below. None is a
+defect in what criterion 9 asks for; each is a bounded item that would otherwise be invisible in an
+approval. Accepting them records them as carried, not as resolved.
 
 | # | Finding | Source | Why it is carried |
 | --- | --- | --- | --- |
 | S1 | Platform Data Owner and Key Custodian are the same individual | Security review §4; M2-ADR-018 governance | A segregation-of-duties finding in any multi-person deployment. Already accepted for research scope with reassignment binding on production. Not re-accepted here — confirmed as still standing. |
-| S2 | The submission path treats **any** status the AI plane chooses as proof nothing was created | Security review §9 | Pre-existing, documented in `durable.py`. A 5xx raised after `batches.create` succeeded would record a definite `FAILED` for an execution that exists. Deliberately unchanged in `#187`. **Should be resolved before route activation.** |
+| S2 | The submission path treats **any** status the AI plane chooses as proof nothing was created | Security review §9 | Pre-existing, documented in `durable.py`. A 5xx raised after `batches.create` succeeded would record a definite `FAILED` for an execution that exists. Deliberately unchanged in `#187`. **Accepted subject to the binding condition below: it must be resolved and separately reviewed before route activation.** |
 | S3 / P5 | No metrics or alerting on the reconciliation worker | Both reviews; closure assessment W4 | Already `ACCEPTED_DEBT` under criterion 6. The runbook's triage section is the manual substitute. |
 | P1 | The inspection budget is per process; N workers means ~N× request rate | Performance §9 | M2-ADR-020 §7 states it; deploying more than one worker is a recorded revisit trigger. |
 | P2 | Listing cost is not reduced by the memo and grows with workspace activity | Performance §9 | Revisit trigger in M2-ADR-020. |
@@ -75,38 +80,82 @@ bounded item that would otherwise be invisible in an approval.
 
 ## Approval decision
 
-> **PENDING HUMAN SIGN-OFF.**
->
-> This block is deliberately incomplete. It must be filled in by the accountable owner, in a commit
-> attributable to them, and must not be completed by anyone acting on their behalf.
+**APPROVED.** Given by the Platform Data Owner on 2026-08-29, in their own words, and transcribed
+here without alteration. The decision is the owner's; this document records it.
 
 | Item | Value |
 | --- | --- |
-| **Platform Data Owner** | *(pending)* |
-| **Date of approval** | *(pending)* |
-| **Scope approved** | *(pending — expected: RAMALS MVP / research environment only)* |
-| **Operational runbook** | ☐ Approved |
-| **Security review** | ☐ Approved |
-| **Performance characterization** | ☐ Approved |
-| **Residual findings S1, S2, S3/P5, P1, P2, P4, P6/P7 accepted as listed** | ☐ Accepted |
+| **Platform Data Owner** | **Sunil Pandey** |
+| **Date of approval** | **2026-08-29** |
+| **Scope approved** | **RAMALS MVP / research environment only** |
+| **Operational runbook** | ☑ **Approved** |
+| **Security review** | ☑ **Approved** |
+| **Performance characterization** | ☑ **Approved** |
+| **Residual findings S1, S2, S3/P5, P1, P2, P4, P6/P7** | ☑ **Accepted as explicitly documented** |
 
-**To complete this approval**, the accountable owner replaces the pending values, ticks the boxes
-they are approving, and commits the change under their own attribution. Criterion 9 becomes `PASS`
-at that commit and not before.
+### Binding approval condition
 
-**If the owner does not approve** — in whole or in part — the correct outcome is that criterion 9
-stays `BLOCKED` and the specific objection is recorded here. That is a legitimate result, not a
-failure of this exercise.
+> **S2 must be resolved and separately reviewed before `ramals.contract-b.enabled` may be activated
+> in any environment. This approval does not authorize Contract-B route activation or production
+> deployment.**
+
+This condition is part of the approval, not commentary on it. S2 is the finding that the submission
+path treats *any* HTTP status the AI plane chooses as proof that nothing was created — correct for a
+4xx, and wrong for a 5xx raised after `batches.create` has already succeeded, where it would record a
+definite `FAILED` for a provider execution that exists.
+
+The condition is proportionate to what activating the route changes. While the route is off, every
+Contract B submission is made by a qualification harness under supervision, and a misclassified
+submission is observed by whoever is running it. With the route on, submissions arrive from learner
+traffic unattended, and a misclassification becomes a durable wrong answer about a learner's work
+that nobody is watching for. S2 is therefore latent today and load-bearing the moment the route
+opens.
+
+**Consequences of the condition:**
+
+- `ramals.contract-b.enabled` stays `false` in every environment until S2 is resolved **and**
+  separately reviewed. Resolving it is not sufficient on its own; the review is part of the
+  condition.
+- That review is a new artefact, not an amendment to this one. This approval does not extend to it
+  and must not be cited as covering it.
+- Criterion 9 is satisfied by this approval. Route activation was never something criterion 9
+  authorized, and the Definition of Done permits activation only after qualification — so this
+  condition narrows an authority that criterion 9 did not grant, rather than qualifying the
+  criterion itself.
+
+### What this approval covers, precisely
+
+The three artefacts as written at `1ffe322edd4d5d75c90d6ff1551df1e4318ddb9e`, and the seven residual
+findings as documented in the table above — accepted as bounded items appropriate to carry in the
+MVP/research environment, not as items that have been resolved.
+
+### What it does not cover
+
+- **Not route activation** — see the binding condition.
+- **Not production or organisational deployment.** The scope limitation inherited from M2-ADR-018 is
+  binding: production requires reassignment of both the Data Owner and Key Custodian roles under the
+  deploying organisation's own governance process, and re-approval against its own scheme.
+- **Not the other eight DoD criteria**, which stand or fall on their own evidence.
+- **Not W4, P5, AWS work, or any other deferred item.** Accepting a residual as documented debt is
+  not scheduling it.
+
+### Re-review
+
+This approval is scoped to the artefacts at the SHA named above. A material change to the Contract B
+path — the lifecycle, the persistence model, the access matrix, the retention rules, or the
+reconciliation mechanism — invalidates it and requires re-approval, on the same basis M2-ADR-018
+requires annual re-review of the classification.
 
 ## What must not happen
 
-- **Nobody may complete the block above on the owner's behalf.** An approval recorded without the
-  owner's act is a fabricated governance record.
-- **Criterion 9 must not be marked `ACCEPTED_DEBT`.** The closure assessment's own rule governs:
-  *"ACCEPTED_DEBT is not available for a criterion whose stated requirement is simply absent."* An
-  unsigned approval is an absent approval. Debt-accepting an approval is additionally
-  self-contradictory, because the entire content of the criterion is that someone accountable said
-  yes.
+- **The approval above must not be extended by reading.** It covers three named artefacts at one
+  named SHA for one named scope, with one binding condition. It is not a general authorisation for
+  Contract B, and citing it as one would be the same error as recording it unsigned would have been.
+- **`ramals.contract-b.enabled` must not be activated** until S2 is resolved and separately
+  reviewed. This is the binding condition, not a recommendation.
+- **Criterion 9 must not be re-opened by a change to the artefacts.** A material change to the
+  Contract B path invalidates this approval and requires a new one, recorded here in the same form —
+  it does not silently carry forward.
 - **The criterion must not be amended to fit what exists.** Criteria 3 and 8 were amended once
   against evidence about the *provider's* capabilities. Amending 9 against evidence about RAMALS'
   own governance would be a different act wearing the same clothes.
