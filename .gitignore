@@ -28,6 +28,20 @@ learning-platform/build/
 # and can carry values that were never meant to be published. It also describes infrastructure that
 # exists right now, which a commit cannot keep true. The declaration is reviewed; the state is not
 # an artifact.
+# Word, Excel and PowerPoint write a lock file beside every open document and delete it on close.
+# One was committed from docs/MVP02 and is removed in this change: it is a transient artefact of
+# somebody having a document open, it means nothing to anyone else, and it reappears on every edit.
+~$*
+
+infrastructure/terraform/**/.terraform/
+infrastructure/terraform/**/*.tfstate
+infrastructure/terraform/**/*.tfstate.*
+infrastructure/terraform/**/*.tfvars
+infrastructure/terraform/**/tfplan
+# Module lock files are an artefact of CI validating each module standalone; the authoritative pins
+# live in bootstrap/ and environments/, which are the directories anyone actually runs.
+infrastructure/terraform/modules/**/.terraform.lock.hcl
+
 performance/environment/terraform/.terraform/
 performance/environment/terraform/*.tfstate
 performance/environment/terraform/*.tfstate.*
