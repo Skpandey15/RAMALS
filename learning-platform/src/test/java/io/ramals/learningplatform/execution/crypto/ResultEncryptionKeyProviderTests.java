@@ -213,10 +213,17 @@ class ResultEncryptionKeyProviderTests {
     assertThat(defaults.getActiveKeyId()).isEmpty();
     assertThat(defaults.getKeys()).isEmpty();
 
+    // Asserted against the encryption prefix rather than the whole `contract-b:` block. The block
+    // now carries Contract B's feature flags, which are not key material and must be committed --
+    // a default nobody can read is a default nobody can review. What must never appear is anything
+    // under ramals.contract-b.encryption, which is where ResultEncryptionKeyProperties binds.
     Path config = Path.of("src", "main", "resources", "application.yml");
-    assertThat(Files.readString(config, StandardCharsets.UTF_8))
+    String yaml = Files.readString(config, StandardCharsets.UTF_8);
+    assertThat(yaml)
         .as("no Contract B key may be configured in the repository")
-        .doesNotContain("contract-b:");
+        .doesNotContain("encryption:")
+        .doesNotContain("active-key-id")
+        .doesNotContain("keys:");
   }
 
   // -- 7. failure never falls back ----------------------------------------------------------------

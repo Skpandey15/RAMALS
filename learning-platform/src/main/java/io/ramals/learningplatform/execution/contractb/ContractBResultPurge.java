@@ -15,11 +15,16 @@ import org.springframework.stereotype.Component;
  * window. Giving both to the same code path would leave no boundary between a targeted delete and
  * an arbitrary bulk one.
  *
- * <p><strong>Nothing in the ordinary Contract B path calls this class.</strong> That is a testable
- * property and is tested: no controller, service, adapter, scheduler or reconciliation path
- * references it. The platform still has no scheduler — {@code V023}'s judgement stands, that
- * shipping a function an operator can run and can test is honest, and that a policy with no
- * mechanism is a comment pretending to be a control.
+ * <p><strong>Nothing in the ordinary Contract B path calls this class.</strong> No controller,
+ * service, adapter or reconciliation path references it: adoption removes its own row, and a sweep
+ * is never a side effect of driving an execution forward.
+ *
+ * <p>It is now reachable from exactly one scheduler, {@link ContractBPurgeWorker}, which is
+ * separately flagged and off by default. That worker exists because the previous position — ship the
+ * function, let an operator run it — left the thirty-day ceiling with no mechanism behind it, and
+ * M2-ADR-018 §10 makes results outliving the ceiling a governance failure rather than a backlog. A
+ * policy whose only enforcement is someone remembering is the comment pretending to be a control
+ * that {@code V023} warned about.
  *
  * <p>The bounds live in the database function, not here. A caller cannot widen the window past the
  * ceiling or narrow it below the floor by calling this method differently, because this method only
@@ -33,6 +38,9 @@ public class ContractBResultPurge {
 
   /** The ceiling from M2-ADR-018 §9, chosen against the provider's own 29-day retention. */
   public static final int CEILING_DAYS = 30;
+
+  /** The database function's own default, restated so a bounded call is the ordinary one. */
+  static final int DEFAULT_BATCH_LIMIT = 500;
 
   private final JdbcTemplate jdbc;
 
@@ -58,10 +66,27 @@ public class ContractBResultPurge {
    * @return rows removed. Zero is the normal steady state and is not an error
    */
   public int sweep(int retentionDays) {
+    return sweep(retentionDays, DEFAULT_BATCH_LIMIT);
+  }
+
+  /**
+   * Sweeps at a window, removing at most {@code batchLimit} rows.
+   *
+   * <p>The bound is what makes a scheduled sweep safe to leave running. An unbounded delete over an
+   * unexpected backlog is one long transaction competing with live traffic; a bounded one drains the
+   * same backlog over successive sweeps and never holds the table for longer than a batch.
+   *
+   * <p>Both bounds are still enforced by the database function rather than here. This method only
+   * forwards, so an operator invoking {@code psql} directly meets the same refusals.
+   *
+   * @param batchLimit rows removed at most, in one sweep
+   */
+  public int sweep(int retentionDays, int batchLimit) {
     Integer purged;
     try {
       purged = jdbc.queryForObject(
-          "SELECT core.purge_expired_ai_execution_results(?)", Integer.class, retentionDays);
+          "SELECT core.purge_expired_ai_execution_results(?, ?)",
+          Integer.class, retentionDays, batchLimit);
     } catch (DataAccessException failure) {
       // M2-ADR-018 §10's last row: a purge that cannot run alerts, because results outliving the
       // ceiling is a governance failure rather than a backlog. Logged here and rethrown -- swallowing
