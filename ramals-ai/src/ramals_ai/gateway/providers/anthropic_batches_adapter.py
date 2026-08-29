@@ -19,6 +19,7 @@ execution machinery has something verified to be written against.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
@@ -223,6 +224,7 @@ class AnthropicBatchesProvider:
         created_before: str,
         max_pages: int = 10,
         max_inspections: int = 50,
+        exclude_ids: Iterable[str] = (),
     ) -> DurableExecutionSearch:
         """Enumerates batches in a creation-time window and correlates them by ``custom_id``.
 
@@ -235,13 +237,26 @@ class AnthropicBatchesProvider:
         window. A lost acknowledgement is recovered soon after it happens; starting from the oldest
         batch would page through the workspace's entire history to reach the relevant hour.
 
+        ``exclude_ids`` are batches the caller has already proven do not carry this key
+        (M2-ADR-020 section 3.1). They are skipped without being opened and counted as covered
+        rather than as uninspectable -- an ended batch's results are immutable, so a negative
+        established once is permanent. This is what lets ``max_inspections`` behave as a budget
+        that resumes across attempts instead of a truncation that repeats the same first
+        candidates forever.
+
+        ``max_inspections`` is that budget. Exhausting it stops the search with ``INCONCLUSIVE``,
+        never ``ZERO`` and never ``ONE``: a search that ran out of budget established no absence,
+        and an uninspected candidate may be a second execution carrying the same key.
+
         Never creates anything. This is the recovery path for an execution that may already exist,
         and a create call here would produce the duplicate the search exists to detect.
         """
         batches = self._batches()
+        excluded_ids = frozenset(exclude_ids)
         matches: dict[str, DurableExecutionMatch] = {}
+        newly_excluded: list[str] = []
         seen: set[str] = set()
-        listed = inspected = uninspectable = 0
+        listed = inspected = uninspectable = excluded = 0
         limit_reached: str | None = None
         consecutive_older = 0
         max_listed = max_pages * 100
@@ -285,6 +300,14 @@ class AnthropicBatchesProvider:
                     continue
                 consecutive_older = 0
 
+                # Already proven not to carry the key by an earlier search. Skipped without being
+                # opened and counted as covered rather than uninspectable: the negative is
+                # permanent, so this is a candidate this search did not need to read, not one it
+                # could not.
+                if batch_id in excluded_ids:
+                    excluded += 1
+                    continue
+
                 # In the window. No results_url means the batch has not ended, so there is nothing
                 # to correlate against -- uninspectable, which is not "does not match".
                 if not getattr(batch, "results_url", None):
@@ -298,9 +321,16 @@ class AnthropicBatchesProvider:
                 inspected += 1
                 readable, found = self._inspect(batch, custom_id)
                 if not readable:
+                    # The stream failed or ended part-way, so this candidate told us nothing. Never
+                    # memoised: recording it would hand a later search coverage of a batch nobody
+                    # read, and that search could then report ZERO, which is terminal.
                     uninspectable += 1
                 elif found is not None:
                     matches[found.provider_execution_id] = found
+                else:
+                    # Ended, streamed to completion, key absent. The one case that may be
+                    # remembered (M2-ADR-020 section 3.1).
+                    newly_excluded.append(batch_id)
         except GatewayError:
             raise
         except Exception as failure:  # noqa: BLE001
@@ -334,6 +364,8 @@ class AnthropicBatchesProvider:
             batches_uninspectable=uninspectable,
             pages_fetched=max(1, (listed + 99) // 100),
             limit_reached=limit_reached,
+            batches_excluded=excluded,
+            newly_excluded_ids=tuple(newly_excluded),
         )
 
     def _inspect(self, batch: Any, custom_id: str) -> tuple[bool, DurableExecutionMatch | None]:
@@ -422,10 +454,47 @@ class AnthropicBatchesProvider:
 
         The provider's message is dropped for the reason the Contract A adapter drops it: provider
         errors routinely echo the request body, which here is a minimized learner context.
+
+        ``Retry-After`` is the one exception, and only for a rate limit. It is a number of seconds,
+        not request content, and it is the only part of the response worth keeping: the provider
+        knows when it will serve again and enumeration does not. Everything else is still dropped.
         """
         name = type(failure).__name__
         code = normalize_exception_name(name, getattr(failure, "status_code", None))
-        return GatewayError(code, f"anthropic batch call failed with {name}")
+        retry_after_ms = (
+            _retry_after_ms(failure) if code is GatewayErrorCode.PROVIDER_RATE_LIMITED else None
+        )
+        return GatewayError(
+            code, f"anthropic batch call failed with {name}", retry_after_ms=retry_after_ms
+        )
+
+
+def _retry_after_ms(failure: Exception) -> int | None:
+    """Reads ``Retry-After`` off a provider exception, defensively.
+
+    Every step here can fail on an exception shape that is not what we expect -- no response, no
+    headers, a date-form value rather than seconds -- and none of those is worth raising over while
+    handling another failure. An absent or unreadable value simply means the caller falls back to
+    its own exponential backoff, which is the correct behaviour anyway.
+    """
+    response = getattr(failure, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        raw = headers.get("retry-after")
+    except Exception:  # noqa: BLE001 - a header mapping that will not be read tells us nothing
+        return None
+    if raw is None:
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except ValueError:
+        # The HTTP-date form. Legal, and not worth parsing: the caller's backoff is the fallback.
+        return None
+    if seconds < 0:
+        return None
+    return int(seconds * 1000)
 
 
 def _counts(counts: Any) -> DurableExecutionCounts | None:

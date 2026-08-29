@@ -59,7 +59,11 @@ class ContractBPersistenceIntegrationTests {
 
   private static final List<String> CONTRACT_B_TABLES = List.of(
       "ai_provider_execution", "ai_execution_result",
-      "ai_execution_transition", "ai_reconciliation_work");
+      "ai_execution_transition", "ai_reconciliation_work",
+      // Added by V038 and V039. Listed here so "the AI plane holds nothing" keeps meaning every
+      // Contract B table rather than the four that existed when the rule was written -- a matrix
+      // test that silently stops covering new tables is worse than none.
+      "ai_provider_execution_observation", "ai_enumeration_no_match");
 
   private static String databaseUrl;
 
@@ -204,6 +208,64 @@ class ContractBPersistenceIntegrationTests {
     assertThat(functionExecutors())
         .as("the AI plane must not be able to invoke either purge mechanism")
         .doesNotContain("ramals_ai_runtime");
+  }
+
+  @Test
+  @DisplayName("6h: the enumeration memo is SELECT and INSERT only -- never UPDATE or DELETE")
+  void theEnumerationMemoIsAppendOnlyByGrant() {
+    assertThat(privilegesOn("ai_enumeration_no_match", RUNTIME_USER))
+        .as("V002 grants every privilege on every future core table, so a narrow matrix has to be "
+            + "produced by revoking first -- this asserts what actually remains")
+        .containsExactlyInAnyOrder("SELECT", "INSERT");
+
+    assertThat(granteesOn("ai_enumeration_no_match"))
+        .containsExactlyInAnyOrder(MIGRATION_USER, RUNTIME_USER);
+  }
+
+  @Test
+  @DisplayName("6i: the runtime cannot rewrite or erase a proven negative")
+  void theEnumerationMemoCannotBeRewritten() {
+    migration.update("INSERT INTO core.ai_provider_execution (request_id, provider, model, "
+        + "model_route, idempotency_key, custom_id, state, submit_fence) "
+        + "VALUES ('req-memo-privilege', 'anthropic', 'claude-sonnet-5', 'diagnostic', "
+        + "'idem-memo-privilege', 'idem-memo-privilege', 'ADMITTED', 0)");
+    migration.update("INSERT INTO core.ai_enumeration_no_match "
+        + "(request_id, provider_execution_id, custom_id) "
+        + "VALUES ('req-memo-privilege', 'msgbatch_ruled_out', 'idem-memo-privilege')");
+
+    // A recorded negative counts as coverage forever, so a runtime able to edit one could
+    // manufacture coverage of a batch nobody read -- and a search could then report ZERO, which is
+    // terminal, over the candidate that was the orphan.
+    assertThatThrownBy(() -> runtime.update(
+        "UPDATE core.ai_enumeration_no_match SET provider_execution_id = 'msgbatch_other'"))
+        .isInstanceOf(DataAccessException.class);
+    assertThatThrownBy(() -> runtime.update("DELETE FROM core.ai_enumeration_no_match"))
+        .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  @DisplayName("6j: purging an execution takes its memo with it, and leaves the evidence alone")
+  void theMemoIsDisposableButTheEvidenceIsNot() {
+    migration.update("INSERT INTO core.ai_provider_execution (request_id, provider, model, "
+        + "model_route, idempotency_key, custom_id, state, submit_fence) "
+        + "VALUES ('req-memo-cascade', 'anthropic', 'claude-sonnet-5', 'diagnostic', "
+        + "'idem-memo-cascade', 'idem-memo-cascade', 'ADMITTED', 0)");
+    migration.update("INSERT INTO core.ai_enumeration_no_match "
+        + "(request_id, provider_execution_id, custom_id) "
+        + "VALUES ('req-memo-cascade', 'msgbatch_gone', 'idem-memo-cascade')");
+    migration.update("INSERT INTO core.ai_provider_execution_observation "
+        + "(request_id, provider_execution_id, custom_id, outcome, discovered_by) "
+        + "VALUES ('req-memo-cascade', 'msgbatch_kept', 'idem-memo-cascade', 'succeeded', "
+        + "'ENUMERATION')");
+
+    // The cascade must work, which is exactly why the memo carries no append-only trigger: a
+    // BEFORE DELETE trigger fires for referential actions too and would turn this into an error.
+    migration.update("DELETE FROM core.ai_provider_execution WHERE request_id = ?",
+        "req-memo-cascade");
+
+    assertThat(migration.queryForObject(
+        "SELECT count(*) FROM core.ai_enumeration_no_match WHERE request_id = ?",
+        Integer.class, "req-memo-cascade")).isZero();
   }
 
   @Test

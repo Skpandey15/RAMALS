@@ -22,6 +22,8 @@ lifecycle service is the only caller, and it is disabled until crash/recovery qu
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from typing import Annotated, Any
 
@@ -62,6 +64,51 @@ class DurableSubmitRequest(BaseModel):
     messages: list[DurableMessage] = Field(min_length=1)
 
 
+# Provider failures, as HTTP. Every code the durable surface can raise appears here, because the
+# caller branches on the status: a rate limit must slow it down, an outage may be retried on the
+# same cadence, and a misconfiguration must not be retried at all. Before this existed a 429 left
+# as an unhandled 500 -- so the one failure that means "you are asking too quickly" arrived looking
+# exactly like "this service is broken", and was retried just as fast (M2-ADR-020 section 7).
+_HTTP_STATUS_BY_CODE: dict[GatewayErrorCode, int] = {
+    GatewayErrorCode.PROVIDER_RATE_LIMITED: status.HTTP_429_TOO_MANY_REQUESTS,
+    GatewayErrorCode.PROVIDER_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
+    GatewayErrorCode.PROVIDER_TIMEOUT: status.HTTP_504_GATEWAY_TIMEOUT,
+    GatewayErrorCode.PROVIDER_AUTH_ERROR: status.HTTP_502_BAD_GATEWAY,
+    GatewayErrorCode.PROVIDER_INVALID_REQUEST: status.HTTP_502_BAD_GATEWAY,
+    GatewayErrorCode.INVALID_STRUCTURED_OUTPUT: status.HTTP_502_BAD_GATEWAY,
+    GatewayErrorCode.ROUTE_NOT_CONFIGURED: status.HTTP_503_SERVICE_UNAVAILABLE,
+    GatewayErrorCode.CONTRACT_B_UNSUPPORTED: status.HTTP_503_SERVICE_UNAVAILABLE,
+    GatewayErrorCode.TOKEN_CEILING_EXCEEDED: status.HTTP_403_FORBIDDEN,
+    GatewayErrorCode.COST_CEILING_EXCEEDED: status.HTTP_403_FORBIDDEN,
+    GatewayErrorCode.DEADLINE_EXCEEDED: status.HTTP_504_GATEWAY_TIMEOUT,
+}
+
+
+@contextmanager
+def _provider_failures_as_http() -> Iterator[None]:
+    """Turns a classified provider failure into the status that says the same thing.
+
+    An unmapped code becomes 502 rather than 500: a code this build does not recognise is still a
+    statement about the provider, and 500 would send an operator looking for a fault in this
+    service.
+
+    ``Retry-After`` is echoed when the provider supplied one. It is a number of seconds and carries
+    no request content, and it is the only part of a provider error response this boundary passes
+    on -- the caller has no other way to learn when the provider will serve again.
+    """
+    try:
+        yield
+    except GatewayError as failure:
+        headers = None
+        if failure.retry_after_ms is not None:
+            headers = {"Retry-After": str(max(1, round(failure.retry_after_ms / 1000)))}
+        raise HTTPException(
+            status_code=_HTTP_STATUS_BY_CODE.get(failure.code, status.HTTP_502_BAD_GATEWAY),
+            detail={"code": failure.code.value, "detail": str(failure)},
+            headers=headers,
+        ) from failure
+
+
 def build_durable_router() -> APIRouter:
     """Router for the Contract B provider surface.
 
@@ -87,6 +134,14 @@ def build_durable_router() -> APIRouter:
         the same reason. The ambiguity is handed back to Spring, which is the only component holding
         the durable state needed to decide what it means.
         """
+        # Deliberately NOT wrapped in _provider_failures_as_http(). The reads below translate a
+        # provider failure into the status that describes it; a submission must not, because the
+        # caller treats *any* status this service chooses as proof that nothing was created, and
+        # decides between FAILED and INDETERMINATE on that basis. Mapping a create-path timeout to
+        # a tidy 504 would dress an ambiguous outcome as a definite one. Whether that classification
+        # is right for every status is a separate question about the submission path and is not
+        # settled here; leaving this call exactly as it was keeps this change to the read paths,
+        # where a misclassification cannot produce a second provider execution.
         adapter = _admitted(request)
         submission = adapter.submit(
             DurableSubmissionRequest(
@@ -122,8 +177,9 @@ def build_durable_router() -> APIRouter:
         custom_id: Annotated[str, Query(min_length=1, max_length=128)],
         created_after: Annotated[str, Query(min_length=1, max_length=40)],
         created_before: Annotated[str, Query(min_length=1, max_length=40)],
-        max_pages: Annotated[int, Query(ge=1, le=50)] = 10,
-        max_inspections: Annotated[int, Query(ge=1, le=200)] = 50,
+        max_pages: Annotated[int, Query(ge=1, le=10)] = 10,
+        max_inspections: Annotated[int, Query(ge=1, le=50)] = 50,
+        exclude_id: Annotated[list[str] | None, Query()] = None,
     ) -> dict[str, Any]:
         """Finds every provider execution carrying a ``custom_id`` in a creation-time window.
 
@@ -133,10 +189,28 @@ def build_durable_router() -> APIRouter:
 
         The window is the caller's, because the caller holds the durable ``submitted_at`` saying
         when the lost call happened. This service remembers nothing and could not derive it.
+
+        So is the memory. ``exclude_id`` carries the batches the caller has already proven do not
+        carry this key, and ``newly_excluded_ids`` returns the ones this search has just proven --
+        the caller persists them (M2-ADR-020 section 3.1). The state lives on the caller's side
+        because M2-ADR-017 section 1 makes Spring/PostgreSQL authoritative and this plane
+        stateless, and because a cache that died with a process would repay its whole cost after
+        every restart.
+
+        ``max_inspections`` is the caller's remaining per-pass budget, so a bounded search resumes
+        across attempts rather than re-reading the same first candidates. The bounds accepted here
+        are M2-ADR-020 section 3's own -- ten pages, fifty inspections -- rather than the looser
+        limits this endpoint used to allow, so the ADR cannot be exceeded by a query parameter.
         """
-        result = _admitted(request).find_executions_by_custom_id(
-            custom_id, created_after, created_before, max_pages, max_inspections
-        )
+        with _provider_failures_as_http():
+            result = _admitted(request).find_executions_by_custom_id(
+                custom_id,
+                created_after,
+                created_before,
+                max_pages,
+                max_inspections,
+                exclude_ids=tuple(exclude_id or ()),
+            )
         business_event(
             logger,
             level=logging.WARNING if result.outcome != "ZERO" else logging.INFO,
@@ -151,6 +225,8 @@ def build_durable_router() -> APIRouter:
                 "batchesUninspectable": result.batches_uninspectable,
                 "pagesFetched": result.pages_fetched,
                 "limitReached": result.limit_reached,
+                "batchesExcluded": result.batches_excluded,
+                "newlyExcluded": len(result.newly_excluded_ids),
             },
         )
         return {
@@ -161,6 +237,8 @@ def build_durable_router() -> APIRouter:
             "batches_uninspectable": result.batches_uninspectable,
             "pages_fetched": result.pages_fetched,
             "limit_reached": result.limit_reached,
+            "batches_excluded": result.batches_excluded,
+            "newly_excluded_ids": list(result.newly_excluded_ids),
         }
 
     @router.get("/executions/{provider_execution_id}")
@@ -170,7 +248,8 @@ def build_durable_router() -> APIRouter:
         The property that makes recovery possible at all: status is read from the provider by
         identity, so a replacement worker asks the same question the dead one would have.
         """
-        return asdict(_admitted(request).get_status(provider_execution_id))
+        with _provider_failures_as_http():
+            return asdict(_admitted(request).get_status(provider_execution_id))
 
     @router.get("/executions/{provider_execution_id}/result")
     def get_result(
@@ -184,7 +263,8 @@ def build_durable_router() -> APIRouter:
         how a result gets attributed to the wrong learner, and it is the difference between a
         correlated retrieval and a plausible one.
         """
-        return asdict(_admitted(request).get_result(provider_execution_id, custom_id))
+        with _provider_failures_as_http():
+            return asdict(_admitted(request).get_result(provider_execution_id, custom_id))
 
     return router
 

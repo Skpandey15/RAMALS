@@ -102,15 +102,26 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
   }
 
   @Override
-  public DurableExecutionSearch search(String customId, String from, String to) {
+  public DurableExecutionSearch search(String customId, String from, String to,
+      int maxInspections, java.util.Collection<String> excludeIds) {
     requireNoTransaction();
     // Every parameter is encoded. custom_id is server-derived rather than caller-supplied, so this
     // is not an injection boundary, but a correlation key travelling in a query string is exactly
     // the sort of value that acquires a colon or a plus sign later.
-    Map<?, ?> response = get("/internal/v1/durable/executions"
-        + "?custom_id=" + encode(customId)
-        + "&created_after=" + encode(from)
-        + "&created_before=" + encode(to));
+    StringBuilder uri = new StringBuilder("/internal/v1/durable/executions")
+        .append("?custom_id=").append(encode(customId))
+        .append("&created_after=").append(encode(from))
+        .append("&created_before=").append(encode(to))
+        .append("&max_inspections=").append(Math.max(1, maxInspections));
+    // The batches an earlier search already proved are not this request's (M2-ADR-020 §3.1). Sent
+    // rather than remembered on the far side, because M2-ADR-017 §1 makes the AI plane stateless:
+    // a cache living there would die with the process and repay its whole cost after every restart.
+    // Bounded by the inspection budget that produced them, so the query string stays small.
+    for (String excluded : excludeIds) {
+      uri.append("&exclude_id=").append(encode(excluded));
+    }
+
+    Map<?, ?> response = get(uri.toString());
     if (response == null) {
       // An empty body is not an empty result set. Reporting ZERO here would let a caller conclude
       // no orphan exists on the strength of a response nobody could read.
@@ -134,6 +145,15 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
         }
       }
     }
+    List<String> newlyExcluded = new ArrayList<>();
+    if (response.get("newly_excluded_ids") instanceof List<?> raw) {
+      for (Object entry : raw) {
+        if (entry != null) {
+          newlyExcluded.add(String.valueOf(entry));
+        }
+      }
+    }
+
     return new DurableExecutionSearch(
         DurableExecutionSearch.Outcome.of(string(response, "outcome")),
         matches,
@@ -141,7 +161,9 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
         intOf(response, "batches_inspected"),
         intOf(response, "batches_uninspectable"),
         intOf(response, "pages_fetched"),
-        string(response, "limit_reached"));
+        string(response, "limit_reached"),
+        intOf(response, "batches_excluded"),
+        newlyExcluded);
   }
 
   @Override
@@ -193,12 +215,45 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
   }
 
   private Map<?, ?> get(String uri) {
-    return restClient.get()
-        .uri(uri)
-        .header("Authorization", "Bearer " + tokenProvider.accessToken())
-        .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
-        .retrieve()
-        .body(Map.class);
+    try {
+      return restClient.get()
+          .uri(uri)
+          .header("Authorization", "Bearer " + tokenProvider.accessToken())
+          .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
+          .retrieve()
+          .body(Map.class);
+    } catch (RestClientResponseException failed) {
+      // A rate limit is not an outage and must not be retried like one (M2-ADR-020 §7). Every other
+      // status keeps the behaviour it had: it reaches the caller as a RuntimeException, says
+      // nothing about whether an orphan exists, and is therefore never terminal on its own.
+      if (failed.getStatusCode().value() == 429) {
+        throw new DurableExecutionRateLimitedException(
+            "the provider plane reported a rate limit", retryAfterMillis(failed));
+      }
+      throw failed;
+    }
+  }
+
+  /**
+   * The provider's own {@code Retry-After}, in milliseconds, or null if it did not say.
+   *
+   * <p>Seconds only. The HTTP-date form is legal and deliberately not parsed: it is vanishingly rare
+   * from this provider, and the caller's exponential backoff is a correct fallback, so parsing it
+   * would add a date-skew bug to save nothing.
+   */
+  private static Long retryAfterMillis(RestClientResponseException failed) {
+    String header = failed.getResponseHeaders() == null
+        ? null
+        : failed.getResponseHeaders().getFirst("Retry-After");
+    if (header == null || header.isBlank()) {
+      return null;
+    }
+    try {
+      long seconds = Long.parseLong(header.trim());
+      return seconds < 0 ? null : seconds * 1000L;
+    } catch (NumberFormatException notSeconds) {
+      return null;
+    }
   }
 
   private static void requireNoTransaction() {

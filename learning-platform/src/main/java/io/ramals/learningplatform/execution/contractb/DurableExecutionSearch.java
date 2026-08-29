@@ -16,6 +16,10 @@ import java.util.List;
  *
  * @param uninspectable candidates inside the window that could not be correlated at all
  * @param limitReached which bound stopped the search — {@code pages} or {@code inspections} — or null
+ * @param excluded candidates skipped because an earlier search already proved they do not carry the
+ *     key, counted as covered rather than as uninspectable (M2-ADR-020 §3.1)
+ * @param newlyExcluded batches this search has just proved do not carry the key, for the caller to
+ *     record durably — ended and fully streamed only, never an uninspectable one
  */
 public record DurableExecutionSearch(
     Outcome outcome,
@@ -24,10 +28,26 @@ public record DurableExecutionSearch(
     int batchesInspected,
     int uninspectable,
     int pagesFetched,
-    String limitReached) {
+    String limitReached,
+    int excluded,
+    List<String> newlyExcluded) {
 
   public DurableExecutionSearch {
     matches = List.copyOf(matches);
+    newlyExcluded = List.copyOf(newlyExcluded);
+  }
+
+  /**
+   * The shape before M2-ADR-020 §3.1, for callers with nothing memoised.
+   *
+   * <p>Kept so that a search with no exclusions reads as one, rather than as a search with two
+   * empty accounting fields bolted on.
+   */
+  public DurableExecutionSearch(Outcome outcome, List<DiscoveredExecution> matches,
+      int batchesListed, int batchesInspected, int uninspectable, int pagesFetched,
+      String limitReached) {
+    this(outcome, matches, batchesListed, batchesInspected, uninspectable, pagesFetched,
+        limitReached, 0, List.of());
   }
 
   /** What the search actually established. */

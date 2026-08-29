@@ -1,8 +1,11 @@
 package io.ramals.learningplatform.execution.contractb;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -365,6 +368,101 @@ public class ProviderExecutionRepository {
         RETURNING attempts
         """, Integer.class, backoffMillis, requestId);
     return attempts.isEmpty() ? 0 : attempts.get(0);
+  }
+
+  /**
+   * Records an attempt and backs the next one off exponentially, with jitter (M2-ADR-020 §7).
+   *
+   * <p>The delay is computed in SQL from the {@code attempts} already on the row, so one statement
+   * both reads the count and acts on it — reading it first and updating after would let two workers
+   * compute the same delay from the same stale count.
+   *
+   * <p><strong>Capped, and the cap is not decoration.</strong> Doubling from thirty seconds passes
+   * twenty-six hours in about a dozen attempts, so an uncapped backoff would quietly stop retrying
+   * long before the horizon that is supposed to end the search — the execution would sit
+   * non-terminal, unexamined, until something else noticed. The cap keeps recovery meaningful for
+   * the whole window.
+   *
+   * <p>The exponent is clamped before it is applied. {@code 2^attempts} overflows a bigint at
+   * sixty-three attempts, and an execution retried that often is exactly the one that must not
+   * suddenly get a negative delay.
+   *
+   * @param jitterMillis a caller-supplied random spread, so a fleet that backed off together does
+   *     not return to the provider together
+   */
+  public int recordReconciliationAttempt(
+      String requestId, long baseMillis, long maxMillis, long jitterMillis) {
+    List<Integer> attempts = jdbc.queryForList("""
+        UPDATE core.ai_reconciliation_work
+           SET attempts = attempts + 1,
+               next_attempt_at = CURRENT_TIMESTAMP + ((
+                 LEAST(?::bigint, (?::bigint) * (2 ^ LEAST(attempts, 16))::bigint) + ?::bigint
+               ) * INTERVAL '1 millisecond'),
+               lease_owner = NULL,
+               lease_expires_at = NULL
+         WHERE request_id = ?
+        RETURNING attempts
+        """, Integer.class, maxMillis, baseMillis, jitterMillis, requestId);
+    return attempts.isEmpty() ? 0 : attempts.get(0);
+  }
+
+  /**
+   * Defers the next attempt by an explicit delay, without touching the attempt count.
+   *
+   * <p>For a provider-supplied {@code Retry-After}. The count is deliberately left alone: being told
+   * to wait is not evidence that this execution is failing, and inflating its backoff for a
+   * condition caused by unrelated traffic would penalise the wrong row.
+   */
+  public void deferReconciliation(String requestId, long delayMillis) {
+    jdbc.update("""
+        UPDATE core.ai_reconciliation_work
+           SET next_attempt_at = CURRENT_TIMESTAMP + (? * INTERVAL '1 millisecond'),
+               lease_owner = NULL,
+               lease_expires_at = NULL
+         WHERE request_id = ?
+        """, delayMillis, requestId);
+  }
+
+  /**
+   * Batches already proven not to carry this request's key (M2-ADR-020 §3.1).
+   *
+   * <p>Handed to the next search so it does not open them again. This is the whole of the memo's
+   * read path: coverage established once is coverage, and re-establishing it every attempt is what
+   * made enumeration exceed the provider's request-rate limit.
+   */
+  public Set<String> excludedFromSearch(String requestId) {
+    return new LinkedHashSet<>(jdbc.queryForList(
+        "SELECT provider_execution_id FROM core.ai_enumeration_no_match WHERE request_id = ?",
+        String.class, requestId));
+  }
+
+  /**
+   * Records batches newly proven not to carry this request's key.
+   *
+   * <p>The caller must pass only batches that had <strong>ended</strong> and whose results streamed
+   * to <strong>completion</strong>. That precondition is the entire safety argument for the memo: a
+   * recorded negative counts as coverage forever, so memoising a candidate nobody actually read
+   * would let a later search report {@code ZERO} — which is terminal — over a batch that might have
+   * been the orphan.
+   *
+   * <p>{@code ON CONFLICT DO NOTHING} because two workers may prove the same negative concurrently,
+   * and the second one is not news.
+   *
+   * @return how many rows were newly recorded
+   */
+  public int recordSearchExclusions(String requestId, String customId, Collection<String> ids) {
+    int recorded = 0;
+    for (String providerExecutionId : ids) {
+      if (providerExecutionId == null || providerExecutionId.isBlank()) {
+        continue;
+      }
+      recorded += jdbc.update("""
+          INSERT INTO core.ai_enumeration_no_match (request_id, provider_execution_id, custom_id)
+          VALUES (?, ?, ?)
+          ON CONFLICT (request_id, provider_execution_id) DO NOTHING
+          """, requestId, providerExecutionId, customId);
+    }
+    return recorded;
   }
 
   /** Removes the work item once its execution is terminal. */

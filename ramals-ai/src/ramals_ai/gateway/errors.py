@@ -86,11 +86,21 @@ class GatewayError(Exception):
     mean echoing a minimized learner context into an exception message and from there into a log.
     """
 
-    def __init__(self, code: GatewayErrorCode, detail: str) -> None:
+    def __init__(
+        self, code: GatewayErrorCode, detail: str, retry_after_ms: int | None = None
+    ) -> None:
         super().__init__(f"{code}: {detail}")
         self.code = code
         self.detail = detail
         self.retryable, self.fallback_eligible = _POLICY[code]
+        self.retry_after_ms = retry_after_ms
+        """How long the provider asked the caller to wait, when it said so.
+
+        Optional and almost always ``None``. It carries a ``Retry-After`` from a rate limit, which
+        is the one piece of a provider's error response worth keeping: the provider knows when it
+        will serve again and the caller does not. Everything else about the response is still
+        dropped, because provider error bodies routinely echo the request.
+        """
 
     @property
     def is_governance_refusal(self) -> bool:

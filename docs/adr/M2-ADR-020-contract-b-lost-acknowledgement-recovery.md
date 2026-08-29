@@ -1,9 +1,11 @@
 # M2-ADR-020: Contract B lost-acknowledgement recovery by `custom_id` enumeration
 
-- **Status:** Accepted — 2026-08-28.
-- **Decides:** the search window, the pagination and cost bounds, the zero/one/multiple-match
-  semantics, and the duplicate audit semantics for recovering a provider execution whose
-  acknowledgement was lost.
+- **Status:** Accepted — 2026-08-28. **Amended — 2026-08-29** (§2, §3, new §7) after the W2
+  real-provider qualification found that the bounds below govern the size of one search and say
+  nothing about the *rate* of repeated searches. See [Amendment 1](#amendment-1--request-rate-2026-08-29).
+- **Decides:** the search window, the pagination and cost bounds, the request-rate discipline, the
+  zero/one/multiple-match semantics, and the duplicate audit semantics for recovering a provider
+  execution whose acknowledgement was lost.
 - **Relates to:** M2-ADR-016 §3 (correlation by `custom_id`, never by position), M2-ADR-017 §4/§5,
   the [Contract B Definition of Done](../release/mvp2-contract-b-definition-of-done.md) criteria 3
   and 8, and the [MVP-2 closure assessment](../release/mvp2-closure-assessment.md) work item W1.
@@ -72,10 +74,17 @@ So the search reports four outcomes, not three:
 
 | Outcome | Meaning |
 | --- | --- |
-| `ZERO` | Every candidate in the window was inspected; none carried the `custom_id`. |
-| `ONE` | Exactly one provider execution carried it. |
+| `ZERO` | Every candidate in the window has been inspected — in this search or in an earlier search for this request whose negative result is durably recorded under §3.1 — and none carried the `custom_id`. |
+| `ONE` | Exactly one provider execution carried it, and the search was otherwise complete. |
 | `MULTIPLE` | More than one did. |
-| `INCONCLUSIVE` | Some candidate could not be inspected — still processing, results unreadable, or a bound was hit. |
+| `INCONCLUSIVE` | Some candidate could not be inspected — still processing, results unreadable, a bound was hit, or the pass's inspection budget was spent before the window was covered. |
+
+**Coverage is cumulative across searches for one request; it is not re-established from scratch each
+time.** That is what makes §3.2's budget safe rather than a livelock, and it is sound only because a
+recorded negative is permanent — see §3.1.
+
+`MULTIPLE` takes precedence over every other outcome, including over an incomplete search: two is
+already more than one, and no amount of further looking can reduce it.
 
 `INCONCLUSIVE` is **not** an error and **not** a terminal answer. It means try again later.
 
@@ -91,6 +100,9 @@ that is still uninspectable is unreadable for some other reason and waiting long
   where we looked and there was nothing, and one where we looked and could not see.
 
 ### 3. Pagination and cost bounds
+
+These bound the size of **one** search. §3.1 and §3.2 bound the cost of **repeating** it, which is
+the part the original version of this ADR left unbounded.
 
 Enumeration is paged and every inspection is a network call, so an unbounded search is a way to spend
 an afternoon and a rate limit on one lost acknowledgement.
@@ -108,6 +120,71 @@ Pagination walks **backwards from newest** using `before_id`, and stops as soon 
 are all older than the window. Newest-first because a lost acknowledgement is recovered soon after it
 happens; a search that started at the beginning of the workspace's history would page through every
 batch ever created to reach the relevant hour.
+
+> **Correction, 2026-08-29.** The `before_id` cursor described above was wrong in practice and is no
+> longer used. `before_id` returns the page *immediately before* an object, which under newest-first
+> ordering walks toward **newer** items; the search re-inspected batches it had already seen and
+> reported a false `MULTIPLE` for a single real execution. The SDK's own auto-pagination is used
+> instead, and matches are keyed by batch id so a repeated listing cannot manufacture a duplicate.
+> Newest-first remains correct; only the manual cursor was wrong.
+
+#### 3.1 The durable negative memo
+
+**When a batch has ended and its results have been streamed to completion without carrying the
+`custom_id`, that fact is recorded durably and the batch is never opened again for that request.**
+
+The cost this removes is the dominant one. Correlation costs one results fetch per candidate, the
+search holds no state between attempts, and an `INCONCLUSIVE` search is retried — so a window of
+forty-five candidates was re-opening the same forty-five batches every retry until the horizon. That
+is what breached the provider's request-rate limit during W2.
+
+Recording the negative is sound because **an ended batch's results are immutable**. A batch that did
+not carry the key when fully read will never carry it later, so skipping it is not a shorter search;
+it is the same search, not repeated. This is the one and only reason the memo does not weaken §2, and
+it is why the precondition is narrow:
+
+**A negative may be recorded only for a batch that had ended and whose results stream was read to
+completion.** Never for a candidate that was still processing, whose results were unreadable, whose
+stream failed part-way, or that was skipped because a bound or budget was reached. Those remain
+*uninspectable* and must be retried, exactly as before. Memoising any of them would fail open in the
+precise way §2 exists to prevent: it would let a search report `ZERO` over a candidate nobody ever
+read, and a false `ZERO` is terminal.
+
+**The memo is not evidence and must never be confused with it.** It holds no usage, no cost and no
+outcome, and it never enters `core.ai_provider_execution_observation`. An observation means *"a
+provider execution attributable to this request"* and feeds Definition-of-Done criterion 8; a memo
+entry means *"this batch is not this request's"*. Recording the latter as the former would corrupt
+the cost evidence with executions that belong to other requests. They live in separate tables, added
+by `V038` and `V039` respectively, and the memo is disposable — it may be deleted at any time, at the
+cost of one repeated inspection and nothing else.
+
+#### 3.2 The inspection budget is per reconciliation pass, not per search
+
+**A reconciliation pass carries a total inspection budget, spent across every orphan it handles.**
+Default **15**. The budget is delivered to a search as its inspection bound, so a pass that has
+already spent its budget performs no further enumeration and its remaining orphans wait for the next
+pass.
+
+Per pass rather than per search because per-search bounds do not compose: a pass leasing twenty
+orphans at fifty inspections each authorises a thousand provider calls, which is the same unbounded
+behaviour one search's bound was meant to prevent.
+
+**Budget exhaustion yields `INCONCLUSIVE`, never `ZERO` and never `ONE`** — the same rule as any
+other bound, for the same reason. `MULTIPLE` still takes precedence: a duplicate already proven is
+not unproven by running out of budget.
+
+**15 is a load-control default, not a proof.** It is not a guarantee that the provider's
+organization-wide limit cannot be exceeded, and must never be described as one. Other traffic shares
+that limit — Contract A submissions, other workspaces, other processes — so §7 still applies and a
+429 remains possible however this is tuned. The number is chosen to leave headroom, not to be a
+ceiling: at a thirty-second cadence it is roughly thirty inspections a minute against an observed
+limit of fifty requests a minute.
+
+**The budget and the memo are one mechanism and must ship together.** A budget without the memo does
+not slow a search down, it prevents it from ever finishing: the same first fifteen candidates would
+be re-inspected every pass and the window would never be covered, turning a recoverable execution
+into a horizon-exhausted one twenty-six hours later. The memo is what lets a bounded pass *resume*
+rather than restart.
 
 ### 4. Zero / one / multiple semantics
 
@@ -154,6 +231,44 @@ Nothing in this ADR gives a recovery path a reason to call the provider's create
 reads; adoption writes to RAMALS' own row. The rule from M2-ADR-016 §4 is unchanged and this
 mechanism exists precisely so that a lost acknowledgement has an answer that is not a resubmission.
 
+### 7. Request-rate discipline
+
+Enumeration reads a shared, rate-limited provider. §3 bounds what one search spends; this section
+bounds how insistently a failing one is repeated.
+
+**A rate limit is classified distinctly from an outage.** They call for opposite responses — an
+outage may be retried on the same cadence, a rate limit must not be — and until this amendment both
+arrived at the recovery path as an indistinguishable failure and were retried identically. The
+provider's 429 is carried as `PROVIDER_RATE_LIMITED` and surfaced across the AI-plane boundary as
+HTTP 429, not as a 500. A 500 says "this service is broken"; the truthful answer is "you are asking
+too quickly", and the two send an operator to completely different places.
+
+**`Retry-After` is honoured when the provider supplies it**, clamped to the backoff bounds below. The
+provider knows when it will serve again and RAMALS does not.
+
+**Otherwise retries back off exponentially with jitter**, computed from the attempt count already
+held in `core.ai_reconciliation_work`. Jitter because a fleet that backs off in lockstep re-converges
+on the provider at the same instant, which is a slower way to be rate-limited.
+
+**The backoff is capped.** An uncapped exponential quietly abandons the execution: doubling from
+thirty seconds reaches the twenty-six-hour horizon in about a dozen attempts, so the search would
+stop being retried long before the horizon that is supposed to end it. The cap keeps recovery
+meaningful for the whole window.
+
+**A pass that is rate-limited stops.** The limit is organization-wide, so continuing to the next
+orphan in the same pass is asking the same question of the same exhausted quota — it cannot succeed
+and it delays recovery for everyone. The pass ends and the next one starts after the backoff.
+
+**Fixed short-interval polling is not a solution and must not become one.** The seventy-five-second
+pacing used during W2 qualification was a harness workaround that made one run complete. It bounds
+nothing: it does not scale with the number of orphans, does not respond to the provider, and stops
+working the moment a pass holds more than one orphan.
+
+**The budget is per process.** Two reconciliation workers are two budgets and roughly twice the
+request rate. This is stated rather than solved: a genuinely global budget needs shared coordination
+state, which is disproportionate to MVP-2 and would be a distributed rate limiter rather than a
+recovery mechanism. Deploying more than one reconciliation worker is a revisit trigger.
+
 ## Alternatives rejected
 
 - **Correlating from batch list metadata.** Impossible, not merely unwise: the listing carries no
@@ -169,6 +284,23 @@ mechanism exists precisely so that a lost acknowledgement has an answer that is 
   unique index that makes a duplicate detectable, in the name of recording duplicates.
 - **Recording duplicates only in the transition ledger.** Auditable but not costed: `reason` is a
   64-character code, not a place for usage, and criterion 8 asks for the tokens.
+- **Narrowing the correlation window to reduce cost.** Directly trades the guarantee the window
+  exists to provide. The skew is what makes the orphan certain to be inside the searched range;
+  narrowing it buys API calls with the risk of a false `ZERO`, which is *terminal* and silently
+  converts an undetected duplicate into a closed case. Rejected on the same principle as treating an
+  uninspectable candidate as a non-match: both are cheap readings that fail open.
+- **A dynamic window that starts narrow and widens on retry.** Implementable, but it must never
+  report `ZERO` before the full window has been covered — which needs exactly the cumulative-coverage
+  bookkeeping §3.1 already provides, for less benefit and one more way to conclude too early.
+- **A global or distributed request-rate limiter.** A shared token bucket across a stateless AI plane
+  needs coordination state and becomes infrastructure with its own failure modes. The per-pass budget
+  is a single integer that bounds the same thing for the deployment MVP-2 actually has, and §7 states
+  the limit of that honestly rather than implying a guarantee.
+- **Memoising uninspectable candidates.** The cheapest possible memo and a fail-open: it would let a
+  later search claim complete coverage of a batch nobody ever read.
+- **Recording negatives in `core.ai_provider_execution_observation`.** Would put executions belonging
+  to *other* requests into the table that answers "what did this request cost", corrupting criterion
+  8's evidence to save one table.
 
 ## Consequences
 
@@ -196,3 +328,33 @@ mechanism exists precisely so that a lost acknowledgement has an answer that is 
   window or the bound no longer matches the traffic.
 - A rule for choosing among multiple matches is ever proposed — it would need its own ADR, and would
   have to explain what makes the choice correct.
+- **More than one reconciliation worker is deployed.** The per-pass budget is per process, so the
+  aggregate request rate multiplies and §7's honesty about that becomes a live problem.
+- **The number of batches created between a submission and its recovery routinely approaches the page
+  bound.** Listing walks from newest and counts everything it passes, so a busy workspace pays a
+  listing cost the memo does not reduce — §3.1 removes repeated *inspection*, not repeated *listing*.
+- **The observed provider request-rate limit changes**, which would invalidate the sizing behind
+  §3.2's default rather than the mechanism itself.
+
+## Amendment 1 — request rate (2026-08-29)
+
+W2 qualified this mechanism against the real Anthropic API and found five defects. Four were coding
+errors and were fixed. The fifth was this ADR's:
+
+```
+anthropic.RateLimitError: 429 — exceeds your organization's rate limit of
+50 requests per minute (limit_type: Message Batches API)
+```
+
+§3 bounded pages and inspections **per search** and said nothing about repeating a search. Because a
+search held no state, every retry repaid its full cost: one orphan in a forty-five-candidate window
+cost about forty-six calls per attempt and was retried every thirty seconds — roughly ninety calls a
+minute against a fifty-a-minute limit, from a single lost acknowledgement. A full pass of twenty
+orphans authorised around nine hundred.
+
+The amendment adds §3.1 (durable negative memo), §3.2 (per-pass inspection budget) and §7
+(request-rate discipline), and restates `ZERO` in §2 as cumulative coverage. **No correctness
+guarantee is relaxed:** the window is unchanged at ±1 hour, the four outcomes keep their meanings,
+`MULTIPLE` keeps its precedence, an uninspectable candidate is still never a non-match, and no
+recovery path submits. The Definition of Done is unchanged and no criterion becomes easier to
+satisfy.

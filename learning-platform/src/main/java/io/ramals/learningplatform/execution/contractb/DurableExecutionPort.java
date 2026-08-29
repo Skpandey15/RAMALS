@@ -43,7 +43,19 @@ public interface DurableExecutionPort {
    * @param from window start, ISO-8601
    * @param to window end, ISO-8601
    */
-  DurableExecutionSearch search(String customId, String from, String to);
+  DurableExecutionSearch search(String customId, String from, String to,
+      int maxInspections, java.util.Collection<String> excludeIds);
+
+  /**
+   * Searches with the ADR's own bounds and nothing already ruled out.
+   *
+   * <p>For callers that hold no memo — chiefly tests. Production goes through the overload above,
+   * because a pass that does not spend a shared budget is the unbounded behaviour M2-ADR-020 §3.2
+   * exists to prevent.
+   */
+  default DurableExecutionSearch search(String customId, String from, String to) {
+    return search(customId, from, to, 50, java.util.List.of());
+  }
 
   /** Reads authoritative status for an execution this process may not have started. */
   DurableStatusSnapshot status(String providerExecutionId);

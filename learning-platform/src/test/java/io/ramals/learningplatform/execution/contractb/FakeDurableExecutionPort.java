@@ -32,6 +32,14 @@ public final class FakeDurableExecutionPort implements DurableExecutionPort {
   private RuntimeException statusFailure;
   private RuntimeException resultFailure;
 
+  private List<FakeBatch> window;
+
+  /** What the last search was told had already been ruled out. Assert on it. */
+  List<String> lastExcludeIds = List.of();
+
+  /** The inspection allowance the last search was given. */
+  int lastMaxInspections = -1;
+
   FakeDurableExecutionPort providerExecutionId(String id) {
     this.providerExecutionId = id;
     return this;
@@ -133,13 +141,111 @@ public final class FakeDurableExecutionPort implements DurableExecutionPort {
     return this;
   }
 
+  /**
+   * A batch sitting in the correlation window.
+   *
+   * @param ended whether its results can be read at all — an unfinished batch is uninspectable,
+   *     which is emphatically not "does not carry the key"
+   */
+  record FakeBatch(String id, boolean ended, boolean carriesKey) {
+
+    static FakeBatch ended(String id) {
+      return new FakeBatch(id, true, false);
+    }
+
+    static FakeBatch carrying(String id) {
+      return new FakeBatch(id, true, true);
+    }
+
+    static FakeBatch inProgress(String id) {
+      return new FakeBatch(id, false, false);
+    }
+  }
+
+  /**
+   * Scripts a window of candidates instead of a canned outcome.
+   *
+   * <p>The fake then honours exclusions and the inspection budget the way the adapter does, which is
+   * what makes a test about <em>cumulative</em> coverage mean anything: a canned outcome would
+   * report {@code ZERO} however little was actually inspected, and the property under test is
+   * precisely that it does not.
+   *
+   * <p>The outcome rules here deliberately mirror {@code anthropic_batches_adapter.py}. The Python
+   * unit tests remain the authority on them — a fake that agreed with an assumption rather than with
+   * the implementation is how W2 shipped three defects — and this exists to exercise the wiring
+   * around them, not to re-decide them.
+   */
+  FakeDurableExecutionPort withWindow(FakeBatch... batches) {
+    this.window = List.of(batches);
+    return this;
+  }
+
+  /** The provider refuses because it is being asked too often. */
+  FakeDurableExecutionPort searchRateLimited(Long retryAfterMillis) {
+    this.searchFailure =
+        new DurableExecutionRateLimitedException("scripted rate limit", retryAfterMillis);
+    return this;
+  }
+
   @Override
-  public DurableExecutionSearch search(String customId, String from, String to) {
+  public DurableExecutionSearch search(String customId, String from, String to,
+      int maxInspections, java.util.Collection<String> excludeIds) {
     searchCalls.incrementAndGet();
+    lastExcludeIds = List.copyOf(excludeIds);
+    lastMaxInspections = maxInspections;
     if (searchFailure != null) {
       throw searchFailure;
     }
-    return search;
+    if (window == null) {
+      return search;
+    }
+
+    List<DiscoveredExecution> matches = new ArrayList<>();
+    List<String> newlyExcluded = new ArrayList<>();
+    int inspected = 0;
+    int uninspectable = 0;
+    int excluded = 0;
+    String limitReached = null;
+
+    for (FakeBatch batch : window) {
+      if (lastExcludeIds.contains(batch.id())) {
+        // Covered by an earlier search, not re-opened. Counted as coverage, never as a candidate
+        // this search could not read.
+        excluded++;
+        continue;
+      }
+      if (!batch.ended()) {
+        uninspectable++;
+        continue;
+      }
+      if (inspected >= maxInspections) {
+        limitReached = "inspections";
+        break;
+      }
+      inspected++;
+      if (batch.carriesKey()) {
+        matches.add(new DiscoveredExecution(batch.id(), customId, "succeeded", 10, 20, 0,
+            null, null, "ended"));
+      } else {
+        // Ended, read to the end, key absent. The only case that may be remembered.
+        newlyExcluded.add(batch.id());
+      }
+    }
+
+    boolean incomplete = uninspectable > 0 || limitReached != null;
+    DurableExecutionSearch.Outcome outcome;
+    if (matches.size() > 1) {
+      outcome = DurableExecutionSearch.Outcome.MULTIPLE;
+    } else if (incomplete) {
+      outcome = DurableExecutionSearch.Outcome.INCONCLUSIVE;
+    } else if (matches.size() == 1) {
+      outcome = DurableExecutionSearch.Outcome.ONE;
+    } else {
+      outcome = DurableExecutionSearch.Outcome.ZERO;
+    }
+
+    return new DurableExecutionSearch(outcome, matches, window.size(), inspected, uninspectable,
+        1, limitReached, excluded, newlyExcluded);
   }
 
   @Override
