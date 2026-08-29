@@ -205,21 +205,33 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
   }
 
   private Map<?, ?> post(String uri, Map<String, Object> body) {
-    return restClient.post()
-        .uri(uri)
-        .header("Authorization", "Bearer " + tokenProvider.accessToken())
-        .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
+    return correlated(restClient.post().uri(uri))
         .body(body)
         .retrieve()
         .body(Map.class);
   }
 
+  /**
+   * Adds workload identity, and the interaction id only when there is one.
+   *
+   * <p>Sending an empty header is strictly worse than sending none. The AI plane accepts a missing
+   * correlation and generates one; it rejects an empty one as malformed, which is how a thread with
+   * no MDC turned every Contract B call into a 400. Omitting is the contract the AI plane actually
+   * defines, and it keeps this transport from inventing identifiers — establishing correlation is
+   * the caller's job, and the reconciliation worker now does it per execution.
+   */
+  private <T extends org.springframework.web.client.RestClient.RequestHeadersSpec<T>> T correlated(
+      org.springframework.web.client.RestClient.RequestHeadersSpec<T> spec) {
+    T withIdentity = spec.header("Authorization", "Bearer " + tokenProvider.accessToken());
+    String interactionId = CorrelationContext.currentInteractionId();
+    return interactionId == null || interactionId.isBlank()
+        ? withIdentity
+        : withIdentity.header(CorrelationHeaders.INTERACTION_ID, interactionId);
+  }
+
   private Map<?, ?> get(String uri) {
     try {
-      return restClient.get()
-          .uri(uri)
-          .header("Authorization", "Bearer " + tokenProvider.accessToken())
-          .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
+      return correlated(restClient.get().uri(uri))
           .retrieve()
           .body(Map.class);
     } catch (RestClientResponseException failed) {

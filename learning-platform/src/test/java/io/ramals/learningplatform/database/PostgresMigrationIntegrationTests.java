@@ -82,10 +82,10 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 39 with V039 (Contract B enumeration no-match memo). Asserting the count
+    // 40 with V040 (Contract B execution correlation). Asserting the count
     // rather than merely that the upgrade succeeds is what makes an accidentally unapplied
     // migration visible -- it caught V029 the first time it ran.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(39);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(40);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 

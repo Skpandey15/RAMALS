@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.execution.contractb;
 
 import io.ramals.learningplatform.execution.crypto.ResultEncryptionKeyUnavailableException;
+import io.ramals.learningplatform.observability.CorrelationContext;
 import java.time.Instant;
 import java.util.Set;
 import java.util.Optional;
@@ -70,8 +71,11 @@ public class ContractBExecutionService {
    */
   public boolean admit(String requestId, String idempotencyKey,
       String provider, String model, String modelRoute) {
-    boolean admitted =
-        executions.admit(requestId, idempotencyKey, provider, model, modelRoute);
+    // Captured now, while a request is still on this thread. Reconciliation runs later on a
+    // scheduler with nothing behind it, and this is the only moment the originating correlation
+    // exists to be recorded (V040).
+    boolean admitted = executions.admit(requestId, idempotencyKey, provider, model, modelRoute,
+        CorrelationContext.currentInteractionId(), CorrelationContext.currentTraceId());
     if (admitted) {
       ledger.record(requestId, null, DurableExecutionState.ADMITTED, "ADMITTER", 0L, "ADMITTED");
     }

@@ -1,5 +1,7 @@
 package io.ramals.learningplatform.execution.contractb;
 
+import io.ramals.learningplatform.observability.CorrelationContext;
+import io.ramals.learningplatform.observability.UuidV7;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -82,7 +84,11 @@ public class ContractBReconciliationWorker {
         InspectionBudget.of(properties.getReconciliation().getInspectionBudgetPerPass());
 
     for (String requestId : due) {
-      try {
+      // Correlation is established per execution, and it has to be established at all: the AI plane
+      // accepts a *missing* interaction header and generates one, but rejects an empty one with 400.
+      // A scheduler thread carries no MDC, so before this every recovery call sent "" and failed --
+      // the durable path could not reach the provider plane at all.
+      try (CorrelationContext.Scope ignored = correlationFor(requestId)) {
         DurableExecutionState state = lifecycle.reconcile(requestId, budget);
         if (!state.terminal()) {
           backOff(requestId);
@@ -105,6 +111,31 @@ public class ContractBReconciliationWorker {
         backOff(requestId);
       }
     }
+  }
+
+  /**
+   * The correlation to run one execution under.
+   *
+   * <p><strong>Per execution, not per pass</strong>, and that follows the platform rather than
+   * taste. An {@code interactionId} names one logical learner interaction — {@code V007} records
+   * evidence provenance by it, {@code V012} tracks a session by it — and {@code V025}'s outbox
+   * persists one per work item so {@code AgentWorkDispatcher} can restore it before dispatching.
+   * A pass is an implementation detail of this worker: it batches whichever unrelated learners'
+   * executions happened to come due together, so a per-pass identifier would file them all under one
+   * interaction and destroy exactly the provenance the field exists to carry.
+   *
+   * <p>The recorded correlation is preferred, so a recovered execution stays reachable from the
+   * request that created it. Where there is none — admitted before {@code V040}, or outside any
+   * request — a fresh canonical UUIDv7 is generated for this attempt. Generated rather than
+   * constant, and generated rather than empty: a constant would merge every orphan in the
+   * deployment into one interaction, and an empty one is the defect being fixed.
+   */
+  private CorrelationContext.Scope correlationFor(String requestId) {
+    String[] recorded = executions.correlationOf(requestId);
+    String interactionId = recorded[0] == null || recorded[0].isBlank()
+        ? UuidV7.generate().toString()
+        : recorded[0];
+    return CorrelationContext.withCorrelation(interactionId, recorded[1]);
   }
 
   /**
