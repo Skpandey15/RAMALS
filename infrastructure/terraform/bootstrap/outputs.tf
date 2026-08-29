@@ -1,5 +1,10 @@
 output "state_bucket" {
-  description = "Put this in environments/dev/backend.tf."
+  description = <<-EOT
+    The remote state bucket. Do NOT paste this into environments/dev/backend.tf -- `bucket` was
+    deliberately removed from that block because this name embeds the AWS account id and the file is
+    tracked. It belongs in the gitignored environments/dev/backend.hcl, or in an `init
+    -backend-config="bucket=..."` argument. See docs/architecture/aws-dev-foundation.md.
+  EOT
   value       = aws_s3_bucket.state.id
 }
 

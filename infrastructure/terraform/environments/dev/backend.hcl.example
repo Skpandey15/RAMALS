@@ -1,0 +1,15 @@
+# Copy to backend.hcl (gitignored) and set the bucket, then:
+#
+#   terraform init -backend-config=backend.hcl
+#
+# The bucket is the `state_bucket` output of infrastructure/terraform/bootstrap. It is always
+# `ramals-tfstate-` followed by the 12-digit AWS account id, so it can also be derived rather than
+# copied:
+#
+#   terraform -chdir=../../bootstrap output -raw state_bucket
+#   aws sts get-caller-identity --query Account --output text
+#
+# Only `bucket` belongs here. key, region, dynamodb_table and encrypt are identical on every machine
+# and live in backend.tf where they can be reviewed.
+
+bucket = "ramals-tfstate-000000000000"

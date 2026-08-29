@@ -37,7 +37,17 @@ infrastructure/terraform/**/.terraform/
 infrastructure/terraform/**/*.tfstate
 infrastructure/terraform/**/*.tfstate.*
 infrastructure/terraform/**/*.tfvars
+# Both spellings. The bare name caught a file called exactly `tfplan` and nothing else, so
+# `terraform plan -out=dev.tfplan` -- the form the runbook actually tells you to use -- produced a
+# committable file. A saved plan embeds every variable value and every resolved attribute, which is
+# the same reason state is ignored two lines up.
 infrastructure/terraform/**/tfplan
+infrastructure/terraform/**/*.tfplan
+
+# Backend configuration carries the state bucket name, which embeds the AWS account id. The name is
+# not a credential, but it is an account identifier with no reason to be in a public repository, and
+# `backend.hcl.example` beside it says what to write without saying the account.
+infrastructure/terraform/**/backend.hcl
 # Module lock files are an artefact of CI validating each module standalone; the authoritative pins
 # live in bootstrap/ and environments/, which are the directories anyone actually runs.
 infrastructure/terraform/modules/**/.terraform.lock.hcl
@@ -47,6 +57,7 @@ performance/environment/terraform/*.tfstate
 performance/environment/terraform/*.tfstate.*
 performance/environment/terraform/*.tfvars
 performance/environment/terraform/tfplan
+performance/environment/terraform/*.tfplan
 #
 # .terraform.lock.hcl is deliberately NOT ignored. It pins the provider version and its hashes,
 # which is what makes `terraform init` resolve the same provider on another machine -- the same

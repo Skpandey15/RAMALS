@@ -99,8 +99,40 @@ describing an estate that never existed.
 ```bash
 cd infrastructure/terraform/bootstrap
 terraform init && terraform apply
-# then put the bucket name into environments/dev/backend.tf
+terraform output -raw state_bucket        # ramals-tfstate-<account-id>
 ```
+
+### Initialising DEV against that state
+
+`environments/dev/backend.tf` is a **partial** backend: `key`, `region`, `dynamodb_table` and
+`encrypt` are the same on every machine and are committed; `bucket` is not, because its name embeds
+the AWS account id. So `bucket` is supplied at init time, and `init` fails rather than guessing if
+it is missing.
+
+Locally, once per checkout:
+
+```bash
+cd infrastructure/terraform/environments/dev
+cp backend.hcl.example backend.hcl
+# set bucket = the state_bucket output above; backend.hcl is gitignored
+terraform init -backend-config=backend.hcl
+```
+
+In CI there is no file to copy, and none is needed — the name is derivable from the account the
+workflow has already assumed a role into, which makes it deterministic rather than configured:
+
+```bash
+terraform init -input=false \
+  -backend-config="bucket=ramals-tfstate-$(aws sts get-caller-identity --query Account --output text)"
+```
+
+That form takes no repository variable and no secret, so the plan and deploy jobs cannot drift from
+each other or from a developer's machine: all three resolve the same bucket from the same account.
+A workflow that assumed the wrong account would fail to find the state rather than quietly
+initialising a second one.
+
+If `init` reports a backend change after switching to this layout, `-reconfigure` re-reads the
+backend block without attempting to migrate state.
 
 ## Secret injection
 
@@ -249,6 +281,36 @@ RAMALS_AI_MODEL_ROUTE=ci-fake
 The `provider-api-key` secret container exists but is expected to hold a placeholder: the container
 reads it at startup, and an empty secret is a clearer failure than a missing one. **No provider
 credential is committed anywhere in this repository.**
+
+### Proving it, and what does not prove it
+
+There were two claims here and only one of them was evidence. A `contract_b_state` **output** used
+to report `enabled/reconciliation/purge = false` — but it was a hardcoded literal in
+`environments/dev/outputs.tf`, not read from the task definition it appeared to describe. It would
+have kept printing `false` after someone set the flags to `true`, which makes it worse than absent:
+a control that cannot fail is one people stop checking. It has been removed.
+
+What actually holds, at three different times:
+
+| When | Check | What it proves |
+|---|---|---|
+| Every push | `contract-b and secret guardrails` in `terraform-ci.yml` greps `modules/compute/main.tf` | The declaration says `false` |
+| Plan | *nothing* | `container_definitions` is unknown at plan time — it embeds secret ARNs resolved on apply — so the flags cannot be read from a plan. Do not claim otherwise |
+| **Post-apply** | `aws ecs describe-task-definition` | **The deployed runtime state.** This is the only runtime proof |
+
+```bash
+aws ecs describe-task-definition \
+  --task-definition ramals-dev-learning-platform --region ap-south-1 \
+  --query "taskDefinition.containerDefinitions[0].environment[?starts_with(name,'RAMALS_CONTRACT_B')]"
+
+aws ecs describe-task-definition \
+  --task-definition ramals-dev-ramals-ai --region ap-south-1 \
+  --query "taskDefinition.containerDefinitions[0].environment[?name=='RAMALS_AI_DURABLE_EXECUTION_ENABLED']"
+```
+
+Run both after any apply that touches the compute module, and record the output in the activation
+evidence. Contract B may not be activated in any environment until residual S2 is resolved and
+separately reviewed (`docs/mvp2-contract-b-approval.md`).
 
 `platform_desired_count` is **1**, and that is a correctness note rather than a resilience one:
 the platform hosts the Contract B reconciliation worker, whose inspection budget is per process

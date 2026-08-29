@@ -34,12 +34,3 @@ output "ai_service_discovery_name" {
   description = "How the platform addresses the AI plane. Resolvable only inside the VPC."
   value       = module.compute.ai_service_discovery_name
 }
-
-output "contract_b_state" {
-  description = "Contract B is off in this environment. Stated as an output so it is visible in CI."
-  value = {
-    enabled        = false
-    reconciliation = false
-    purge          = false
-  }
-}
