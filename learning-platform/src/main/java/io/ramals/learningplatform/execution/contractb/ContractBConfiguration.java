@@ -53,7 +53,8 @@ public class ContractBConfiguration {
     }
 
     @Override
-    public DurableExecutionSearch search(String customId, String from, String to) {
+    public DurableExecutionSearch search(String customId, String from, String to,
+        int maxInspections, java.util.Collection<String> excludeIds) {
       throw new IllegalStateException("no durable execution plane is configured");
     }
 

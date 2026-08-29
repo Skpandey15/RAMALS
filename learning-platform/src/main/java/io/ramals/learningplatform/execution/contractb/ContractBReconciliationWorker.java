@@ -2,6 +2,7 @@ package io.ramals.learningplatform.execution.contractb;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -73,22 +74,68 @@ public class ContractBReconciliationWorker {
       return;
     }
 
+    // One allowance for the whole pass, not one per execution (M2-ADR-020 §3.2). Enumeration costs
+    // a provider call per candidate, so a pass leasing twenty orphans at fifty inspections each
+    // would authorise a thousand calls -- the unbounded behaviour a single search's bound was meant
+    // to prevent, reintroduced by the loop around it.
+    InspectionBudget budget =
+        InspectionBudget.of(properties.getReconciliation().getInspectionBudgetPerPass());
+
     for (String requestId : due) {
       try {
-        DurableExecutionState state = lifecycle.reconcile(requestId);
+        DurableExecutionState state = lifecycle.reconcile(requestId, budget);
         if (!state.terminal()) {
-          executions.recordReconciliationAttempt(
-              requestId, properties.getReconciliation().getBackoffMs());
+          backOff(requestId);
         }
+      } catch (DurableExecutionRateLimitedException limited) {
+        // The limit is organization-wide, so the next execution in this pass would ask the same
+        // exhausted quota the same question. Ending the pass is not giving up: it is the only
+        // response that does not make recovery slower for every other execution too (§7).
+        long delay = deferralFor(limited);
+        LOGGER.warn("contract B reconciliation stopped: the provider is rate limiting "
+            + "[requestId={}, retryInMs={}, remainingInPass={}]. The rest of this pass is deferred.",
+            requestId, delay, due.size() - due.indexOf(requestId) - 1);
+        executions.deferReconciliation(requestId, delay);
+        return;
       } catch (RuntimeException failure) {
         // One execution's failure must not end the pass. The others in this batch are unrelated,
         // and a worker that stopped at the first problem would strand them.
         LOGGER.warn("contract B reconciliation failed for one execution [requestId={}, error={}]",
             requestId, failure.getClass().getSimpleName());
-        executions.recordReconciliationAttempt(
-            requestId, properties.getReconciliation().getBackoffMs());
+        backOff(requestId);
       }
     }
+  }
+
+  /**
+   * Pushes the next attempt out exponentially, with jitter and a cap (M2-ADR-020 §7).
+   *
+   * <p>Exponential because a fixed interval spends the same provider quota on the hundredth failed
+   * attempt as on the first, and jittered because a fleet that backs off in lockstep returns to the
+   * provider in lockstep — which is a slower way to be rate limited, not a way to avoid it.
+   */
+  private void backOff(String requestId) {
+    ContractBProperties.Reconciliation settings = properties.getReconciliation();
+    long jitter = settings.getBackoffJitterMs() <= 0
+        ? 0
+        : ThreadLocalRandom.current().nextLong(settings.getBackoffJitterMs());
+    executions.recordReconciliationAttempt(
+        requestId, settings.getBackoffMs(), settings.getMaxBackoffMs(), jitter);
+  }
+
+  /**
+   * How long to wait after a rate limit: what the provider asked for, clamped to the backoff bounds.
+   *
+   * <p>The provider's own figure is preferred because it knows when it will serve again. Clamped
+   * because an unbounded provider-supplied delay should not be able to push a recovery most of the
+   * way to its horizon in a single step, and a zero-second one should not turn into an immediate
+   * retry of the request that was just refused.
+   */
+  private long deferralFor(DurableExecutionRateLimitedException limited) {
+    ContractBProperties.Reconciliation settings = properties.getReconciliation();
+    Long asked = limited.retryAfterMillis();
+    long delay = asked == null ? settings.getBackoffMs() : asked;
+    return Math.clamp(delay, settings.getBackoffMs(), settings.getMaxBackoffMs());
   }
 
   /**
@@ -114,8 +161,9 @@ public class ContractBReconciliationWorker {
    * </ul>
    *
    * <p>This never submits. It only makes an execution visible to reconciliation, which decides the
-   * outcome — and for the second population that decision is always indeterminate, because no
-   * enumeration exists that could establish anything better.
+   * outcome. For the second population that decision used to be indeterminate by necessity; since
+   * M2-ADR-020 it is whatever enumeration by {@code custom_id} establishes — a recovered identity,
+   * a conclusive absence, a duplicate, or an honest "not yet".
    */
   private void recoverOrphans() {
     int batch = properties.getReconciliation().getBatchSize();
@@ -128,8 +176,8 @@ public class ContractBReconciliationWorker {
       for (String requestId : executions.sentWithoutAcknowledgement(
           properties.getReconciliation().getUnacknowledgedGraceMs(), batch)) {
         LOGGER.warn("contract B execution was sent and never acknowledged [requestId={}]. "
-            + "Queuing it to be recorded INDETERMINATE: the provider may hold an execution RAMALS "
-            + "cannot name, and no enumeration exists to recover it.", requestId);
+            + "Queuing it for enumeration by custom_id: the provider may hold an execution RAMALS "
+            + "cannot name, and only a search can establish whether it does.", requestId);
         executions.enqueueReconciliation(requestId);
       }
     } catch (RuntimeException unavailable) {

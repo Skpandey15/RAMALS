@@ -61,6 +61,24 @@ public class ContractBProperties {
      */
     private long searchHorizonMs = 93_600_000;
 
+    /**
+     * The most result inspections one search may perform, whatever budget the pass still holds.
+     *
+     * <p>M2-ADR-020 §3's own bound, made explicit so it cannot be exceeded by configuring a large
+     * pass budget. A window holding more than fifty candidates means the window or the traffic
+     * assumption is wrong, and the honest answer is {@code INCONCLUSIVE} rather than a longer
+     * search.
+     */
+    private int maxInspectionsPerSearch = 50;
+
+    public int getMaxInspectionsPerSearch() {
+      return maxInspectionsPerSearch;
+    }
+
+    public void setMaxInspectionsPerSearch(int maxInspectionsPerSearch) {
+      this.maxInspectionsPerSearch = maxInspectionsPerSearch;
+    }
+
     public long getSearchSkewMs() {
       return searchSkewMs;
     }
@@ -104,8 +122,41 @@ public class ContractBProperties {
      */
     private long leaseMs = 60_000;
 
-    /** How long a non-terminal execution waits before the next attempt. */
+    /** The first backoff after a failed attempt. Doubles from here, up to {@link #maxBackoffMs}. */
     private long backoffMs = 30_000;
+
+    /**
+     * The ceiling on exponential backoff.
+     *
+     * <p>Fifteen minutes. Not decoration: doubling from thirty seconds passes the twenty-six-hour
+     * search horizon in about a dozen attempts, so an uncapped backoff would stop retrying an
+     * execution long before the horizon that is meant to end it, leaving it non-terminal and
+     * unexamined. The cap keeps roughly a hundred attempts inside the horizon.
+     */
+    private long maxBackoffMs = 900_000;
+
+    /**
+     * The most random spread added to a backoff.
+     *
+     * <p>So that a fleet which backed off together does not return to the provider together. A
+     * synchronised retry is how a rate limit becomes self-sustaining.
+     */
+    private long backoffJitterMs = 5_000;
+
+    /**
+     * Result inspections one reconciliation pass may spend across every orphan it handles
+     * (M2-ADR-020 §3.2).
+     *
+     * <p>Per pass rather than per search, because per-search bounds do not compose: twenty orphans
+     * at fifty inspections each authorises a thousand provider calls in one pass.
+     *
+     * <p><strong>Fifteen is a load-control default, not a guarantee.</strong> It does not prove the
+     * provider's organization-wide limit cannot be exceeded — other traffic shares that limit, and
+     * this budget is per process, so two workers are two budgets. It is sized to leave headroom: at
+     * a thirty-second cadence it is roughly thirty inspections a minute against an observed limit
+     * of fifty requests a minute.
+     */
+    private int inspectionBudgetPerPass = 15;
 
     /** Executions per pass. Bounded so one pass cannot hold a long transaction or a long deadline. */
     private int batchSize = 20;
@@ -143,6 +194,30 @@ public class ContractBProperties {
 
     public void setBackoffMs(long backoffMs) {
       this.backoffMs = backoffMs;
+    }
+
+    public long getMaxBackoffMs() {
+      return maxBackoffMs;
+    }
+
+    public void setMaxBackoffMs(long maxBackoffMs) {
+      this.maxBackoffMs = maxBackoffMs;
+    }
+
+    public long getBackoffJitterMs() {
+      return backoffJitterMs;
+    }
+
+    public void setBackoffJitterMs(long backoffJitterMs) {
+      this.backoffJitterMs = backoffJitterMs;
+    }
+
+    public int getInspectionBudgetPerPass() {
+      return inspectionBudgetPerPass;
+    }
+
+    public void setInspectionBudgetPerPass(int inspectionBudgetPerPass) {
+      this.inspectionBudgetPerPass = inspectionBudgetPerPass;
     }
 
     public int getBatchSize() {

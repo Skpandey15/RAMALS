@@ -69,10 +69,12 @@ class _FakeBatches:
         batches: Sequence[_Batch],
         contents: dict[str, Sequence[str]],
         unreadable: set[str] | None = None,
+        truncated: set[str] | None = None,
     ) -> None:
         self._batches = list(batches)
         self._contents = contents
         self._unreadable = unreadable or set()
+        self._truncated = truncated or set()
         self.list_calls = 0
         self.result_calls: list[str] = []
         self.create_calls = 0
@@ -96,11 +98,37 @@ class _FakeBatches:
         self.result_calls.append(batch_id)
         if batch_id in self._unreadable:
             raise RuntimeError("results stream failed")
+        if batch_id in self._truncated:
+            return _TruncatedStream(self._contents.get(batch_id, []))
         return [_Record(custom_id) for custom_id in self._contents.get(batch_id, [])]
 
     def create(self, **_kwargs: Any) -> Any:  # pragma: no cover - must never be reached
         self.create_calls += 1
         raise AssertionError("enumeration must never create a provider execution")
+
+
+class _TruncatedStream(Sequence[_Record]):
+    """Yields part of a batch's records and then fails.
+
+    The nastiest shape in this file, and the reason it exists. A stream that fails *before* yielding
+    anything is obviously unknown; one that fails half way looks like a complete read right up to
+    the moment it does not. If the search treated that as a finished inspection it would memoise a
+    batch whose remaining records were never seen -- and the target could have been in them.
+    """
+
+    def __init__(self, custom_ids: Sequence[str]) -> None:
+        self._custom_ids = list(custom_ids)
+
+    def __iter__(self) -> Any:
+        for custom_id in self._custom_ids[:1]:
+            yield _Record(custom_id)
+        raise RuntimeError("results stream failed part-way")
+
+    def __len__(self) -> int:  # pragma: no cover - iteration is the access path
+        return len(self._custom_ids)
+
+    def __getitem__(self, index: Any) -> Any:  # pragma: no cover - iteration is the access path
+        return _Record(self._custom_ids[index])
 
 
 def _provider(fake: _FakeBatches) -> AnthropicBatchesProvider:
@@ -339,3 +367,268 @@ def test_enumeration_never_creates_a_provider_execution() -> None:
         fake, _ = _corpus(index, size=5)
         _search(fake)
         assert fake.create_calls == 0
+
+
+# -- the durable negative memo, M2-ADR-020 section 3.1 ---------------------------------------------
+
+
+def test_an_excluded_batch_is_never_opened() -> None:
+    fake, batches = _corpus(None, size=5)
+    already_ruled_out = [batches[0].id, batches[1].id]
+
+    _search(fake, exclude_ids=already_ruled_out)
+
+    # Asserting on the call log, not the outcome. The outcome would be ZERO whether or not the
+    # exclusions saved anything, and the entire point of the memo is the calls it does not make.
+    assert already_ruled_out[0] not in fake.result_calls
+    assert already_ruled_out[1] not in fake.result_calls
+    assert len(fake.result_calls) == 3
+
+
+def test_an_excluded_batch_counts_as_covered_not_as_uninspectable() -> None:
+    fake, batches = _corpus(None, size=5)
+
+    result = _search(fake, exclude_ids=[b.id for b in batches[:4]])
+
+    # The distinction decides the outcome. Counted as uninspectable, four exclusions would make
+    # every future search INCONCLUSIVE forever and ZERO would become unreachable.
+    assert result.batches_excluded == 4
+    assert result.batches_uninspectable == 0
+    assert result.outcome is DurableSearchOutcome.ZERO
+
+
+def test_only_ended_fully_read_non_matching_batches_are_offered_for_memoisation() -> None:
+    batches = [
+        _Batch("msgbatch_ended_nomatch", IN_WINDOW),
+        _Batch("msgbatch_running", IN_WINDOW, ended=False),
+        _Batch("msgbatch_unreadable", IN_WINDOW),
+        _Batch("msgbatch_carries", IN_WINDOW),
+    ]
+    fake = _FakeBatches(
+        batches,
+        {
+            "msgbatch_ended_nomatch": ["custom-someone-else"],
+            "msgbatch_unreadable": ["custom-someone-else"],
+            "msgbatch_carries": [TARGET],
+        },
+        unreadable={"msgbatch_unreadable"},
+    )
+
+    result = _search(fake)
+
+    # Exactly one of the four qualifies. The running one has no results, the unreadable one told us
+    # nothing, and the matching one is evidence rather than a negative.
+    assert result.newly_excluded_ids == ("msgbatch_ended_nomatch",)
+
+
+def test_a_truncated_result_stream_is_never_memoised() -> None:
+    batches = [_Batch("msgbatch_truncated", IN_WINDOW), _Batch("msgbatch_clean", IN_WINDOW)]
+    fake = _FakeBatches(
+        batches,
+        {
+            # The target sits *after* the record the stream manages to yield, so a search that
+            # treated a truncated read as complete would both miss it and record that it had
+            # looked.
+            "msgbatch_truncated": ["custom-someone-else", TARGET],
+            "msgbatch_clean": ["custom-someone-else"],
+        },
+        truncated={"msgbatch_truncated"},
+    )
+
+    result = _search(fake)
+
+    assert "msgbatch_truncated" not in result.newly_excluded_ids
+    assert result.batches_uninspectable == 1
+    # And it must not read as absence either: the target really was in there.
+    assert result.outcome is DurableSearchOutcome.INCONCLUSIVE
+
+
+def test_a_batch_carrying_the_key_is_never_memoised_as_a_negative() -> None:
+    fake, batches = _corpus(2, size=5)
+
+    result = _search(fake)
+
+    assert batches[2].id not in result.newly_excluded_ids
+    assert result.outcome is DurableSearchOutcome.ONE
+
+
+def test_exclusions_do_not_hide_a_match_found_this_time() -> None:
+    fake, batches = _corpus(4, size=5)
+
+    result = _search(fake, exclude_ids=[batches[0].id, batches[1].id])
+
+    assert result.outcome is DurableSearchOutcome.ONE
+    assert result.matches[0].provider_execution_id == batches[4].id
+
+
+# -- the per-pass inspection budget, M2-ADR-020 section 3.2 ----------------------------------------
+
+
+def test_an_exhausted_budget_is_inconclusive_never_zero() -> None:
+    fake, _ = _corpus(None, size=10)
+
+    result = _search(fake, max_inspections=3)
+
+    assert result.batches_inspected == 3
+    assert result.limit_reached == "inspections"
+    # It found nothing, and it must not say so: seven candidates were never opened.
+    assert result.outcome is DurableSearchOutcome.INCONCLUSIVE
+
+
+def test_an_exhausted_budget_is_inconclusive_never_one() -> None:
+    fake, batches = _corpus(0, size=10)
+
+    result = _search(fake, max_inspections=1)
+
+    # The target was found on the first inspection, and that is still not enough. An uninspected
+    # candidate may be a *second* execution carrying the same key, which is the duplicate the
+    # Definition of Done exists to surface.
+    assert len(result.matches) == 1
+    assert result.outcome is DurableSearchOutcome.INCONCLUSIVE
+
+
+def test_multiple_still_wins_when_the_budget_runs_out() -> None:
+    batches = [_Batch(f"msgbatch_{i:04d}", IN_WINDOW) for i in range(6)]
+    contents: dict[str, Sequence[str]] = {b.id: ["custom-someone-else"] for b in batches}
+    contents[batches[0].id] = [TARGET]
+    contents[batches[1].id] = [TARGET]
+    fake = _FakeBatches(batches, contents)
+
+    result = _search(fake, max_inspections=2)
+
+    # Two is already more than one, and no further looking can reduce it. Degrading this to
+    # INCONCLUSIVE would let the lifecycle keep searching for a duplicate it has already proven.
+    assert result.outcome is DurableSearchOutcome.MULTIPLE
+    assert len(result.matches) == 2
+
+
+def test_a_budget_resumes_across_attempts_when_negatives_are_remembered() -> None:
+    """The interaction the whole design rests on: bounded searches must converge.
+
+    A budget without the memo does not slow a search down, it stops it finishing -- the same first
+    candidates are re-read every attempt and the window is never covered. Three passes of three
+    inspections over an eight-batch window must reach a conclusion; without carrying the negatives
+    forward they never would.
+    """
+    fake, batches = _corpus(7, size=8)
+    ruled_out: list[str] = []
+    outcomes = []
+
+    for _ in range(3):
+        result = _search(fake, max_inspections=3, exclude_ids=list(ruled_out))
+        ruled_out.extend(result.newly_excluded_ids)
+        outcomes.append(result.outcome)
+
+    assert outcomes[0] is DurableSearchOutcome.INCONCLUSIVE
+    assert outcomes[-1] is DurableSearchOutcome.ONE
+    # Each batch opened exactly once across all three passes -- the point of the memo.
+    assert sorted(fake.result_calls) == sorted(b.id for b in batches)
+
+
+def test_without_the_memo_a_bounded_search_never_converges() -> None:
+    """The negative control for the test above.
+
+    Same window, same budget, exclusions discarded between attempts. The search re-reads the same
+    three candidates forever and the eighth batch is never reached -- a livelock that ends as
+    horizon exhaustion twenty-six hours later. This is what proves the memo and the budget are one
+    mechanism rather than two independent improvements.
+    """
+    fake, batches = _corpus(7, size=8)
+
+    outcomes = [_search(fake, max_inspections=3).outcome for _ in range(3)]
+
+    assert outcomes == [DurableSearchOutcome.INCONCLUSIVE] * 3
+    assert batches[7].id not in fake.result_calls
+    assert set(fake.result_calls) == {b.id for b in batches[:3]}
+
+
+def test_cumulative_coverage_is_required_before_zero() -> None:
+    fake, batches = _corpus(None, size=6)
+
+    partial = _search(fake, max_inspections=4)
+    assert partial.outcome is DurableSearchOutcome.INCONCLUSIVE
+
+    complete = _search(fake, max_inspections=4, exclude_ids=list(partial.newly_excluded_ids))
+
+    # ZERO only once every candidate has been covered -- four in the first pass, two in the second.
+    assert complete.outcome is DurableSearchOutcome.ZERO
+    assert complete.batches_excluded == 4
+    assert complete.batches_inspected == 2
+
+
+def test_a_cached_negative_plus_an_unfinished_candidate_is_still_inconclusive() -> None:
+    batches = [
+        _Batch("msgbatch_known_negative", IN_WINDOW),
+        _Batch("msgbatch_still_running", IN_WINDOW, ended=False),
+    ]
+    fake = _FakeBatches(batches, {"msgbatch_known_negative": ["custom-someone-else"]})
+
+    result = _search(fake, exclude_ids=["msgbatch_known_negative"])
+
+    # Full coverage of everything readable is still not full coverage. The unfinished batch is the
+    # one most likely to be the orphan, which is exactly why this may not read as ZERO.
+    assert result.batches_excluded == 1
+    assert result.batches_uninspectable == 1
+    assert result.outcome is DurableSearchOutcome.INCONCLUSIVE
+
+
+def test_excluding_every_candidate_still_never_creates_anything() -> None:
+    fake, batches = _corpus(None, size=5)
+
+    _search(fake, exclude_ids=[b.id for b in batches])
+
+    assert fake.create_calls == 0
+    assert fake.result_calls == []
+
+
+# -- Retry-After, M2-ADR-020 section 7 ------------------------------------------------------------
+
+
+class _RateLimitedError(Exception):
+    """Shaped like the SDK's RateLimitError: classified by class name, carrying a response."""
+
+    def __init__(self, retry_after: object) -> None:
+        super().__init__("429")
+        self.status_code = 429
+        self.response = type("_Response", (), {"headers": {"retry-after": retry_after}})()
+
+
+def _rate_limited(retry_after: object) -> Any:
+    fake, _ = _corpus(None, size=3)
+    fake.list_failure = type("RateLimitError", (_RateLimitedError,), {})(retry_after)
+    from ramals_ai.gateway.errors import GatewayError
+
+    with pytest.raises(GatewayError) as raised:
+        _search(fake)
+    return raised.value
+
+
+def test_a_rate_limit_is_classified_and_carries_retry_after() -> None:
+    failure = _rate_limited("30")
+
+    from ramals_ai.gateway.errors import GatewayErrorCode
+
+    # Classified as a rate limit rather than a generic outage, because the two call for opposite
+    # responses: one may be retried on the same cadence and the other must not be.
+    assert failure.code is GatewayErrorCode.PROVIDER_RATE_LIMITED
+    assert failure.retry_after_ms == 30_000
+
+
+def test_an_unparseable_retry_after_falls_back_rather_than_failing() -> None:
+    # The HTTP-date form is legal and deliberately not parsed. Falling back to the caller's own
+    # backoff is correct; raising while handling another failure is not.
+    assert _rate_limited("Wed, 21 Oct 2026 07:28:00 GMT").retry_after_ms is None
+    assert _rate_limited(None).retry_after_ms is None
+    assert _rate_limited("-5").retry_after_ms is None
+
+
+def test_an_outage_carries_no_retry_after() -> None:
+    fake, _ = _corpus(None, size=3)
+    fake.list_failure = type("APIConnectionError", (Exception,), {})("down")
+    from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
+
+    with pytest.raises(GatewayError) as raised:
+        _search(fake)
+
+    assert raised.value.code is GatewayErrorCode.PROVIDER_UNAVAILABLE
+    assert raised.value.retry_after_ms is None

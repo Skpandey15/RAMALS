@@ -292,6 +292,24 @@ class DurableExecutionSearch:
     limit_reached: str | None = None
     """Which bound stopped the search, when one did: ``pages``, ``inspections``. None otherwise."""
 
+    batches_excluded: int = 0
+    """Candidates skipped because the caller had already proven they do not carry the key.
+
+    Counted as covered, not as uninspectable: the caller is asserting a durable negative from an
+    earlier search (M2-ADR-020 section 3.1), and an excluded candidate is one this search did not
+    need to open rather than one it could not read.
+    """
+
+    newly_excluded_ids: tuple[str, ...] = ()
+    """Batches this search proved do not carry the key, for the caller to record durably.
+
+    **Only ended batches whose results streamed to completion appear here.** Never one still
+    processing, whose results were unreadable, whose stream failed part-way, or that was skipped for
+    a bound -- those are uninspectable and must be retried. A caller persisting any of them would be
+    recording coverage nobody established, and a search could then report ZERO over a batch no one
+    ever read.
+    """
+
 
 @dataclass(frozen=True)
 class DurableStatus:

@@ -2,6 +2,7 @@ package io.ramals.learningplatform.execution.contractb;
 
 import io.ramals.learningplatform.execution.crypto.ResultEncryptionKeyUnavailableException;
 import java.time.Instant;
+import java.util.Set;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,8 @@ public class ContractBExecutionService {
   private final ContractBAdoption adoption;
   private final long skewMillis;
   private final long horizonMillis;
+  private final int maxInspectionsPerSearch;
+  private final int defaultInspectionBudget;
 
   public ContractBExecutionService(
       ProviderExecutionRepository executions,
@@ -54,6 +57,8 @@ public class ContractBExecutionService {
     this.adoption = adoption;
     this.skewMillis = properties.getRecovery().getSearchSkewMs();
     this.horizonMillis = properties.getRecovery().getSearchHorizonMs();
+    this.maxInspectionsPerSearch = properties.getRecovery().getMaxInspectionsPerSearch();
+    this.defaultInspectionBudget = properties.getReconciliation().getInspectionBudgetPerPass();
   }
 
   /**
@@ -192,12 +197,24 @@ public class ContractBExecutionService {
    * @return the state the execution holds after this attempt
    */
   public DurableExecutionState reconcile(String requestId) {
+    return reconcile(requestId, InspectionBudget.of(defaultInspectionBudget));
+  }
+
+  /**
+   * Reconciles one execution, spending from a budget shared with the rest of the pass.
+   *
+   * <p>The budget matters only to the enumeration path. Polling an execution that already has an
+   * identity is a single call by name and costs nothing that needs rationing; searching for one that
+   * does not is a call per candidate, and it is the operation that has to be paid for out of a
+   * shared allowance (M2-ADR-020 §3.2).
+   */
+  public DurableExecutionState reconcile(String requestId, InspectionBudget budget) {
     ProviderExecution execution = require(requestId);
     if (execution.state().terminal()) {
       return execution.state();
     }
     if (!execution.hasProviderIdentity()) {
-      return recoverLostAcknowledgement(execution);
+      return recoverLostAcknowledgement(execution, budget);
     }
     return pollAndAdvance(execution);
   }
@@ -226,7 +243,8 @@ public class ContractBExecutionService {
    * <p>Every discovered execution is recorded whatever the outcome, because cost evidence has to
    * account for executions RAMALS decided not to adopt just as much as for the one it did.
    */
-  private DurableExecutionState recoverLostAcknowledgement(ProviderExecution execution) {
+  private DurableExecutionState recoverLostAcknowledgement(
+      ProviderExecution execution, InspectionBudget budget) {
     String requestId = execution.requestId();
     Instant submittedAt = executions.submittedAt(requestId);
     if (submittedAt == null) {
@@ -236,12 +254,42 @@ public class ContractBExecutionService {
     }
 
     boolean pastHorizon = Instant.now().isAfter(submittedAt.plusMillis(horizonMillis));
+
+    if (budget.exhausted()) {
+      // This pass has spent its inspections on other orphans. Deliberately NOT terminal, even past
+      // the horizon: the horizon ends a search that looked and could not see, and this one never
+      // looked. Terminating on evidence we declined to gather would be the fail-open M2-ADR-020 §2
+      // exists to prevent. The next pass gets a fresh budget, and the memo means it resumes rather
+      // than restarts.
+      LOGGER.info("contract B enumeration deferred; the pass has no inspection budget left "
+          + "[requestId={}]", requestId);
+      return DurableExecutionState.RECONCILING;
+    }
+
+    // Batches an earlier search already proved are not this request's. Coverage established once is
+    // coverage: an ended batch's results are immutable, so re-reading them is spending the
+    // provider's rate limit to learn something already known (M2-ADR-020 §3.1).
+    Set<String> alreadyRuledOut = executions.excludedFromSearch(requestId);
+    int allowance = Math.min(budget.remaining(), maxInspectionsPerSearch);
+
     DurableExecutionSearch search;
     try {
       search = provider.search(
           execution.customId(),
           submittedAt.minusMillis(skewMillis).toString(),
-          submittedAt.plusMillis(skewMillis).toString());
+          submittedAt.plusMillis(skewMillis).toString(),
+          allowance,
+          alreadyRuledOut);
+    } catch (DurableExecutionRateLimitedException limited) {
+      // Being told to slow down says nothing about whether an orphan exists, so past the horizon it
+      // is treated exactly like any other search that could not complete. Before the horizon it is
+      // rethrown, because the pass must stop rather than ask the same exhausted quota again, and
+      // only the worker can end a pass (M2-ADR-020 §7).
+      if (pastHorizon) {
+        return indeterminate(requestId, execution.submitFence(), "SEARCH_HORIZON_EXHAUSTED",
+            "enumeration was rate limited and never completed before the search horizon");
+      }
+      throw limited;
     } catch (RuntimeException unreachable) {
       // The provider being unreachable says nothing about whether an orphan exists. Not terminal,
       // unless we have waited long enough that waiting more cannot help.
@@ -251,6 +299,19 @@ public class ContractBExecutionService {
           ? indeterminate(requestId, execution.submitFence(), "SEARCH_HORIZON_EXHAUSTED",
               "enumeration could not complete before the search horizon")
           : DurableExecutionState.RECONCILING;
+    }
+
+    budget.spend(search.batchesInspected());
+
+    // Remember what this search ruled out, so the next one does not pay for it again. The port
+    // reports only ended, fully-streamed, non-matching batches here; anything uninspectable is
+    // excluded at the source, because memoising it would hand a later search coverage nobody
+    // established and let it report ZERO -- which is terminal -- over a batch no one read.
+    int remembered = executions.recordSearchExclusions(
+        requestId, execution.customId(), search.newlyExcluded());
+    if (remembered > 0) {
+      LOGGER.debug("contract B enumeration ruled out {} further batches [requestId={}]",
+          remembered, requestId);
     }
 
     for (DiscoveredExecution discovered : search.matches()) {
@@ -267,8 +328,9 @@ public class ContractBExecutionService {
           "enumeration inspected every candidate and none carried this request");
       case INCONCLUSIVE -> {
         LOGGER.warn("contract B enumeration inconclusive [requestId={}, uninspectable={}, "
-            + "limitReached={}]. Not treated as absence.",
-            requestId, search.uninspectable(), search.limitReached());
+            + "limitReached={}, inspected={}, alreadyRuledOut={}]. Not treated as absence.",
+            requestId, search.uninspectable(), search.limitReached(),
+            search.batchesInspected(), search.excluded());
         yield pastHorizon
             ? indeterminate(requestId, execution.submitFence(), "SEARCH_HORIZON_EXHAUSTED",
                 "the search never became conclusive before the horizon")

@@ -64,9 +64,10 @@ public final class CrashingDurableExecutionPort implements DurableExecutionPort 
   }
 
   @Override
-  public DurableExecutionSearch search(String customId, String from, String to) {
+  public DurableExecutionSearch search(String customId, String from, String to,
+      int maxInspections, java.util.Collection<String> excludeIds) {
     crashIf(When.BEFORE_SEARCH);
-    DurableExecutionSearch result = delegate.search(customId, from, to);
+    DurableExecutionSearch result = delegate.search(customId, from, to, maxInspections, excludeIds);
     // After the delegate answered: the orphan was found and the process died before RAMALS could
     // write the identity down. The next instance must find it again rather than assume it.
     crashIf(When.AFTER_SEARCH);
