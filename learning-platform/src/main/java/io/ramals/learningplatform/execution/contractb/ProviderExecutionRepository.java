@@ -41,15 +41,21 @@ public class ProviderExecutionRepository {
    * admission it is unsure about must not be punished for asking twice — the durable row is the
    * answer, and it already exists.
    */
-  public boolean admit(String requestId, String idempotencyKey, String customId,
+  public boolean admit(String requestId, String idempotencyKey,
       String provider, String model, String modelRoute) {
     try {
+      // custom_id IS the idempotency key. Not a convention -- the Definition of Done says so:
+      // "the custom_id submitted with the batch is the server-derived idempotency key for the
+      // request". Taking it as a separate parameter let the two diverge, and when they did, the
+      // adapter submitted one value while the platform correlated on the other: the result of a
+      // finished batch became unreachable and its orphan unfindable. Found by the W2 real-provider
+      // run; made structurally impossible here rather than documented as a rule.
       jdbc.update("""
           INSERT INTO core.ai_provider_execution
             (request_id, provider, model, model_route, idempotency_key, custom_id,
              state, submit_fence, admitted_at)
           VALUES (?, ?, ?, ?, ?, ?, 'ADMITTED', 0, CURRENT_TIMESTAMP)
-          """, requestId, provider, model, modelRoute, idempotencyKey, customId);
+          """, requestId, provider, model, modelRoute, idempotencyKey, idempotencyKey);
       return true;
     } catch (DuplicateKeyException alreadyAdmitted) {
       return false;

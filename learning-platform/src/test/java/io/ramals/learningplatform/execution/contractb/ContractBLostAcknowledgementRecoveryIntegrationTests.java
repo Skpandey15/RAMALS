@@ -124,14 +124,14 @@ class ContractBLostAcknowledgementRecoveryIntegrationTests {
    */
   private long orphan(String requestId) {
     instance(new FakeDurableExecutionPort()).admit(requestId, "idem-" + requestId,
-        "custom-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
+        "anthropic", "claude-sonnet-5", "diagnostic");
     long fence = executions.claimForSubmission(requestId).orElseThrow();
     assertThat(providerExecutionId(requestId)).isNull();
     return fence;
   }
 
   private DiscoveredExecution discovered(String batch, String requestId) {
-    return new DiscoveredExecution(batch, "custom-" + requestId, "succeeded", 16, 4, 0,
+    return new DiscoveredExecution(batch, "idem-" + requestId, "succeeded", 16, 4, 0,
         null, null, "ended");
   }
 
@@ -146,7 +146,7 @@ class ContractBLostAcknowledgementRecoveryIntegrationTests {
     orphan(requestId);
     var fake = new FakeDurableExecutionPort().providerExecutionId(FOUND);
     fake.searchFinds(DurableExecutionSearch.Outcome.ONE, discovered(FOUND, requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
 
     // Recovery restores what the lost acknowledgement would have written, then the ordinary path
     // takes over -- so the execution completes rather than merely stopping being an orphan.
@@ -165,7 +165,7 @@ class ContractBLostAcknowledgementRecoveryIntegrationTests {
     orphan(requestId);
     var fake = new FakeDurableExecutionPort().providerExecutionId(FOUND);
     fake.searchFinds(DurableExecutionSearch.Outcome.ONE, discovered(FOUND, requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     instance(fake).reconcile(requestId);
 
     List<DiscoveredExecution> observed = executions.observations(requestId);
@@ -288,7 +288,7 @@ class ContractBLostAcknowledgementRecoveryIntegrationTests {
 
     var fake = new FakeDurableExecutionPort().providerExecutionId(FOUND);
     fake.searchFinds(DurableExecutionSearch.Outcome.ONE, discovered(FOUND, requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     assertThat(instance(fake).reconcile(requestId)).isEqualTo(DurableExecutionState.SUCCEEDED);
   }
 
@@ -311,7 +311,7 @@ class ContractBLostAcknowledgementRecoveryIntegrationTests {
 
     // A fresh instance repeats the search and reaches the same conclusion. Enumeration is a read,
     // so repeating it is free of consequence.
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     assertThat(instance(crashing.survive()).reconcile(requestId))
         .isEqualTo(DurableExecutionState.SUCCEEDED);
     assertThat(providerExecutionId(requestId)).isEqualTo(FOUND);
@@ -364,7 +364,7 @@ class ContractBLostAcknowledgementRecoveryIntegrationTests {
         fake.searchFinds(outcome, discovered(FOUND, requestId), discovered(OTHER, requestId));
       } else if (outcome == DurableExecutionSearch.Outcome.ONE) {
         fake.searchFinds(outcome, discovered(FOUND, requestId));
-        fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+        fake.succeedsWith(proposal(requestId), "idem-" + requestId);
       } else {
         fake.searchFinds(outcome);
       }
@@ -383,7 +383,7 @@ class ContractBLostAcknowledgementRecoveryIntegrationTests {
     orphan(requestId);
     var fake = new FakeDurableExecutionPort().providerExecutionId(FOUND);
     fake.searchFinds(DurableExecutionSearch.Outcome.ONE, discovered(FOUND, requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     instance(fake).reconcile(requestId);
 
     assertThat(jdbc.queryForObject(

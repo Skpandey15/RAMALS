@@ -139,8 +139,7 @@ class ContractBCrashQualificationIntegrationTests {
     String requestId = "req-k1-000000000001";
     var provider = new CrashingDurableExecutionPort(new FakeDurableExecutionPort()
         .providerExecutionId(BATCH));
-    instance(provider, store()).admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    instance(provider, store()).admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     // The process dies here. No provider call was ever made.
 
     assertState(requestId, "ADMITTED", null);
@@ -170,8 +169,7 @@ class ContractBCrashQualificationIntegrationTests {
     var provider = new CrashingDurableExecutionPort(new FakeDurableExecutionPort()
         .providerExecutionId(BATCH)).dieAt(CrashingDurableExecutionPort.When.AFTER_SUBMIT);
     var service = instance(provider, store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     assertThatThrownBy(() -> service.submit(requestId, command(requestId)))
         .isInstanceOf(SimulatedProcessDeath.class);
@@ -210,8 +208,7 @@ class ContractBCrashQualificationIntegrationTests {
     var provider = new CrashingDurableExecutionPort(new FakeDurableExecutionPort()
         .providerExecutionId(BATCH)).dieAt(CrashingDurableExecutionPort.When.AFTER_SUBMIT);
     var service = instance(provider, store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     assertThatThrownBy(() -> service.submit(requestId, command(requestId)))
         .isInstanceOf(SimulatedProcessDeath.class);
 
@@ -236,8 +233,7 @@ class ContractBCrashQualificationIntegrationTests {
     var repository = new ProviderExecutionRepository(jdbc);
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     instance(new CrashingDurableExecutionPort(fake), store())
-        .admit(requestId, "idem-" + requestId, "custom-" + requestId,
-            "anthropic", "claude-sonnet-5", "diagnostic");
+        .admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
 
     // Exactly the window: the identity is committed, the work item is not. Produced by driving the
     // repository directly, because the service writes both and the gap between them is the point.
@@ -255,7 +251,7 @@ class ContractBCrashQualificationIntegrationTests {
         .extracting(ProviderExecution::requestId)
         .contains(requestId);
 
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     assertThat(instance(new CrashingDurableExecutionPort(fake), store()).reconcile(requestId))
         .isEqualTo(DurableExecutionState.SUCCEEDED);
     assertThat(fake.submissions).isEmpty();
@@ -272,8 +268,7 @@ class ContractBCrashQualificationIntegrationTests {
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     var provider = new CrashingDurableExecutionPort(fake);
     var service = instance(provider, store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
     service.reconcile(requestId);
     assertState(requestId, "RUNNING", BATCH);
@@ -285,7 +280,7 @@ class ContractBCrashQualificationIntegrationTests {
     // Non-terminal, and no outcome was invented on the way down.
     assertThat(DurableExecutionState.of(state(requestId)).terminal()).isFalse();
 
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     assertThat(instance(provider.survive(), store()).reconcile(requestId))
         .isEqualTo(DurableExecutionState.SUCCEEDED);
     // The identity was reused, never re-established: recovery added no submission of its own.
@@ -304,10 +299,9 @@ class ContractBCrashQualificationIntegrationTests {
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     var provider = new CrashingDurableExecutionPort(fake);
     var service = instance(provider, store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
 
     provider.dieAt(CrashingDurableExecutionPort.When.BEFORE_RESULT);
     assertThatThrownBy(() -> instance(provider, store()).reconcile(requestId))
@@ -332,10 +326,9 @@ class ContractBCrashQualificationIntegrationTests {
     var provider = new CrashingDurableExecutionPort(fake);
     var crashing = new CrashingResultStore(jdbc, codec(), new ObjectMapper());
     var service = instance(provider, crashing);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
 
     crashing.dieAt(CrashingResultStore.When.BEFORE_WRITE);
     assertThatThrownBy(() -> instance(provider, crashing).reconcile(requestId))
@@ -361,10 +354,9 @@ class ContractBCrashQualificationIntegrationTests {
     var provider = new CrashingDurableExecutionPort(fake);
     var crashing = new CrashingResultStore(jdbc, codec(), new ObjectMapper());
     var service = instance(provider, crashing);
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
 
     crashing.dieAt(CrashingResultStore.When.AFTER_WRITE);
     assertThatThrownBy(() -> instance(provider, crashing).reconcile(requestId))
@@ -394,10 +386,9 @@ class ContractBCrashQualificationIntegrationTests {
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     var provider = new CrashingDurableExecutionPort(fake);
     var service = instance(provider, store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     service.reconcile(requestId);
     // The process dies here, with everything committed and nothing adopted.
 
@@ -423,10 +414,9 @@ class ContractBCrashQualificationIntegrationTests {
     String requestId = "req-k10-00000000001";
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     var service = instance(new CrashingDurableExecutionPort(fake), store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     service.reconcile(requestId);
 
     // Dies after the decision is written and before the transaction commits. The only two states
@@ -474,8 +464,7 @@ class ContractBCrashQualificationIntegrationTests {
     var repository = new ProviderExecutionRepository(jdbc);
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     instance(new CrashingDurableExecutionPort(fake), store())
-        .admit(requestId, "idem-" + requestId, "custom-" + requestId,
-            "anthropic", "claude-sonnet-5", "diagnostic");
+        .admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     long fence = repository.claimForSubmission(requestId).orElseThrow();
     repository.recordSubmission(requestId, fence, BATCH);
     assertThat(reconciliationRows(requestId)).isZero();
@@ -499,8 +488,7 @@ class ContractBCrashQualificationIntegrationTests {
     var provider = new CrashingDurableExecutionPort(fake)
         .dieAt(CrashingDurableExecutionPort.When.AFTER_SUBMIT);
     var service = instance(provider, store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     assertThatThrownBy(() -> service.submit(requestId, command(requestId)))
         .isInstanceOf(SimulatedProcessDeath.class);
     assertState(requestId, "SUBMITTED", null);
@@ -526,8 +514,7 @@ class ContractBCrashQualificationIntegrationTests {
     var repository = new ProviderExecutionRepository(jdbc);
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     instance(new CrashingDurableExecutionPort(fake), store())
-        .admit(requestId, "idem-" + requestId, "custom-" + requestId,
-            "anthropic", "claude-sonnet-5", "diagnostic");
+        .admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     // Exactly the state a submission in progress holds, right now.
     repository.claimForSubmission(requestId);
 
@@ -549,10 +536,9 @@ class ContractBCrashQualificationIntegrationTests {
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     var provider = new CrashingDurableExecutionPort(fake);
     var service = instance(provider, store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     assertThat(instance(provider, store()).reconcile(requestId))
         .isEqualTo(DurableExecutionState.SUCCEEDED);
 
@@ -580,10 +566,10 @@ class ContractBCrashQualificationIntegrationTests {
       var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH + when.ordinal());
       var crashing = new CrashingResultStore(jdbc, codec(), new ObjectMapper());
       var service = instance(new CrashingDurableExecutionPort(fake), crashing);
-      service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
+      service.admit(requestId, "idem-" + requestId,
           "anthropic", "claude-sonnet-5", "diagnostic");
       service.submit(requestId, command(requestId));
-      fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+      fake.succeedsWith(proposal(requestId), "idem-" + requestId);
       crashing.dieAt(when);
       assertThatThrownBy(() -> instance(new CrashingDurableExecutionPort(fake), crashing)
           .reconcile(requestId)).isInstanceOf(SimulatedProcessDeath.class);
@@ -604,10 +590,9 @@ class ContractBCrashQualificationIntegrationTests {
     String requestId = "req-ca-000000000001";
     var fake = new FakeDurableExecutionPort().providerExecutionId(BATCH);
     var service = instance(new CrashingDurableExecutionPort(fake), store());
-    service.admit(requestId, "idem-" + requestId, "custom-" + requestId,
-        "anthropic", "claude-sonnet-5", "diagnostic");
+    service.admit(requestId, "idem-" + requestId, "anthropic", "claude-sonnet-5", "diagnostic");
     service.submit(requestId, command(requestId));
-    fake.succeedsWith(proposal(requestId), "custom-" + requestId);
+    fake.succeedsWith(proposal(requestId), "idem-" + requestId);
     service.reconcile(requestId);
 
     // Contract B writes nothing into Contract A's tables, so its qualification stays valid. Read as

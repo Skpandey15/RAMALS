@@ -63,10 +63,10 @@ public class ContractBExecutionService {
    * lifecycle recoverable: a process that dies immediately after this leaves a row a later worker
    * can find and reason about, rather than nothing at all.
    */
-  public boolean admit(String requestId, String idempotencyKey, String customId,
+  public boolean admit(String requestId, String idempotencyKey,
       String provider, String model, String modelRoute) {
     boolean admitted =
-        executions.admit(requestId, idempotencyKey, customId, provider, model, modelRoute);
+        executions.admit(requestId, idempotencyKey, provider, model, modelRoute);
     if (admitted) {
       ledger.record(requestId, null, DurableExecutionState.ADMITTED, "ADMITTER", 0L, "ADMITTED");
     }
@@ -347,7 +347,13 @@ public class ContractBExecutionService {
     }
 
     return switch (normalized(status.state())) {
-      case "SUCCEEDED", "ENDED", "COMPLETED" -> retrieveAndFinish(execution, status);
+      // RESULT_AVAILABLE is what the adapter actually emits for a batch whose processing_status is
+      // "ended" -- the others are defensive aliases. Getting this wrong meant every real Contract B
+      // execution polled a finished batch forever, and no test caught it because the fake asserted
+      // the vocabulary I assumed rather than the one the adapter produces. Found by the W2
+      // real-provider run; guarded now by ContractBProviderStateVocabularyTests.
+      case "RESULT_AVAILABLE", "SUCCEEDED", "ENDED", "COMPLETED" ->
+          retrieveAndFinish(execution, status);
       case "FAILED", "ERRORED" -> finish(execution, DurableExecutionState.FAILED,
           "PROVIDER_FAILED", null, null);
       case "CANCELLED", "CANCELED" -> finish(execution, DurableExecutionState.CANCELLED,

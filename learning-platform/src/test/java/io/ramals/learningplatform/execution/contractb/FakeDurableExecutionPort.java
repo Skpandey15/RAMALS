@@ -84,7 +84,10 @@ public final class FakeDurableExecutionPort implements DurableExecutionPort {
   }
 
   FakeDurableExecutionPort succeedsWith(String text, String customId) {
-    this.state = "SUCCEEDED";
+    // The adapter's own word for an ended batch. It used to say "SUCCEEDED" here, which the adapter
+    // never emits -- so the fake agreed with an assumption and the mismatch survived 51 green tests
+    // until a real provider run hit it.
+    this.state = "RESULT_AVAILABLE";
     this.nativeStatus = "ended";
     this.result = new DurableResultRecord(providerExecutionId, "succeeded", customId, text,
         16, 4, "msg_fake01", null);
@@ -92,7 +95,7 @@ public final class FakeDurableExecutionPort implements DurableExecutionPort {
   }
 
   FakeDurableExecutionPort recordOutcome(String outcome, String customId) {
-    this.state = "SUCCEEDED";
+    this.state = "RESULT_AVAILABLE";
     this.nativeStatus = "ended";
     this.result = new DurableResultRecord(providerExecutionId, outcome, customId, null,
         16, 0, null, "provider_error");

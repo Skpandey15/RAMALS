@@ -3,10 +3,7 @@ package io.ramals.learningplatform.execution.crypto;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
+import io.ramals.learningplatform.observability.RootLogCapture;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Base64;
@@ -36,29 +33,23 @@ class ResultEnvelopeCodecTests {
 
   private FakeResultEncryptionKeyProvider keys;
   private ResultEnvelopeCodec codec;
-  private ListAppender<ILoggingEvent> logs;
-  private Logger rootLogger;
-  private Level originalLevel;
+  private RootLogCapture logs;
 
   @BeforeEach
   void setUp() {
     keys = new FakeResultEncryptionKeyProvider().with(KEY_V1).with(KEY_V2).active(KEY_V1);
     codec = new ResultEnvelopeCodec(keys);
 
-    // Attached to the ROOT logger at TRACE, so anything logged anywhere during these operations is
-    // captured -- including by the JCE provider or a future logger added to the codec.
-    rootLogger = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
-    logs = new ListAppender<>();
-    logs.start();
-    rootLogger.addAppender(logs);
-    originalLevel = rootLogger.getLevel();
-    rootLogger.setLevel(Level.TRACE);
+    // ROOT at TRACE, so anything logged anywhere during these operations is captured -- including
+    // by the JCE provider or a future logger added to the codec. Thread-safe by construction: a
+    // ROOT-attached appender is fed by every thread in the process, and a plain ListAppender threw
+    // ConcurrentModificationException on CI when a scheduler thread logged mid-read.
+    logs = new RootLogCapture();
   }
 
   @AfterEach
   void tearDown() {
-    rootLogger.detachAppender(logs);
-    rootLogger.setLevel(originalLevel);
+    logs.close();
   }
 
   private byte[] plaintext() {
@@ -66,9 +57,7 @@ class ResultEnvelopeCodecTests {
   }
 
   private String capturedLogs() {
-    return logs.list.stream()
-        .map(event -> event.getFormattedMessage() + " " + Arrays.toString(event.getArgumentArray()))
-        .reduce("", (a, b) -> a + "\n" + b);
+    return logs.text();
   }
 
   // -- criterion 4: the envelope round-trips and has the ADR-defined shape ------------------------

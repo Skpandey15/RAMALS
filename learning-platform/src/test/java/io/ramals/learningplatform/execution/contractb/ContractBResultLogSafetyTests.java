@@ -7,17 +7,13 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import io.ramals.learningplatform.execution.crypto.FakeResultEncryptionKeyProvider;
 import io.ramals.learningplatform.execution.crypto.ResultEncryptionKeyUnavailableException;
 import io.ramals.learningplatform.execution.crypto.ResultEnvelopeCodec;
+import io.ramals.learningplatform.observability.RootLogCapture;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
@@ -60,9 +56,7 @@ class ContractBResultLogSafetyTests {
       "evidenceIds":["ev-1","ev-2"]}],"recommendedNextSkills":["ALG.LIN.02"],"confidence":0.72}""";
 
   private ContractBResultStore store;
-  private ListAppender<ILoggingEvent> logs;
-  private Logger rootLogger;
-  private Level originalLevel;
+  private RootLogCapture logs;
 
   private JdbcTemplate jdbc;
 
@@ -77,26 +71,18 @@ class ContractBResultLogSafetyTests {
     store = new ContractBResultStore(jdbc, new ResultEnvelopeCodec(keys), new ObjectMapper());
 
     // ROOT at TRACE, so anything logged by anything during these calls is captured -- including by
-    // Jackson, the JCE provider, or a logger someone adds to the store later.
-    rootLogger = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
-    logs = new ListAppender<>();
-    logs.start();
-    rootLogger.addAppender(logs);
-    originalLevel = rootLogger.getLevel();
-    rootLogger.setLevel(Level.TRACE);
+    // Jackson, the JCE provider, or a logger someone adds to the store later. Thread-safe: every
+    // thread in the process feeds a ROOT-attached appender.
+    logs = new RootLogCapture();
   }
 
   @AfterEach
   void tearDown() {
-    rootLogger.detachAppender(logs);
-    rootLogger.setLevel(originalLevel);
+    logs.close();
   }
 
   private String capturedLogs() {
-    return logs.list.stream()
-        .map(event -> event.getFormattedMessage() + " " + Arrays.toString(event.getArgumentArray())
-            + " " + (event.getThrowableProxy() == null ? "" : event.getThrowableProxy().getMessage()))
-        .reduce("", (a, b) -> a + "\n" + b);
+    return logs.text();
   }
 
   @Test
