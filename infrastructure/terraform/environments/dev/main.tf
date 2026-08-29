@@ -113,6 +113,27 @@ module "compute" {
   platform_log_group = module.observability.log_group_names["learning-platform"]
   ai_log_group       = module.observability.log_group_names["ramals-ai"]
 
+  # Live provider execution is OPT-IN and stays OFF here.
+  #
+  # The compute module defaults `ai_enabled` to "false" and `ai_model_route` to "ci-fake", so the AI
+  # plane runs, answers health checks and serves the capability gate without spending anything. That
+  # default is deliberate: an environment that bills by existing is one nobody can leave running.
+  #
+  # To enable it for an approved OpenAI-backed qualification, set these three here in that change --
+  # not as a standing default -- and record the approval alongside it:
+  #
+  #   ai_enabled     = "true"
+  #   ai_model_route = "diagnostic-default"
+  #   ai_model_pins  = jsonencode({
+  #     "tutor-default" = "gpt-4.1-2025-04-14", "diagnostic-default" = "gpt-4.1-2025-04-14",
+  #     "assessment-default" = "gpt-4.1-2025-04-14", "adaptation-default" = "gpt-4.1-2025-04-14"
+  #   })
+  #
+  # The credential never appears here, in any manifest, or in state. `provider-api-key` is a Secrets
+  # Manager container created empty by the secrets module; an operator writes the value into it out
+  # of band, and CI fails the build if an `aws_secretsmanager_secret_version` ever appears in the
+  # Terraform. Contract B is a separate switch and remains false regardless.
+
   oidc_issuer_uri = var.oidc_issuer_uri
   web_origin      = var.web_origin
   certificate_arn = var.certificate_arn

@@ -7,6 +7,28 @@ spec:
     matchLabels: {app.kubernetes.io/name: ramals-ai}
   policyTypes: [Egress]
   egress:
+    # DNS, unrestricted destination because kube-dns is in-cluster and the resolver address is not
+    # something this policy should hard-code.
     - ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
+
+    # HTTPS to model providers -- and to nothing inside the cluster.
+    #
+    # The `except` list is what preserves the invariant. Without it, `0.0.0.0/0` on 443 would be a
+    # blanket egress allowance that happens not to name PostgreSQL, and the isolation would rest on
+    # PostgreSQL not listening on 443 rather than on a rule. With it, the AI plane can reach the
+    # public internet and provably cannot open a connection to any pod or Service in this cluster,
+    # whatever port it listens on.
+    #
+    # 10.42.0.0/16 is the k3s pod CIDR, 10.43.0.0/16 the Service CIDR. Both are k3s defaults; if a
+    # cluster is created with different ranges these must change with it, or the exclusion silently
+    # stops covering the addresses it names.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.42.0.0/16
+              - 10.43.0.0/16
+      ports:
+        - {protocol: TCP, port: 443}

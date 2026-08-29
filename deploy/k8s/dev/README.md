@@ -104,15 +104,56 @@ RAMALS_AI_AI_ENABLED=false
 RAMALS_AI_MODEL_ROUTE=ci-fake
 ```
 
-No Anthropic or OpenAI credential is configured, and none belongs in this environment. Contract B
-must not be activated anywhere until residual S2 is resolved and separately reviewed
-(`docs/mvp2-contract-b-approval.md`).
+Contract B must not be activated anywhere until residual S2 is resolved and separately reviewed
+(`docs/mvp2-contract-b-approval.md`). That is independent of everything below: live provider
+execution and Contract B are separate switches answering different questions.
+
+### Enabling a real provider (opt-in)
+
+Off by default. A fresh checkout deploys with `ci-fake` and makes no provider call, so a developer
+without a key gets a working cluster rather than a `CrashLoopBackOff` — `config/settings.py` fails
+closed on a live route with no credential, which is correct behaviour and precisely why it must not
+be the default.
+
+```powershell
+pwsh -File .\deploy\k8s\dev\bootstrap.ps1 -EnableOpenAI
+```
+
+That reads `RAMALS_AI_PROVIDER_API_KEY` from the **Windows User/Machine environment**, creates the
+`ramals-ai-provider` Secret, and sets `RAMALS_AI_AI_ENABLED=true` with route `diagnostic-default` on
+the live Deployment — not in the manifests, so a later `kubectl apply -k` cannot silently re-enable
+billable calls for someone else.
+
+**It makes real, billable calls.** Nothing local caps spend; set a limit at
+`platform.openai.com/settings/organization/limits`.
+
+Two things worth knowing:
+
+- **The key never enters Git.** Not in a manifest, not in an image, not in Terraform. It exists only
+  in your environment and in a cluster Secret created at runtime.
+- **Read it from the registry, not `$env:`.** A long-lived shell inherited its environment when it
+  started and will hand back a key you rotated an hour ago. That staleness produced a 401 against a
+  perfectly valid key during this package's own bring-up, which is why `bootstrap.ps1` uses
+  `[Environment]::GetEnvironmentVariable(..., "User")` instead.
+
+Selecting OpenAI is a **model pin**, not a route: every route is `claude-sonnet-5` primary with
+`gpt-4.1-2025-04-14` as an alternate, so `RAMALS_AI_MODEL_PINS` points the routes at the alternate.
+
+Enabling a provider also requires the AI plane to reach the internet — see Isolation below.
 
 ## Isolation
 
-`network-policy.yaml` restricts the AI plane's egress to DNS only. It therefore cannot open a
-connection to PostgreSQL — the architectural invariant that the AI plane is non-authoritative and
-has no path to the authoritative database, enforced by the cluster rather than by convention.
+`network-policy.yaml` allows the AI plane exactly two things: DNS, and TCP/443 to
+`0.0.0.0/0` **except** `10.42.0.0/16` and `10.43.0.0/16` — the k3s pod and Service CIDRs.
+
+That `except` list is the whole control. It lets the AI plane reach a model provider while making it
+provably unable to open a connection to any pod or Service in this cluster, whatever port that
+target listens on. Without it, allowing 443 outbound would be a blanket egress permit that merely
+happens not to name PostgreSQL, and the isolation would rest on PostgreSQL not listening on 443
+rather than on a rule.
+
+If a cluster is ever created with non-default CIDRs, those two entries must change with it —
+otherwise the exclusion silently stops covering the addresses it names.
 
 `smoke.ps1` checks this as a **negative control**: it asserts the connection *fails*, and fails the
 run if the AI plane can reach the database. A path that is never exercised looks exactly like a path

@@ -264,6 +264,7 @@ resource "aws_ecs_task_definition" "ai" {
       { name = "RAMALS_AI_OIDC_AUDIENCE", value = "ramals-ai" },
       { name = "RAMALS_AI_AI_ENABLED", value = var.ai_enabled },
       { name = "RAMALS_AI_MODEL_ROUTE", value = var.ai_model_route },
+      { name = "RAMALS_AI_MODEL_PINS", value = var.ai_model_pins },
     ]
 
     secrets = local.ai_secrets

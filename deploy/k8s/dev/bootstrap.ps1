@@ -16,7 +16,8 @@ param(
   [string]$RegistryName = "ramals-registry",
   [int]$RegistryPort = 5000,
   [string]$Namespace = "ramals-dev",
-  [switch]$SkipBuild
+  [switch]$SkipBuild,
+  [switch]$EnableOpenAI
 )
 
 $ErrorActionPreference = "Stop"
@@ -122,6 +123,30 @@ $rendered = [regex]::Replace(
   "(?<repo>${registryHost}:${RegistryPort}/[A-Za-z0-9._/-]+):[A-Za-z0-9._-]+",
   "`${repo}:$gitSha")
 $rendered | kubectl apply -f - | Out-Host
+
+if ($EnableOpenAI) {
+  Write-Host "== live provider execution (opt-in) ==" -ForegroundColor Yellow
+
+  # Read from the User environment in the registry rather than $env:, because a long-lived shell
+  # inherited its environment when it started and will happily hand back a key you rotated an hour
+  # ago. That exact staleness produced a 401 against a key that was perfectly valid.
+  $key = [Environment]::GetEnvironmentVariable("RAMALS_AI_PROVIDER_API_KEY", "User")
+  if (-not $key) { $key = [Environment]::GetEnvironmentVariable("RAMALS_AI_PROVIDER_API_KEY", "Machine") }
+  if (-not $key) {
+    throw "-EnableOpenAI needs RAMALS_AI_PROVIDER_API_KEY in the User or Machine environment. Set it, then re-run."
+  }
+
+  # The value is piped straight into kubectl and never written to a file, a log, or the console.
+  kubectl -n $Namespace create secret generic ramals-ai-provider `
+    --from-literal=provider-api-key=$key --dry-run=client -o yaml | kubectl apply -f - | Out-Host
+
+  # Applied to the live Deployment rather than to the manifests, so the committed default stays off
+  # and a later `kubectl apply -k` does not silently re-enable billable calls for someone else.
+  kubectl -n $Namespace set env deployment/ramals-ai `
+    RAMALS_AI_AI_ENABLED=true RAMALS_AI_MODEL_ROUTE=diagnostic-default | Out-Host
+
+  Write-Host "OpenAI enabled: routes pinned to gpt-4.1-2025-04-14. This makes real, billable calls." -ForegroundColor Yellow
+}
 
 Write-Host "== waiting for workloads ==" -ForegroundColor Cyan
 kubectl rollout status statefulset/postgres -n $Namespace --timeout=300s | Out-Host
