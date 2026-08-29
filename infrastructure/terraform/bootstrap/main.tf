@@ -109,6 +109,20 @@ resource "aws_dynamodb_table" "locks" {
     type = "S"
   }
 
+  # Point-in-time recovery, enabled with a caveat worth stating plainly: the rows here are in-flight
+  # locks, and recovering yesterday's lock is meaningless. The thing that actually needs recovery is
+  # the state bucket, and that is versioned above.
+  #
+  # It is on anyway because it costs effectively nothing on a table measured in bytes, and because a
+  # security baseline everyone has to remember the exceptions to stops being a baseline.
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
   lifecycle {
     prevent_destroy = true
   }

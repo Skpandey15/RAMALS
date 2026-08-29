@@ -152,9 +152,9 @@ variable "certificate_arn" {
   description = <<-EOT
     ACM certificate for the HTTPS listener.
 
-    Empty until a domain exists, and while empty the environment serves plain HTTP on port 80. That
-    is a bring-up accommodation and the first thing to close: no learner traffic may reach an
-    environment in that state.
+    Empty until a domain exists. While empty there is no HTTPS listener at all, and port 80's
+    redirect leads nowhere -- the environment is unreachable rather than served in the clear. There
+    is deliberately no plaintext fallback.
   EOT
   type        = string
   default     = ""

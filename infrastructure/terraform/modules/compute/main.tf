@@ -119,31 +119,29 @@ resource "aws_lb_listener" "https" {
   }
 }
 
-# Port 80 redirects and never serves. When no certificate has been issued yet the listener forwards
-# instead, so the environment is reachable during bring-up -- a DEV-only accommodation, and the
-# reason certificate_arn is the first thing to set once a domain exists.
+# Port 80 redirects and never serves. Always -- there is no plaintext fallback.
+#
+# This previously forwarded to the target group when no certificate had been issued, so that the
+# environment was reachable during bring-up. That was convenience bought with the one property a
+# public listener should not trade: it served the application over plain HTTP, and a scanner caught
+# it pointing straight at the forward action.
+#
+# Without a certificate there is now no HTTPS listener and this redirect leads nowhere, so the
+# environment is simply unreachable until `certificate_arn` is set. That is the same fail-closed
+# posture as `alb_ingress_cidrs` defaulting to empty: an environment you cannot reach yet is a
+# smaller problem than one reachable in the clear.
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn
   port              = 80
   protocol          = "HTTP"
 
-  dynamic "default_action" {
-    for_each = var.certificate_arn == "" ? [] : [1]
-    content {
-      type = "redirect"
-      redirect {
-        port        = "443"
-        protocol    = "HTTPS"
-        status_code = "HTTP_301"
-      }
-    }
-  }
+  default_action {
+    type = "redirect"
 
-  dynamic "default_action" {
-    for_each = var.certificate_arn == "" ? [1] : []
-    content {
-      type             = "forward"
-      target_group_arn = aws_lb_target_group.platform.arn
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
     }
   }
 }

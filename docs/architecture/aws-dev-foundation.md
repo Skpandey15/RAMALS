@@ -185,6 +185,12 @@ empty allow-list are both refused by a module precondition rather than rendered.
 
 ## Health checks and rollback
 
+**Port 80 always redirects to 443 and never serves.** An earlier revision forwarded to the target
+group when no certificate existed, so the environment was reachable during bring-up; that traded the
+one property a public listener should not trade, and a scanner caught it pointing at the forward
+action. With no certificate the environment is now simply unreachable, which is the same fail-closed
+posture as `alb_ingress_cidrs` defaulting to empty.
+
 Two layers, answering different questions:
 
 - **Target group** → *should traffic go here?* `/actuator/health` on the platform. Spring's actuator
@@ -263,9 +269,9 @@ breached silently when it is.
 
 - **Nothing has been applied.** No AWS account has been touched; `terraform apply` has not run.
   `validate` and `fmt` pass; `plan` requires credentials and a bootstrapped backend.
-- **No domain or certificate.** `certificate_arn` is empty, so the ALB serves plain HTTP on port 80
-  during bring-up. **No learner traffic may reach an environment in that state**, and closing this
-  is the first task once a domain exists.
+- **No domain or certificate.** `certificate_arn` is empty, so there is no HTTPS listener and port
+  80's redirect leads nowhere — the environment is **unreachable** rather than reachable in the
+  clear. Issuing a certificate is what makes it serve at all.
 - **No identity provider.** `oidc_issuer_uri` is empty; Keycloak is not yet deployed to AWS, so the
   platform's own authentication cannot be exercised here yet.
 - **`alb_ingress_cidrs` defaults to empty**, so a first apply produces a load balancer nothing can
