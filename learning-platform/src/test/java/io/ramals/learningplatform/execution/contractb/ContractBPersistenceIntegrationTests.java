@@ -379,19 +379,11 @@ class ContractBPersistenceIntegrationTests {
   void aFailedSweepAlerts() {
     // §10's last row: results outliving the ceiling is a governance failure, not a backlog. The
     // failure is reported and rethrown -- swallowing it would turn a retention breach into silence.
-    ch.qos.logback.classic.Logger root =
-        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(
-            ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
-    var captured = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
-    captured.start();
-    root.addAppender(captured);
-    try {
+    try (var captured = new io.ramals.learningplatform.observability.RootLogCapture()) {
       assertThatThrownBy(() -> purge.sweep(0)).isInstanceOf(DataAccessException.class);
-      assertThat(captured.list).anyMatch(event ->
+      assertThat(captured.events()).anyMatch(event ->
           event.getLevel() == ch.qos.logback.classic.Level.ERROR
               && event.getFormattedMessage().contains("governance failure"));
-    } finally {
-      root.detachAppender(captured);
     }
   }
 
