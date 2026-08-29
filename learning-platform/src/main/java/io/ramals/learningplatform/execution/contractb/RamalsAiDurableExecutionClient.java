@@ -46,6 +46,15 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
   private static final Logger LOGGER =
       LoggerFactory.getLogger(RamalsAiDurableExecutionClient.class);
 
+  /**
+   * The AI plane's marker for "no provider execution was created".
+   *
+   * <p>Kept as a constant on both sides of the boundary and asserted by a contract test, because a
+   * typo here would silently turn every definite refusal into an ambiguous one — safe, but it would
+   * quietly fill the ledger with executions needing an operator that never needed one.
+   */
+  static final String SUBMISSION_NOT_CREATED = "NOT_CREATED";
+
   private final RestClient restClient;
   private final WorkloadToken tokenProvider;
 
@@ -71,13 +80,30 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
     Map<?, ?> response;
     try {
       response = post("/internal/v1/durable/executions", body);
-    } catch (RestClientResponseException refused) {
-      // A status the far side chose. It knows nothing was submitted, so this is a refusal and the
-      // caller may safely record a definite failure.
-      LOGGER.warn("contract B submission refused [requestId={}, status={}]",
-          command.requestId(), refused.getStatusCode().value());
-      throw new DurableExecutionRefusedException(
-          command.requestId(), refused.getStatusCode().value());
+    } catch (RestClientResponseException answered) {
+      // A status the far side chose -- which is *not* the same as knowing nothing was created.
+      //
+      // This used to treat any status as a definite refusal, and that failed open in the one
+      // direction it must not. The same 500 covers "the SDK was missing" and "the connection
+      // dropped after create was sent", and only the AI plane can tell those apart. Recording
+      // FAILED for the second says RAMALS knows no provider execution exists, when one may be
+      // running and billing under a name RAMALS never learned.
+      //
+      // So the classification is read from what the far side *says*, not from the status it chose.
+      // A definite refusal requires an explicit NOT_CREATED; anything else -- an unrecognised body,
+      // a proxy's own error page, a status raised by infrastructure that never reached the AI
+      // plane -- is ambiguous by default and fails closed.
+      if (creationRuledOut(answered)) {
+        LOGGER.warn("contract B submission refused before creation [requestId={}, status={}]",
+            command.requestId(), answered.getStatusCode().value());
+        throw new DurableExecutionRefusedException(
+            command.requestId(), answered.getStatusCode().value());
+      }
+      LOGGER.warn("contract B submission failed and creation cannot be ruled out [requestId={}, "
+          + "status={}]. Treated as ambiguous: a provider execution may exist.",
+          command.requestId(), answered.getStatusCode().value());
+      throw new DurableSubmissionAmbiguousException(command.requestId(),
+          "the submission failed with a status that does not rule out provider-side creation");
     } catch (ResourceAccessException | IllegalStateException unknown) {
       // A timeout, a reset connection, an unreadable body. The provider may be running this work.
       throw new DurableSubmissionAmbiguousException(command.requestId(),
@@ -99,6 +125,32 @@ public class RamalsAiDurableExecutionClient implements DurableExecutionPort {
         string(response, "custom_id"),
         string(response, "created_at"),
         string(response, "expires_at"));
+  }
+
+  /**
+   * Whether the AI plane explicitly stated that no provider execution was created.
+   *
+   * <p>The marker is a positive claim and is required to be present, spelled exactly, and made by
+   * the AI plane itself. Its absence is not evidence of anything — a proxy error page, a gateway
+   * timeout, a body this build cannot parse and a response that never reached the AI plane all
+   * arrive with no marker, and none of them rules creation out.
+   *
+   * <p>Reading it never throws. A classifier that could fail while classifying a failure would
+   * decide the outcome by accident, so anything unreadable simply means "not stated", which is the
+   * safe answer.
+   */
+  private static boolean creationRuledOut(RestClientResponseException answered) {
+    try {
+      Map<?, ?> body = answered.getResponseBodyAs(Map.class);
+      if (body == null) {
+        return false;
+      }
+      Object detail = body.get("detail");
+      return detail instanceof Map<?, ?> stated
+          && SUBMISSION_NOT_CREATED.equals(String.valueOf(stated.get("submission")));
+    } catch (RuntimeException unreadable) {
+      return false;
+    }
   }
 
   @Override

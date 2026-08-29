@@ -84,6 +84,65 @@ _HTTP_STATUS_BY_CODE: dict[GatewayErrorCode, int] = {
 }
 
 
+# Whether a failed submission can have left a provider execution behind. The caller decides between
+# a definite FAILED and an ambiguous INDETERMINATE on this and nothing else, so it is stated
+# explicitly here rather than inferred from a status code on the other side of the wire.
+#
+# A status cannot carry this. The same 500 means "the SDK was missing" and "the connection dropped
+# after create was sent", and those are opposite answers. Saying which one it was is knowledge only
+# this process has, and losing it at the boundary is what made a 5xx-after-create look retryable.
+SUBMISSION_NOT_CREATED = "NOT_CREATED"
+"""No provider execution exists. Safe for the caller to record a definite failure."""
+
+SUBMISSION_MAY_EXIST = "MAY_EXIST"
+"""A provider execution may exist and cannot be named. The caller must fail closed."""
+
+# Only a *deliberate, parsed rejection* rules creation out. Everything here was decided by something
+# that read the request and said no -- our own capability gate, our own governance ceilings, or the
+# provider answering with a classified refusal before any batch could be created.
+_CREATION_RULED_OUT: frozenset[GatewayErrorCode] = frozenset(
+    {
+        # Refused before the adapter was reached at all.
+        GatewayErrorCode.CONTRACT_B_UNSUPPORTED,
+        GatewayErrorCode.ROUTE_NOT_CONFIGURED,
+        # Refused by our own governance, before any provider call.
+        GatewayErrorCode.TOKEN_CEILING_EXCEEDED,
+        GatewayErrorCode.COST_CEILING_EXCEEDED,
+        GatewayErrorCode.DEADLINE_EXCEEDED,
+        # The provider parsed the request and rejected it. A 400, a 401/403 or a 429 on batch
+        # creation is an answer, and an answer means nothing was created.
+        GatewayErrorCode.PROVIDER_INVALID_REQUEST,
+        GatewayErrorCode.PROVIDER_AUTH_ERROR,
+        GatewayErrorCode.PROVIDER_RATE_LIMITED,
+    }
+)
+
+# Deliberately absent, and each for a reason:
+#   PROVIDER_TIMEOUT     -- the request may have arrived and been acted on; a timeout is the absence
+#                           of an answer, never an answer.
+#   PROVIDER_UNAVAILABLE -- covers connection resets and the provider's own 5xx. A reset can happen
+#                           after the bytes were sent, and a provider 500 can follow work it already
+#                           began. Neither rules creation out.
+# Anything not listed in _CREATION_RULED_OUT is treated as MAY_EXIST, so a code added later fails
+# closed until someone decides otherwise.
+
+
+def _submission_disposition(code: GatewayErrorCode) -> str:
+    return SUBMISSION_NOT_CREATED if code in _CREATION_RULED_OUT else SUBMISSION_MAY_EXIST
+
+
+def _mark_submission(failure: HTTPException, disposition: str) -> None:
+    """Adds the disposition to an HTTPException raised before the adapter was reached.
+
+    ``detail`` is typed ``str`` upstream but is a dict everywhere this service raises one, so it is
+    read through ``Any``. A detail that is genuinely a string is left alone rather than rewritten --
+    the caller treats a missing marker as MAY_EXIST, which is the safe reading.
+    """
+    detail: Any = failure.detail
+    if isinstance(detail, dict):
+        detail["submission"] = disposition
+
+
 @contextmanager
 def _provider_failures_as_http() -> Iterator[None]:
     """Turns a classified provider failure into the status that says the same thing.
@@ -134,42 +193,74 @@ def build_durable_router() -> APIRouter:
         the same reason. The ambiguity is handed back to Spring, which is the only component holding
         the durable state needed to decide what it means.
         """
-        # Deliberately NOT wrapped in _provider_failures_as_http(). The reads below translate a
-        # provider failure into the status that describes it; a submission must not, because the
-        # caller treats *any* status this service chooses as proof that nothing was created, and
-        # decides between FAILED and INDETERMINATE on that basis. Mapping a create-path timeout to
-        # a tidy 504 would dress an ambiguous outcome as a definite one. Whether that classification
-        # is right for every status is a separate question about the submission path and is not
-        # settled here; leaving this call exactly as it was keeps this change to the read paths,
-        # where a misclassification cannot produce a second provider execution.
-        adapter = _admitted(request)
-        submission = adapter.submit(
-            DurableSubmissionRequest(
-                request_id=payload.request_id,
-                idempotency_key=payload.idempotency_key,
-                request_digest=payload.request_digest,
-                model=payload.model,
-                messages=tuple(
-                    Message(role=message.role, content=message.content)
-                    for message in payload.messages
-                ),
-                max_output_tokens=payload.max_output_tokens,
+        # NOT wrapped in _provider_failures_as_http(). The read paths translate a provider failure
+        # into the status that describes it; a submission needs to say something a status cannot:
+        # whether a provider execution may now exist. That is stated explicitly in the body below,
+        # because the caller decides between a definite failure and an ambiguous one on it, and
+        # getting it wrong in the optimistic direction licenses a duplicate provider execution.
+        try:
+            adapter = _admitted(request)
+            submission = adapter.submit(
+                DurableSubmissionRequest(
+                    request_id=payload.request_id,
+                    idempotency_key=payload.idempotency_key,
+                    request_digest=payload.request_digest,
+                    model=payload.model,
+                    messages=tuple(
+                        Message(role=message.role, content=message.content)
+                        for message in payload.messages
+                    ),
+                    max_output_tokens=payload.max_output_tokens,
+                )
             )
-        )
-        business_event(
-            logger,
-            level=logging.INFO,
-            operation="gateway.durable.submit",
-            message="submitted a durable provider execution",
-            fields={
-                "requestId": payload.request_id,
-                "providerExecutionId": submission.provider_execution_id,
-                "customId": submission.custom_id,
-                "state": submission.state,
-                "outcome": "SUBMITTED",
-            },
-        )
-        return asdict(submission)
+        except HTTPException as refused:
+            # The capability gate. It runs before the adapter, so nothing was created -- but it
+            # raises its own HTTPException, and that detail needs the marker like any other.
+            _mark_submission(refused, SUBMISSION_NOT_CREATED)
+            raise
+        except GatewayError as failure:
+            raise HTTPException(
+                status_code=_HTTP_STATUS_BY_CODE.get(failure.code, status.HTTP_502_BAD_GATEWAY),
+                detail={
+                    "code": failure.code.value,
+                    "detail": str(failure),
+                    "submission": _submission_disposition(failure.code),
+                },
+            ) from failure
+        except Exception as unexpected:
+            # A failure nobody classified, raised from somewhere inside the submission path. It
+            # cannot prove the provider created nothing, so it must not be allowed to look like it
+            # can. 502 with MAY_EXIST, never a bare 500 the caller has to interpret.
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "SUBMISSION_UNCLASSIFIED",
+                    "detail": f"the submission failed with {type(unexpected).__name__}",
+                    "submission": SUBMISSION_MAY_EXIST,
+                },
+            ) from unexpected
+
+        # Past this line the batch exists. The response is built first and logged second, so that a
+        # failure in logging cannot lose a provider execution the caller has no other way to learn
+        # about -- which would recreate the very orphan this endpoint exists to avoid.
+        acknowledgement = asdict(submission)
+        try:
+            business_event(
+                logger,
+                level=logging.INFO,
+                operation="gateway.durable.submit",
+                message="submitted a durable provider execution",
+                fields={
+                    "requestId": payload.request_id,
+                    "providerExecutionId": submission.provider_execution_id,
+                    "customId": submission.custom_id,
+                    "state": submission.state,
+                    "outcome": "SUBMITTED",
+                },
+            )
+        except Exception:  # noqa: BLE001 - never lose an acknowledged execution to a logging fault
+            logger.exception("failed to record a durable submission that succeeded")
+        return acknowledgement
 
     @router.get("/executions")
     def search(
