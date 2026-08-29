@@ -10,6 +10,7 @@ resources:
   - ramals-ai.yaml
   - web-ui.yaml
   - network-policy.yaml
+  - ingress.yaml
 labels:
   - pairs:
       app.kubernetes.io/part-of: ramals

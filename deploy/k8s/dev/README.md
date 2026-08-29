@@ -78,18 +78,40 @@ Push goes to `localhost:5000`; the cluster pulls the same repositories as
 
 ## Developer access
 
-Every Service is `ClusterIP`. There is no Ingress, no NodePort, and the cluster is created with no
-host port mappings — so nothing is reachable from the host until you ask for it:
+The cluster publishes **one** host port, 8080, to the Traefik load balancer. Everything else is
+`ClusterIP`, so that single mapping is the only way in and PostgreSQL cannot be reached from the
+host at all.
 
-```powershell
-kubectl -n ramals-dev port-forward svc/web-ui 5173:8080            # http://localhost:5173
-kubectl -n ramals-dev port-forward svc/learning-platform 8080:8080 # http://localhost:8080
-kubectl -n ramals-dev port-forward svc/keycloak 8081:8080          # http://localhost:8081
-kubectl -n ramals-dev port-forward svc/ramals-ai 8000:8000         # http://localhost:8000/health/ready
-```
+| URL | Serves |
+|---|---|
+| http://localhost:8080 | the RAMALS UI (its NGINX proxies `/api/` to the platform) |
+| http://keycloak.localhost:8080 | Keycloak |
 
-**Do not port-forward PostgreSQL as a matter of course.** It is cluster-internal by design; forward
-it only for a specific debugging task and stop the forward afterwards.
+`*.localhost` resolves to 127.0.0.1 in Chrome, Edge and Firefox without a hosts-file entry.
+
+No `kubectl port-forward` is needed for normal use. For a one-off look at something not exposed --
+the platform's actuator, say -- forward it deliberately and stop the forward afterwards.
+
+### The single-issuer rule
+
+The browser and the platform must use the **same** Keycloak URL. Keycloak stamps `iss` with the host
+it was reached on; the platform fetches JWKS from the issuer it is configured with. Point the
+browser at one host and the platform at another and login succeeds while every subsequent API call
+fails 401 -- a failure that looks like a permissions problem and is not.
+
+Three things therefore have to agree, and `bootstrap.ps1` sets all three:
+
+1. `VITE_KEYCLOAK_URL=http://keycloak.localhost:8080`, baked into the web-ui image at build time
+2. `RAMALS_OIDC_ISSUER_URI` in `configmap.yaml`, the same URL
+3. a CoreDNS rewrite mapping `keycloak.localhost` to the in-cluster Keycloak Service
+
+### VITE_API_BASE_URL must be empty
+
+`api.ts` already prefixes every request with `/api/v1/...`. A non-empty base produces
+`/api/api/v1/...`, which Spring has no route for; it answers `404 RESOURCE_NOT_FOUND` from
+`NoResourceFoundException` and the UI renders "Not found" panels that look like missing data. The
+`Dockerfile` asserts the keycloak URL reached the bundle so that class of mistake fails the build
+rather than the browser.
 
 ## Contract B and AI providers
 

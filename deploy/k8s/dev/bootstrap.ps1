@@ -17,6 +17,7 @@ param(
   [int]$RegistryPort = 5000,
   [string]$Namespace = "ramals-dev",
   [switch]$SkipBuild,
+  [int]$IngressPort = 8080,
   [switch]$EnableOpenAI
 )
 
@@ -56,9 +57,12 @@ if (-not (k3d registry list -o json | ConvertFrom-Json | Where-Object { $_.name 
 
 Write-Host "== cluster ==" -ForegroundColor Cyan
 if (-not (k3d cluster list -o json | ConvertFrom-Json | Where-Object { $_.name -eq $ClusterName })) {
-  # No host port mappings on purpose: every Service in this package is ClusterIP, so there is
-  # nothing to publish. Developer access is kubectl port-forward (see README).
-  k3d cluster create $ClusterName --servers 1 --agents 1 --registry-use $registryRef --wait --timeout 300s | Out-Host
+  # -p publishes a host port to the Traefik load balancer, which is what makes the Ingress
+  # reachable. Every Service stays ClusterIP; this one mapping is the only way in, and it can only
+  # be set at creation time -- on an existing cluster use
+  # `k3d cluster edit <name> --port-add "8080:80@loadbalancer"`.
+  k3d cluster create $ClusterName --servers 1 --agents 1 --registry-use $registryRef `
+    -p "${IngressPort}:80@loadbalancer" --wait --timeout 300s | Out-Host
 } else {
   Write-Host "cluster $ClusterName already exists"
 }
@@ -80,12 +84,42 @@ if (-not $SkipBuild) {
     # name. Both names address one registry, so one push serves both.
     $push = "localhost:${RegistryPort}/ramals-$($i.name):$gitSha"
     Write-Host "building $($i.name)" -ForegroundColor DarkCyan
-    docker build -t $push -f $i.file . | Out-Host
+
+    # web-ui's VITE_* values are inlined at build time, so the OIDC issuer is a property of the
+    # image. VITE_API_BASE_URL must be EMPTY: api.ts already prefixes every path with /api/v1, so a
+    # non-empty base produces /api/api/v1/... -- a route Spring has no mapping for, and the only
+    # symptom is a 404 the UI renders as "Not found".
+    $buildArgs = @()
+    if ($i.name -eq "web-ui") {
+      $buildArgs = @(
+        "--build-arg", "VITE_KEYCLOAK_URL=http://keycloak.localhost:${IngressPort}",
+        "--build-arg", "VITE_API_BASE_URL="
+      )
+    }
+    docker build @buildArgs -t $push -f $i.file . | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "build failed: $($i.name)" }
     docker push $push | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "push failed: $($i.name)" }
   }
 }
+
+Write-Host "== cluster DNS ==" -ForegroundColor Cyan
+# The browser and the platform must agree on ONE issuer URL. `keycloak.localhost` resolves to
+# 127.0.0.1 in browsers for free (RFC 6761); this rewrite makes the same name resolve to the
+# keycloak Service inside the cluster, so Keycloak stamps `iss` with a host the platform can also
+# fetch JWKS from. Without it, login succeeds in the browser and every API call then 401s.
+@"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  ramals.override: |
+    rewrite name keycloak.localhost keycloak.$Namespace.svc.cluster.local
+"@ | kubectl apply -f - | Out-Host
+kubectl -n kube-system rollout restart deployment/coredns | Out-Host
+kubectl -n kube-system rollout status deployment/coredns --timeout=120s | Out-Host
 
 Write-Host "== secrets ==" -ForegroundColor Cyan
 kubectl apply -f deploy/k8s/dev/namespace.yaml | Out-Host

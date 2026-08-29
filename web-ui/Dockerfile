@@ -3,7 +3,35 @@ WORKDIR /app
 COPY web-ui/package.json web-ui/package-lock.json ./
 RUN npm ci
 COPY web-ui/ ./
+
+# Vite inlines `import.meta.env.VITE_*` at build time, so these are baked into the bundle and cannot
+# be changed by an environment variable on the running container. That makes the identity of the
+# OIDC issuer a property of the image, which is why it is a build argument rather than a default
+# somebody edits in source.
+#
+# The default matches authClient.ts's own fallback, so an unparameterised build behaves exactly as
+# before. Local Kubernetes overrides it with a URL that resolves identically from the browser and
+# from inside the cluster -- see deploy/k8s/dev/README.md; a browser-only URL produces tokens whose
+# `iss` the platform then rejects.
+ARG VITE_KEYCLOAK_URL=http://localhost:8081
+ARG VITE_KEYCLOAK_REALM=ramals
+ARG VITE_KEYCLOAK_CLIENT_ID=ramals-web-ui
+ARG VITE_API_BASE_URL=http://localhost:8080
+# Written to .env.production rather than exported as ENV: Vite resolves import.meta.env from its
+# .env files, and a process environment variable of the same name is not a dependable substitute --
+# it builds without error and silently produces a bundle carrying the source defaults, which then
+# fails at runtime in the browser rather than here.
+RUN printf 'VITE_KEYCLOAK_URL=%s\nVITE_KEYCLOAK_REALM=%s\nVITE_KEYCLOAK_CLIENT_ID=%s\nVITE_API_BASE_URL=%s\n' \
+      "$VITE_KEYCLOAK_URL" "$VITE_KEYCLOAK_REALM" "$VITE_KEYCLOAK_CLIENT_ID" "$VITE_API_BASE_URL" \
+      > .env.production \
+ && cat .env.production
+
 RUN npm run build
+
+# Fail the build if the bundle did not pick the values up. Without this the only symptom is a blank
+# page in a browser, a long way from the cause.
+RUN grep -rq "$VITE_KEYCLOAK_URL" dist/assets/*.js \
+ || (echo "VITE_KEYCLOAK_URL '$VITE_KEYCLOAK_URL' is not present in the built bundle" && exit 1)
 
 # Alpine 3.24.1 base, pinned by digest. The pin is what makes the build reproducible and it is also
 # why the image cannot pick up a security fix on its own: the digest is frozen, so a CVE published
