@@ -28,6 +28,92 @@ public class ContractBProperties {
 
   private final Reconciliation reconciliation = new Reconciliation();
   private final Recovery recovery = new Recovery();
+  private final Purge purge = new Purge();
+
+  public Purge getPurge() {
+    return purge;
+  }
+
+  /**
+   * The retention sweep (M2-ADR-018 §9, M2-ADR-019).
+   *
+   * <p>A third switch, separate from the route and the worker, because it authorises a different
+   * thing: this one <em>deletes</em>. The other two commission work and drive it forward; a sweep
+   * removes result material permanently, and an operator turning on reconciliation should not
+   * silently acquire a scheduled delete along with it.
+   */
+  public static class Purge {
+
+    /**
+     * Whether the sweep runs on a schedule.
+     *
+     * <p>Off by default, like everything else in Contract B. Off is also the correct state while no
+     * results exist: a scheduler sweeping an empty table forever is noise, not safety.
+     *
+     * <p><strong>It must be on wherever results are being produced.</strong> M2-ADR-018 §10 makes a
+     * purge that cannot run a governance failure rather than a backlog, and a purge that is merely
+     * switched off fails the same rule more quietly.
+     */
+    private boolean enabled = false;
+
+    /**
+     * How often the sweep runs. Six hours.
+     *
+     * <p>The ceiling is thirty days, so cadence is not a precision problem — anything well inside a
+     * day keeps the window tight without turning an administrative bulk delete into a busy loop.
+     */
+    private long intervalMs = 21_600_000;
+
+    /**
+     * The retention window, in days. Thirty: the ceiling itself.
+     *
+     * <p>Configurable downward only in effect — the database function refuses anything above the
+     * ceiling or below one, so this cannot widen retention. Lowering it is a legitimate operator
+     * choice and the function honours it.
+     */
+    private int retentionDays = ContractBResultPurge.CEILING_DAYS;
+
+    /**
+     * Rows removed per sweep.
+     *
+     * <p>Bounded so one sweep cannot hold a long transaction over an arbitrarily large window. A
+     * backlog larger than this drains over successive sweeps rather than in one statement, which is
+     * the right trade for a delete that competes with live traffic.
+     */
+    private int batchSize = 500;
+
+    public boolean isEnabled() {
+      return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+      this.enabled = enabled;
+    }
+
+    public long getIntervalMs() {
+      return intervalMs;
+    }
+
+    public void setIntervalMs(long intervalMs) {
+      this.intervalMs = intervalMs;
+    }
+
+    public int getRetentionDays() {
+      return retentionDays;
+    }
+
+    public void setRetentionDays(int retentionDays) {
+      this.retentionDays = retentionDays;
+    }
+
+    public int getBatchSize() {
+      return batchSize;
+    }
+
+    public void setBatchSize(int batchSize) {
+      this.batchSize = batchSize;
+    }
+  }
 
   public Recovery getRecovery() {
     return recovery;

@@ -48,6 +48,28 @@ ramals:
       max-attempts: ${RAMALS_AI_DISPATCHER_MAX_ATTEMPTS:5}
       initial-backoff-millis: ${RAMALS_AI_DISPATCHER_INITIAL_BACKOFF_MS:1000}
       max-backoff-millis: ${RAMALS_AI_DISPATCHER_MAX_BACKOFF_MS:60000}
+  # Contract B: durable recoverable AI execution. Three independent switches, all off.
+  #
+  # They are separate because they authorise different things, and turning one on must not silently
+  # turn on another. `enabled` exposes the operator-only commissioning route -- it spends money at a
+  # paid provider. `reconciliation.enabled` runs the worker that drives executions forward and
+  # recovers lost acknowledgements. `purge.enabled` runs the retention sweep, which *deletes*.
+  #
+  # Enabling the route without the worker leaves commissioned executions unreconciled; enabling
+  # either without the purge leaves the M2-ADR-018 section 9 ceiling unenforced. The safe DEV order
+  # is purge, then reconciliation, then the route -- see the Contract B operational runbook.
+  contract-b:
+    enabled: ${RAMALS_CONTRACT_B_ENABLED:false}
+    reconciliation:
+      enabled: ${RAMALS_CONTRACT_B_RECONCILIATION_ENABLED:false}
+      interval-ms: ${RAMALS_CONTRACT_B_RECONCILIATION_INTERVAL_MS:30000}
+      batch-size: ${RAMALS_CONTRACT_B_RECONCILIATION_BATCH_SIZE:20}
+      inspection-budget-per-pass: ${RAMALS_CONTRACT_B_INSPECTION_BUDGET_PER_PASS:15}
+    purge:
+      enabled: ${RAMALS_CONTRACT_B_PURGE_ENABLED:false}
+      interval-ms: ${RAMALS_CONTRACT_B_PURGE_INTERVAL_MS:21600000}
+      retention-days: ${RAMALS_CONTRACT_B_PURGE_RETENTION_DAYS:30}
+      batch-size: ${RAMALS_CONTRACT_B_PURGE_BATCH_SIZE:500}
   security:
     web-origin: ${RAMALS_WEB_ORIGIN:http://localhost:5173}
     # Two tiers, and the placeholder defaults must equal the defaults in RateLimitProperties.

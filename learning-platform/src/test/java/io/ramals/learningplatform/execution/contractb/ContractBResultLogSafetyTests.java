@@ -190,21 +190,31 @@ class ContractBResultLogSafetyTests {
   // -- the sweep must stay off every ordinary path -------------------------------------------------
 
   @Test
-  @DisplayName("no ordinary code path invokes the ceiling sweep")
+  @DisplayName("only the dedicated purge scheduler invokes the ceiling sweep")
   void theSweepIsUnreachableFromOrdinaryCode() throws Exception {
-    // M2-ADR-019 §3 makes this a testable property rather than a convention: the platform runtime
-    // *can* reach the sweep function, and no controller, service, adapter or reconciliation path
-    // may call it. Asserted over main sources, so adding such a call fails here rather than in
-    // review.
+    // M2-ADR-019 §3 makes this a testable property rather than a convention: no controller,
+    // service, adapter or reconciliation path may call the sweep, because an ordinary caller erases
+    // the boundary between a targeted adoption delete and an arbitrary bulk one.
+    //
+    // Exactly one caller is permitted, and it is named here rather than implied. ContractBPurgeWorker
+    // exists because the previous position -- ship the function, let an operator run it -- left the
+    // thirty-day ceiling with no mechanism behind it, and M2-ADR-018 §10 makes results outliving the
+    // ceiling a governance failure rather than a backlog. That worker is separately flagged and off
+    // by default, so the sweep is still not something a deployment acquires by accident.
+    //
+    // The check is on *invocation* rather than on mention, which is stricter in the direction that
+    // matters: a file that calls purge.sweep(...) without naming the class is now caught, where
+    // before it was not. Referencing the class for its CEILING_DAYS constant is not invoking it.
     Path main = Path.of("src", "main", "java");
     try (Stream<Path> sources = Files.walk(main)) {
       List<Path> callers = sources
           .filter(path -> path.toString().endsWith(".java"))
           .filter(path -> !path.endsWith("ContractBResultPurge.java"))
+          .filter(path -> !path.endsWith("ContractBPurgeWorker.java"))
           .filter(path -> {
             try {
               String text = Files.readString(path, StandardCharsets.UTF_8);
-              return text.contains("ContractBResultPurge")
+              return text.contains(".sweep(")
                   || text.contains("purge_expired_ai_execution_results");
             } catch (Exception unreadable) {
               return false;
@@ -213,10 +223,26 @@ class ContractBResultLogSafetyTests {
           .toList();
 
       assertThat(callers)
-          .as("the ceiling sweep is operator-invoked; an ordinary caller erases the boundary "
-              + "between a targeted adoption delete and an arbitrary bulk one")
+          .as("the ceiling sweep runs on its own schedule and nowhere else; an ordinary caller "
+              + "erases the boundary between a targeted adoption delete and an arbitrary bulk one")
           .isEmpty();
     }
+  }
+
+  @Test
+  @DisplayName("the one permitted caller is a flagged scheduler, not an ordinary path")
+  void thePermittedCallerIsAFlaggedScheduler() throws Exception {
+    String worker = Files.readString(
+        Path.of("src", "main", "java", "io", "ramals", "learningplatform", "execution",
+            "contractb", "ContractBPurgeWorker.java"), StandardCharsets.UTF_8);
+
+    // The exemption above is only defensible while the caller it names is itself gated. A scheduler
+    // that ran unconditionally would delete result material in every deployment that upgraded.
+    assertThat(worker)
+        .as("the purge scheduler must be conditional and separately flagged")
+        .contains("@ConditionalOnProperty")
+        .contains("purge.enabled")
+        .contains("havingValue = \"true\"");
   }
 
   @Test

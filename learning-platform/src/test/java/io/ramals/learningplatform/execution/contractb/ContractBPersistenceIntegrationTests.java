@@ -405,6 +405,23 @@ class ContractBPersistenceIntegrationTests {
   }
 
   @Test
+  @DisplayName("8g: the batch bound caps one sweep and the remainder drains on the next")
+  void theBatchBoundCapsOneSweep() {
+    for (int i = 1; i <= 3; i++) {
+      String requestId = String.format("req-bounded-%05d", i);
+      seedExecution(requestId, "SUCCEEDED", 45);
+      seedAgedResult(requestId, 45);
+    }
+
+    // The bound is what makes a scheduled sweep safe to leave running: a backlog larger than one
+    // batch drains over successive sweeps rather than in one long transaction competing with live
+    // traffic. Enforced by the database function, not by the caller.
+    assertThat(purge.sweep(30, 2)).isEqualTo(2);
+    assertThat(purge.sweep(30, 2)).isEqualTo(1);
+    assertThat(purge.sweep(30, 2)).isZero();
+  }
+
+  @Test
   @DisplayName("8c: a repeated sweep removes nothing and writes no second ledger entry")
   void theSweepIsIdempotent() {
     seedExecution("req-expired-0002", "SUCCEEDED", 45);
