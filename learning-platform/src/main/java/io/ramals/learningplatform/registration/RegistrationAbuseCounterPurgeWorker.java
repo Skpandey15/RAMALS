@@ -15,33 +15,19 @@ import org.springframework.stereotype.Component;
 /**
  * Deletes abuse-counter rows whose window has long closed.
  *
- * <p><strong>Why this exists at all.</strong> {@code identity.abuse_counter} gains a row per
- * dimension per window and never loses one. Registration alone contributes a source bucket and an
- * email bucket per attempt; mobile verification contributes three more. Left alone the table grows
- * without bound, on the write path of a public unauthenticated endpoint, until the insert that
- * enforces the rate limit is itself the slowest thing in the request. A rate limiter that degrades
- * the service it protects has inverted its purpose — so the sweep is part of the control, not
- * housekeeping alongside it.
+ * <p>{@code identity.abuse_counter} gains a row per dimension per window and never loses one, on
+ * the write path of a public endpoint, until the insert that enforces the rate limit is the slowest
+ * thing in the request. A limiter that degrades the service it protects has inverted its purpose,
+ * so the sweep is part of the control rather than housekeeping beside it.
  *
- * <p><strong>Why a fixed cutoff rather than a per-window one.</strong> A row is dead the moment its
- * window closes, and every window here is at most an hour. Retaining a week is far longer than any
- * ceiling needs and short enough to bound the table; the margin exists so that a counter is still
- * available to an operator reconstructing an abuse episode a few days later.
+ * <p>Holds no state: the cutoff is computed from the clock each run, so a missed sweep and an empty
+ * one are indistinguishable and concurrent replicas delete disjoint or already-deleted rows.
+ * Failure is logged and swallowed, because killing the only thing that bounds the table is worse
+ * than a skipped sweep.
  *
- * <p><strong>Why it holds no state.</strong> The cutoff is computed from the clock on every run, so a
- * sweep that never happened is indistinguishable from one that deleted nothing, and a process that
- * dies mid-sweep leaves a committed partial delete the next run simply continues. There is no cursor
- * to lose. The same property is what makes it safe to run on every replica: concurrent sweeps delete
- * disjoint or already-deleted rows.
- *
- * <p><strong>Why failure is swallowed here.</strong> A scheduled method that throws is not retried by
- * the default scheduler, and killing the only thing that bounds the table is a worse outcome than a
- * skipped sweep. The failure is logged at ERROR, which is the alerting signal.
- *
- * <p>Enabled by default, unlike the Contract B purge worker it is modelled on. That worker deletes
- * model output and is therefore something an operator should switch on deliberately; this one deletes
- * expired counters, which nothing reads, and defaulting it off would mean every deployment silently
- * accrues the growth this exists to prevent.
+ * <p>Enabled by default, unlike the Contract B purge worker it is modelled on: that one deletes
+ * model output and should be switched on deliberately, this one deletes expired counters nothing
+ * reads.
  */
 @Component
 @ConditionalOnProperty(prefix = "ramals.registration", name = "abuse-counter-purge.enabled",

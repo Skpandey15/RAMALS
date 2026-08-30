@@ -15,19 +15,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 /**
- * Persistence for registration operations, contact PII, onboarding state, mobile challenges, abuse
- * counters and the registration audit trail.
+ * Persistence for registration operations, contact PII, onboarding state, mobile challenges,
+ * abuse counters and the registration audit trail.
  *
- * <p><strong>Why one repository across five tables.</strong> They are a single consistency boundary,
- * not five: an onboarding state change is only meaningful together with the contact row it describes,
- * and a verified challenge is only meaningful together with the mobile reservation it produces.
- * Splitting them per table would let a caller update one without the other, which is the failure this
- * capability most needs to avoid.
- *
- * <p><strong>Plain JDBC, deliberately.</strong> The invariants here are database invariants — a
- * partial unique index, an upsert that must not overwrite, a {@code FOR UPDATE} that must actually
- * lock. Those read clearly as SQL and obscurely as mapped entities, and the mapping layer would add a
- * flush-ordering question to every one of them.
+ * <p>One repository across five tables because they are a single consistency boundary: an
+ * onboarding change is only meaningful with the contact row it describes. Plain JDBC because the
+ * invariants here are database invariants - a partial unique index, an upsert that must not
+ * overwrite, a FOR UPDATE that must actually lock.
  */
 @Repository
 class RegistrationRepository {
@@ -45,11 +39,9 @@ class RegistrationRepository {
   /**
    * Claims or replays a registration operation for an Idempotency-Key.
    *
-   * <p>The insert is {@code ON CONFLICT DO NOTHING} followed by a read, so two concurrent requests
-   * carrying the same key converge on one row rather than racing to create two — the database
-   * decides, not the application. The fingerprint is then compared in constant time: a key replayed
-   * with a <em>different</em> body is a client defect or an attack, and answering it with the first
-   * request's result would be worse than refusing it.
+   * <p>Insert-on-conflict-do-nothing then read, so concurrent requests with one key converge on one
+   * row. A key replayed with a different body is refused rather than answered with the first
+   * request's result.
    */
   Operation start(String key, String fingerprint) {
     jdbc.update("""
@@ -87,12 +79,8 @@ class RegistrationRepository {
   }
 
   /**
-   * Records that an operation failed in a way a later attempt with the same key may resume from.
-   *
-   * <p>Without this the row stays at {@code STARTED} forever and the {@code FAILED_RECOVERABLE} state
-   * declared in the V041 check constraint is unreachable — a state machine that exists in the schema
-   * and nowhere in the behaviour. An operator triaging a stuck registration needs to see the
-   * difference between "in flight" and "failed, retryable".
+   * Records a failure a later attempt with the same key may resume from. Without it the row stays
+   * at STARTED forever and FAILED_RECOVERABLE is unreachable.
    */
   void markFailedRecoverable(UUID operationId) {
     jdbc.update("""
@@ -107,12 +95,10 @@ class RegistrationRepository {
   // -------------------------------------------------------------------------------------------
 
   /**
-   * Writes the contact row and opens onboarding, without ever overwriting an existing one.
+   * Writes the contact row and opens onboarding, never overwriting an existing one.
    *
-   * <p>Both inserts are {@code ON CONFLICT DO NOTHING}. That is the second line of defence behind
-   * {@code RegistrationService}'s refusal to persist for an identity it did not create: even if a
-   * caller reached here for a learner who already has contact data, this cannot replace their name or
-   * their mobile number with somebody else's.
+   * <p>Both inserts are ON CONFLICT DO NOTHING: the second line of defence behind
+   * {@code RegistrationService} refusing to persist for an identity it did not create.
    */
   void complete(UUID operationId, UUID learnerId, RegistrationData data) {
     jdbc.update("""
@@ -136,12 +122,8 @@ class RegistrationRepository {
   /**
    * Marks the operation complete, once the provider has accepted the verification mail.
    *
-   * <p>Separate from {@link #complete} on purpose. {@code EMAIL_PENDING} is what
-   * {@code RegistrationService} treats as "this operation already finished, replay it as a no-op", so
-   * it must not be reached until the verification mail has actually been requested. Setting it
-   * alongside the contact insert would mean a send failure left the operation looking finished, and a
-   * retry carrying the same Idempotency-Key would short-circuit — stranding a learner with an account
-   * they were never told how to verify.
+   * <p>Separate from {@link #complete} because EMAIL_PENDING is what makes a replay a no-op. Setting
+   * it before the mail was accepted would strand a learner whose retry short-circuits.
    */
   void markEmailRequested(UUID operationId) {
     jdbc.update("""
@@ -165,11 +147,8 @@ class RegistrationRepository {
   }
 
   /**
-   * The learner's onboarding state, or empty for a learner who never registered.
-   *
-   * <p>Empty is a legitimate answer, not an error: ADR 0001 lets a learner exist from just-in-time
-   * provisioning alone, and every such learner predates or bypasses this capability. Treating the
-   * absence as a failure would make the legacy population unreadable.
+   * The learner's onboarding state, or empty for a learner who never registered - a legitimate
+   * answer, since ADR 0001 lets a learner exist from just-in-time provisioning alone.
    */
   Optional<String> findOnboardingState(UUID learnerId) {
     return jdbc.query(
@@ -178,10 +157,8 @@ class RegistrationRepository {
   }
 
   /**
-   * Records trusted email verification and advances onboarding.
-   *
-   * <p>The state update is guarded by the states it may legally leave, so a learner who has already
-   * progressed past mobile verification cannot be walked backwards by a late reconciliation.
+   * Records trusted email verification and advances onboarding. The state update is guarded by the
+   * states it may legally leave, so a late reconciliation cannot walk a learner backwards.
    */
   void markEmailVerified(UUID learnerId) {
     jdbc.update("""
@@ -221,11 +198,9 @@ class RegistrationRepository {
   /**
    * Inserts a challenge.
    *
-   * <p>{@code expires_at} is converted to {@link OffsetDateTime} rather than passed as an
-   * {@link Instant}. The PostgreSQL driver cannot infer a SQL type for {@code Instant} and throws
-   * "Can't infer the SQL type to use" at execution — so an {@code Instant} here compiles, passes
-   * every test with a mocked repository, and fails for the first learner who asks for a code.
-   * {@link #withinCeiling} and {@link #purgeAbuseCountersBefore} convert for the same reason.
+   * <p>{@code expires_at} is converted to {@link OffsetDateTime}: the PostgreSQL driver cannot infer
+   * a SQL type for {@link Instant} and throws at execution, so an Instant here passes every mocked
+   * test and fails for the first learner who asks for a code.
    */
   void insertChallenge(UUID id, UUID learnerId, String mobile, byte[] otpHmac, String keyVersion,
       int maxAttempts, String policyVersion, Instant expiresAt) {
@@ -249,13 +224,9 @@ class RegistrationRepository {
   /**
    * Loads a challenge for verification, locking the row.
    *
-   * <p>The {@code learner_id} predicate is the cross-user control, and it belongs in the query rather
-   * than in a check afterwards: a challenge id that belongs to somebody else must be indistinguishable
-   * from one that does not exist, and an ownership test performed after a successful read is a test
-   * somebody can later forget to perform.
-   *
-   * <p>{@code FOR UPDATE} serialises concurrent verification of the same challenge, so two racing
-   * submissions of the same code cannot both consume it.
+   * <p>The learner_id predicate is the cross-user control and belongs in the query: another
+   * learner's challenge must read as absent, not be read and then rejected. FOR UPDATE serialises
+   * concurrent verification of the same challenge.
    */
   Optional<Challenge> lockChallengeForVerification(UUID id, UUID learnerId) {
     return jdbc.query("""
@@ -286,11 +257,8 @@ class RegistrationRepository {
   /**
    * Claims the mobile number for this learner and closes the challenge.
    *
-   * <p>The reservation is enforced by {@code uq_learner_contact_verified_mobile}, a partial unique
-   * index over verified rows. Two learners verifying the same number concurrently both reach this
-   * update; one commits and the other's constraint violation surfaces as
-   * {@code MOBILE_ALREADY_REGISTERED}. A read-then-write check could not do this — both readers would
-   * see the number free.
+   * <p>Enforced by {@code uq_learner_contact_verified_mobile}. A read-then-write check could not do
+   * this - both racing readers would see the number free.
    */
   void recordVerifiedMobile(UUID challengeId, UUID learnerId, String mobile) {
     try {
@@ -321,22 +289,11 @@ class RegistrationRepository {
   /**
    * Increments a fixed-window counter and reports whether the caller is still inside its ceiling.
    *
-   * <p><strong>Why the database and not a local map.</strong> The service runs multiple replicas. An
-   * in-process counter is bypassed by whichever pod the next request lands on, which for a public
-   * registration route and an SMS budget is not a partial control but an absent one. A single upsert
-   * returning the post-increment count makes the check atomic across replicas without a second
-   * datastore.
-   *
-   * <p><strong>Why blocked requests still increment.</strong> The increment happens before the
-   * comparison, so an attacker who keeps pushing keeps the window pinned above its ceiling rather
-   * than sliding back under it. That deliberately makes sustained abuse cost the abuser the whole
-   * window. The dimensions are hashed, so no bucket key holds an email, a mobile number or an
-   * address.
-   *
-   * <p><strong>Why the window is aligned to the epoch.</strong> Every replica computes the same
-   * boundary from the same clock arithmetic without coordinating. The trade is the usual fixed-window
-   * one — up to twice the ceiling across a boundary — which is acceptable for an abuse ceiling whose
-   * job is to bound cost, and not acceptable for anything asked to be exact.
+   * <p>In the database, not a local map: the service runs multiple replicas and a per-pod counter
+   * throttles the accounting rather than the caller. Blocked requests still increment, so sustained
+   * abuse costs the abuser the whole window. Dimensions are hashed, so no bucket key holds an email,
+   * a number or an address. The window is epoch-aligned so every replica computes the same boundary
+   * without coordinating; the trade is the usual fixed-window overshoot at a boundary.
    */
   boolean withinCeiling(String dimension, int limit, int windowSeconds) {
     long epochSecond = Instant.now().getEpochSecond();
@@ -355,11 +312,8 @@ class RegistrationRepository {
   }
 
   /**
-   * Deletes counter rows whose window closed before the cutoff.
-   *
-   * <p>Called by {@link RegistrationAbuseCounterPurgeWorker}. Without it the table accumulates one
-   * row per dimension per window forever — unbounded growth in the storage path of a public endpoint,
-   * which is a slow denial of service against ourselves rather than a tidiness problem.
+   * Deletes counter rows whose window closed before the cutoff. Without it the table grows without
+   * bound on the write path of a public endpoint.
    */
   int purgeAbuseCountersBefore(Instant cutoff) {
     return jdbc.update("DELETE FROM identity.abuse_counter WHERE window_started_at < ?",
@@ -371,12 +325,8 @@ class RegistrationRepository {
   // -------------------------------------------------------------------------------------------
 
   /**
-   * Appends one registration audit event.
-   *
-   * <p>The table rejects UPDATE and DELETE by trigger, so this is the only way a row enters it and
-   * there is no way for one to change afterwards. Only surrogates and codes are recorded: no email,
-   * no mobile number, no code, no credential. The interaction id is taken from MDC so an audit row
-   * joins to the request that produced it.
+   * Appends one registration audit event. Only surrogates and codes: no email, mobile, code or
+   * credential. The interaction id comes from MDC so a row joins to the request that produced it.
    */
   void audit(UUID operationId, UUID learnerId, UUID challengeId, String eventType, String outcome,
       String reasonCode) {

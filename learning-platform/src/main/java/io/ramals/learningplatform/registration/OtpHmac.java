@@ -13,35 +13,20 @@ import org.springframework.stereotype.Component;
 /**
  * The keyed verifier for mobile one-time codes.
  *
- * <p><strong>Why keyed, and not a hash.</strong> A six-digit code has a million possible values. An
- * unkeyed digest of one — even a strong digest, even salted with public data — is exhaustible in
- * microseconds by anyone who obtains the stored value, so a database disclosure would hand the
- * attacker every outstanding code. An HMAC under a key held outside the database means a stolen table
- * yields nothing without also stealing the key. Reversible encryption would be worse than either:
- * verification does not need to recover the code, so holding a mechanism that can is pure downside.
+ * <p>Keyed, not hashed: a six-digit code has a million values, so an unkeyed digest of one is
+ * exhaustible in microseconds by anyone who obtains the stored value. An HMAC under a key held
+ * outside the database means a stolen table yields nothing. Reversible encryption would be worse
+ * again, since verification never needs to recover the code.
  *
- * <p><strong>The canonical encoding.</strong> The MAC is computed over exactly:
+ * <p>The canonical encoding is
+ * {@code HMAC-SHA-256(Kv, UTF-8(challengeId) || 0x00 || UTF-8(mobileE164) || 0x00 || ASCII(otp))},
+ * with the challenge id in lowercase UUID text form, the number in E.164 including the leading
+ * plus, and six zero-padded ASCII digits. The NUL separators make the encoding unambiguous - a MAC
+ * over an ambiguous encoding authenticates the ambiguity - and cannot occur inside any field.
  *
- * <pre>
- *   HMAC-SHA-256(Kv, UTF-8(challengeId) || 0x00 || UTF-8(mobileE164) || 0x00 || ASCII(otp))
- * </pre>
- *
- * <p>{@code challengeId} is the lowercase canonical UUID text form. {@code mobileE164} is the
- * normalized number including its leading {@code +}. {@code otp} is exactly six ASCII digits,
- * zero-padded. The {@code 0x00} separators are what make the encoding unambiguous: without them the
- * concatenation of a challenge id and a number could equal a different pairing of the two, and a MAC
- * over an ambiguous encoding authenticates the ambiguity rather than the values. A NUL byte cannot
- * occur inside any of the three fields, so it cannot be used to forge a boundary.
- *
- * <p><strong>Binding to the challenge and the number is the point.</strong> A MAC over the code alone
- * would verify equally against any challenge, so a code observed for one learner's challenge would
- * satisfy another's. Including both identifiers makes each stored value useful for exactly one
- * verification.
- *
- * <p><strong>Rotation.</strong> Keys are supplied as a versioned ring, and each challenge records the
- * version it was created under, so a rotation does not invalidate codes already in flight: a
- * challenge is always verified with the key that produced it. Retiring a key is then just removing it
- * from the ring once no unexpired challenge names it.
+ * <p>Binding to the challenge and number is the point: a MAC over the code alone would verify
+ * against any challenge. Keys are a versioned ring and each challenge records the version it was
+ * created under, so rotation does not invalidate codes already in flight.
  */
 @Component
 class OtpHmac {
@@ -60,11 +45,8 @@ class OtpHmac {
   }
 
   /**
-   * Parses {@code version:base64Key} entries.
-   *
-   * <p>Validation happens here, at startup, rather than at first use. A deployment whose key material
-   * is missing, malformed or too short is misconfigured, and the moment to discover that is while the
-   * container is starting — not when the first learner cannot verify their number.
+   * Parses {@code version:base64Key} entries. Validated at startup rather than at first use: the
+   * moment to discover missing or malformed key material is while the container is starting.
    */
   private static Map<String, byte[]> parseKeyRing(String configured) {
     Map<String, byte[]> ring = new LinkedHashMap<>();
@@ -125,11 +107,8 @@ class OtpHmac {
   }
 
   /**
-   * Compares two MACs without leaking where they first differ.
-   *
-   * <p>{@link MessageDigest#isEqual} is the constant-time comparison; {@code Arrays.equals} and
-   * {@code byte[].equals} are not, and a timing-visible comparison against a stored MAC is a
-   * distinguisher an attacker can drive with repeated submissions.
+   * Compares two MACs in constant time. {@code Arrays.equals} is not, and a timing-visible
+   * comparison against a stored MAC is a distinguisher an attacker can drive.
    */
   boolean matches(byte[] expected, byte[] actual) {
     return MessageDigest.isEqual(expected, actual);

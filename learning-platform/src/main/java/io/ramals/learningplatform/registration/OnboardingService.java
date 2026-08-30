@@ -14,18 +14,13 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The authoritative answer to "where is this learner in professional onboarding".
  *
- * <p><strong>The server decides; the browser is told.</strong> Every state here is derived from
- * trusted sources — the database, and Keycloak either through a signed token claim or a
- * server-to-server call. Nothing a client sends can move a learner to {@code EMAIL_VERIFIED},
- * {@code MOBILE_VERIFIED} or {@code ONBOARDED}, and there is no endpoint that accepts a state as
- * input. The UI reads this and renders it; it does not participate in deciding it.
+ * <p>Every state is derived from the database or from Keycloak, through a signed token claim or a
+ * server-to-server call. Nothing a client sends can move a learner to EMAIL_VERIFIED,
+ * MOBILE_VERIFIED or ONBOARDED, and no endpoint accepts a state as input.
  *
- * <p><strong>Operational status and onboarding state are different questions</strong> (M1-ADR-012).
- * {@code core.learner.status = ACTIVE} means the account is usable, and just-in-time provisioning
- * sets it on first sign-in for anybody Keycloak authenticates — including every learner who predates
- * this capability. It says nothing about whether professional onboarding was completed, which is why
- * that lives in {@code identity.professional_onboarding} and why {@link #requireOnboarded} consults
- * the latter and never the former.
+ * <p>Operational status and onboarding state are different questions (M1-ADR-012):
+ * {@code core.learner.status = ACTIVE} is set by just-in-time provisioning for anybody Keycloak
+ * authenticates, so it says nothing about whether onboarding was completed.
  */
 @Service
 class OnboardingService {
@@ -51,16 +46,11 @@ class OnboardingService {
   /**
    * Resolves the caller's onboarding state, reconciling email verification if it has changed.
    *
-   * <p><strong>The three sources are consulted in cost order, and all three are trusted.</strong>
-   * The stored flag first, because a learner who has already been reconciled needs no external call
-   * at all. Then the {@code email_verified} claim on the presented access token: it is signed by
-   * Keycloak and validated by the resource server before this code runs, so it is provider state, not
-   * client state — the thing §11 forbids is a browser-supplied boolean, and a claim inside a verified
-   * JWT is not one. Only if neither says verified do we ask Keycloak directly, which covers the
-   * learner who verified in another tab and holds a token minted before they did.
-   *
-   * <p>The ordering matters for load as much as correctness: without the short-circuit, every poll of
-   * this endpoint by an unverified learner would become a synchronous admin call.
+   * <p>Three trusted sources in cost order: the stored flag, then the {@code email_verified} claim on
+   * the presented token - signed by Keycloak and already validated by the resource server, so it is
+   * provider state rather than the browser boolean §11 forbids - then a direct call, which covers a
+   * learner holding a token minted before they verified. Without the short-circuit every poll by an
+   * unverified learner would become a synchronous admin call.
    */
   @Transactional
   OnboardingResponse current(String subject, boolean trustedTokenEmailVerified) {
@@ -108,19 +98,12 @@ class OnboardingService {
   /**
    * Refuses a caller whose professional onboarding is not complete.
    *
-   * <p><strong>This is the seam PR-B builds on, and the control §2 asks for.</strong> Any endpoint
-   * that requires a fully onboarded professional learner calls this instead of testing
-   * {@code core.learner.status}. The distinction is the entire point of M1-ADR-012: a just-in-time
-   * learner is {@code ACTIVE} from their first sign-in, so an {@code ACTIVE} check would admit every
-   * learner who never registered, and would do so silently.
-   *
-   * <p>It is applied narrowly and never blanket-applied. Existing deterministic learning endpoints
-   * keep their present authorization, because retrofitting an onboarding requirement onto them would
-   * lock out the legacy population this capability was explicitly required not to break (§19). PR-A
-   * introduces no endpoint that needs completed onboarding — its own mobile endpoints require
-   * registration and email verification, which they check directly — so this has no production caller
-   * yet. It ships with PR-A because the invariant it protects is PR-A's, and a control introduced
-   * alongside its first consumer is a control nobody reviews.
+   * <p>The seam PR-B builds on, and the control §2 asks for: any endpoint needing a fully onboarded
+   * learner calls this instead of testing {@code core.learner.status}, which would admit every
+   * learner who never registered. Applied narrowly and never blanket-applied - existing learning
+   * endpoints keep their present authorization, or the legacy population would be locked out (§19).
+   * PR-A introduces no endpoint that needs it, so it ships without a production caller; a control
+   * introduced alongside its first consumer is one nobody reviews.
    */
   void requireOnboarded(String subject) {
     Learner learner = learners.provisionForSubject(subject);

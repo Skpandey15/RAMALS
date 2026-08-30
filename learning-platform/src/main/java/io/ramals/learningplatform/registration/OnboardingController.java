@@ -17,15 +17,10 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Authenticated onboarding continuation.
  *
- * <p><strong>Ownership comes from the token, never from the request.</strong> Every method derives
- * the learner from {@code Authentication#getName()}, which is the validated OIDC {@code sub}. No
- * method accepts a learner id, and there is no path parameter identifying a learner — a caller cannot
- * name a victim, so no amount of authorization logic is required to stop them. The challenge id in
- * {@code verify} is not an exception: the repository query filters on the authenticated learner as
- * well, so a challenge belonging to somebody else reads as absent.
- *
- * <p>These routes sit under {@code /api/v1/me} and require the {@code LEARNER} role, so they run
- * after the platform's existing bearer authentication and subject rate limiting.
+ * <p>Ownership comes from the validated token, never the request: no method accepts a learner id,
+ * so a caller cannot name a victim. The challenge id in {@code verify} is no exception - the
+ * repository query filters on the authenticated learner, so another learner's challenge reads as
+ * absent.
  */
 @RestController
 @RequestMapping("/api/v1/me")
@@ -41,12 +36,8 @@ class OnboardingController {
   }
 
   /**
-   * Reports the server's view of onboarding.
-   *
-   * <p>The {@code email_verified} claim is read from the validated JWT rather than from the body.
-   * The resource server has already checked the signature, the issuer, the audience and the expiry
-   * before this runs, so the claim is Keycloak's assertion — not the browser's. A request body
-   * claiming verification would be ignored, because there is no request body.
+   * Reports the server's view of onboarding. The {@code email_verified} claim comes from the JWT the
+   * resource server already validated - Keycloak's assertion, not the browser's.
    */
   @GetMapping("/onboarding")
   OnboardingService.OnboardingResponse onboarding(Authentication authentication) {
@@ -61,12 +52,8 @@ class OnboardingController {
   }
 
   /**
-   * Resend is the same operation as send.
-   *
-   * <p>It exists as a separate route only because the UI distinguishes them. Routing both to one
-   * implementation is what keeps the cooldown, the supersede step and the three send ceilings
-   * identical for both — a separate resend path would eventually diverge, and the direction it
-   * diverges in is always weaker.
+   * Resend routes to send, so the cooldown, the supersede step and the three ceilings stay identical
+   * for both; a separate path would eventually diverge, and always in the weaker direction.
    */
   @PostMapping("/mobile/resend-otp")
   MobileVerificationService.SendResponse resendOtp(Authentication authentication) {

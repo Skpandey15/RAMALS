@@ -18,21 +18,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Mobile ownership verification for professional onboarding.
  *
- * <p><strong>This is an ownership check, not an authentication factor.</strong> It proves that the
- * person completing onboarding controls the number they registered. It does not, and must never,
- * contribute to authentication assurance: it does not set {@code amr}, does not raise {@code acr},
- * does not satisfy {@code MfaAuthorization}, and does not touch Keycloak's TOTP configuration
- * (M1-ADR-015, §16). Keycloak owns authentication; this owns a contact-detail claim. Conflating them
- * would let an SMS code — deliverable to anyone who has compromised a phone number through a SIM swap
- * — stand in for a second factor the platform believes it required.
+ * <p>An ownership check, not an authentication factor: it never sets {@code amr}, raises
+ * {@code acr}, satisfies {@code MfaAuthorization} or touches TOTP (M1-ADR-015). It follows that
+ * Keycloak's brute-force protection does not apply here, so the attempt ceiling, the cooldown and
+ * the per-dimension budgets below are the whole control rather than a supplement to one.
  *
- * <p>It also follows that Keycloak's brute-force protection does not apply here. Nothing in Keycloak
- * observes these attempts, so the attempt ceiling, the resend cooldown and the per-dimension budgets
- * below are the whole control, not a supplement to one.
- *
- * <p><strong>Provider calls sit outside the database transaction.</strong> The challenge is prepared
- * and committed, then the message is sent. An SMS gateway is a slow, failure-prone dependency, and
- * holding a transaction open across it would tie database connections to gateway latency.
+ * <p>Provider calls sit outside the database transaction.
  */
 @Service
 class MobileVerificationService {
@@ -68,12 +59,8 @@ class MobileVerificationService {
   }
 
   /**
-   * Issues a challenge and sends the code.
-   *
-   * <p>The code is generated, hashed and committed inside the transaction, then handed to the sender
-   * outside it. The plaintext code exists only as a local and as the sender's argument; it is never
-   * stored, logged, traced, audited or returned to the caller. The caller receives the challenge id
-   * and the timing envelope, which are enough to complete verification and useless for guessing.
+   * Issues a challenge and sends the code. The plaintext code exists only as a local and the
+   * sender's argument; the caller gets the challenge id and timing envelope, never the code.
    */
   SendResponse send(String subject) {
     PendingChallenge pending = transactions.execute(status -> prepare(subject));
@@ -100,12 +87,8 @@ class MobileVerificationService {
   }
 
   /**
-   * Retires a challenge whose code was never delivered.
-   *
-   * <p>Leaving it open would waste the learner's most recent challenge slot on a code nobody
-   * received. The resend cooldown still applies afterwards: a provider failure must not become a way
-   * to issue challenges faster than the cooldown allows, or a caller could induce failures to pump
-   * the gateway.
+   * Retires a challenge whose code was never delivered. The cooldown still applies afterwards, so a
+   * provider failure cannot be induced to issue challenges faster than the cooldown allows.
    */
   private void abandon(PendingChallenge pending, String reasonCode) {
     registrations.supersedeOpenChallenges(pending.learnerId());
@@ -150,13 +133,9 @@ class MobileVerificationService {
   }
 
   /**
-   * Applies the three send ceilings: per subject, per number, and per deployment.
-   *
-   * <p>The first two bound an individual abuser. The third is the one that bounds the bill: without a
-   * global budget, an attacker who can cheaply mint accounts can spend an unbounded amount of real
-   * money on outbound SMS — the "pumping" attack — because every per-subject counter is fresh. All
-   * three dimensions are hashed before they become bucket keys, so no counter row holds a mobile
-   * number or a subject identifier.
+   * Applies the three send ceilings: per subject, per number, and per deployment. The first two
+   * bound an individual abuser; the third bounds the bill, because an attacker who can mint accounts
+   * gets a fresh per-subject counter each time. All three dimensions are hashed before use.
    */
   private void enforceSendBudget(String subject, String mobile) {
     if (!registrations.withinCeiling("sms-subject:" + subject, SEND_LIMIT_PER_WINDOW,
@@ -176,17 +155,11 @@ class MobileVerificationService {
   /**
    * Verifies a submitted code.
    *
-   * <p><strong>Why {@code noRollbackFor}.</strong> A wrong code must both be rejected and be counted.
-   * Under the default rollback-on-RuntimeException the increment would be undone along with the
-   * rejection, and the attempt ceiling — the only thing standing between an attacker and unlimited
-   * guesses at six digits — would never advance. {@link InvalidOtpException} exists to carry that
-   * exemption, and Spring resolves the most specific rollback rule, so it wins over the default that
-   * its supertype attracts.
+   * <p>{@code noRollbackFor} is what makes the attempt increment durable: under the default rule the
+   * rejection would undo it and the ceiling would never advance.
    *
-   * <p>Every unusable-challenge condition raises the same code, and
-   * {@link RegistrationException#detail()} gives it the same wording as a wrong code: a caller who
-   * could tell "expired" from "already used" from "wrong" would learn whether they were racing a live
-   * challenge.
+   * <p>Every unusable-challenge condition raises the same code and wording as a wrong code, so a
+   * caller cannot tell whether they are racing a live challenge.
    */
   @Transactional(noRollbackFor = InvalidOtpException.class)
   VerifyResponse verify(String subject, UUID challengeId, String otp) {

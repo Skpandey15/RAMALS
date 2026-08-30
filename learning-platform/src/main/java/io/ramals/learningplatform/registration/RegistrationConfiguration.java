@@ -7,18 +7,12 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Startup validation for the registration capability.
  *
- * <p><strong>Fail closed, and fail early.</strong> Every check below could instead be made at first
- * use, where it would surface as a learner's registration failing for reasons an operator has to
- * reverse-engineer from a stack trace. Making them startup conditions means a misconfigured
- * deployment never becomes reachable: the container does not come up, the readiness probe never
- * passes, and the rollout stops at the first replica rather than after the first learner.
+ * <p>Every check below could be made at first use, where it would surface as a learner's
+ * registration failing for reasons an operator has to reverse-engineer. As startup conditions, a
+ * misconfigured deployment never becomes reachable: readiness never passes and the rollout stops
+ * at the first replica. Skipped entirely when the capability is disabled.
  *
- * <p>The checks are skipped entirely when the capability is disabled, which is what lets an
- * environment that has not been given a Keycloak admin client or key material run the rest of the
- * platform normally.
- *
- * <p>Messages name the missing setting and never its value. An exception thrown here is logged by the
- * container at ERROR and is frequently the most widely-read line in a failed deployment.
+ * <p>Messages name the missing setting and never its value.
  */
 @Configuration
 @EnableConfigurationProperties(RegistrationProperties.class)

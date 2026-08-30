@@ -5,27 +5,16 @@ import org.springframework.http.HttpStatus;
 /**
  * A rejected registration or verification command, carrying a stable machine-readable code.
  *
- * <p><strong>Why a dedicated exception rather than {@code IllegalArgumentException}.</strong> The
- * global handler maps every {@code IllegalArgumentException} onto one response code,
- * {@code VALIDATION_FAILED}. That is adequate where a package has a single failure mode; it is not
- * adequate here. Registration and mobile verification reject for at least a dozen distinct reasons —
- * an unknown consent version, an exhausted send budget, a superseded challenge, a mobile number
- * already reserved by another learner — and collapsing them into one code costs three things. A
- * client cannot tell a retryable refusal from a permanent one. An operator cannot see, on a
- * dashboard, whether a spike is abuse control working or a provider failing. And a support engineer
- * reading an audit trail cannot reconstruct why a learner was stopped.
+ * <p>The global handler maps every {@code IllegalArgumentException} onto one response code. That
+ * is fine for a package with one failure mode; this one rejects for a dozen distinct reasons, and
+ * collapsing them means a client cannot tell a retryable refusal from a permanent one and an
+ * operator cannot tell abuse control working from a provider failing.
  *
- * <p><strong>Why the status travels with the code.</strong> The sibling
- * {@link io.ramals.learningplatform.content.ApprovalRequestException} leaves status selection to a
- * switch in the handler. That reads well for five codes. At this package's count the switch becomes
- * the place the mapping rots: a new code added here but forgotten there silently degrades to 422.
- * Binding the status at the throw site makes the pair unforgettable, and keeps the handler total.
+ * <p>The status travels with the code rather than living in a handler switch, so a new code cannot
+ * be added at a throw site and forgotten there, silently degrading to 422.
  *
- * <p><strong>Messages are for operators, not for learners.</strong> The message is logged and never
- * returned; {@link io.ramals.learningplatform.observability.ApiExceptionHandler} supplies the
- * learner-facing detail from the code. That separation is what lets this class describe a refusal
- * precisely without deciding how much of it an unauthenticated caller is allowed to learn — see
- * {@link #detail()}, where several distinct codes deliberately share one deliberately vague wording.
+ * <p>Messages are for operators and are never returned; {@link #detail()} supplies the
+ * learner-facing text.
  */
 public class RegistrationException extends RuntimeException {
 
@@ -49,17 +38,10 @@ public class RegistrationException extends RuntimeException {
   /**
    * The learner-facing detail for this code.
    *
-   * <p>Deliberately coarser than the code in three places, because the caller is unauthenticated and
-   * the precise reason is an oracle:
-   *
-   * <ul>
-   *   <li>{@code MOBILE_ALREADY_REGISTERED} does not say which account holds the number, which would
-   *       confirm that a given mobile is registered to someone.
-   *   <li>The OTP failures ({@code MOBILE_OTP_INVALID}, {@code MOBILE_CHALLENGE_UNAVAILABLE}) do not
-   *       distinguish wrong from expired from consumed from superseded. An attacker who can tell
-   *       "wrong code" from "expired code" learns whether they are racing a live challenge.
-   *   <li>{@code IDENTITY_PROVIDER_UNAVAILABLE} never echoes the provider's own error.
-   * </ul>
+   * <p>Deliberately coarser than the code where the caller is unauthenticated and the precise reason
+   * would be an oracle: the mobile-conflict wording does not confirm that a number is registered,
+   * and the OTP failures do not distinguish wrong from expired from consumed from superseded, which
+   * would tell an attacker whether they are racing a live challenge.
    */
   public String detail() {
     return switch (code) {

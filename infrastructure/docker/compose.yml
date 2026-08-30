@@ -96,6 +96,9 @@ services:
       RAMALS_OIDC_ISSUER_URI: ${RAMALS_OIDC_ISSUER_URI:-http://keycloak:8080/realms/ramals}
       RAMALS_OIDC_AUDIENCE: ${RAMALS_OIDC_AUDIENCE:-ramals-api}
       RAMALS_WEB_ORIGIN: ${RAMALS_WEB_ORIGIN:-http://localhost:5173}
+      # The nginx sidecar is the only thing that reaches the backend, and it sets X-Forwarded-For.
+      # Docker's default bridge pool; narrow this if the compose networks are pinned.
+      RAMALS_TRUSTED_PROXIES: ${RAMALS_TRUSTED_PROXIES:-172.16.0.0/12}
       RAMALS_REGISTRATION_ENABLED: ${RAMALS_REGISTRATION_ENABLED:-false}
       RAMALS_ENVIRONMENT: ${RAMALS_ENVIRONMENT:-dev}
       RAMALS_KEYCLOAK_ADMIN_BASE_URL: ${RAMALS_KEYCLOAK_ADMIN_BASE_URL:-http://keycloak:8080}

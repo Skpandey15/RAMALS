@@ -12,18 +12,13 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * The one unauthenticated route in the platform.
  *
- * <p>{@code SecurityConfig} permits exactly {@code POST /api/v1/registration} and leaves
- * {@code anyRequest().authenticated()} in force for everything else, so widening this surface takes a
- * deliberate edit in a file whose tests assert the shape of the chain.
- * {@link PreAuthRegistrationRateLimitFilter} runs ahead of authentication for this path, because the
- * platform's existing limiter is keyed on the authenticated subject and there is no subject here.
+ * <p>{@code SecurityConfig} permits exactly this path and leaves {@code anyRequest().authenticated()}
+ * in force elsewhere. {@link PreAuthRegistrationRateLimitFilter} runs ahead of authentication,
+ * because the platform's existing limiter keys on a subject this route does not have.
  *
- * <p><strong>202, not 201.</strong> The response is an acknowledgement, not a created resource: the
- * account is not usable until the learner verifies the email Keycloak sends. Returning 201 with a
- * location would imply a resource the caller can go and use.
- *
- * <p>The response body carries the operation id and the next step, and nothing about whether the
- * email was already registered — see {@code RegistrationService} for why that silence is deliberate.
+ * <p>202 rather than 201: the response is an acknowledgement, not a resource the caller can use
+ * until the learner verifies the email Keycloak sends. The body says nothing about whether the
+ * address was already registered - see {@code RegistrationService}.
  */
 @RestController
 @RequestMapping("/api/v1/registration")

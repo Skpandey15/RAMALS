@@ -21,24 +21,12 @@ import org.springframework.web.client.RestClientResponseException;
  * The Keycloak adapter for professional registration, running as a dedicated least-privilege
  * service account (M1-ADR-014).
  *
- * <p><strong>Three things this class is careful about.</strong>
- *
- * <p><em>It never puts a learner's email in a recorded URI.</em> Every call uses RestClient's URI
- * <em>template</em> form, so the value the HTTP client observation records is
- * {@code /admin/realms/{realm}/users?exact=true&email={email}} rather than the expanded address. The
- * distinction is not cosmetic: this module is instrumented, span attributes are exported to the
- * collector, and string-concatenating the address would publish the email of every registering
- * learner into the trace backend — durable, queryable, and outside the least-privilege PII boundary
- * that {@code identity.learner_contact} exists to be. Template variables are also encoded by the
- * client, so the manual URL-encoding this replaces is no longer needed.
- *
- * <p><em>It caches the access token.</em> A client-credentials grant per HTTP call meant one
- * registration cost four token round-trips before the first useful request. The cache holds the
- * token until shortly before expiry; the refresh skew is generous because the cost of refreshing
- * early is one extra request and the cost of refreshing late is a failed registration.
- *
- * <p><em>It reports whether it created the identity.</em> See {@link #createLearner}: this is the
- * difference between an idempotent retry and an account-integrity defect.
+ * <p>Three things it is careful about. It never puts a learner's email in a recorded URI - every
+ * call uses RestClient's URI template form, so the client observation records the template rather
+ * than the expanded address, which would otherwise publish each registering learner's email into
+ * the trace backend. It caches the access token, because a grant per HTTP call cost four round
+ * trips before the first useful request. And it reports whether it created the identity, which is
+ * the difference between an idempotent retry and an account-integrity defect.
  */
 @Component
 class KeycloakRegistrationAdminClient implements IdentityProviderPort {
@@ -90,23 +78,14 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
    * Creates the learner identity, reconciling rather than blindly retrying when the outcome is
    * unclear.
    *
-   * <p><strong>Why the created/pre-existing distinction matters so much.</strong> Consider a legacy
-   * learner who exists in Keycloak — provisioned just-in-time at first sign-in, or created by an
-   * administrator — and who has no {@code identity.learner_contact} row because they predate this
-   * capability. An attacker submits a registration for that learner's email. Keycloak answers 409.
-   * If this method reported that as an ordinary success, the caller would go on to write the
-   * <em>attacker's</em> name and mobile number against the <em>victim's</em> learner id, and the row
-   * would insert cleanly because no contact row existed to conflict with. No password is changed and
-   * no session is granted, so it is not account takeover — but it is an attacker writing PII into
-   * another person's account and attaching their own mobile number to it, which is close enough to
-   * be unacceptable.
+   * <p>The created/pre-existing distinction is the security control. Consider a learner who exists
+   * in Keycloak from just-in-time provisioning and has no contact row yet: if a 409 were reported as
+   * an ordinary success, the caller would write the <em>attacker's</em> name and mobile against the
+   * <em>victim's</em> learner id, and it would insert cleanly. So the flag is returned honestly and
+   * {@code RegistrationService} refuses to persist for an identity it did not create. The response
+   * is identical either way, which keeps this from becoming an email-existence oracle.
    *
-   * <p>So the flag is returned honestly, and {@code RegistrationService} refuses to persist for an
-   * identity it did not create. The response the caller sends back is identical either way, which
-   * keeps the endpoint from becoming an email-existence oracle.
-   *
-   * <p>The password is passed straight through into the provider request body and is never held,
-   * logged or returned. It exists in this method as a parameter field and nowhere else.
+   * <p>The password is a parameter field and nothing else: never held, logged or returned.
    */
   @Override
   public Identity createLearner(String operationId, RegistrationRequest request) {
@@ -155,12 +134,9 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
   }
 
   /**
-   * Resolves an unclear create by looking the identity up and reading back our own operation stamp.
-   *
-   * <p>If the stamp matches, this operation created the user on an earlier attempt whose response we
-   * lost, and the caller may safely continue. If the identity exists without our stamp, it belongs to
-   * someone else and the caller must not touch it. If it does not exist at all, the create genuinely
-   * failed and the original cause is surfaced.
+   * Resolves an unclear create by reading back our own operation stamp. Matching means an earlier
+   * attempt of this operation created the user and the caller may continue; not matching means the
+   * identity belongs to someone else and must not be touched.
    */
   private Identity reconcile(String operationId, String email, String reason, Exception cause) {
     ProviderUser existing;
@@ -223,8 +199,11 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
    * client performs the encoding. Nothing here writes the address to a log.
    */
   private ProviderUser findByEmail(String email) {
+    // briefRepresentation=false is required: the default search omits attributes, so the operation
+    // stamp would always read as absent and every reconciled retry would look like somebody else's
+    // pre-existing account.
     List<Map<String, Object>> users = http.get()
-        .uri(realmBase() + "/users?exact=true&email={email}",
+        .uri(realmBase() + "/users?exact=true&briefRepresentation=false&email={email}",
             properties.getKeycloak().getRealm(), email)
         .headers(headers -> headers.setBearerAuth(accessToken()))
         .retrieve()
@@ -255,20 +234,22 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
   /**
    * Assigns the single realm role public registration may produce.
    *
-   * <p>{@link #LEARNER_ROLE} is a compile-time constant and the method takes no role parameter, so
-   * there is no call path — present or future — by which request data could influence which role is
-   * granted. Keycloak treats a repeated mapping as a no-op, which is what makes it safe to re-apply
-   * during reconciliation.
+   * <p>{@link #LEARNER_ROLE} is a constant and this takes no role parameter, so request data cannot
+   * influence which role is granted.
+   *
+   * <p>Read from the user's assignable list, not {@code GET /roles/{name}}: fetching a realm role by
+   * name needs {@code view-realm}, which this account deliberately lacks, so that call returns 403
+   * under the intended grant and failed the whole registration. Already-assigned is success, since a
+   * reconciled retry no longer sees the role in {@code available}.
    */
   private void assignLearnerRole(String subject) {
     try {
-      Map<String, Object> role = http.get()
-          .uri(realmBase() + "/roles/{role}", properties.getKeycloak().getRealm(), LEARNER_ROLE)
-          .headers(headers -> headers.setBearerAuth(accessToken()))
-          .retrieve()
-          .body(Map.class);
+      Map<String, Object> role = findAssignableLearnerRole(subject);
       if (role == null) {
-        throw new IllegalStateException("Realm role " + LEARNER_ROLE + " is not defined.");
+        if (hasLearnerRole(subject)) {
+          return;
+        }
+        throw new IllegalStateException("Realm role " + LEARNER_ROLE + " is not assignable.");
       }
       http.post()
           .uri(realmBase() + "/users/{subject}/role-mappings/realm",
@@ -281,6 +262,37 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
     } catch (RestClientException failure) {
       throw providerFailure("assignLearnerRole", null, failure);
     }
+  }
+
+  private Map<String, Object> findAssignableLearnerRole(String subject) {
+    return firstNamed(http.get()
+        .uri(realmBase() + "/users/{subject}/role-mappings/realm/available",
+            properties.getKeycloak().getRealm(), subject)
+        .headers(headers -> headers.setBearerAuth(accessToken()))
+        .retrieve()
+        .body(List.class));
+  }
+
+  private boolean hasLearnerRole(String subject) {
+    return firstNamed(http.get()
+        .uri(realmBase() + "/users/{subject}/role-mappings/realm",
+            properties.getKeycloak().getRealm(), subject)
+        .headers(headers -> headers.setBearerAuth(accessToken()))
+        .retrieve()
+        .body(List.class)) != null;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> firstNamed(List<Map<String, Object>> roles) {
+    if (roles == null) {
+      return null;
+    }
+    for (Map<String, Object> role : roles) {
+      if (LEARNER_ROLE.equals(role.get("name"))) {
+        return role;
+      }
+    }
+    return null;
   }
 
   /**
@@ -322,12 +334,8 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
   }
 
   /**
-   * Builds the token form body.
-   *
-   * <p>The secret is placed in a form body rather than the query string, and this method returns the
-   * assembled body directly to the caller's request rather than storing it, so the credential exists
-   * only for the length of the call. It is never logged: {@link #providerFailure} records the
-   * operation name and status, never the request.
+   * Builds the token form body. The secret goes in a body rather than a query string and is never
+   * logged; {@link #providerFailure} records the operation and status only.
    */
   private static String form(RegistrationProperties.Keycloak keycloak) {
     return "grant_type=client_credentials"
@@ -341,11 +349,10 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
   }
 
   /**
-   * Converts a provider failure into a domain failure, logging the shape of it and nothing else.
+   * Converts a provider failure into a domain failure, logging its shape and nothing else.
    *
-   * <p>Deliberately does not include the provider's response body. Keycloak error bodies routinely
-   * echo the submitted representation, which for the create call contains the credential; forwarding
-   * one into a log would defeat the password-handling rule at the last hop.
+   * <p>Deliberately excludes the provider's response body: Keycloak error bodies routinely echo the
+   * submitted representation, which for the create call contains the credential.
    */
   private RegistrationException providerFailure(
       String operation, String operationId, Exception cause) {

@@ -72,6 +72,14 @@ ramals:
       batch-size: ${RAMALS_CONTRACT_B_PURGE_BATCH_SIZE:500}
   security:
     web-origin: ${RAMALS_WEB_ORIGIN:http://localhost:5173}
+    forwarding:
+      # Which immediate peers may speak for a client address. Empty means forwarding headers are
+      # ignored and getRemoteAddr() is used -- X-Forwarded-For is caller-controlled, so trusting it
+      # from an arbitrary peer lets a direct caller rotate it and mint a fresh rate-limit bucket per
+      # request. Set this to the proxy network actually in front of the service.
+      trusted-proxies: ${RAMALS_TRUSTED_PROXIES:}
+      max-hops: ${RAMALS_FORWARDED_MAX_HOPS:8}
+      max-header-length: ${RAMALS_FORWARDED_MAX_HEADER_LENGTH:1024}
     # Two tiers, and the placeholder defaults must equal the defaults in RateLimitProperties.
     # RateLimitPropertiesContractTests fails if they drift: this file previously bound the
     # pre-authentication tier to 120/60 -- the subject tier's numbers -- which silently reinstated

@@ -10,23 +10,14 @@ import org.springframework.stereotype.Component;
 /**
  * The SMS sender selected by configuration.
  *
- * <p><strong>DEV and CI use a fake, and production cannot.</strong> Qualifying this capability must
- * not require a paid gateway, so {@code fake} is the default and it is a real implementation of the
- * port rather than a test stub — the ordering, the failure handling and the abuse ceilings around it
- * are exercised exactly as they would be in production. What must never happen is a production
- * deployment quietly selecting it and reporting delivery for messages nobody sent.
+ * <p>{@code fake} is the default and a real implementation of the port, so ordering, failure
+ * handling and the abuse ceilings around it are exercised exactly as in production without a paid
+ * gateway. What must never happen is production quietly selecting it and reporting delivery for
+ * messages nobody sent, so {@link RegistrationConfiguration} refuses to start a production context
+ * configured this way and the check is repeated here for an environment marker changed afterwards.
  *
- * <p>That is guarded twice, deliberately. {@link RegistrationConfiguration} refuses to start a
- * production context configured with the fake provider, which is the control that matters because it
- * fails closed before serving a single request. The check repeated here covers the narrower case of a
- * deployment whose environment marker is changed after startup, and costs one comparison per send.
- * A single check placed only at startup would be the kind of control that is correct until someone
- * makes the property refreshable.
- *
- * <p>No real gateway adapter ships in this change. A production deployment must therefore configure a
- * provider this class does not recognise, and will fail closed at startup rather than silently
- * degrade — which is the intended state until an adapter is delivered and qualified against the real
- * provider (§23).
+ * <p>No real gateway adapter ships in this change, so a production deployment must configure a
+ * provider this class does not recognise and will fail closed at startup.
  */
 @Component
 class ConfiguredMobileVerificationSender implements MobileVerificationSender {

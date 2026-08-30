@@ -17,23 +17,15 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Orchestrates professional self-registration across Keycloak and the RAMALS identity boundary.
  *
- * <p><strong>There is no distributed transaction here, and the design assumes it.</strong> Creating
- * an identity in Keycloak and writing contact data in PostgreSQL are two systems that can each
- * succeed while the other fails. Rather than pretend otherwise, the flow is ordered so that every
- * interruption leaves a state a later attempt can resume from: claim an idempotent operation row
- * first, call the provider second, persist third, request the verification mail last, and only then
- * mark the operation finished. Each step is safe to repeat.
+ * <p>There is no distributed transaction, and the ordering assumes it: claim an idempotent
+ * operation row, call the provider, persist, request the mail, then mark the operation finished.
+ * Every step is safe to repeat, so any interruption leaves a state a later attempt resumes from.
  *
- * <p><strong>The provider call sits outside the database transaction</strong> (§27). A Keycloak stall
- * inside an open transaction would hold a connection and row locks for the length of the stall, so a
- * provider slowdown would become database exhaustion. The transaction opens after the provider has
- * answered and closes before the mail is requested.
+ * <p>The provider call sits outside the database transaction, or a Keycloak stall would hold a
+ * connection and row locks for its duration.
  *
- * <p><strong>The password is a parameter and never a field.</strong> It arrives on
- * {@link RegistrationRequest}, is compared against its confirmation, is handed to the provider
- * adapter, and is referenced nowhere else — not in the fingerprint, not in the operation row, not in
- * an audit event, not in a log, not in the metric tags. {@code RegistrationRequest#toString} is
- * redacted so that even an accidental interpolation cannot disclose it.
+ * <p>The password is a parameter and never a field: not in the fingerprint, the operation row, an
+ * audit event, a log or a metric tag.
  */
 @Service
 class RegistrationService {
@@ -115,18 +107,11 @@ class RegistrationService {
   /**
    * Runs the provider call, the persistence step and the verification mail.
    *
-   * <p><strong>The refusal to persist against a pre-existing identity is the security control in this
-   * method.</strong> When Keycloak reports that the email already belongs to someone — as opposed to
-   * confirming that this very operation created it — we stop. We do not write the submitted name,
-   * mobile number or consent record, because they would land against the existing learner's id. That
-   * matters most for a learner who was provisioned just-in-time and has no contact row yet: the
-   * insert would succeed, and an attacker who merely knows a victim's email address would have
-   * written their own mobile number into the victim's account.
-   *
-   * <p>The response is the same shape as a genuine registration, deliberately. Answering differently
-   * would turn this endpoint into an oracle for "does an account exist for this address", which is
-   * exactly the enumeration primitive an unauthenticated route must not offer. The distinction is
-   * recorded in the audit trail, where it is available to an operator and not to a caller.
+   * <p>The refusal to persist against a pre-existing identity is the security control here. When
+   * Keycloak reports the email already belongs to someone, we stop: writing the submitted name and
+   * mobile would land them against the existing learner, and for a just-in-time learner with no
+   * contact row the insert would succeed. The response is shaped identically either way, so this
+   * does not become an oracle for whether an account exists; the distinction is recorded in audit.
    */
   private RegistrationResponse complete(RegistrationRepository.Operation operation,
       RegistrationRequest request, String email, String mobile) {
@@ -181,12 +166,8 @@ class RegistrationService {
   }
 
   /**
-   * Compares the password with its confirmation in constant time.
-   *
-   * <p>Constant time not because the confirmation is a secret an attacker is guessing — they supplied
-   * both halves — but because {@code String.equals} short-circuits on the first differing character,
-   * and using it here would establish the habit of comparing credential material with the fast
-   * comparison in a package where several other comparisons genuinely must not.
+   * Compares the password with its confirmation in constant time - not because the confirmation is
+   * a secret, but so credential comparison in this package never uses the short-circuiting one.
    */
   private static void requireMatchingPasswordConfirmation(RegistrationRequest request) {
     if (!MessageDigest.isEqual(
@@ -197,13 +178,8 @@ class RegistrationService {
   }
 
   /**
-   * Rejects consent versions this deployment did not issue.
-   *
-   * <p>A boolean "I accept" is not evidence of what was accepted. The learner echoes the version of
-   * each document they were shown, and it is checked against server-known values so that the stored
-   * acceptance refers to a specific revision. The versions written to the database are the server's
-   * own, never the submitted strings — a request cannot name a version that does not exist and have
-   * it recorded as though it did.
+   * Rejects consent versions this deployment did not issue. The learner echoes the version they were
+   * shown; the values written to the database are the server's own, never the submitted strings.
    */
   private void requireServerKnownConsent(RegistrationRequest request) {
     RegistrationProperties.Consent consent = properties.getConsent();
@@ -219,11 +195,8 @@ class RegistrationService {
 
   /**
    * A stable hash of the request's meaningful content, used to detect a replayed Idempotency-Key
-   * carrying a different body.
-   *
-   * <p>The password is deliberately excluded. Including it would place a credential-derived value in
-   * a durable column, and it adds nothing: two requests differing only by password are a client
-   * defect this check is not the right place to catch.
+   * carrying a different body. The password is excluded: it would put a credential-derived value in
+   * a durable column and adds nothing.
    */
   private static String fingerprint(RegistrationRequest request, String email, String mobile) {
     return RegistrationRepository.sha256(String.join(" ",
@@ -233,12 +206,9 @@ class RegistrationService {
   }
 
   /**
-   * One counter for every registration outcome.
-   *
-   * <p>Both tags are bounded server-side vocabularies. §22 forbids email, mobile, address or OIDC
-   * subject as label values: those are unbounded, so they would multiply the time series per learner
-   * and put contact data in the metrics store, which is neither access-controlled as PII nor covered
-   * by the retention rules that apply to {@code identity.learner_contact}.
+   * One counter for every registration outcome. Both tags are bounded server-side vocabularies:
+   * email, mobile, address or subject would multiply series per learner and put contact data in the
+   * metrics store.
    */
   private void count(String outcome, String code) {
     meterRegistry.counter("ramals.registration.attempts", "outcome", outcome, "code", code)

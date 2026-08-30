@@ -2,6 +2,7 @@ package io.ramals.learningplatform.registration;
 
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import io.ramals.learningplatform.observability.TraceContextAccessor;
+import io.ramals.learningplatform.security.ClientAddressResolver;
 import io.ramals.learningplatform.security.RateLimitResponses;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -19,30 +20,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * The source-based ceiling in front of the unauthenticated registration route.
+ * Source ceiling in front of the unauthenticated registration route.
  *
- * <p><strong>Why the existing limiter is not enough.</strong> {@code SubjectRateLimitFilter} keys on
- * the authenticated subject. On this route there is no authenticated subject — that is the whole
- * point of the route — so it has nothing to key on and does not constrain it. Without something
- * ahead of authentication, the only cost ceiling on registration would be the per-email one inside
- * the service, which an attacker varies trivially by varying the email.
+ * <p>{@code SubjectRateLimitFilter} keys on the authenticated subject, and this route has none, so
+ * without something ahead of authentication the only ceiling would be the per-email one inside the
+ * service — which an attacker varies by varying the email.
  *
- * <p><strong>Why it is backed by PostgreSQL rather than a field in this class.</strong> The service
- * runs multiple replicas. An in-process counter constrains one pod, and the next request is load
- * balanced to another, so per-pod state does not throttle a distributed caller — it throttles the
- * accounting. Sharing the counter through the database the request is about to write to anyway costs
- * one upsert and makes the ceiling hold across every replica. §10 requires exactly this: enforcement
- * that changing pods does not bypass.
- *
- * <p><strong>Why not rely on the edge.</strong> A WAF or ingress limiter is a good outer layer and a
- * poor only layer: it is deployment-specific, it is absent in DEV and CI where this behaviour is
- * qualified, and it protects the route rather than the resource. §10 forbids depending on it alone.
- *
- * <p><strong>On the source signal.</strong> {@code X-Forwarded-For}'s leftmost entry is the
- * conventional client address, and it is spoofable by anyone who can reach the service directly.
- * That is acceptable for a cost ceiling and would not be acceptable for an authorization decision,
- * which is not what this makes. The address is hashed before it becomes a bucket key, so no row in
- * {@code identity.abuse_counter} holds an address, and it never reaches a log or a metric label.
+ * <p>Backed by PostgreSQL rather than a field on this bean: the service runs multiple replicas, and
+ * a per-pod counter throttles the accounting rather than the caller. The source comes from
+ * {@link ClientAddressResolver}, so a forwarding header is honoured only from a configured proxy.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 140)
@@ -58,12 +44,15 @@ class PreAuthRegistrationRateLimitFilter extends OncePerRequestFilter {
   private final RegistrationRepository registrations;
   private final ObjectMapper objectMapper;
   private final TraceContextAccessor traceContext;
+  private final ClientAddressResolver clientAddresses;
 
   PreAuthRegistrationRateLimitFilter(RegistrationRepository registrations,
-      ObjectMapper objectMapper, TraceContextAccessor traceContext) {
+      ObjectMapper objectMapper, TraceContextAccessor traceContext,
+      ClientAddressResolver clientAddresses) {
     this.registrations = registrations;
     this.objectMapper = objectMapper;
     this.traceContext = traceContext;
+    this.clientAddresses = clientAddresses;
   }
 
   @Override
@@ -75,10 +64,11 @@ class PreAuthRegistrationRateLimitFilter extends OncePerRequestFilter {
   @Override
   protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
       FilterChain chain) throws ServletException, IOException {
-    if (!registrations.withinCeiling("registration-source:" + sourceOf(request), SOURCE_LIMIT,
-        SOURCE_WINDOW_SECONDS)) {
-      // No source value in the event: the whole point of hashing the bucket key is defeated if the
-      // address is written to the log line next to it.
+    String source = clientAddresses.resolve(request);
+    if (!registrations.withinCeiling(
+        "registration-source:" + source, SOURCE_LIMIT, SOURCE_WINDOW_SECONDS)) {
+      // No address in the event: hashing the bucket key is pointless if the log line beside it
+      // carries the value.
       BusinessEventLogger.warn(LOGGER, "registration.source.throttled",
           "Registration request rejected by the pre-authentication source ceiling",
           Map.of("errorCode", "REGISTRATION_RATE_LIMITED", "statusCode", 429,
@@ -88,13 +78,5 @@ class PreAuthRegistrationRateLimitFilter extends OncePerRequestFilter {
       return;
     }
     chain.doFilter(request, response);
-  }
-
-  private static String sourceOf(HttpServletRequest request) {
-    String forwarded = request.getHeader("X-Forwarded-For");
-    if (forwarded != null && !forwarded.isBlank()) {
-      return forwarded.split(",", 2)[0].trim();
-    }
-    return request.getRemoteAddr();
   }
 }

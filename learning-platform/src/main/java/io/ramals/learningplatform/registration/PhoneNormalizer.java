@@ -9,16 +9,11 @@ import org.springframework.stereotype.Component;
 /**
  * Normalizes a submitted mobile number to E.164.
  *
- * <p><strong>Why a library rather than a regular expression.</strong> The uniqueness guarantee — one
- * verified number, one learner — is only as good as the normalization in front of it. Numbering plans
- * carry national prefixes that are dropped when dialled internationally, variable-length area codes,
- * and country-specific rules about which prefixes are mobile at all. A regular expression accepts
- * {@code 09876543210} and {@code +919876543210} as different strings, and the partial unique index
- * then happily stores both, which silently defeats the constraint it is there to enforce. libphonenumber
- * carries the actual plans and collapses those to one value.
- *
- * <p>Validity is checked, not merely parseability: a number that parses but is not a valid number for
- * the country is rejected here rather than after an SMS has been paid for.
+ * <p>A library rather than a regular expression, because the uniqueness guarantee is only as good
+ * as the normalization in front of it: a regex accepts {@code 09876543210} and
+ * {@code +919876543210} as different strings and the partial unique index then stores both.
+ * Validity is checked, not just parseability, so an invalid number is refused before an SMS is
+ * paid for.
  */
 @Component
 class PhoneNormalizer {
@@ -26,10 +21,8 @@ class PhoneNormalizer {
   private final PhoneNumberUtil phoneNumbers = PhoneNumberUtil.getInstance();
 
   /**
-   * Returns the E.164 form, or rejects the number.
-   *
-   * <p>The rejection deliberately does not echo the submitted value. It is contact PII, and this
-   * exception's message reaches the log.
+   * Returns the E.164 form, or rejects the number without echoing the submitted value, which is
+   * contact PII and would reach the log.
    */
   String normalize(String rawNumber, String country) {
     try {

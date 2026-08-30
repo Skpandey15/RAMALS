@@ -31,16 +31,19 @@ public class RateLimitFilter extends OncePerRequestFilter {
   private final RateLimitProperties properties;
   private final ObjectMapper objectMapper;
   private final TraceContextAccessor traceContext;
+  private final ClientAddressResolver clientAddresses;
 
   public RateLimitFilter(
       @Qualifier("ipRateLimiter") TokenBucketRateLimiter limiter,
       RateLimitProperties properties,
       ObjectMapper objectMapper,
-      TraceContextAccessor traceContext) {
+      TraceContextAccessor traceContext,
+      ClientAddressResolver clientAddresses) {
     this.limiter = limiter;
     this.properties = properties;
     this.objectMapper = objectMapper;
     this.traceContext = traceContext;
+    this.clientAddresses = clientAddresses;
   }
 
   @Override
@@ -60,11 +63,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
   }
 
   private String clientKey(HttpServletRequest request) {
-    String forwardedFor = request.getHeader("X-Forwarded-For");
-    if (forwardedFor != null && !forwardedFor.isBlank()) {
-      return forwardedFor.split(",", 2)[0].trim();
-    }
-    return request.getRemoteAddr();
+    // Was the left-most X-Forwarded-For value whenever the header was present, which a direct
+    // caller could rotate to mint a fresh bucket per request. The resolver consults the header only
+    // when the immediate peer is a configured trusted proxy.
+    return clientAddresses.resolve(request);
   }
 
   private void writeTooManyRequests(
