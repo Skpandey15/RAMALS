@@ -1,7 +1,11 @@
 CREATE SCHEMA IF NOT EXISTS identity;
 
+-- USAGE only. There is deliberately no REVOKE CREATE here: PostgreSQL grants CREATE on a new schema
+-- to its owner alone -- ramals_core_migration -- and to no one else, so the runtime role never holds
+-- it and a REVOKE would remove nothing. It also reads to the rollback checker as a privilege being
+-- taken away from the previously released image, which for a schema created in this same migration
+-- is not something that image could ever have held.
 GRANT USAGE ON SCHEMA identity TO ramals_core_runtime;
-REVOKE CREATE ON SCHEMA identity FROM ramals_core_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE ramals_core_migration IN SCHEMA identity
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ramals_core_runtime;
 
