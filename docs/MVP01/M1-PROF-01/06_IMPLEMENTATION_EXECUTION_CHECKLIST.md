@@ -1,6 +1,8 @@
 # M1-PROF-01 Implementation Execution Checklist
 
-This is the coding handoff checklist for Claude/Codex. Read all sibling documents and M1-ADR-012 through M1-ADR-015 before implementation.
+This is the coding handoff checklist for Claude/Codex. Read all sibling documents, M1-ADR-012 through M1-ADR-015, and `docs/product/RAMALS_PRODUCT_VISION_AND_SEGMENT_ARCHITECTURE.md` before implementation.
+
+Professional is the current product beachhead. Do not add School/Higher Education/guardian/minor-specific machinery in this milestone. Segment taxonomy is future-compatible product context, not authorization-role machinery.
 
 ## Gate 0 — discover before editing
 
@@ -14,6 +16,7 @@ This is the coding handoff checklist for Claude/Codex. Read all sibling document
 - [ ] Inventory web-ui auth flow; hosted Keycloak login remains sign-in UI.
 - [ ] Inventory current Flyway migrations and choose next version at implementation time per ADR 0003.
 - [ ] Inventory audit, interactionId/traceId and idempotency patterns.
+- [ ] Confirm no DOB is added solely for hypothetical future segments.
 - [ ] Confirm no AWS/T15/Contract-B/mastery redesign.
 
 ## Gate 1 — ADR/invariant mapping
@@ -31,6 +34,7 @@ This is the coding handoff checklist for Claude/Codex. Read all sibling document
 - [ ] Separate onboarding state ends `ONBOARDED`; JIT `ACTIVE` cannot set/imply it.
 - [ ] No name/email/mobile/country/city columns added to `core.learner`.
 - [ ] Separate contact/registration PII table/schema has least-privilege grants.
+- [ ] If approved adult self-attestation is implemented, persist auditable statement/version/timestamp evidence without DOB by default.
 - [ ] Mobile normalized E.164 and DB reservation/uniqueness survives disable/soft-delete.
 - [ ] OTP challenge stores `otp_hmac`, `hmac_key_version`, `attempt_count`, `max_attempts`, `policy_version`, expiry/consume/supersede state; no plaintext/unkeyed OTP.
 - [ ] Terms/Privacy immutable refs + timestamps persisted.
@@ -49,7 +53,7 @@ This is the coding handoff checklist for Claude/Codex. Read all sibling document
 - [ ] IdentityProviderPort exposes only needed user/verification operations, not generic realm administration.
 - [ ] Password never enters logs/traces/audit/cache/idempotency/retry/outbox/persistence.
 - [ ] Keycloak ambiguous-create reconciliation implemented before retry-create.
-- [ ] Consent versions validated against server-known immutable artifacts.
+- [ ] Consent/attestation versions validated against server-known immutable artifacts.
 - [ ] Keycloak triggers verification email; RAMALS does not fake verification authority.
 
 ## Gate 4 — email verification/onboarding separation
@@ -94,7 +98,7 @@ This is the coding handoff checklist for Claude/Codex. Read all sibling document
 - [ ] RAMALS exposes public registration page/CTA; do not claim hosted Keycloak login is a RAMALS page.
 - [ ] Hosted Keycloak remains sign-in UI for MVP-1.
 - [ ] Do not enable Keycloak native self-registration or use `keycloak.login({action:'register'})` without a new reviewed ADR.
-- [ ] Registration form includes mandatory mobile and consent.
+- [ ] Registration form includes mandatory mobile and consent; approved adult attestation if product policy requires it.
 - [ ] Post-verification sign-in resumes email/mobile/profile/journey flow from server state.
 - [ ] Mobile OTP UX has resend/expiry/safe errors.
 - [ ] No authoritative onboarding/business state in localStorage.
@@ -110,7 +114,7 @@ This is the coding handoff checklist for Claude/Codex. Read all sibling document
 - [ ] Role escalation negatives for INSTRUCTOR/CONTENT_AUTHOR/ADMIN/SERVICE.
 - [ ] Browser verification/ONBOARDED forgery negatives.
 - [ ] Password/admin-secret/OTP/token leakage scan.
-- [ ] Unknown consent version rejection.
+- [ ] Unknown consent/attestation version rejection.
 - [ ] OTP wrong/expired/replay/resend/max-attempt/HMAC storage tests.
 - [ ] Pre-auth registration and authenticated mobile/provider-budget rate-limit tests.
 - [ ] Cross-replica limiter qualification.
@@ -154,7 +158,7 @@ Report exact evidence, not inference:
 - [ ] mandatory mobile ownership verification success
 - [ ] SMS-vs-MFA separation negative control
 - [ ] OTP abuse/replay negatives
-- [ ] immutable consent evidence
+- [ ] immutable consent/attestation evidence as applicable
 - [ ] profile persisted
 - [ ] journey + `core.learner_goal` projection consistent
 - [ ] Kafka not default
@@ -167,11 +171,13 @@ Report exact evidence, not inference:
 - [ ] production email provider qualification or `NOT VERIFIED` + blocked
 - [ ] production SMS provider qualification or `NOT VERIFIED` + blocked
 
-## Mandatory PR sequence
+## Compact implementation PR sequence
 
-1. **PR-A — schema + identity foundation**
-2. **PR-B — mobile verification**
-3. **PR-C — professional onboarding + LearningJourney + goal compatibility + UI**
-4. **PR-D — hardening + E2E/production qualification**
+For the current solo-founder + AI-pair workflow, use two coherent PRs by default while retaining every gate above:
 
-Each PR must leave main buildable/testable and must not temporarily weaken security. Do not merge automatically. Final review verdict is MERGE / FIX / BLOCKED / WAIT FOR CI based on evidence.
+1. **PR-A — Identity + Registration + Verification**
+2. **PR-B — Professional Onboarding + Qualification**
+
+Split further only when risk/reviewability requires it. PR count is not a substitute for security controls or qualification evidence. Each PR must leave main buildable/testable and must not temporarily weaken security.
+
+Do not merge automatically. Final review verdict is MERGE / FIX / BLOCKED / WAIT FOR CI based on evidence.

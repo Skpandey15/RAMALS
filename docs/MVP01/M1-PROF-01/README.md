@@ -9,6 +9,8 @@ Production-grade target: Yes
 
 M1-PROF-01 establishes the production-grade identity, registration, verification, professional-profile, and first-learning-journey boundary for RAMALS professional learners.
 
+**Professional is RAMALS's first product beachhead, not the lifetime architectural boundary of the platform.** The long-term segment taxonomy and expansion guardrails are defined in `docs/product/RAMALS_PRODUCT_VISION_AND_SEGMENT_ARCHITECTURE.md`. This milestone MUST NOT implement School, Higher Education, guardian, parental-consent or minor-specific machinery merely to anticipate those future segments.
+
 This package is intentionally implementation-oriented so Claude or Codex can code from it without inventing architecture. It is subordinate to accepted repository invariants and explicitly reconciles the existing OIDC-subject JIT learner model, PII-free `core.learner`, operational learner status, Keycloak MFA, `core.learner_goal`, security filter chain, and workload-identity decisions already on `main`.
 
 ## Product outcome
@@ -17,14 +19,15 @@ A new professional learner can:
 
 1. Open the RAMALS public registration entry point (`/register`) while hosted Keycloak remains the sign-in UI.
 2. Register with first name, last name, email, mandatory mobile, country, password, and Terms/Privacy acceptance.
-3. Verify email through Keycloak.
-4. Sign in through hosted Keycloak and resume authoritative onboarding.
-5. Verify the mandatory mobile using RAMALS SMS ownership verification.
-6. Complete a professional profile.
-7. Define learning goals, target role, selected domains, intensity, and weekly availability.
-8. Create the initial learning journey.
-9. Resume onboarding after interruption.
-10. Reach onboarding state `ONBOARDED` only after all required gates pass.
+3. Where the approved professional product policy requires it, explicitly self-attest adult status without collecting date of birth solely for future use.
+4. Verify email through Keycloak.
+5. Sign in through hosted Keycloak and resume authoritative onboarding.
+6. Verify the mandatory mobile using RAMALS SMS ownership verification.
+7. Complete a professional profile.
+8. Define learning goals, target role, selected domains, intensity, and weekly availability.
+9. Create the initial learning journey.
+10. Resume onboarding after interruption.
+11. Reach onboarding state `ONBOARDED` only after all required gates pass.
 
 `core.learner.status=ACTIVE` is an operational account/workflow status and **does not mean onboarding is complete**. Professional product eligibility requires the applicable authorization/ownership checks plus the onboarding gate defined by this package.
 
@@ -49,11 +52,13 @@ Kafka is one professional domain only; it must not be the global/default platfor
 - Mobile numbers are normalized to E.164.
 - One verified mobile number maps to one RAMALS learner identity for MVP-1 and remains reserved after disable/soft-delete unless explicitly released through a separate audited policy.
 - Terms/Privacy acceptance records an immutable server-known document/version reference and timestamp, not only a boolean.
+- If adult self-attestation is required for the professional product, its accepted statement/version and timestamp are auditable; date of birth is not collected merely for hypothetical future segments.
+- `PROFESSIONAL`, `HIGHER_EDUCATION` and `SCHOOL` are product-segment concepts, not Keycloak authorization roles.
 - Keycloak, not a RAMALS fake email adapter, owns verification mail. DEV/CI uses a non-billable local SMTP sink such as Mailpit wired to Keycloak; production qualification uses the configured production SMTP/provider and fails closed when absent.
 - SMS abuse protection includes a pre-auth registration limiter plus authenticated subject/mobile/challenge/provider-budget controls; the existing bearer-subject limiter alone is insufficient.
 - Existing `core.learner_goal` remains the deterministic-core compatibility projection during MVP-1; LearningJourney does not silently replace it.
 - No paid SMS provider is required for local DEV/CI; production must fail closed if the production sender is not configured.
-- Implementation is delivered through the mandatory staged PR sequence defined in the master plan/checklist rather than one oversized PR.
+- Delivery decomposition is a review/coordination mechanism, not a security control. The implementation may use the approved compact PR sequence in the master plan while preserving every security, testing and qualification gate.
 
 ## ADRs
 
