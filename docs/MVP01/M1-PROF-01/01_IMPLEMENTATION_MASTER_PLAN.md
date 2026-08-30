@@ -4,11 +4,14 @@
 
 Deliver production-grade professional learner self-registration and onboarding while preserving RAMALS identity, Zero Trust, deterministic-learning, migration, and deployment invariants already present on `main`.
 
+Professional is the current implementation beachhead, not the lifetime RAMALS product boundary. See `docs/product/RAMALS_PRODUCT_VISION_AND_SEGMENT_ARCHITECTURE.md`. This plan does not authorize implementation of School, Higher Education, guardian or minor-specific machinery.
+
 ## 2. In scope
 
 - RAMALS public `/register` entry point; hosted Keycloak remains the sign-in UI for MVP-1.
 - Learner-only public registration.
 - First/last name, email, mandatory mobile, country, optional city, password/confirmation, Terms/Privacy acceptance.
+- Optional policy-driven adult self-attestation for the professional launch without DOB collection solely for future use.
 - Keycloak identity creation and email verification.
 - Mandatory authenticated mobile ownership verification after email verification/sign-in.
 - Professional profile.
@@ -19,7 +22,7 @@ Deliver production-grade professional learner self-registration and onboarding w
 
 ## 3. Out of scope
 
-School/college learners, parents, institution administration, billing, subscription/payment, mastery algorithm redesign, Contract B changes, AWS redesign, T15 semantic changes, Keycloak MFA redesign, retirement of `core.learner_goal`, or production SMS vendor procurement unless separately approved.
+School/Higher Education implementation, parents/guardians, minor-specific consent or age-proofing machinery, institution administration, billing, subscription/payment, mastery algorithm redesign, Contract B changes, AWS redesign, T15 semantic changes, Keycloak MFA redesign, retirement of `core.learner_goal`, or production SMS vendor procurement unless separately approved.
 
 ## 4. Existing-main invariants this plan MUST preserve
 
@@ -38,6 +41,8 @@ Existing background/deterministic consumers that intentionally use operational `
 ### 4.2 PII-free core learner
 
 The existing `core.learner` no-PII baseline remains authoritative. Names, email, mobile, country and city MUST NOT be added to `core.learner`. M1-PROF-01 introduces/reuses a separate least-privilege contact/registration PII boundary keyed by learner identity. Professional attributes remain in a separate professional-profile model.
+
+Do not collect date of birth merely to prepare for future School/Higher Education segments. If the professional product requires adult assurance, prefer explicit self-attestation with server-known statement/version and timestamp evidence unless legal/product review requires stronger proof.
 
 ### 4.3 Existing learner goal
 
@@ -108,7 +113,7 @@ Exit: written mapping to concrete existing classes/files and explicit list of le
 
 ### Phase B — identity/registration foundation
 
-Implement separate onboarding state, dedicated PII boundary, dedicated Keycloak admin client integration, public registration security/rate limit, Terms evidence, idempotency, partial-failure reconciliation, Keycloak email trigger and canonical email-verification reconciliation.
+Implement separate onboarding state, dedicated PII boundary, dedicated Keycloak admin client integration, public registration security/rate limit, Terms evidence, optional approved adult-attestation evidence, idempotency, partial-failure reconciliation, Keycloak email trigger and canonical email-verification reconciliation.
 
 Exit: JIT `ACTIVE` cannot bypass onboarding; public registration creates only `LEARNER`; no PII is added to `core.learner`.
 
@@ -182,14 +187,29 @@ Require backend/frontend tests, real PostgreSQL migration/race tests, Keycloak i
 
 Monitor registration success/failure, Keycloak admin failures, email verification, OTP sends/verifies/rejects, rate limits, provider latency/errors/budget, onboarding funnel, mobile conflicts and reconciliation backlog. Never put email/mobile/IP/subject in metric labels.
 
-## 15. Mandatory implementation PR sequence
+## 15. Compact implementation PR sequence
 
-1. **PR-A — schema + identity foundation:** onboarding separation, PII boundary, Keycloak admin client, public registration/pre-auth limiter, Keycloak email mechanism, consent evidence, idempotency/reconciliation.
-2. **PR-B — mobile verification:** authenticated mobile APIs, HMAC, rate/budget controls, provider abstraction, uniqueness/reservation, SMS-vs-MFA negative tests.
-3. **PR-C — professional onboarding + LearningJourney + goal compatibility + UI:** profile, journey, `core.learner_goal` projection/compatibility, public registration UI/post-login resume; Kafka not default.
-4. **PR-D — hardening + E2E qualification:** failure injection, load/concurrency, telemetry, runbooks, production email/SMS/provider evidence.
+Delivery decomposition is a coordination/review mechanism, **not a security control**. For the current solo-founder + AI-pair workflow, M1-PROF-01 should normally be delivered in two coherent implementation PRs while preserving every threat-model, negative-test, concurrency, provider and qualification requirement.
 
-Each PR leaves main buildable/testable with no temporary bypass.
+1. **PR-A — Identity + Registration + Verification**
+   - additive schema/onboarding state and PII boundary;
+   - dedicated Keycloak admin client;
+   - public registration and pre-auth abuse control;
+   - credential/consent/adult-attestation handling as approved;
+   - Keycloak email verification and reconciliation;
+   - authenticated mobile verification, HMAC, rate/budget controls, provider abstraction and verified-mobile reservation;
+   - idempotency, failure recovery, authorization, concurrency and security tests.
+
+2. **PR-B — Professional Onboarding + Qualification**
+   - professional profile;
+   - learning goals and LearningJourney;
+   - `core.learner_goal` compatibility projection;
+   - registration/onboarding UI and authoritative resume;
+   - E2E, failure/load/concurrency qualification;
+   - observability/runbooks;
+   - production email/SMS/provider qualification evidence.
+
+A PR may be split further if reviewability or risk requires it. It MUST NOT be split merely to satisfy ceremony, and combining work MUST NOT weaken security review or permit temporary bypasses on main.
 
 ## 16. Completion criteria
 
