@@ -2,73 +2,104 @@
 
 ## 1. Design rules
 
-- Inspect/reuse existing learner/user tables first.
-- Keycloak `sub` is the external identity key; email is mutable and is not the immutable join key.
-- UUID/UUIDv7 and timestamp conventions follow existing RAMALS standards.
-- Use optimistic locking/version where repository conventions require it.
-- PII columns receive least-privilege access and must not be copied into unrelated tables/events.
+- Preserve ADR 0001: Keycloak `sub` is the external identity anchor and `/me` ownership key.
+- Preserve the existing Zero Trust invariant that `core.learner` contains no PII.
+- Preserve existing `core.learner.status` semantics (`ACTIVE | SUSPENDED | CLOSED`); onboarding is a separate state ending `ONBOARDED`.
+- Preserve existing `core.learner_goal` as the deterministic-core compatibility projection during MVP-1.
+- Migration numbering follows ADR 0003 and implementation order; do not hard-code a migration number in this design package.
+- Use existing UUID/timestamp/version conventions.
+- PII is minimized and held in a separately permissioned boundary; it is not copied into unrelated core/AI/event tables.
 
 ## 2. Logical model
 
 ```text
-LearnerIdentity
-  1 --- 1 ProfessionalProfile
-  1 --- * MobileVerificationChallenge
-  1 --- * LearningJourney
+core.learner (NO PII; OIDC-sub anchored; operational status)
+   1 --- 1 ProfessionalOnboarding
+   1 --- 1 LearnerContactPII
+   1 --- 1 ProfessionalProfile
+   1 --- * MobileVerificationChallenge
+   1 --- * LearningJourney
+   1 --- 0..1 core.learner_goal   <-- deterministic compatibility projection
+
 LearningJourney
-  1 --- * LearningJourneyDomain
+   1 --- * LearningJourneyDomain
 ```
 
-Names are logical; implementation must reuse existing tables/entities where suitable.
+Physical names must follow repository/schema conventions discovered in PR-A. `LearnerContactPII` is a boundary concept, not permission to alter `core.learner`.
 
-## 3. Learner identity/application registration fields
+## 3. `core.learner` — unchanged identity/operational boundary
 
-Recommended fields or equivalents:
+Do not add first name, last name, email, mobile, country or city to `core.learner`.
 
-- id
-- keycloak_subject (unique, non-null once identity created)
+Existing identity remains anchored to opaque OIDC `sub`. Existing operational status remains separate from onboarding. JIT provisioning may create an operationally `ACTIVE` row; it does not create onboarding completion.
+
+## 4. Professional onboarding
+
+Recommended new/reused state record keyed by learner ID:
+
+- learner_id PK/FK
+- onboarding_state: `IDENTITY_CREATED | EMAIL_PENDING | EMAIL_VERIFIED | MOBILE_PENDING | MOBILE_VERIFIED | PROFILE_PENDING | JOURNEY_PENDING | ONBOARDED`
+- created_at
+- updated_at
+- version where repository convention requires
+
+`REGISTRATION_STARTED` is an audit/idempotency orchestration event and does not need to be a persistent learner onboarding enum.
+
+Legacy learners require an explicit backfill/compatibility rule in PR-A; absence of an onboarding row must not accidentally lock out existing deterministic workflows.
+
+## 5. Registration/contact PII boundary
+
+Recommended separate least-privilege table/schema boundary (physical name selected during implementation discovery):
+
+- learner_id PK/FK
 - first_name
 - last_name
-- normalized_email / display email as existing model permits
-- mobile_e164 (nullable until captured; verified uniqueness handled explicitly)
+- email_normalized / display_email as required
+- mobile_e164
+- email_verified_at
 - mobile_verified_at
 - country_code
-- city (optional)
+- city optional
 - terms_version
-- terms_document_ref or immutable content/version identifier
+- terms_document_ref / immutable content identifier
 - privacy_version
-- privacy_document_ref or immutable content/version identifier
+- privacy_document_ref / immutable content identifier
 - terms_accepted_at
 - privacy_accepted_at where separately captured
-- onboarding_state
-- created_at / updated_at
-- version
+- created_at / updated_at / version
 
-Do not persist password.
+Password is never stored.
 
-Terms/Privacy acceptance evidence must be reproducible later. Storing only `accepted=true` is insufficient. Persist the server-known immutable document/version reference that was accepted plus timestamp. If Terms and Privacy are one combined consent artifact, one immutable reference may be used; otherwise record both explicitly.
+DB grants should allow only the application components that need contact/profile PII. AI-plane access is prohibited. Audit/events use stable non-PII identifiers and immutable consent references rather than contact values.
 
-## 4. Mobile verification challenge
+The verified-mobile reservation constraint must remain effective for disabled/soft-deleted learners. A soft-delete predicate must not silently release the number.
 
-Recommended:
+See M1-ADR-013.
 
-- id (opaque UUID)
+## 6. Mobile verification challenge
+
+Required fields/equivalents:
+
+- id opaque UUID
 - learner_id
 - mobile_e164
 - otp_hmac
 - hmac_key_version
 - expires_at
 - attempt_count
-- max_attempts or policy version
-- resend lineage/generation
-- provider_message_ref (non-secret, optional)
+- **max_attempts**
+- **policy_version**
+- resend_generation / lineage
+- provider_message_ref optional/non-secret
 - consumed_at
 - superseded_at
 - created_at
 
-Do not persist plaintext OTP. Do not persist a plain unkeyed fast hash of a low-entropy OTP. Expired/consumed challenge retention must be bounded by policy and purgeable.
+Both `max_attempts` and `policy_version` are recorded so an in-flight challenge has deterministic enforcement/audit semantics even if configured policy changes.
 
-## 5. Professional profile
+Never store plaintext OTP, reversible OTP, or an unkeyed fast hash. Expired/consumed challenge retention is bounded and purgeable.
+
+## 7. Professional profile
 
 Recommended:
 
@@ -76,14 +107,14 @@ Recommended:
 - current_role
 - experience_band
 - primary_expertise
-- declared_skill_level (explicitly non-authoritative)
+- declared_skill_level (non-authoritative)
 - created_at / updated_at / version
 
-Technologies known should use normalized child rows/catalog references rather than uncontrolled comma-separated strings when an existing taxonomy/catalog exists.
+Known technologies use normalized catalog references/child rows where the repository has a taxonomy. Professional attributes are not added to `core.learner`.
 
-## 6. Learning journey
+## 8. LearningJourney and `core.learner_goal`
 
-Recommended:
+LearningJourney is the product-level multi-domain orchestration model:
 
 - id
 - learner_id
@@ -92,113 +123,123 @@ Recommended:
 - learning_intensity
 - weekly_hours
 - status
+- primary_domain_id (or an equivalent explicit primary-domain relation)
 - created_at / updated_at / version
 
-Selected domains use child rows/references. Kafka is not inserted automatically unless explicitly selected or existing compatibility requires a clearly documented migration.
+Selected domains use child rows/catalog references. Kafka is never auto-selected.
 
-## 7. Constraints
+During MVP-1, existing `core.learner_goal` remains the deterministic-core compatibility projection. The designated primary journey/domain maps to the existing one-goal-per-learner model (`target_domain_id`, target proficiency/date fields as currently defined).
 
-Required database-level controls:
+Required compatibility semantics:
 
-- unique Keycloak subject
-- verified mobile uniqueness including disabled/soft-deleted identities unless an audited release/reassignment policy explicitly changes ownership
-- FK integrity
-- allowed lifecycle/status values via enum/check/application + migration conventions
-- non-negative/realistic weekly-hours bounds
-- no duplicate domain within one journey
-- challenge lookup indexes for learner/mobile/active expiry paths
+1. Journey creation/update writes the primary-goal projection transactionally/idempotently with the authoritative journey mutation where feasible.
+2. Existing GET `/me/goal` remains supported.
+3. Existing PUT `/me/goal` is not silently broken. For a learner with a journey, route through a compatibility application service that updates primary journey context and projection atomically. For a legacy learner without a journey, preserve current behavior.
+4. Failure to create/maintain the required projection prevents transition to `ONBOARDED` where that journey depends on it.
+5. Retirement of `core.learner_goal` requires a separate future ADR/migration; it is not part of M1-PROF-01.
 
-Application checks alone are insufficient for mobile uniqueness under concurrency.
+## 9. Database controls
 
-## 8. API principles
+Required:
 
-- Version according to current RAMALS API conventions.
-- JSON only unless existing conventions differ.
-- Explicit request DTOs; never bind persistence entities directly.
-- RFC/problem-style existing error envelope should be reused.
-- Validation errors must be deterministic and safe.
-- Mutating retry-sensitive endpoints support idempotency.
-- `/me` endpoints derive identity from authenticated subject.
+- existing unique OIDC subject preserved;
+- `core.learner` PII-free;
+- one onboarding row per learner;
+- DB-enforced verified-mobile reservation/uniqueness including disabled/soft-deleted identities;
+- challenge FKs and active lookup indexes;
+- no duplicate domain within journey;
+- primary-domain/goal-projection integrity;
+- realistic weekly-hours bounds;
+- lifecycle/status check constraints according to repository conventions;
+- least-privilege grants for PII tables/schema.
 
-## 9. Candidate contracts
+Application-only mobile uniqueness is insufficient under concurrency.
 
-Exact paths may be adapted to existing routing conventions.
+## 10. Role vocabulary
 
-### POST registration
+Use actual realm roles: `LEARNER`, `INSTRUCTOR`, `CONTENT_AUTHOR`, `ADMIN`, `SERVICE`.
 
-Request: firstName, lastName, email, mobileNumber, country, city?, password, confirmPassword, acceptedTermsVersion/document reference as allowed by server contract. Header: `Idempotency-Key` required for the RAMALS-orchestrated path.
+Public registration always produces `LEARNER`. Do not expose `role`, realm-role or client-role fields in public DTOs. Product terminology such as mentor/reviewer must not be invented as a Keycloak role; if mapped in future, current instructor semantics require an explicit decision.
 
-The server MUST validate that the submitted consent version/reference corresponds to a currently acceptable server-known immutable artifact. A client cannot invent an arbitrary terms version and make it authoritative.
+## 11. Public registration API
 
-Response: registrationId/opaque reference, lifecycle status, nextStep. Never echo password. Avoid revealing whether unrelated accounts exist beyond the chosen enumeration policy.
+Candidate path following current versioning convention: `POST /api/v1/registration` (final path may adapt to repository convention).
 
-### POST mobile/send-otp
+This is an intentionally unauthenticated endpoint behind a dedicated pre-auth abuse limiter. Request:
 
-Requires correct registration/auth context. Request contains intended mobile only where not already bound. Response contains challengeId, expiresAt, resendAfter. Never OTP.
+- firstName
+- lastName
+- email
+- mobileNumber
+- country
+- city optional
+- password
+- confirmPassword
+- server-recognized Terms/Privacy version/reference fields
 
-### POST mobile/verify-otp
+Header: `Idempotency-Key` required.
 
-Request: challengeId, otp. Response: verified boolean/status and nextStep. Repeated successful request should be idempotent where possible; consumed challenge with same completed state must not create duplicate side effects.
+Server validates consent references against currently acceptable immutable artifacts. No role input. Never echo password. Responses are enumeration-resistant.
 
-### POST mobile/resend-otp
+The backend creates the Keycloak user through the dedicated registration-admin client, assigns only `LEARNER` through a narrow server policy, persists RAMALS linkage/contact/consent state, and triggers Keycloak verification email.
 
-Returns new/current challenge metadata under policy. Previous OTP becomes unusable.
+## 12. Authenticated onboarding/mobile APIs
 
-### GET /me/onboarding
+After Keycloak email verification and hosted-Keycloak sign-in, `/me` APIs derive learner from validated token subject.
 
-Returns authoritative lifecycle and nextStep plus completion flags safe for UI. It may trigger safe Keycloak email-verification reconciliation as specified in the HLD/LLD document.
+Candidate contracts:
 
-### GET/PUT /me/profile
+- `GET /api/v1/me/onboarding`
+- `POST /api/v1/me/mobile/send-otp`
+- `POST /api/v1/me/mobile/verify-otp`
+- `POST /api/v1/me/mobile/resend-otp`
+- `GET/PUT /api/v1/me/profile`
+- `POST/GET /api/v1/me/learning-journeys`
 
-Authenticated learner only. PUT validates enumerations/catalog references. It cannot mutate password, roles or verified mobile ownership directly.
+Mobile APIs require trusted email verification/onboarding prerequisite and authenticated subject. They do not accept learner ID and do not provide authentication MFA tokens/claims.
 
-### POST /me/learning-journeys
+Send response: challengeId, expiresAt, resendAfter; never OTP.
+Verify request: challengeId + OTP. Repeated success is idempotent/current-state safe; it creates no duplicate ownership side effects.
 
-Requires verified identity/profile prerequisites. Use Idempotency-Key. Request includes goal, targetRole, domains, intensity, weeklyHours. Response returns journey ID/status.
+## 13. Existing goal API compatibility
 
-### GET /me/learning-journeys
+Existing `/me/goal` remains part of the compatibility contract during M1-PROF-01. Implementation must inventory the exact current controller/service behavior and add tests proving journey introduction does not change deterministic consumers unexpectedly.
 
-Only caller-owned journeys.
+## 14. Validation and idempotency
 
-## 10. Validation
+- bounded Unicode-safe names; reject controls;
+- established email validation; avoid provider-specific destructive normalization;
+- mature phone parsing + E.164;
+- controlled country values;
+- authoritative password policy remains Keycloak;
+- immutable server-known consent artifacts;
+- bounded free text and weekly hours;
+- registration/journey idempotency stores non-secret request fingerprint/result only;
+- registration fingerprint/storage excludes plaintext/reversible credentials;
+- ambiguous Keycloak outcomes reconcile rather than replay a stored password.
 
-- names: bounded length, Unicode-safe, trim/canonicalization; reject control characters.
-- email: use established validator; normalize carefully without provider-specific destructive assumptions.
-- phone: parse with country context and normalize E.164 using a mature library.
-- country: ISO-style controlled value/catalog.
-- password: defer authoritative policy to Keycloak; frontend hints are advisory.
-- terms/privacy: accepted artifact(s) must be server-known and immutable/versioned; record timestamp and reference.
-- free text: strict size limits and output encoding.
-- weekly hours: bounded numeric value.
+## 15. PII API minimization
 
-## 11. Idempotency
+Return only screen-required fields. Mask mobile outside dedicated contact/verification contexts. Do not put email/mobile/IP/subject/OTP in metric labels. Logs/traces/audits use non-sensitive record identifiers and redaction.
 
-Registration and journey creation require a deterministic idempotency design. Persist key scope, non-secret request fingerprint, result reference and expiration according to existing RAMALS patterns. Same key + materially different request returns conflict.
+## 16. Audit events
 
-For registration, the idempotency fingerprint/storage MUST exclude plaintext password and any reversible credential representation. Retries after ambiguous identity-provider outcomes reconcile Keycloak state rather than replaying a durably stored credential.
-
-## 12. PII API minimization
-
-Responses return only fields required by the screen. Mobile should be masked outside dedicated verification/profile contexts (for example `+91******3210`). Logs and audit events use masked or stable non-PII identifiers.
-
-## 13. Events/audit
-
-Emit/reuse structured audit events:
+Use/reuse structured events such as:
 
 - LEARNER_REGISTRATION_STARTED
 - IDENTITY_CREATED
 - EMAIL_VERIFICATION_REQUIRED
 - EMAIL_VERIFIED
 - MOBILE_OTP_SENT
-- MOBILE_VERIFICATION_FAILED (reason category, no OTP)
+- MOBILE_VERIFICATION_FAILED (category only)
 - MOBILE_VERIFIED
 - PROFESSIONAL_PROFILE_COMPLETED
 - LEARNING_JOURNEY_CREATED
 - ONBOARDING_COMPLETED
-- TERMS_ACCEPTED / PRIVACY_ACCEPTED or equivalent evidence event with immutable document/version reference only, never full credential/request payload
+- TERMS_ACCEPTED / PRIVACY_ACCEPTED with immutable artifact reference
 
-Carry interactionId/traceId according to RAMALS conventions. Event payloads must be schema-controlled and PII-minimized.
+Carry interactionId/traceId per repository conventions. Never include password, OTP, token, provider secret or full request body.
 
-## 14. OpenAPI
+## 17. OpenAPI
 
-Update/generate OpenAPI using repository conventions. Contracts must document authentication, idempotency header, 400/401/403/409/422/429/5xx behavior, examples without real PII/secrets, and state-transition conflicts.
+Document public vs authenticated endpoints, idempotency, prerequisite state, 400/401/403/409/422/429/5xx, enumeration-resistant error behavior, and examples containing no real PII/secrets. Explicitly state that mobile ownership verification is not Keycloak MFA.
