@@ -7,6 +7,18 @@
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 28800,
   "bruteForceProtected": true,
+  "registrationAllowed": false,
+  "verifyEmail": true,
+  "passwordPolicy": "length(12) and notUsername(undefined) and notEmail(undefined)",
+  "smtpServer": {
+    "host": "mailpit",
+    "port": "1025",
+    "from": "no-reply@ramals.local",
+    "fromDisplayName": "RAMALS",
+    "auth": "false",
+    "ssl": "false",
+    "starttls": "false"
+  },
   "otpPolicyType": "totp",
   "otpPolicyAlgorithm": "HmacSHA256",
   "otpPolicyDigits": 6,
@@ -117,6 +129,30 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "ramals-registration-admin",
+      "name": "RAMALS registration administration",
+      "description": "Dedicated least-privilege identity for learner creation and verification reconciliation. Secret is external and absent from Git.",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-ramals-registration-admin",
+      "enabled": true,
+      "serviceAccountClientId": "ramals-registration-admin",
+      "clientRoles": {
+        "realm-management": [
+          "manage-users",
+          "view-users"
+        ]
+      }
     }
   ],
   "requiredActions": [

@@ -65,7 +65,7 @@ class PostgresMigrationIntegrationTests {
           $$;
           """);
       statement.execute("ALTER DATABASE " + quotedDatabase + " OWNER TO " + quotedAdmin);
-      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit CASCADE");
+      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit, identity CASCADE");
       statement.execute("ALTER DATABASE " + quotedDatabase + " OWNER TO " + MIGRATION_USER);
       statement.execute("REVOKE CONNECT ON DATABASE " + quotedDatabase + " FROM PUBLIC");
       statement.execute("GRANT CONNECT ON DATABASE " + quotedDatabase + " TO "
@@ -82,10 +82,10 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 40 with V040 (Contract B execution correlation). Asserting the count
+    // 41 with V041 (professional registration and verification). Asserting the count
     // rather than merely that the upgrade succeeds is what makes an accidentally unapplied
     // migration visible -- it caught V029 the first time it ran.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(40);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(41);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 
@@ -320,7 +320,7 @@ class PostgresMigrationIntegrationTests {
         .dataSource(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD)
         .locations(locations)
         .defaultSchema("core")
-        .schemas("core", "ledger", "audit")
+        .schemas("core", "ledger", "audit", "identity")
         .createSchemas(true)
         .validateMigrationNaming(true)
         .cleanDisabled(true)

@@ -41,6 +41,7 @@ public class SecurityConfig {
         .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
         .authorizeHttpRequests(authorize -> authorize
             .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll()
+            .requestMatchers(HttpMethod.POST, "/api/v1/registration").permitAll()
             .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
             .anyRequest().authenticated())
         .oauth2ResourceServer(resourceServer -> resourceServer

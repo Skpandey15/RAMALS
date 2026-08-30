@@ -40,7 +40,7 @@ RAMALS recognizes the following long-term product taxonomy:
 ```text
 RAMALS
 |
-+-- PROFESSIONAL          <- current implementation beachhead
++-- PROFESSIONAL          <- implement first / current delivery beachhead
 |   +-- technology learning/switching
 |   +-- job/role transition
 |   +-- interview preparation
@@ -71,7 +71,7 @@ This taxonomy is intentionally small. Do not create speculative polymorphic peda
 The segments are expected to reuse a common conceptual learning loop:
 
 ```text
-Target outcome
+Current capability -> Target outcome
      |
      v
 Curriculum / competency model
@@ -95,7 +95,7 @@ Learn -> Practice -> Assess
                Deterministic mastery
                          |
                          v
-                Verified outcome proof
+                Verified outcome
 ```
 
 Common platform capabilities include curriculum/skill graphs, evidence, deterministic mastery, recommendation/policy, assessment, AI assistance under deterministic authority boundaries, auditability, observability and identity/security foundations.

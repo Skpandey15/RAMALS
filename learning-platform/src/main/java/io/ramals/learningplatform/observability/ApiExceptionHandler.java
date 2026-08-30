@@ -17,10 +17,12 @@ import io.ramals.learningplatform.learning.InvalidSessionTransitionException;
 import io.ramals.learningplatform.learning.LearningSessionNotFoundException;
 import io.ramals.learningplatform.learning.SessionConflictException;
 import io.ramals.learningplatform.content.ApprovalRequestException;
+import io.ramals.learningplatform.registration.RegistrationException;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -262,6 +264,38 @@ public class ApiExceptionHandler {
     };
     return problem(status, "Approval request rejected", exception.code(),
         "The approval command could not be completed.", request);
+  }
+
+  /**
+   * Registration and verification rejections.
+   *
+   * <p>Unlike the sibling domains above, this one carries its own status and its own learner-facing
+   * detail. The reason is the count: the package rejects for well over a dozen distinct causes, and a
+   * per-code {@code case} here would be the place the mapping rots — a code added at the throw site
+   * and forgotten in this switch would silently answer with the wrong status. Keeping the pair
+   * together in {@link RegistrationException} makes that impossible, and leaves this method total.
+   *
+   * <p>The detail is deliberately coarser than the code for the enumeration-sensitive cases; see
+   * {@link RegistrationException#detail()}. {@code Retry-After} is set only for the codes that are
+   * throttles, so a client can back off correctly rather than retry immediately against a ceiling.
+   */
+  @ExceptionHandler(RegistrationException.class)
+  ResponseEntity<ApiProblem> handleRegistrationFailure(
+      RegistrationException exception, HttpServletRequest request) {
+    ResponseEntity<ApiProblem> response = problem(
+        exception.status(),
+        "Registration request rejected",
+        exception.code(),
+        exception.detail(),
+        request);
+    long retryAfter = exception.retryAfterSeconds();
+    if (retryAfter <= 0) {
+      return response;
+    }
+    return ResponseEntity.status(exception.status())
+        .headers(headers -> headers.addAll(response.getHeaders()))
+        .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfter))
+        .body(response.getBody());
   }
 
   @ExceptionHandler(IllegalArgumentException.class)

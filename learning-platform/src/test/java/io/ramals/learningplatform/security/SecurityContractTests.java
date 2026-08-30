@@ -84,7 +84,9 @@ class SecurityContractTests {
     Jwt rightAudience = token(Instant.now().minusSeconds(10), Instant.now().plusSeconds(60), "ramals-api");
     org.assertj.core.api.Assertions.assertThat(audience.validate(rightAudience).hasErrors()).isFalse();
 
-    Jwt expired = token(Instant.now().minusSeconds(120), Instant.now().minusSeconds(60), "ramals-api");
+    // Stay beyond Spring Security's permitted clock skew; exactly 60 seconds is a boundary and
+    // made this assertion depend on sub-millisecond scheduling.
+    Jwt expired = token(Instant.now().minusSeconds(240), Instant.now().minusSeconds(120), "ramals-api");
     OAuth2TokenValidatorResult expiryResult = JwtValidators.createDefaultWithIssuer(ISSUER).validate(expired);
     org.assertj.core.api.Assertions.assertThat(expiryResult.hasErrors()).isTrue();
   }

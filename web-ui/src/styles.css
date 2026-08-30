@@ -199,3 +199,48 @@ legend {
   white-space: nowrap;
   border: 0;
 }
+
+.registration-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.registration-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.registration-form input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.65rem;
+  border: 1px solid #b9c7d8;
+  border-radius: 0.4rem;
+  font: inherit;
+}
+
+.registration-form .check {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 400;
+}
+
+.registration-form .check input {
+  width: auto;
+}
+
+.registration-form button,
+.registration-form .error-banner {
+  grid-column: 1 / -1;
+}
+
+/* One column on narrow viewports: the paired fields stack rather than being squeezed. */
+@media (max-width: 42rem) {
+  .registration-form {
+    grid-template-columns: 1fr;
+  }
+}

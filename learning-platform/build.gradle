@@ -27,6 +27,7 @@ dependencies {
   implementation 'org.springframework.boot:spring-boot-starter-web'
   implementation 'net.ttddyy.observation:datasource-micrometer-spring-boot:2.2.1'
   implementation 'net.ttddyy.observation:datasource-micrometer-opentelemetry:2.2.1'
+  implementation 'com.googlecode.libphonenumber:libphonenumber:9.0.15'
   // Pinned ahead of the Spring Boot BOM: the managed 42.7.11 carries CVE-2026-54291 (HIGH,
   // scram-client), fixed in 42.7.12. Drop the explicit version once the BOM catches up.
   runtimeOnly 'org.postgresql:postgresql:42.7.12'

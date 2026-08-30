@@ -139,6 +139,8 @@ Complete pre-auth registration abuse controls, authenticated SMS controls, admin
 
 Execute Doc 05. Mocks alone do not qualify identity/email/provider boundaries.
 
+Phases A-G are engineering work phases and may coexist within PR-A or PR-B; they are not separate mandatory pull requests.
+
 ## 9. Onboarding lifecycle
 
 Persistent onboarding states:

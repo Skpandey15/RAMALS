@@ -16,7 +16,7 @@ spring:
     password: ${RAMALS_DB_MIGRATION_PASSWORD}
     locations: classpath:db/migration
     default-schema: core
-    schemas: core,ledger,audit
+    schemas: core,ledger,audit,identity
     create-schemas: true
     validate-migration-naming: true
     validate-on-migrate: true
@@ -89,6 +89,34 @@ ramals:
       subject:
         capacity: ${RAMALS_RATE_LIMIT_SUBJECT_CAPACITY:120}
         refill-per-second: ${RAMALS_RATE_LIMIT_SUBJECT_REFILL_PER_SECOND:60}
+  registration:
+    enabled: ${RAMALS_REGISTRATION_ENABLED:false}
+    environment: ${RAMALS_ENVIRONMENT:dev}
+    keycloak:
+      base-url: ${RAMALS_KEYCLOAK_ADMIN_BASE_URL:http://localhost:8081}
+      realm: ${RAMALS_KEYCLOAK_REALM:ramals}
+      client-id: ${RAMALS_REGISTRATION_ADMIN_CLIENT_ID:ramals-registration-admin}
+      client-secret: ${RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET:}
+    consent:
+      terms-version: ${RAMALS_TERMS_VERSION:terms-v1}
+      terms-ref: ${RAMALS_TERMS_REF:terms-v1}
+      privacy-version: ${RAMALS_PRIVACY_VERSION:privacy-v1}
+      privacy-ref: ${RAMALS_PRIVACY_REF:privacy-v1}
+      adult-statement-version: ${RAMALS_ADULT_STATEMENT_VERSION:adult-18-v1}
+    otp:
+      hmac-key-version: ${RAMALS_OTP_HMAC_KEY_VERSION:v1}
+      hmac-key-ring: ${RAMALS_OTP_HMAC_KEYS:}
+      policy-version: ${RAMALS_OTP_POLICY_VERSION:otp-v1}
+      ttl-seconds: ${RAMALS_OTP_TTL_SECONDS:300}
+      resend-cooldown-seconds: ${RAMALS_OTP_RESEND_COOLDOWN_SECONDS:45}
+      max-attempts: ${RAMALS_OTP_MAX_ATTEMPTS:5}
+    sms:
+      provider: ${RAMALS_SMS_PROVIDER:fake}
+      global-hourly-budget: ${RAMALS_SMS_GLOBAL_HOURLY_BUDGET:100}
+      abuse-counter-retention-days: ${RAMALS_ABUSE_COUNTER_RETENTION_DAYS:7}
+    abuse-counter-purge:
+      enabled: ${RAMALS_ABUSE_COUNTER_PURGE_ENABLED:true}
+      interval-ms: ${RAMALS_ABUSE_COUNTER_PURGE_INTERVAL_MS:3600000}
 
 management:
   otlp:
