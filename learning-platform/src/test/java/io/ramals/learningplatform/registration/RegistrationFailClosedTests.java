@@ -133,7 +133,7 @@ class RegistrationFailClosedTests {
     assertThatThrownBy(() -> new ConfiguredMobileVerificationSender(properties)
         .send("+919876543210", "123456"))
         .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("prohibited in production");
+        .hasMessageContaining("not production-capable");
   }
 
   @Test

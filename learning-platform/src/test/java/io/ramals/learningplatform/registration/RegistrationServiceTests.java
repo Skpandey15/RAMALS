@@ -42,6 +42,7 @@ class RegistrationServiceTests {
   private RegistrationRepository registrations;
   private LearnerRepository learners;
   private IdentityProviderPort identities;
+  private AbuseCeiling ceilings;
   private SimpleMeterRegistry meterRegistry;
   private RegistrationService service;
 
@@ -58,9 +59,10 @@ class RegistrationServiceTests {
     registrations = mock(RegistrationRepository.class);
     learners = mock(LearnerRepository.class);
     identities = mock(IdentityProviderPort.class);
+    ceilings = mock(AbuseCeiling.class);
     meterRegistry = new SimpleMeterRegistry();
 
-    when(registrations.withinCeiling(anyString(), anyInt(), anyInt())).thenReturn(true);
+    when(ceilings.consume(anyString(), anyInt(), anyInt())).thenReturn(true);
     when(registrations.start(anyString(), anyString()))
         .thenAnswer(invocation -> new RegistrationRepository.Operation(
             OPERATION_ID, invocation.getArgument(1), "STARTED", null));
@@ -73,7 +75,7 @@ class RegistrationServiceTests {
             .doInTransaction(mock(TransactionStatus.class)));
 
     service = new RegistrationService(properties, registrations, learners, identities,
-        new PhoneNormalizer(), meterRegistry, transactions);
+        new PhoneNormalizer(), ceilings, meterRegistry, transactions);
   }
 
   private static RegistrationRequest request() {
@@ -169,6 +171,65 @@ class RegistrationServiceTests {
     verify(registrations, never()).complete(any(), any(), any());
     assertThat(response.operationId()).isEqualTo(OPERATION_ID);
     assertThat(counter("replayed")).isEqualTo(1d);
+  }
+
+  @Test
+  @DisplayName("replaying a completed operation does not consume email quota")
+  void replayDoesNotChargeEmailQuota() {
+    when(registrations.start(anyString(), anyString()))
+        .thenReturn(new RegistrationRepository.Operation(
+            OPERATION_ID, "fingerprint", "EMAIL_PENDING", "existing-subject"));
+
+    service.register("key-1", request());
+    service.register("key-1", request());
+    service.register("key-1", request());
+
+    // The quota was charged before start() could recognise the replay, so a client retrying its own
+    // success would eventually be answered 429 for a request that does nothing.
+    verify(ceilings, never()).consume(
+        org.mockito.ArgumentMatchers.startsWith("registration-email:"), anyInt(), anyInt());
+  }
+
+  @Test
+  @DisplayName("a genuine new attempt still consumes email quota")
+  void newAttemptStillChargesEmailQuota() {
+    when(identities.createLearner(anyString(), any()))
+        .thenReturn(new IdentityProviderPort.Identity("new-subject", false, true));
+
+    service.register("key-1", request());
+
+    verify(ceilings).consume(
+        org.mockito.ArgumentMatchers.startsWith("registration-email:"), anyInt(), anyInt());
+  }
+
+  @Test
+  @DisplayName("an idempotency conflict is refused before quota is charged")
+  void idempotencyConflictIsRefusedBeforeCharging() {
+    when(registrations.start(anyString(), anyString()))
+        .thenThrow(RegistrationException.idempotencyKeyConflict());
+
+    assertThatCode("REGISTRATION_IDEMPOTENCY_KEY_CONFLICT",
+        () -> service.register("key-1", request()));
+
+    // Claiming the operation first must not have weakened the different-body protection.
+    verify(ceilings, never()).consume(anyString(), anyInt(), anyInt());
+    verify(identities, never()).createLearner(anyString(), any());
+  }
+
+  @Test
+  @DisplayName("the registration throttle advertises the window actually in force")
+  void registrationThrottleAdvertisesItsWindow() {
+    when(ceilings.consume(anyString(), anyInt(), anyInt())).thenReturn(false);
+
+    assertThatThrownBy(() -> service.register("key-1", request()))
+        .isInstanceOf(RegistrationException.class)
+        .satisfies(failure -> {
+          RegistrationException rejected = (RegistrationException) failure;
+          assertThat(rejected.code()).isEqualTo("REGISTRATION_RATE_LIMITED");
+          // The window is an hour; a hardcoded 300 told a well-behaved client to retry twelve times
+          // too early.
+          assertThat(rejected.retryAfterSeconds()).isEqualTo(3600L);
+        });
   }
 
   @Test
@@ -281,7 +342,7 @@ class RegistrationServiceTests {
   @Test
   @DisplayName("the per-email ceiling refuses before the provider is called")
   void refusesWhenThePerEmailCeilingIsReached() {
-    when(registrations.withinCeiling(anyString(), anyInt(), anyInt())).thenReturn(false);
+    when(ceilings.consume(anyString(), anyInt(), anyInt())).thenReturn(false);
     assertThatCode("REGISTRATION_RATE_LIMITED", () -> service.register("key-1", request()));
     // The ceiling exists to bound cost. Calling the provider first would spend exactly what it is
     // meant to protect: a Keycloak write and an outbound verification mail.

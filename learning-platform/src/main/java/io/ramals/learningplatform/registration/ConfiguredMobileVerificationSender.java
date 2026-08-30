@@ -25,8 +25,6 @@ class ConfiguredMobileVerificationSender implements MobileVerificationSender {
   private static final Logger LOGGER =
       LoggerFactory.getLogger(ConfiguredMobileVerificationSender.class);
 
-  private static final String FAKE_PROVIDER = "fake";
-
   private final RegistrationProperties properties;
 
   ConfiguredMobileVerificationSender(RegistrationProperties properties) {
@@ -35,13 +33,14 @@ class ConfiguredMobileVerificationSender implements MobileVerificationSender {
 
   @Override
   public String send(String mobileE164, String otp) {
-    String provider = properties.getSms().getProvider();
-    if (!FAKE_PROVIDER.equalsIgnoreCase(provider)) {
+    String provider = SmsProviderCatalog.normalize(properties.getSms().getProvider());
+    if (!SmsProviderCatalog.isSupported(provider)) {
       throw new IllegalStateException(
           "No SMS adapter is available for provider '" + provider + "'.");
     }
-    if (properties.production()) {
-      throw new IllegalStateException("The fake SMS provider is prohibited in production.");
+    if (properties.production() && !SmsProviderCatalog.isProductionCapable(provider)) {
+      throw new IllegalStateException(
+          "Provider '" + provider + "' is not production-capable in this build.");
     }
     // The code is deliberately absent from this event. A DEV log that printed it would be the
     // easiest place in the system to harvest live codes, and habits formed in DEV are the ones that
@@ -49,7 +48,7 @@ class ConfiguredMobileVerificationSender implements MobileVerificationSender {
     String reference = "fake-" + UUID.randomUUID();
     BusinessEventLogger.info(LOGGER, "mobile.otp.dispatched",
         "Verification code handed to the configured sender",
-        Map.of("provider", FAKE_PROVIDER, "providerMessageRef", reference, "outcome", "SUCCESS"));
+        Map.of("provider", provider, "providerMessageRef", reference, "outcome", "SUCCESS"));
     return reference;
   }
 }

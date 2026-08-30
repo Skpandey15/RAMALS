@@ -43,6 +43,7 @@ class MobileVerificationServiceTests {
   private LearnerRepository learners;
   private OtpHmac otpHmac;
   private RecordingSender sender;
+  private AbuseCeiling ceilings;
   private SimpleMeterRegistry meterRegistry;
   private MobileVerificationService service;
 
@@ -73,11 +74,12 @@ class MobileVerificationServiceTests {
     learners = mock(LearnerRepository.class);
     otpHmac = new OtpHmac(properties);
     sender = new RecordingSender();
+    ceilings = mock(AbuseCeiling.class);
     meterRegistry = new SimpleMeterRegistry();
 
     when(learners.provisionForSubject(anyString()))
         .thenReturn(new Learner(LEARNER_ID, SUBJECT, "ACTIVE", Instant.now(), Instant.now()));
-    when(registrations.withinCeiling(anyString(), anyInt(), anyInt())).thenReturn(true);
+    when(ceilings.consume(anyString(), anyInt(), anyInt())).thenReturn(true);
     when(registrations.findContact(LEARNER_ID)).thenReturn(Optional.of(
         new RegistrationRepository.Contact("asha@example.com", MOBILE, Instant.now(), null)));
     when(registrations.latestChallengeCreatedAt(LEARNER_ID)).thenReturn(Optional.empty());
@@ -88,7 +90,7 @@ class MobileVerificationServiceTests {
             .doInTransaction(mock(TransactionStatus.class)));
 
     service = new MobileVerificationService(learners, registrations, properties, otpHmac, sender,
-        meterRegistry, transactions);
+        ceilings, meterRegistry, transactions);
   }
 
   private RegistrationRepository.Challenge challenge(String otp, int attemptCount,
@@ -157,7 +159,7 @@ class MobileVerificationServiceTests {
   void eachSendCeilingRefuses() {
     for (String dimension : new String[] {"sms-subject:", "sms-mobile:", "sms-global"}) {
       setUp();
-      when(registrations.withinCeiling(
+      when(ceilings.consume(
           org.mockito.ArgumentMatchers.startsWith(dimension), anyInt(), anyInt())).thenReturn(false);
       assertCode("MOBILE_SEND_RATE_LIMITED", () -> service.send(SUBJECT));
       assertThat(sender.lastOtp).as("no message is sent once a ceiling refuses").isNull();
@@ -300,10 +302,60 @@ class MobileVerificationServiceTests {
   @Test
   @DisplayName("the per-subject verify ceiling refuses before the challenge is read")
   void verifyCeilingRefusesBeforeReadingTheChallenge() {
-    when(registrations.withinCeiling(org.mockito.ArgumentMatchers.startsWith("otp-verify:"),
+    when(ceilings.consume(org.mockito.ArgumentMatchers.startsWith("otp-verify:"),
         anyInt(), anyInt())).thenReturn(false);
     assertCode("MOBILE_OTP_RATE_LIMITED", () -> service.verify(SUBJECT, CHALLENGE_ID, "123456"));
     verify(registrations, never()).lockChallengeForVerification(any(), any());
+  }
+
+  @Test
+  @DisplayName("throttles advertise the window or cooldown actually configured")
+  void throttlesAdvertiseRealPolicy() {
+    when(ceilings.consume(org.mockito.ArgumentMatchers.startsWith("sms-subject:"), anyInt(),
+        anyInt())).thenReturn(false);
+    assertThatThrownBy(() -> service.send(SUBJECT))
+        .isInstanceOf(RegistrationException.class)
+        .satisfies(failure -> assertThat(((RegistrationException) failure).retryAfterSeconds())
+            .as("send window is an hour").isEqualTo(3600L));
+
+    setUp();
+    when(registrations.latestChallengeCreatedAt(LEARNER_ID))
+        .thenReturn(Optional.of(Instant.now().minusSeconds(5)));
+    assertThatThrownBy(() -> service.send(SUBJECT))
+        .isInstanceOf(RegistrationException.class)
+        .satisfies(failure -> assertThat(((RegistrationException) failure).retryAfterSeconds())
+            .as("cooldown hint must track the configured value, not a hardcoded 60")
+            .isEqualTo(properties.getOtp().getResendCooldownSeconds()));
+
+    setUp();
+    when(ceilings.consume(org.mockito.ArgumentMatchers.startsWith("otp-verify:"), anyInt(),
+        anyInt())).thenReturn(false);
+    assertThatThrownBy(() -> service.verify(SUBJECT, CHALLENGE_ID, "123456"))
+        .isInstanceOf(RegistrationException.class)
+        .satisfies(failure -> assertThat(((RegistrationException) failure).retryAfterSeconds())
+            .isEqualTo(300L));
+  }
+
+  @Test
+  @DisplayName("a non-default cooldown is reflected in the retry hint")
+  void configuredCooldownIsReflected() {
+    properties.getOtp().setResendCooldownSeconds(90);
+    when(registrations.latestChallengeCreatedAt(LEARNER_ID))
+        .thenReturn(Optional.of(Instant.now().minusSeconds(5)));
+    assertThatThrownBy(() -> service.send(SUBJECT))
+        .isInstanceOf(RegistrationException.class)
+        .satisfies(failure -> assertThat(((RegistrationException) failure).retryAfterSeconds())
+            .isEqualTo(90L));
+  }
+
+  @Test
+  @DisplayName("a refusal that is not a throttle advertises no retry hint")
+  void nonThrottleRefusalsHaveNoRetryHint() {
+    when(registrations.findContact(LEARNER_ID)).thenReturn(Optional.empty());
+    assertThatThrownBy(() -> service.send(SUBJECT))
+        .isInstanceOf(RegistrationException.class)
+        .satisfies(failure -> assertThat(((RegistrationException) failure).retryAfterSeconds())
+            .isZero());
   }
 
   @Test

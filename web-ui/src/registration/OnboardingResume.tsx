@@ -229,5 +229,20 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
     );
   }
 
-  return <>{children}</>;
+  // Dashboard access is explicit, never a fall-through. The previous default admitted any state the
+  // UI did not recognise -- a future step such as JOURNEY_PENDING, a malformed response, or simply a
+  // server ahead of this build -- which is the one direction an onboarding gate must not fail.
+  if (state.onboardingState === 'ONBOARDED' && state.nextStep === 'COMPLETE') {
+    return <>{children}</>;
+  }
+
+  return (
+    <main className="app">
+      <h1>Onboarding is not complete</h1>
+      <p role="status">
+        There is a step left before your account is ready. Reload the page, or sign in again if this
+        persists.
+      </p>
+    </main>
+  );
 }

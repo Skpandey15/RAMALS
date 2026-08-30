@@ -172,3 +172,94 @@ it('reports a transport failure without leaving the form stuck', async () => {
   await screen.findByRole('alert');
   expect(screen.getByRole('button', { name: 'Register' })).toBeEnabled();
 });
+
+function keyOf(call: number): string {
+  return (fetchMock.mock.calls[call][1].headers as Headers).get('Idempotency-Key')!;
+}
+
+it('reuses the Idempotency-Key when a transport failure is retried', async () => {
+  // The bug: a key minted per submission means a retry after a lost response arrives under a new
+  // key, so the server starts a second registration instead of replaying the completed one.
+  fetchMock.mockRejectedValueOnce(new Error('connection reset'));
+  render(<RegistrationPage />);
+  fillAndSubmit();
+  await screen.findByRole('alert');
+
+  fetchMock.mockReturnValueOnce(accepted());
+  fillAndSubmit();
+  await screen.findByText('Check your email');
+
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(keyOf(0)).toBe(keyOf(1));
+});
+
+it('reuses the key across repeated server-side failures', async () => {
+  fetchMock.mockReturnValue(
+    Promise.resolve(
+      new Response(JSON.stringify({ code: 'IDENTITY_PROVIDER_UNAVAILABLE', title: 'x' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ),
+  );
+  render(<RegistrationPage />);
+  fillAndSubmit();
+  await screen.findByRole('alert');
+  fillAndSubmit();
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+  expect(keyOf(0)).toBe(keyOf(1));
+});
+
+it('retires the key after success, so an independent registration gets a new one', async () => {
+  fetchMock.mockReturnValue(accepted());
+  const { unmount } = render(<RegistrationPage />);
+  fillAndSubmit();
+  await screen.findByText('Check your email');
+  unmount();
+
+  render(<RegistrationPage />);
+  fillAndSubmit({ Email: 'second@example.com' });
+  await screen.findByText('Check your email');
+
+  // Replaying a completed key for a different registration would have it answered as that one.
+  expect(keyOf(0)).not.toBe(keyOf(1));
+});
+
+it('mints a new key when the registration data materially changes', async () => {
+  fetchMock.mockRejectedValueOnce(new Error('connection reset'));
+  render(<RegistrationPage />);
+  fillAndSubmit();
+  await screen.findByRole('alert');
+
+  fetchMock.mockReturnValueOnce(accepted());
+  // Corrected email after the failure: the same key against a different body is refused by the
+  // server as an idempotency conflict, so the client must not send it.
+  fillAndSubmit({ Email: 'corrected@example.com' });
+  await screen.findByText('Check your email');
+
+  expect(keyOf(0)).not.toBe(keyOf(1));
+});
+
+it('mints a new key when the mobile number changes', async () => {
+  fetchMock.mockRejectedValueOnce(new Error('connection reset'));
+  render(<RegistrationPage />);
+  fillAndSubmit();
+  await screen.findByRole('alert');
+
+  fetchMock.mockReturnValueOnce(accepted());
+  fillAndSubmit({ Mobile: '9000000001' });
+  await screen.findByText('Check your email');
+
+  expect(keyOf(0)).not.toBe(keyOf(1));
+});
+
+it('keeps the retry key out of browser storage', async () => {
+  fetchMock.mockRejectedValueOnce(new Error('connection reset'));
+  render(<RegistrationPage />);
+  fillAndSubmit();
+  await screen.findByRole('alert');
+
+  expect(localStorage.length).toBe(0);
+  expect(sessionStorage.length).toBe(0);
+});

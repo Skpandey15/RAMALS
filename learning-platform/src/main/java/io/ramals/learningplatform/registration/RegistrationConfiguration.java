@@ -75,9 +75,36 @@ class RegistrationConfiguration {
           "ramals.registration.otp.ttl-seconds must allow at least a minute to enter the code.");
     }
 
-    if (properties.production() && "fake".equalsIgnoreCase(properties.getSms().getProvider())) {
+    validateSmsProvider();
+  }
+
+  /**
+   * Refuses to start unless the configured SMS provider has an adapter that may serve this
+   * environment.
+   *
+   * <p>Three separate refusals, narrowest first, so the message names the actual problem: a provider
+   * with no adapter at all; the DEV fake in production; and a supported provider that is not
+   * production-capable. The last is what makes production fail closed today - PR-A ships no real
+   * gateway, so {@code PRODUCTION_CAPABLE} is empty and no provider string can satisfy it.
+   */
+  private void validateSmsProvider() {
+    String provider = SmsProviderCatalog.normalize(properties.getSms().getProvider());
+    if (!SmsProviderCatalog.isSupported(provider)) {
+      throw new IllegalStateException("ramals.registration.sms.provider is '" + provider
+          + "', for which this build has no adapter. Supported providers: "
+          + SmsProviderCatalog.SUPPORTED + ".");
+    }
+    if (!properties.production()) {
+      return;
+    }
+    if (SmsProviderCatalog.FAKE.equals(provider)) {
       throw new IllegalStateException(
           "The fake SMS provider is prohibited in production; configure a real sender.");
+    }
+    if (!SmsProviderCatalog.isProductionCapable(provider)) {
+      throw new IllegalStateException("ramals.registration.sms.provider '" + provider
+          + "' has no production-capable adapter in this build, so registration cannot start in "
+          + "production. Real-provider SMS is not yet delivered.");
     }
   }
 

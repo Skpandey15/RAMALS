@@ -226,3 +226,77 @@ it('caches no onboarding state in browser storage', async () => {
   expect(localStorage.length).toBe(0);
   expect(sessionStorage.length).toBe(0);
 });
+
+it('does not render the dashboard for an unknown nextStep', async () => {
+  authenticatedFetch.mockReturnValue(
+    json({ onboardingState: 'SOMETHING_NEW', nextStep: 'SOMETHING_NEW' }) as never,
+  );
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  // The previous default fell through to children, so any state this build did not recognise --
+  // including a server ahead of it -- admitted the learner.
+  await screen.findByText('Onboarding is not complete');
+  expect(screen.queryByText('dashboard')).toBeNull();
+});
+
+it('does not render the dashboard for JOURNEY_PENDING', async () => {
+  authenticatedFetch.mockReturnValue(
+    json({ onboardingState: 'JOURNEY_PENDING', nextStep: 'LEARNING_JOURNEY' }) as never,
+  );
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  await screen.findByText('Onboarding is not complete');
+  expect(screen.queryByText('dashboard')).toBeNull();
+});
+
+it('does not render the dashboard when only one half of completion is reported', async () => {
+  for (const partial of [
+    { onboardingState: 'ONBOARDED', nextStep: 'PROFESSIONAL_PROFILE' },
+    { onboardingState: 'PROFILE_PENDING', nextStep: 'COMPLETE' },
+  ]) {
+    authenticatedFetch.mockReset();
+    authenticatedFetch.mockReturnValue(json(partial) as never);
+    const view = render(
+      <OnboardingResume>
+        <p>dashboard</p>
+      </OnboardingResume>,
+    );
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalled());
+    expect(screen.queryByText('dashboard')).toBeNull();
+    view.unmount();
+  }
+});
+
+it('renders children only for explicit ONBOARDED and COMPLETE', async () => {
+  authenticatedFetch.mockReturnValue(
+    json({
+      onboardingState: 'ONBOARDED',
+      nextStep: 'COMPLETE',
+      emailVerified: true,
+      mobileVerified: true,
+    }) as never,
+  );
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  expect(await screen.findByText('dashboard')).toBeInTheDocument();
+});
+
+it('does not render the dashboard for a malformed response', async () => {
+  authenticatedFetch.mockReturnValue(json({}) as never);
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  await screen.findByText('Onboarding is not complete');
+  expect(screen.queryByText('dashboard')).toBeNull();
+});

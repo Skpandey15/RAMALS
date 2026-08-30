@@ -42,18 +42,20 @@ class MobileVerificationService {
   private final RegistrationProperties properties;
   private final OtpHmac otpHmac;
   private final MobileVerificationSender sender;
+  private final AbuseCeiling ceilings;
   private final MeterRegistry meterRegistry;
   private final TransactionTemplate transactions;
   private final SecureRandom random = new SecureRandom();
 
   MobileVerificationService(LearnerRepository learners, RegistrationRepository registrations,
       RegistrationProperties properties, OtpHmac otpHmac, MobileVerificationSender sender,
-      MeterRegistry meterRegistry, TransactionTemplate transactions) {
+      AbuseCeiling ceilings, MeterRegistry meterRegistry, TransactionTemplate transactions) {
     this.learners = learners;
     this.registrations = registrations;
     this.properties = properties;
     this.otpHmac = otpHmac;
     this.sender = sender;
+    this.ceilings = ceilings;
     this.meterRegistry = meterRegistry;
     this.transactions = transactions;
   }
@@ -115,7 +117,7 @@ class MobileVerificationService {
     registrations.latestChallengeCreatedAt(learner.id())
         .filter(created -> created.plusSeconds(cooldownSeconds).isAfter(now))
         .ifPresent(created -> {
-          throw RegistrationException.resendCooldown();
+          throw RegistrationException.resendCooldown(cooldownSeconds);
         });
 
     UUID challengeId = UuidV7.generate();
@@ -138,17 +140,15 @@ class MobileVerificationService {
    * gets a fresh per-subject counter each time. All three dimensions are hashed before use.
    */
   private void enforceSendBudget(String subject, String mobile) {
-    if (!registrations.withinCeiling("sms-subject:" + subject, SEND_LIMIT_PER_WINDOW,
-        SEND_WINDOW_SECONDS)) {
-      throw RegistrationException.mobileSendRateLimited("subject");
+    if (!ceilings.consume("sms-subject:" + subject, SEND_LIMIT_PER_WINDOW, SEND_WINDOW_SECONDS)) {
+      throw RegistrationException.mobileSendRateLimited("subject", SEND_WINDOW_SECONDS);
     }
-    if (!registrations.withinCeiling("sms-mobile:" + mobile, SEND_LIMIT_PER_WINDOW,
-        SEND_WINDOW_SECONDS)) {
-      throw RegistrationException.mobileSendRateLimited("mobile");
+    if (!ceilings.consume("sms-mobile:" + mobile, SEND_LIMIT_PER_WINDOW, SEND_WINDOW_SECONDS)) {
+      throw RegistrationException.mobileSendRateLimited("mobile", SEND_WINDOW_SECONDS);
     }
-    if (!registrations.withinCeiling("sms-global", properties.getSms().getGlobalHourlyBudget(),
+    if (!ceilings.consume("sms-global", properties.getSms().getGlobalHourlyBudget(),
         SEND_WINDOW_SECONDS)) {
-      throw RegistrationException.mobileSendRateLimited("global");
+      throw RegistrationException.mobileSendRateLimited("global", SEND_WINDOW_SECONDS);
     }
   }
 
@@ -167,9 +167,10 @@ class MobileVerificationService {
       throw new InvalidOtpException();
     }
     Learner learner = learners.provisionForSubject(subject);
-    if (!registrations.withinCeiling("otp-verify:" + subject, VERIFY_ATTEMPT_LIMIT,
+    // Charged in its own transaction, so the rejections below cannot roll the increment back.
+    if (!ceilings.consume("otp-verify:" + subject, VERIFY_ATTEMPT_LIMIT,
         VERIFY_ATTEMPT_WINDOW_SECONDS)) {
-      throw RegistrationException.otpVerifyRateLimited();
+      throw RegistrationException.otpVerifyRateLimited(VERIFY_ATTEMPT_WINDOW_SECONDS);
     }
     RegistrationRepository.Challenge challenge = registrations
         .lockChallengeForVerification(challengeId, learner.id())

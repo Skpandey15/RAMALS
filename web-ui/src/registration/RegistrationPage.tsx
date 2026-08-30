@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { beginInteraction, interactionFetch, toApiError } from '../platform/apiClient';
 
 const API = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
@@ -18,6 +18,43 @@ const CONSENT = {
   adultStatementVersion: 'adult-18-v1',
 } as const;
 
+/**
+ * The Idempotency-Key held for the payload currently being submitted.
+ *
+ * <p>A key minted per submission defeats the server's lost-response recovery: if the first POST
+ * succeeds and the response is lost, the retry arrives under a new key, so the server treats it as a
+ * fresh registration instead of replaying the completed one. The key therefore has to outlive a
+ * failed attempt.
+ *
+ * <p>It is keyed by a fingerprint of the submitted values, so editing the form after a failure - a
+ * corrected email, a different number - mints a new key rather than replaying an old key against a
+ * materially different body, which the server refuses outright.
+ *
+ * <p>Held in a ref, never in web storage: it must not survive a reload, and the browser-storage
+ * prohibition covers it as much as anything else.
+ */
+interface RegistrationAttempt {
+  readonly fingerprint: string;
+  readonly idempotencyKey: string;
+}
+
+/** The values that identify one logical registration. Password is deliberately excluded. */
+function fingerprintOf(payload: Record<string, unknown>): string {
+  return [
+    payload.firstName,
+    payload.lastName,
+    payload.email,
+    payload.mobileNumber,
+    payload.country,
+    payload.city,
+    payload.termsVersion,
+    payload.privacyVersion,
+    payload.adultStatementVersion,
+  ]
+    .map((value) => String(value ?? '').trim().toLowerCase())
+    .join('\u0000');
+}
+
 type Status =
   | { kind: 'idle' }
   | { kind: 'submitting' }
@@ -34,6 +71,18 @@ type Status =
  */
 export function RegistrationPage() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const attempt = useRef<RegistrationAttempt | null>(null);
+
+  /** Returns the key for this payload, reusing it only when the payload is unchanged. */
+  function idempotencyKeyFor(payload: Record<string, unknown>): string {
+    const fingerprint = fingerprintOf(payload);
+    if (attempt.current?.fingerprint === fingerprint) {
+      return attempt.current.idempotencyKey;
+    }
+    const idempotencyKey = crypto.randomUUID();
+    attempt.current = { fingerprint, idempotencyKey };
+    return idempotencyKey;
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -41,34 +90,39 @@ export function RegistrationPage() {
     const fields = new FormData(form);
     setStatus({ kind: 'submitting' });
 
+    const payload = {
+      firstName: fields.get('firstName'),
+      lastName: fields.get('lastName'),
+      email: fields.get('email'),
+      mobileNumber: fields.get('mobileNumber'),
+      country: fields.get('country'),
+      city: fields.get('city') || null,
+      password: fields.get('password'),
+      confirmPassword: fields.get('confirmPassword'),
+      ...CONSENT,
+      termsAccepted: fields.has('termsAccepted'),
+      privacyAccepted: fields.has('privacyAccepted'),
+      adultConfirmed: fields.has('adultConfirmed'),
+    };
+
     const interaction = beginInteraction();
     try {
       const response = await interactionFetch(interaction, `${API}/api/v1/registration`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // A stable key per submission, so a retry of a request whose response was lost resolves to
-          // the same operation instead of creating a second one.
-          'Idempotency-Key': crypto.randomUUID(),
+          // Stable across retries of the same payload, so a retry after a lost response replays the
+          // completed operation instead of starting a second one.
+          'Idempotency-Key': idempotencyKeyFor(payload),
         },
-        body: JSON.stringify({
-          firstName: fields.get('firstName'),
-          lastName: fields.get('lastName'),
-          email: fields.get('email'),
-          mobileNumber: fields.get('mobileNumber'),
-          country: fields.get('country'),
-          city: fields.get('city') || null,
-          password: fields.get('password'),
-          confirmPassword: fields.get('confirmPassword'),
-          ...CONSENT,
-          termsAccepted: fields.has('termsAccepted'),
-          privacyAccepted: fields.has('privacyAccepted'),
-          adultConfirmed: fields.has('adultConfirmed'),
-        }),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) {
         throw await toApiError(response, interaction.interactionId);
       }
+      // Definitive success: retire the key so a later, independent registration from this same page
+      // cannot be answered as a replay of this one.
+      attempt.current = null;
       // Reset before rendering the confirmation, so the password does not remain in the DOM.
       form.reset();
       setStatus({ kind: 'submitted' });

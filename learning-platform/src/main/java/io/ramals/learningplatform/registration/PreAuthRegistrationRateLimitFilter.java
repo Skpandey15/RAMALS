@@ -41,15 +41,15 @@ class PreAuthRegistrationRateLimitFilter extends OncePerRequestFilter {
   private static final int SOURCE_LIMIT = 30;
   private static final int SOURCE_WINDOW_SECONDS = 300;
 
-  private final RegistrationRepository registrations;
+  private final AbuseCeiling ceilings;
   private final ObjectMapper objectMapper;
   private final TraceContextAccessor traceContext;
   private final ClientAddressResolver clientAddresses;
 
-  PreAuthRegistrationRateLimitFilter(RegistrationRepository registrations,
+  PreAuthRegistrationRateLimitFilter(AbuseCeiling ceilings,
       ObjectMapper objectMapper, TraceContextAccessor traceContext,
       ClientAddressResolver clientAddresses) {
-    this.registrations = registrations;
+    this.ceilings = ceilings;
     this.objectMapper = objectMapper;
     this.traceContext = traceContext;
     this.clientAddresses = clientAddresses;
@@ -65,8 +65,7 @@ class PreAuthRegistrationRateLimitFilter extends OncePerRequestFilter {
   protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
       FilterChain chain) throws ServletException, IOException {
     String source = clientAddresses.resolve(request);
-    if (!registrations.withinCeiling(
-        "registration-source:" + source, SOURCE_LIMIT, SOURCE_WINDOW_SECONDS)) {
+    if (!ceilings.consume("registration-source:" + source, SOURCE_LIMIT, SOURCE_WINDOW_SECONDS)) {
       // No address in the event: hashing the bucket key is pointless if the log line beside it
       // carries the value.
       BusinessEventLogger.warn(LOGGER, "registration.source.throttled",

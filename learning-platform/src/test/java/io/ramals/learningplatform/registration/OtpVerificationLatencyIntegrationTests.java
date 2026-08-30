@@ -120,7 +120,8 @@ class OtpVerificationLatencyIntegrationTests {
     jdbc = new JdbcTemplate(dataSource);
     registrations = new RegistrationRepository(jdbc);
     learners = new LearnerRepository(jdbc);
-    transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+    DataSourceTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+    transactions = new TransactionTemplate(transactionManager);
 
     properties = new RegistrationProperties();
     byte[] key = new byte[32];
@@ -129,7 +130,8 @@ class OtpVerificationLatencyIntegrationTests {
     otpHmac = new OtpHmac(properties);
 
     service = new MobileVerificationService(learners, registrations, properties, otpHmac,
-        (mobile, otp) -> null, new SimpleMeterRegistry(), transactions);
+        (mobile, otp) -> null, new AbuseCeiling(registrations, transactionManager),
+        new SimpleMeterRegistry(), transactions);
   }
 
   @Test

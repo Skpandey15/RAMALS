@@ -20,11 +20,18 @@ public class RegistrationException extends RuntimeException {
 
   private final String code;
   private final HttpStatus status;
+  private final long retryAfterSeconds;
 
   public RegistrationException(String code, HttpStatus status, String message) {
+    this(code, status, message, 0L);
+  }
+
+  public RegistrationException(String code, HttpStatus status, String message,
+      long retryAfterSeconds) {
     super(message);
     this.code = code;
     this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 
   public String code() {
@@ -83,13 +90,16 @@ public class RegistrationException extends RuntimeException {
     };
   }
 
-  /** The retry hint, in seconds, for the codes that are throttles rather than refusals. */
+  /**
+   * The retry hint, in seconds; zero for refusals that are not throttles.
+   *
+   * <p>Supplied by the throw site from the window or cooldown actually in force, rather than by a
+   * switch of literals here. The literals had already drifted: every throttle answered 300s while
+   * the registration and SMS windows are an hour, and the resend hint said 60s against a
+   * configurable 45s cooldown - so a well-behaved client backed off for the wrong interval.
+   */
   public long retryAfterSeconds() {
-    return switch (code) {
-      case "REGISTRATION_RATE_LIMITED", "MOBILE_SEND_RATE_LIMITED", "MOBILE_OTP_RATE_LIMITED" -> 300L;
-      case "MOBILE_RESEND_COOLDOWN" -> 60L;
-      default -> 0L;
-    };
+    return retryAfterSeconds;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -127,9 +137,9 @@ public class RegistrationException extends RuntimeException {
         "Mobile number failed E.164 normalization for the submitted country.");
   }
 
-  static RegistrationException registrationRateLimited(String dimension) {
+  static RegistrationException registrationRateLimited(String dimension, int windowSeconds) {
     return new RegistrationException("REGISTRATION_RATE_LIMITED", HttpStatus.TOO_MANY_REQUESTS,
-        "Registration abuse ceiling reached for dimension " + dimension + ".");
+        "Registration abuse ceiling reached for dimension " + dimension + ".", windowSeconds);
   }
 
   static RegistrationException identityProviderUnavailable(String operation, Throwable cause) {
@@ -150,14 +160,14 @@ public class RegistrationException extends RuntimeException {
         "Trusted email verification is required before mobile verification.");
   }
 
-  static RegistrationException mobileSendRateLimited(String dimension) {
+  static RegistrationException mobileSendRateLimited(String dimension, int windowSeconds) {
     return new RegistrationException("MOBILE_SEND_RATE_LIMITED", HttpStatus.TOO_MANY_REQUESTS,
-        "Mobile verification send ceiling reached for dimension " + dimension + ".");
+        "Mobile verification send ceiling reached for dimension " + dimension + ".", windowSeconds);
   }
 
-  static RegistrationException resendCooldown() {
+  static RegistrationException resendCooldown(int cooldownSeconds) {
     return new RegistrationException("MOBILE_RESEND_COOLDOWN", HttpStatus.TOO_MANY_REQUESTS,
-        "Resend requested inside the configured cooldown window.");
+        "Resend requested inside the configured cooldown window.", cooldownSeconds);
   }
 
   static RegistrationException challengeUnavailable(String reason) {
@@ -165,9 +175,9 @@ public class RegistrationException extends RuntimeException {
         "Mobile verification challenge is unusable: " + reason + ".");
   }
 
-  static RegistrationException otpVerifyRateLimited() {
+  static RegistrationException otpVerifyRateLimited(int windowSeconds) {
     return new RegistrationException("MOBILE_OTP_RATE_LIMITED", HttpStatus.TOO_MANY_REQUESTS,
-        "Mobile verification attempt ceiling reached for this subject.");
+        "Mobile verification attempt ceiling reached for this subject.", windowSeconds);
   }
 
   static RegistrationException mobileAlreadyRegistered() {

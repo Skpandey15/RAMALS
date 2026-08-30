@@ -42,17 +42,19 @@ class RegistrationService {
   private final LearnerRepository learners;
   private final IdentityProviderPort identities;
   private final PhoneNormalizer phones;
+  private final AbuseCeiling ceilings;
   private final MeterRegistry meterRegistry;
   private final TransactionTemplate transactions;
 
   RegistrationService(RegistrationProperties properties, RegistrationRepository registrations,
       LearnerRepository learners, IdentityProviderPort identities, PhoneNormalizer phones,
-      MeterRegistry meterRegistry, TransactionTemplate transactions) {
+      AbuseCeiling ceilings, MeterRegistry meterRegistry, TransactionTemplate transactions) {
     this.properties = properties;
     this.registrations = registrations;
     this.learners = learners;
     this.identities = identities;
     this.phones = phones;
+    this.ceilings = ceilings;
     this.meterRegistry = meterRegistry;
     this.transactions = transactions;
   }
@@ -68,12 +70,10 @@ class RegistrationService {
     String email = request.email().trim().toLowerCase(Locale.ROOT);
     String mobile = phones.normalize(request.mobileNumber(), request.country());
 
-    if (!registrations.withinCeiling(
-        "registration-email:" + email, EMAIL_ATTEMPT_LIMIT, EMAIL_ATTEMPT_WINDOW_SECONDS)) {
-      count("rate_limited", "REGISTRATION_RATE_LIMITED");
-      throw RegistrationException.registrationRateLimited("email");
-    }
-
+    // Claim the operation before charging quota. start() is idempotent per key and verifies the
+    // fingerprint, so a replay of a *completed* operation is identified here and answered without
+    // consuming a new-attempt allowance - a client retrying its own success must not eventually be
+    // throttled for it. A key replayed with a different body still fails inside start().
     RegistrationRepository.Operation operation =
         registrations.start(key, fingerprint(request, email, mobile));
     if ("EMAIL_PENDING".equals(operation.status())) {
@@ -84,6 +84,12 @@ class RegistrationService {
           Map.of("operationId", operation.id(), "outcome", "SUCCESS"));
       count("replayed", "NONE");
       return new RegistrationResponse(operation.id(), "EMAIL_VERIFICATION");
+    }
+
+    if (!ceilings.consume(
+        "registration-email:" + email, EMAIL_ATTEMPT_LIMIT, EMAIL_ATTEMPT_WINDOW_SECONDS)) {
+      count("rate_limited", "REGISTRATION_RATE_LIMITED");
+      throw RegistrationException.registrationRateLimited("email", EMAIL_ATTEMPT_WINDOW_SECONDS);
     }
 
     registrations.audit(operation.id(), null, null, "LEARNER_REGISTRATION_STARTED", "SUCCESS", null);
