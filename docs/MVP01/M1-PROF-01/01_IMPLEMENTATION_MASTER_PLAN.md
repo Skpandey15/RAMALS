@@ -43,23 +43,38 @@ Owns presentation and user interaction only. It must not assert verification or 
 
 External effects are behind ports/interfaces. Local DEV/CI uses deterministic non-billable adapters; production adapters use externalized secrets and bounded timeouts.
 
+## 4.1 Registration credential-handling decision
+
+MVP-1 uses RAMALS-orchestrated registration against Keycloak unless implementation discovery proves a Keycloak-native registration flow can satisfy the same RAMALS orchestration, Terms, mobile-verification and onboarding requirements without weakening UX or security. This is an explicit architecture decision, not something left to implementation preference.
+
+If `learning-platform` receives a plaintext password in the registration request, all of the following are mandatory:
+
+- the password exists only in request memory for the minimum time required to hand it to Keycloak;
+- it is never persisted in PostgreSQL, cache, idempotency storage, retry/outbox payloads, audit records, traces, metrics or logs;
+- request-body logging/tracing is disabled or redacted for registration endpoints;
+- registration retries must not depend on recovering the original password from durable state;
+- after an ambiguous Keycloak outcome, reconciliation queries identity state before any create retry;
+- application code must not perform its own password hashing as a substitute for Keycloak ownership.
+
+If discovery chooses a Keycloak-native registration page instead, that choice must be documented in the implementation mapping and RAMALS must still enforce mandatory mobile verification and onboarding before ACTIVE state.
+
 ## 5. Delivery phases
 
 ### Phase A — repository discovery and compatibility
 
 Before coding, inventory existing user/learner entities, Keycloak realm/client/roles, Flyway migrations, API conventions, tracing, audit infrastructure, rate limiting, error schema, frontend routing/state, tests, and local deployment configuration. Reuse existing abstractions; do not create parallel identity models.
 
-Exit: written implementation mapping from this design to concrete existing classes/files.
+Exit: written implementation mapping from this design to concrete existing classes/files, including the final registration credential path.
 
 ### Phase B — identity and registration foundation
 
-Implement learner-only registration orchestration, identity linkage by Keycloak `sub`, lifecycle state, Terms metadata, uniqueness policy, safe error mapping, idempotency, and email-verification integration.
+Implement learner-only registration orchestration, identity linkage by Keycloak `sub`, lifecycle state, Terms evidence, uniqueness policy, safe error mapping, idempotency, and canonical email-verification reconciliation.
 
 Exit: account can be registered without privileged-role injection; email verification is required.
 
 ### Phase C — mobile verification
 
-Implement E.164 normalization, challenge creation, secure OTP generation/hash, TTL, verify, resend, attempt ceilings, rate limits, replay prevention, one-time consumption, verified-mobile uniqueness, audit and provider abstraction.
+Implement E.164 normalization, challenge creation, CSPRNG OTP, mandatory keyed HMAC verification storage, TTL, verify, resend, attempt ceilings, rate limits, replay prevention, one-time consumption, verified-mobile uniqueness, audit and provider abstraction.
 
 Exit: mobile verification cannot be bypassed and is safe under retries/concurrency.
 
@@ -104,7 +119,7 @@ There is no distributed transaction across Keycloak, PostgreSQL, email and SMS. 
 Required principles:
 
 - Generate a stable registration operation/idempotency key.
-- Persist sufficient state to resume/reconcile.
+- Persist sufficient non-secret state to resume/reconcile.
 - Keycloak creation must be discoverable/reconcilable by authoritative subject/external identity reference.
 - Do not create duplicate Keycloak identities after client timeout/retry.
 - OTP verification and mobile ownership update occur transactionally in RAMALS where feasible.
@@ -134,6 +149,17 @@ Before production enablement define dashboards/alerts for registration success/f
 
 Recommended staged rollout: disabled-by-default configuration → internal/dev qualification → controlled non-production → limited production cohort → general availability. Rollback switch disables new registrations without invalidating already-created learners.
 
-## 13. Completion criteria
+## 13. Mandatory implementation PR sequence
+
+M1-PROF-01 implementation MUST be split into reviewable sequential PRs unless an explicit architecture review approves a different decomposition before coding:
+
+1. **PR-A — schema + identity foundation**: additive migrations, Keycloak linkage, learner-only registration, credential handling, lifecycle, canonical email-verification reconciliation, Terms evidence, idempotency/recovery foundations.
+2. **PR-B — mobile verification**: phone normalization, OTP challenge model, mandatory HMAC construction, rate limits, provider abstraction, verified-mobile uniqueness/reuse policy, concurrency and negative tests.
+3. **PR-C — professional onboarding + journey + UI**: profile, goals, domains, journey APIs, Create Account/onboarding UX, server-driven resume; Kafka not default.
+4. **PR-D — hardening + E2E qualification**: failure injection, abuse/load/concurrency, telemetry, runbook, production-provider qualification and final evidence.
+
+Each PR must leave main buildable/testable and must not temporarily weaken security or bypass verification gates. Do not combine all identity, OTP, database, UI and qualification work into one large implementation PR.
+
+## 14. Completion criteria
 
 Implementation is not complete until security, reliability, concurrency, performance, observability and end-to-end qualification gates pass. Any production provider not exercised in a production-like environment must be reported `NOT VERIFIED`.
