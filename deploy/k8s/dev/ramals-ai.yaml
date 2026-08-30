@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ramals-ai
+spec:
+  selector: {app.kubernetes.io/name: ramals-ai}
+  ports: [{name: http, port: 8000, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ramals-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: ramals-ai}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: ramals-ai}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: ramals-ai
+          image: ramals/ramals-ai:local
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8000}]
+          env:
+            - {name: RAMALS_AI_ENVIRONMENT, value: local}
+
+            # Live provider execution is OPT-IN and off in the committed default.
+            #
+            # config/settings.py refuses to start when ai_enabled is true on a non-ci-fake route
+            # with no credential. That is the right behaviour, and it is exactly why this must not
+            # default to true: a developer without an OpenAI key would get a CrashLoopBackOff from a
+            # fresh checkout, and everyone else would make billable calls without asking for them.
+            #
+            # Turn it on with:  pwsh -File .\deploy\k8s\dev\bootstrap.ps1 -EnableOpenAI
+            - {name: RAMALS_AI_AI_ENABLED, value: "false"}
+            - {name: RAMALS_AI_MODEL_ROUTE, value: ci-fake}
+
+            # Every route in the MVP-1 table is claude-sonnet-5 primary with gpt-4.1 as an
+            # alternate. Pinning all four to the alternate is what makes this an OpenAI
+            # environment -- there is no "openai route" to select. pins_from_config resolves the
+            # route names rather than trusting them, so a typo stops the process instead of being
+            # silently dropped.
+            - name: RAMALS_AI_MODEL_PINS
+              value: >-
+                {"tutor-default":"gpt-4.1-2025-04-14",
+                 "diagnostic-default":"gpt-4.1-2025-04-14",
+                 "assessment-default":"gpt-4.1-2025-04-14",
+                 "adaptation-default":"gpt-4.1-2025-04-14"}
+
+            # Supplied at runtime from a Secret created outside the repository. The value is never
+            # committed, never in a manifest, and never in an image.
+            #
+            # optional: true so the default (ci-fake) deployment starts on a machine that has no
+            # provider Secret at all. When ai_enabled is true the credential is no longer optional
+            # in practice -- settings.py fails closed on a live route without one -- so making the
+            # reference optional weakens nothing; it only stops an absent Secret from blocking the
+            # deployment that was never going to call a provider.
+            - name: RAMALS_AI_PROVIDER_API_KEY
+              valueFrom:
+                secretKeyRef: {name: ramals-ai-provider, key: provider-api-key, optional: true}
+
+            # Contract B stays off, and deliberately separately from ai_enabled: the two answer
+            # different questions, and the durable surface remains unqualified pending residual S2.
+            - {name: RAMALS_AI_DURABLE_EXECUTION_ENABLED, value: "false"}
+            - {name: RAMALS_AI_WORKLOAD_AUTH_ENABLED, value: "false"}
+            - {name: RAMALS_AI_LOG_LEVEL, value: INFO}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          startupProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 10

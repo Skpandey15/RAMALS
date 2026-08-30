@@ -1,0 +1,54 @@
+# Developer entry points. Two hosts, one port, no port-forwarding.
+#
+#   http://localhost:8080           -> web-ui  (which proxies /api/ to the platform itself)
+#   http://keycloak.localhost:8080  -> keycloak
+#
+# `*.localhost` resolves to 127.0.0.1 in Chrome, Edge and Firefox without a hosts-file entry
+# (RFC 6761), which is what lets this work on a fresh machine.
+#
+# Why Keycloak needs its own host rather than a path under the UI: the browser and the platform must
+# agree on ONE issuer URL. Keycloak stamps `iss` with the host it was reached on, and the platform
+# fetches JWKS from the issuer it is configured with. Give the browser `localhost:8081` and the
+# platform `keycloak:8080` -- the arrangement this package started with -- and login succeeds in the
+# browser while every API call then fails 401 on issuer mismatch. `keycloak.localhost:8080` is
+# reachable from both sides and resolves to the same Keycloak, so the two agree.
+#
+# In-cluster, `keycloak.localhost` is resolved by a CoreDNS rewrite installed by bootstrap.ps1.
+#
+# Reaching any of this needs the cluster to publish a host port to Traefik, which is a property of
+# how the cluster was created, not of this manifest:
+#
+#   k3d cluster create ramals-dev ... -p "8080:80@loadbalancer"
+#   k3d cluster edit   ramals-dev     --port-add "8080:80@loadbalancer"   # on a live cluster
+#
+# PostgreSQL is deliberately absent and must stay that way.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ramals-dev
+spec:
+  ingressClassName: traefik
+  rules:
+    # The UI. Host-less would also match, but naming it keeps the two rules symmetrical and stops
+    # this one from swallowing requests meant for Keycloak.
+    - host: localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-ui
+                port:
+                  number: 8080
+
+    - host: keycloak.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080
