@@ -273,6 +273,11 @@ Container environment is not ready; stopping before the image builds.
   }
 }
 
+Write-Host "== verify images ==" -ForegroundColor Cyan
+# Runs on BOTH paths. After a build it confirms the pushes landed; with -SkipBuild it is the only
+# thing standing between a developer and a healthy environment repointed at tags that do not exist.
+Assert-ImagesPresent $gitSha
+
 Write-Host "== cluster DNS ==" -ForegroundColor Cyan
 # The browser and the platform must agree on ONE issuer URL. `keycloak.localhost` resolves to
 # 127.0.0.1 in browsers for free (RFC 6761); this rewrite makes the same name resolve to the
@@ -313,11 +318,6 @@ if (-not (kubectl get secret ramals-dev-runtime -n $Namespace --ignore-not-found
 } else {
   Write-Host "secret ramals-dev-runtime already exists (kept)"
 }
-
-Write-Host "== verify images ==" -ForegroundColor Cyan
-# Runs on BOTH paths. After a build it confirms the pushes landed; with -SkipBuild it is the only
-# thing standing between a developer and a healthy environment repointed at tags that do not exist.
-Assert-ImagesPresent $gitSha
 
 Write-Host "== deploy ==" -ForegroundColor Cyan
 # kustomization.yaml pins a tag so that `kubectl kustomize` alone renders something valid and
