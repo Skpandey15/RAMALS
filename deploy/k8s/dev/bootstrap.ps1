@@ -410,11 +410,12 @@ foreach ($u in $testUsers) {
   $script = @'
 set -e
 read -r PW
-# PowerShell writes CRLF into the pipe on Windows. `read` strips the newline and keeps the carriage
-# return, so Keycloak would store "password" while the Secret holds "password" -- the two never
-# match and every login fails with "Invalid username or password", pointing at everything except
-# the actual cause.
-PW=$(printf '%s' "$PW" | tr -d '')
+# PowerShell writes CRLF into this pipe on Windows. `read` consumes the newline but keeps the
+# carriage return, so Keycloak would store the password with a trailing control character while the
+# Secret holds it without one. The two never match, and every login then fails with "Invalid
+# username or password" -- an error that points at the credential, the user, the realm, anything
+# except the pipe that mangled it. Strip trailing control characters rather than trusting the pipe.
+PW=$(printf %s "$PW" | sed -e "s/[[:cntrl:]]*$//")
 K=/opt/keycloak/bin/kcadm.sh
 A="--no-config --server http://localhost:8080 --realm master --user $KC_BOOTSTRAP_ADMIN_USERNAME --password $KC_BOOTSTRAP_ADMIN_PASSWORD"
 if [ -z "$($K get users -r ramals -q username=__USER__ --fields id --format csv --noquotes $A 2>/dev/null | head -1)" ]; then
