@@ -118,6 +118,28 @@ Check "RAMALS_AI_AI_ENABLED = false (no external provider)" {
 }
 
 Write-Host ""
+Write-Host "== local test users ==" -ForegroundColor Cyan
+# Reproducibility is the claim being tested here: a teardown followed by a bootstrap must leave a
+# developer able to log in. That is only true if the users exist, carry their role, and have a
+# credential -- so all three are checked, and none of them prints the password.
+foreach ($u in @(@{n = "ramals-admin"; r = "ADMIN" }, @{n = "ramals-learner"; r = "LEARNER" })) {
+  Check "$($u.n) exists with role $($u.r)" {
+    $pod = kubectl get pod -n $Namespace -l app.kubernetes.io/name=keycloak -o jsonpath='{.items[0].metadata.name}' 2>$null
+    if (-not $pod) { return $false }
+    $roles = kubectl exec -n $Namespace $pod -- sh -c @"
+/opt/keycloak/bin/kcadm.sh get-roles -r ramals --uusername $($u.n) --fields name --format csv --noquotes \
+  --no-config --server http://localhost:8080 --realm master \
+  --user `$KC_BOOTSTRAP_ADMIN_USERNAME --password `$KC_BOOTSTRAP_ADMIN_PASSWORD 2>/dev/null
+"@ 2>$null
+    return ($roles -join " ") -match $u.r
+  }
+  Check "$($u.n) password is stored in the Secret" {
+    $v = kubectl get secret ramals-dev-test-users -n $Namespace -o jsonpath="{.data.$($u.n)}" 2>$null
+    return -not [string]::IsNullOrWhiteSpace($v)
+  }
+}
+
+Write-Host ""
 Write-Host "== logs carry no credentials ==" -ForegroundColor Cyan
 # Deliberately does not read Secret objects -- it reads what the applications actually emit, which
 # is where a leak would surface.
