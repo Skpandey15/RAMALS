@@ -50,9 +50,60 @@ pwsh -File .\deploy\k8s\dev\smoke.ps1         # prove it works
 pwsh -File .\deploy\k8s\dev\teardown.ps1      # remove the cluster
 ```
 
-`bootstrap.ps1` is safe to re-run: it creates only what is missing and keeps the existing Secret so
-a redeploy does not invalidate the passwords PostgreSQL initialised its roles with. Pass
-`-SkipBuild` to redeploy manifests without rebuilding images.
+`bootstrap.ps1` is safe to re-run: it creates only what is missing and keeps existing Secrets, so a
+redeploy invalidates neither the passwords PostgreSQL initialised its roles with nor the test-user
+passwords you already noted down.
+
+| Switch | Effect |
+|---|---|
+| `-SkipBuild` | redeploy manifests without rebuilding images. Only valid when images for the **current commit** already exist — the manifests are pinned to the checked-out sha, so on a new commit this yields `ImagePullBackOff` |
+| `-EnableOpenAI` | opt in to live provider execution (see below) |
+| `-ShowTestCredentials` | print the generated test-user passwords inline instead of the retrieval command |
+| `-RepairDockerCredentials` | remove a broken `credsStore` key from your Docker config (see preflight) |
+
+### Docker preflight
+
+Before the image builds — which are the expensive part — the script classifies the container
+environment and stops with an exact remedy rather than failing minutes later inside a build:
+
+| Condition | Meaning |
+|---|---|
+| `HEALTHY` | Docker answers and can pull from a registry |
+| `DAEMON_UNAVAILABLE` | no runtime answering; start Rancher Desktop |
+| `CREDENTIAL_HELPER_BROKEN` | `credsStore` names a helper that is missing or failing; pulls die with "error getting credentials". Repairable |
+| `DNS_FAILURE` | the runtime cannot resolve registry hostnames — on Rancher Desktop usually its host-switch gateway being unreachable |
+| `REGISTRY_UNREACHABLE` | anything else that stopped a pull |
+
+It **never** silently edits your machine. The one automatic repair is opt-in
+(`-RepairDockerCredentials`), removes only the `credsStore` key, leaves every other key untouched,
+writes a `.ramals-backup` beside the file, and prints the command to restore it. `/etc/resolv.conf`
+is never touched: a DNS failure is diagnosed and its remedy printed, because rewriting a resolver
+inside somebody's Rancher Desktop distribution is not a bootstrap script's business.
+
+### Local test users
+
+Two users are created so you can log in immediately:
+
+| Username | Realm role |
+|---|---|
+| `ramals-admin` | `ADMIN` |
+| `ramals-learner` | `LEARNER` |
+
+**Their passwords are generated at bootstrap and are not in this repository.** They are stored in
+the `ramals-dev-test-users` Secret, which is what makes re-running idempotent: a second bootstrap
+finds the Secret, reuses the same passwords, and reconciles Keycloak to match, so a password you
+wrote down yesterday still works. A teardown destroys the Secret with the cluster and the next
+bootstrap mints fresh ones.
+
+Retrieve one:
+
+```powershell
+kubectl get secret ramals-dev-test-users -n ramals-dev -o jsonpath='{.data.ramals-learner}' | base64 -d
+```
+
+They are not printed by default, for the same reason the other generated passwords are not: a
+credential in terminal scrollback outlives the moment it was useful. Pass `-ShowTestCredentials` if
+you would rather have them inline.
 
 It **refuses to run against a dirty working tree**. Images are tagged with the short commit sha, so
 a dirty tree would produce an image labelled with a commit whose contents it does not have — a tag
