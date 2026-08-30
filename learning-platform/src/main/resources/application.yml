@@ -16,7 +16,7 @@ spring:
     password: ${RAMALS_DB_MIGRATION_PASSWORD}
     locations: classpath:db/migration
     default-schema: core
-    schemas: core,ledger,audit
+    schemas: core,ledger,audit,identity
     create-schemas: true
     validate-migration-naming: true
     validate-on-migrate: true
@@ -72,6 +72,14 @@ ramals:
       batch-size: ${RAMALS_CONTRACT_B_PURGE_BATCH_SIZE:500}
   security:
     web-origin: ${RAMALS_WEB_ORIGIN:http://localhost:5173}
+    forwarding:
+      # Which immediate peers may speak for a client address. Empty means forwarding headers are
+      # ignored and getRemoteAddr() is used -- X-Forwarded-For is caller-controlled, so trusting it
+      # from an arbitrary peer lets a direct caller rotate it and mint a fresh rate-limit bucket per
+      # request. Set this to the proxy network actually in front of the service.
+      trusted-proxies: ${RAMALS_TRUSTED_PROXIES:}
+      max-hops: ${RAMALS_FORWARDED_MAX_HOPS:8}
+      max-header-length: ${RAMALS_FORWARDED_MAX_HEADER_LENGTH:1024}
     # Two tiers, and the placeholder defaults must equal the defaults in RateLimitProperties.
     # RateLimitPropertiesContractTests fails if they drift: this file previously bound the
     # pre-authentication tier to 120/60 -- the subject tier's numbers -- which silently reinstated
@@ -89,6 +97,34 @@ ramals:
       subject:
         capacity: ${RAMALS_RATE_LIMIT_SUBJECT_CAPACITY:120}
         refill-per-second: ${RAMALS_RATE_LIMIT_SUBJECT_REFILL_PER_SECOND:60}
+  registration:
+    enabled: ${RAMALS_REGISTRATION_ENABLED:false}
+    environment: ${RAMALS_ENVIRONMENT:dev}
+    keycloak:
+      base-url: ${RAMALS_KEYCLOAK_ADMIN_BASE_URL:http://localhost:8081}
+      realm: ${RAMALS_KEYCLOAK_REALM:ramals}
+      client-id: ${RAMALS_REGISTRATION_ADMIN_CLIENT_ID:ramals-registration-admin}
+      client-secret: ${RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET:}
+    consent:
+      terms-version: ${RAMALS_TERMS_VERSION:terms-v1}
+      terms-ref: ${RAMALS_TERMS_REF:terms-v1}
+      privacy-version: ${RAMALS_PRIVACY_VERSION:privacy-v1}
+      privacy-ref: ${RAMALS_PRIVACY_REF:privacy-v1}
+      adult-statement-version: ${RAMALS_ADULT_STATEMENT_VERSION:adult-18-v1}
+    otp:
+      hmac-key-version: ${RAMALS_OTP_HMAC_KEY_VERSION:v1}
+      hmac-key-ring: ${RAMALS_OTP_HMAC_KEYS:}
+      policy-version: ${RAMALS_OTP_POLICY_VERSION:otp-v1}
+      ttl-seconds: ${RAMALS_OTP_TTL_SECONDS:300}
+      resend-cooldown-seconds: ${RAMALS_OTP_RESEND_COOLDOWN_SECONDS:45}
+      max-attempts: ${RAMALS_OTP_MAX_ATTEMPTS:5}
+    sms:
+      provider: ${RAMALS_SMS_PROVIDER:fake}
+      global-hourly-budget: ${RAMALS_SMS_GLOBAL_HOURLY_BUDGET:100}
+      abuse-counter-retention-days: ${RAMALS_ABUSE_COUNTER_RETENTION_DAYS:7}
+    abuse-counter-purge:
+      enabled: ${RAMALS_ABUSE_COUNTER_PURGE_ENABLED:true}
+      interval-ms: ${RAMALS_ABUSE_COUNTER_PURGE_INTERVAL_MS:3600000}
 
 management:
   otlp:

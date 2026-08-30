@@ -77,7 +77,7 @@ class AiRuntimeBoundaryIntegrationTests {
           $$;
           """);
       statement.execute("ALTER DATABASE " + quotedDatabase + " OWNER TO " + MIGRATION_USER);
-      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit CASCADE");
+      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit, identity CASCADE");
       statement.execute("GRANT CONNECT ON DATABASE " + quotedDatabase + " TO "
           + MIGRATION_USER + ", ramals_core_runtime");
     }
@@ -86,7 +86,7 @@ class AiRuntimeBoundaryIntegrationTests {
         .dataSource(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD)
         .locations("classpath:db/migration")
         .defaultSchema("core")
-        .schemas("core", "ledger", "audit")
+        .schemas("core", "ledger", "audit", "identity")
         .createSchemas(true)
         .cleanDisabled(true)
         .load()

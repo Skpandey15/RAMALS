@@ -1,7 +1,10 @@
 import { isAuthenticated, login, logout } from './auth/authClient';
 import { LearnerDashboard } from './learning/LearnerDashboard';
+import { RegistrationPage } from './registration/RegistrationPage';
+import { OnboardingResume } from './registration/OnboardingResume';
 
 export function App() {
+  if (window.location.pathname === '/register') return <RegistrationPage />;
   if (!isAuthenticated()) {
     return (
       <main className="app">
@@ -16,15 +19,16 @@ export function App() {
         >
           Log in
         </button>
+        <p><a href="/register">Create a professional learner account</a></p>
       </main>
     );
   }
 
   return (
-    <LearnerDashboard
+    <OnboardingResume><LearnerDashboard
       onLogout={() => {
         void logout();
       }}
-    />
+    /></OnboardingResume>
   );
 }

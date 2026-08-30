@@ -102,7 +102,7 @@ class RecommendationPersistenceIntegrationTests {
           $$;
           """);
       statement.execute("ALTER DATABASE " + quotedDatabase + " OWNER TO " + quotedAdmin);
-      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit CASCADE");
+      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit, identity CASCADE");
       statement.execute("ALTER DATABASE " + quotedDatabase + " OWNER TO " + MIGRATION_USER);
       statement.execute("REVOKE CONNECT ON DATABASE " + quotedDatabase + " FROM PUBLIC");
       statement.execute("GRANT CONNECT ON DATABASE " + quotedDatabase + " TO "
@@ -113,7 +113,7 @@ class RecommendationPersistenceIntegrationTests {
         .dataSource(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD)
         .locations("classpath:db/migration")
         .defaultSchema("core")
-        .schemas("core", "ledger", "audit")
+        .schemas("core", "ledger", "audit", "identity")
         .createSchemas(true)
         .cleanDisabled(true)
         .load()

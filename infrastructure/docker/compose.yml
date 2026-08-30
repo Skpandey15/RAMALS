@@ -47,6 +47,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     networks:
       - data
       - edge
@@ -67,6 +69,20 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  mailpit:
+    image: axllent/mailpit:v1.27.11
+    networks:
+      - data
+      - edge
+    ports:
+      - "127.0.0.1:${RAMALS_MAILPIT_PORT:-8025}:8025"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
   backend:
     build:
       context: ../..
@@ -80,6 +96,17 @@ services:
       RAMALS_OIDC_ISSUER_URI: ${RAMALS_OIDC_ISSUER_URI:-http://keycloak:8080/realms/ramals}
       RAMALS_OIDC_AUDIENCE: ${RAMALS_OIDC_AUDIENCE:-ramals-api}
       RAMALS_WEB_ORIGIN: ${RAMALS_WEB_ORIGIN:-http://localhost:5173}
+      # The nginx sidecar is the only thing that reaches the backend, and it sets X-Forwarded-For.
+      # Docker's default bridge pool; narrow this if the compose networks are pinned.
+      RAMALS_TRUSTED_PROXIES: ${RAMALS_TRUSTED_PROXIES:-172.16.0.0/12}
+      RAMALS_REGISTRATION_ENABLED: ${RAMALS_REGISTRATION_ENABLED:-false}
+      RAMALS_ENVIRONMENT: ${RAMALS_ENVIRONMENT:-dev}
+      RAMALS_KEYCLOAK_ADMIN_BASE_URL: ${RAMALS_KEYCLOAK_ADMIN_BASE_URL:-http://keycloak:8080}
+      RAMALS_REGISTRATION_ADMIN_CLIENT_ID: ${RAMALS_REGISTRATION_ADMIN_CLIENT_ID:-ramals-registration-admin}
+      RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET: ${RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET:-}
+      RAMALS_OTP_HMAC_KEY_VERSION: ${RAMALS_OTP_HMAC_KEY_VERSION:-v1}
+      RAMALS_OTP_HMAC_KEYS: ${RAMALS_OTP_HMAC_KEYS:-}
+      RAMALS_SMS_PROVIDER: ${RAMALS_SMS_PROVIDER:-fake}
     depends_on:
       postgres:
         condition: service_healthy

@@ -192,6 +192,9 @@ class ContractBHttpBoundaryTests {
     // call failed. Omitting is the contract the AI plane defines: a missing header makes it
     // generate one, an empty header is malformed. Strictly better than sending nothing is only
     // possible by establishing real correlation, which is the worker's job, not the transport's.
+    // The Gradle worker is reused across Spring contexts; make the premise explicit instead of
+    // inheriting MDC left by an unrelated scheduled test callback.
+    org.slf4j.MDC.clear();
     port().submit(command());
 
     assertThat(only().header("X-interaction-id"))

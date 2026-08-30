@@ -52,6 +52,12 @@ export async function toApiError(
       : (echoed ?? fallbackInteractionId);
   const code = typeof problem.code === 'string' ? problem.code : 'UNKNOWN_ERROR';
   const title = typeof problem.title === 'string' ? problem.title : 'The request could not be completed.';
-  return new RamalsApiError(code, supportCode, response.status, title);
+  // RFC 7807 splits the generic problem type (`title`) from the guidance specific to this occurrence
+  // (`detail`). The detail is what tells a learner what to actually do next -- "wait for the cooldown",
+  // "the code is not valid, request a new one" -- so prefer it, and fall back to the title for the
+  // endpoints that only set one. The server decides how much a caller may learn; this only chooses
+  // the more useful of the two fields it chose to send.
+  const detail = typeof problem.detail === 'string' && problem.detail ? problem.detail : undefined;
+  return new RamalsApiError(code, supportCode, response.status, detail ?? title);
 }
 

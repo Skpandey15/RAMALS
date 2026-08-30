@@ -16,12 +16,12 @@ import tools.jackson.databind.ObjectMapper;
  * the request. The body carries the interactionId, so a throttled learner can still quote a support
  * code.
  */
-final class RateLimitResponses {
+public final class RateLimitResponses {
 
   private RateLimitResponses() {
   }
 
-  static void writeTooManyRequests(
+  public static void writeTooManyRequests(
       HttpServletRequest request, HttpServletResponse response, ObjectMapper objectMapper,
       String traceId, long retryAfterSeconds) throws IOException {
     response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());

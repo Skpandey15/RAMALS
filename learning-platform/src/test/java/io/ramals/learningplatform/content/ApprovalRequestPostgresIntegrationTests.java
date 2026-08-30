@@ -65,13 +65,13 @@ class ApprovalRequestPostgresIntegrationTests {
           END $$;
           """);
       statement.execute("ALTER DATABASE " + database + " OWNER TO " + admin);
-      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit CASCADE");
+      statement.execute("DROP SCHEMA IF EXISTS core, ledger, audit, identity CASCADE");
       statement.execute("ALTER DATABASE " + database + " OWNER TO " + MIGRATION_USER);
       statement.execute("REVOKE CONNECT ON DATABASE " + database + " FROM PUBLIC");
       statement.execute("GRANT CONNECT ON DATABASE " + database + " TO " + MIGRATION_USER + ", " + RUNTIME_USER);
     }
     Flyway.configure().dataSource(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD)
-        .locations("classpath:db/migration").defaultSchema("core").schemas("core", "ledger", "audit")
+        .locations("classpath:db/migration").defaultSchema("core").schemas("core", "ledger", "audit", "identity")
         .createSchemas(true).cleanDisabled(true).load().migrate();
   }
 

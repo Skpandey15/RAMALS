@@ -6,6 +6,10 @@ vi.mock('./auth/authClient', () => ({
   isAuthenticated: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
+  authenticatedFetch: vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ onboardingState: 'ONBOARDED', nextStep: 'COMPLETE' }),
+  }),
 }));
 
 vi.mock('./learning/api', () => ({

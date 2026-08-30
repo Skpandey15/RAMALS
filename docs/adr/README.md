@@ -41,6 +41,10 @@ Which task each earlier decision gates is recorded in [the MVP-1 release board](
 
 M1-ADR-011 through M1-ADR-015 are repository-native follow-on decisions rather than registrations from the external MVP-1 Canonical Package. M1-ADR-012 through M1-ADR-015 are the architecture authority for the M1-PROF-01 professional learner registration/onboarding capability.
 
+Not yet authored: none. Every decision the package registers is authored and Accepted. Each was
+written just before the task it gates rather than as a batch, so it had the information its
+implementation produced.
+
 ## MVP-2
 
 The proposed DOCX source package is retained under `docs/MVP02/RAMALS_MVP2_ADR_Package_v1.0`. Its fifteen decisions were accepted during M2-T01 on 2026-08-22. The repository-native [M2-ADR register](M2-ADR-register.md) owns task mapping, compatibility, and implementation status; the source documents retain detailed rationale and revisit triggers.
