@@ -72,9 +72,22 @@ learning-platform --> Client: accepted + nextStep=EMAIL_VERIFICATION
 
 If Keycloak succeeds but DB persistence fails, subsequent retry/reconciliation must locate the existing identity rather than create another account.
 
-## 5. Email verification sequence
+If `learning-platform` receives the plaintext password, it must treat the value as transient secret material only: no persistence, request-body logging, tracing, audit capture, idempotency payload storage, retry queue or outbox serialization is allowed.
 
-Email ownership is verified by the IdP. RAMALS must derive/confirm verified status from a trusted IdP assertion/admin lookup, not a browser boolean. Once confirmed, transition EMAIL_PENDING → EMAIL_VERIFIED → MOBILE_PENDING.
+## 5. Canonical email verification reconciliation
+
+Email ownership is verified by Keycloak. RAMALS MUST NOT accept a browser-supplied `emailVerified=true` flag or equivalent assertion.
+
+The canonical synchronization mechanism is:
+
+1. Keycloak completes its normal email verification flow.
+2. On the learner's next authenticated login/token refresh/onboarding request, `learning-platform` derives the Keycloak `sub` from the trusted access token.
+3. RAMALS evaluates the trusted `email_verified` claim when present and acceptable under the configured Keycloak token contract.
+4. When claim freshness is insufficient, absent, or a transition must be confirmed, `learning-platform` performs a server-to-server Keycloak lookup through `IdentityProviderPort` using `sub` and confirms `emailVerified=true`.
+5. RAMALS idempotently transitions `EMAIL_PENDING → EMAIL_VERIFIED → MOBILE_PENDING`.
+6. Repeated reconciliation of an already verified learner is a no-op/current-state result.
+
+Do not implement browser callbacks, browser booleans or periodic database polling as alternate authorities. Provider/admin lookup is the authoritative fallback.
 
 ## 6. OTP send sequence
 
@@ -97,13 +110,14 @@ Within transaction/locking semantics appropriate to PostgreSQL:
 1. Load active challenge by opaque challenge ID and learner context.
 2. Verify not expired/consumed/locked.
 3. Increment attempts safely.
-4. Constant-time compare submitted OTP-derived hash against stored hash.
-5. On mismatch, persist failed attempt and return generic failure.
-6. On match, acquire/validate verified-mobile uniqueness.
-7. Mark challenge consumed.
-8. Mark mobile verified and timestamped.
-9. Transition to PROFILE_PENDING.
-10. Commit.
+4. Derive the submitted verification value using the mandatory keyed HMAC construction defined in the security document.
+5. Constant-time compare against the stored HMAC.
+6. On mismatch, persist failed attempt and return generic failure.
+7. On match, acquire/validate verified-mobile uniqueness.
+8. Mark challenge consumed.
+9. Mark mobile verified and timestamped.
+10. Transition to PROFILE_PENDING.
+11. Commit.
 
 Concurrent verify requests must yield exactly one successful ownership transition.
 
@@ -151,7 +165,7 @@ Forbidden examples:
 
 ## 10. Resume algorithm
 
-`GET /me/onboarding` should calculate the next step from trusted state:
+`GET /me/onboarding` should calculate the next step from trusted state and perform safe Keycloak email-verification reconciliation when applicable:
 
 - email unverified → EMAIL_VERIFICATION
 - email verified + mobile unverified → MOBILE_VERIFICATION
@@ -165,15 +179,21 @@ Frontend localStorage must not be authoritative for progress.
 
 Changing a verified mobile is a separate re-verification operation. Do not overwrite the verified number immediately. Store pending candidate/challenge; only switch verified ownership after successful verification and uniqueness check.
 
-## 12. Email change after activation
+## 12. Mobile reuse policy
+
+For MVP-1, a verified mobile number remains reserved to the owning RAMALS identity even if that identity becomes disabled or enters a soft-deleted/retention state. It MUST NOT automatically become available for another registration.
+
+Release/reassignment requires an explicit account-deletion/administrative policy and audited operation outside ordinary self-registration. This avoids immediate number-recycling/account-takeover ambiguity and keeps uniqueness deterministic. A future lifecycle capability may define verified reassignment after stronger proof and retention requirements.
+
+## 13. Email change after activation
 
 Delegate credential/identity semantics to Keycloak and require re-verification. RAMALS must resynchronize trusted identity claims/state rather than accepting an arbitrary profile email update.
 
-## 13. Deletion/disable considerations
+## 14. Deletion/disable considerations
 
-Account deletion and retention are broader lifecycle capabilities, but this feature must avoid schema choices that make deletion impossible. Mobile uniqueness policy must define behavior for disabled/deleted identities; production policy should be explicit before reuse of a formerly verified number.
+Account deletion and retention are broader lifecycle capabilities. Schema and uniqueness rules must preserve the reserved-mobile policy above and remain compatible with future deletion/export requirements.
 
-## 14. Failure matrix
+## 15. Failure matrix
 
 - DB unavailable before Keycloak call: fail, no external mutation.
 - Keycloak timeout with unknown outcome: query/reconcile before retry-create.
@@ -184,10 +204,10 @@ Account deletion and retention are broader lifecycle capabilities, but this feat
 - Profile save timeout: idempotent PUT/upsert semantics.
 - Journey creation retry: Idempotency-Key prevents duplicate journey.
 
-## 15. Authorization
+## 16. Authorization
 
 Public endpoints are narrowly limited to registration/verification initiation where required. Authenticated onboarding APIs derive learner identity from token subject. Never accept arbitrary learnerId for `/me` mutations. Privileged role assignment is not present in public request DTOs.
 
-## 16. Compatibility
+## 17. Compatibility
 
 Existing learners must continue to authenticate. Define a migration/backfill rule for legacy learners without the new onboarding state so rollout does not lock them out unexpectedly. Prefer an explicit compatibility decision rather than inferring incomplete registration from NULL fields.
