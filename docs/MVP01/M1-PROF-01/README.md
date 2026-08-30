@@ -30,17 +30,19 @@ Kafka is one professional domain only; it must not be the global/default platfor
 ## Architecture invariants
 
 - Keycloak remains authoritative for authentication credentials and login.
-- RAMALS never stores plaintext passwords.
+- RAMALS never stores plaintext passwords; if RAMALS receives a registration password, it is transient secret material only and is never logged, traced, cached, audited, persisted, queued or placed in idempotency storage.
 - Public self-registration grants only the learner role.
 - Mobile verification is mandatory.
-- Email verification is mandatory.
+- Email verification is mandatory and RAMALS reconciles it only from trusted Keycloak state/claims, never a browser boolean.
 - The server, never the browser, decides onboarding/verification state transitions.
 - Self-declared skill level is profile input, not authoritative mastery evidence.
 - The deterministic evidence/mastery engine remains authoritative and is not redesigned by this capability.
-- OTPs are never logged or persisted in plaintext.
+- OTPs are never logged or persisted in plaintext and persisted verification state uses the mandatory keyed HMAC construction defined in the security design.
 - Mobile numbers are normalized to E.164.
-- One verified mobile number maps to one active learner identity for MVP-1.
-- No paid SMS provider is required for local DEV/CI.
+- One verified mobile number maps to one RAMALS learner identity for MVP-1 and remains reserved after disable/soft-delete unless explicitly released through a separate audited policy.
+- Terms/Privacy acceptance records an immutable server-known document/version reference and timestamp, not only a boolean.
+- No paid SMS provider is required for local DEV/CI; production must fail closed if the production sender is not configured.
+- Implementation is delivered through the mandatory staged PR sequence defined in the master plan/checklist rather than one oversized PR.
 
 ## Documents
 
