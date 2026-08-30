@@ -72,6 +72,83 @@ if (-not (k3d cluster list -o json | ConvertFrom-Json | Where-Object { $_.name -
 kubectl config use-context $context | Out-Null
 kubectl wait --for=condition=Ready node --all --timeout=180s | Out-Host
 
+# The registry repository for each image, written out rather than derived from a service name.
+# Deriving it once produced `ramals-ramals-ai`, because the AI service is already called "ramals-ai"
+# and the code prefixed it again -- the manifests asked for `ramals-ai`, nothing had pushed that, and
+# the pod sat in ImagePullBackOff. An explicit name cannot drift from the manifests by construction.
+$ramalsImages = @(
+  @{ Repo = "ramals-postgres";          File = "infrastructure/docker/postgres-init/Dockerfile" },
+  @{ Repo = "ramals-keycloak";          File = "infrastructure/docker/keycloak/Dockerfile" },
+  @{ Repo = "ramals-ai";                File = "ramals-ai/Dockerfile" },
+  @{ Repo = "ramals-web-ui";            File = "web-ui/Dockerfile" },
+  @{ Repo = "ramals-learning-platform"; File = "learning-platform/Dockerfile" }
+)
+
+# Every expected tag must exist in the registry before Kubernetes is touched.
+#
+# This ordering is the whole point: a -SkipBuild run against a commit whose images were never built
+# used to repoint healthy Deployments at tags that did not exist, turning a working environment into
+# five ImagePullBackOffs. Verification first means the worst case is an early exit with nothing
+# mutated.
+function Assert-ImagesPresent([string]$sha) {
+  $missing = @()
+  foreach ($i in $ramalsImages) {
+    $url = "http://localhost:$RegistryPort/v2/$($i.Repo)/manifests/$sha"
+    try {
+      $r = Invoke-WebRequest -Uri $url -Method Head -TimeoutSec 15 -UseBasicParsing `
+             -Headers @{ Accept = "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json" } `
+             -ErrorAction Stop
+      if ($r.StatusCode -ne 200) { $missing += "$($i.Repo):$sha" }
+    } catch {
+      $missing += "$($i.Repo):$sha"
+    }
+  }
+  if ($missing.Count -gt 0) {
+    throw @"
+Required images are not in the registry, so Kubernetes has NOT been touched.
+
+  missing : $($missing -join ", ")
+  commit  : $sha
+
+Re-run without -SkipBuild to build them. The running environment is unchanged.
+"@
+  }
+  Write-Host "  all $($ramalsImages.Count) images present at :$sha" -ForegroundColor DarkGray
+}
+
+# Classify a failed `docker pull` from its output alone.
+#
+# Split out from the probe so it is a pure function of a string: the DNS branch can then be tested
+# against the exact stderr this environment produced, without anyone breaking their own networking
+# to reach it. A classifier that can only be exercised by wrecking the machine it runs on does not
+# get exercised.
+function Get-DockerPullDiagnosis([string]$output, [string]$dockerConfigPath) {
+  $text = ($output | Out-String).Trim()
+
+  if ($text -match "no such host|server misbehaving|Temporary failure in name resolution|dial tcp: lookup|context deadline exceeded|i/o timeout") {
+    return [pscustomobject]@{
+      Condition  = "DNS_FAILURE"
+      Detail     = "The container runtime cannot resolve registry hostnames. On Rancher Desktop this is usually its host-switch gateway being unreachable, which leaves the runtime resolver pointing at a dead address."
+      Remedy     = "Restart the runtime network: wsl --shutdown  then relaunch Rancher Desktop and wait for Running. If it recurs, read network-setup.log and host-switch.log under the Rancher Desktop logs directory."
+      Repairable = $false
+    }
+  }
+  if ($text -match "error getting credentials|credential helper|docker-credential") {
+    return [pscustomobject]@{
+      Condition  = "CREDENTIAL_HELPER_BROKEN"
+      Detail     = "A registry pull failed in the credential path: $text"
+      Remedy     = "Re-run with -RepairDockerCredentials, or remove the credsStore key from $dockerConfigPath by hand."
+      Repairable = $true
+    }
+  }
+  return [pscustomobject]@{
+    Condition  = "REGISTRY_UNREACHABLE"
+    Detail     = "A registry pull failed: $text"
+    Remedy     = "Check network connectivity and any proxy or firewall between this machine and the registry."
+    Repairable = $false
+  }
+}
+
 # Diagnose the container environment BEFORE the builds, because the builds are the expensive part
 # and the two failures seen on this project both surface inside them, minutes in, as errors that
 # name Docker rather than their actual cause:
@@ -137,30 +214,7 @@ function Test-DockerEnvironment {
   # A pull of a tiny public image is the only honest test: it exercises DNS, egress and the
   # credential path together, which is exactly what the builds need.
   $pull = docker pull --quiet hello-world:latest 2>&1 | Out-String
-  if ($LASTEXITCODE -ne 0) {
-    if ($pull -match "no such host|server misbehaving|Temporary failure in name resolution|dial tcp: lookup") {
-      return [pscustomobject]@{
-        Condition = "DNS_FAILURE"
-        Detail    = "The container runtime cannot resolve registry hostnames. On Rancher Desktop this is usually its host-switch gateway being unreachable, which leaves the runtime's resolver pointing at a dead address."
-        Remedy    = "Restart the runtime's network: wsl --shutdown  then relaunch Rancher Desktop and wait for Running. If it recurs, check Rancher Desktop's own logs under %LOCALAPPDATA%\rancher-desktop\logs (network-setup.log, host-switch.log)."
-        Repairable = $false
-      }
-    }
-    if ($pull -match "error getting credentials|credential") {
-      return [pscustomobject]@{
-        Condition = "CREDENTIAL_HELPER_BROKEN"
-        Detail    = "A registry pull failed in the credential path: $($pull.Trim())"
-        Remedy    = "Re-run with -RepairDockerCredentials, or remove the credsStore key from $dockerConfigPath by hand."
-        Repairable = $true
-      }
-    }
-    return [pscustomobject]@{
-      Condition = "REGISTRY_UNREACHABLE"
-      Detail    = "A registry pull failed: $($pull.Trim())"
-      Remedy    = "Check network connectivity and any proxy or firewall between this machine and the registry."
-      Repairable = $false
-    }
-  }
+  if ($LASTEXITCODE -ne 0) { return (Get-DockerPullDiagnosis $pull $dockerConfigPath) }
 
   return [pscustomobject]@{ Condition = "HEALTHY"; Detail = "Docker responds and can pull from a registry."; Remedy = $null; Repairable = $false }
 }
@@ -195,34 +249,27 @@ Container environment is not ready; stopping before the image builds.
   }
 
   Write-Host "== images ==" -ForegroundColor Cyan
-  $images = @(
-    @{ name = "postgres";          file = "infrastructure/docker/postgres-init/Dockerfile" },
-    @{ name = "keycloak";          file = "infrastructure/docker/keycloak/Dockerfile" },
-    @{ name = "ramals-ai";         file = "ramals-ai/Dockerfile" },
-    @{ name = "web-ui";            file = "web-ui/Dockerfile" },
-    @{ name = "learning-platform"; file = "learning-platform/Dockerfile" }
-  )
-  foreach ($i in $images) {
+  foreach ($i in $ramalsImages) {
     # Push through localhost; the cluster pulls the same repository under the registry's in-network
     # name. Both names address one registry, so one push serves both.
-    $push = "localhost:${RegistryPort}/ramals-$($i.name):$gitSha"
-    Write-Host "building $($i.name)" -ForegroundColor DarkCyan
+    $push = "localhost:${RegistryPort}/$($i.Repo):$gitSha"
+    Write-Host "building $($i.Repo)" -ForegroundColor DarkCyan
 
     # web-ui's VITE_* values are inlined at build time, so the OIDC issuer is a property of the
     # image. VITE_API_BASE_URL must be EMPTY: api.ts already prefixes every path with /api/v1, so a
     # non-empty base produces /api/api/v1/... -- a route Spring has no mapping for, and the only
     # symptom is a 404 the UI renders as "Not found".
     $buildArgs = @()
-    if ($i.name -eq "web-ui") {
+    if ($i.Repo -eq "ramals-web-ui") {
       $buildArgs = @(
         "--build-arg", "VITE_KEYCLOAK_URL=http://keycloak.localhost:${IngressPort}",
         "--build-arg", "VITE_API_BASE_URL="
       )
     }
-    docker build @buildArgs -t $push -f $i.file . | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "build failed: $($i.name)" }
+    docker build @buildArgs -t $push -f $i.File . | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "build failed: $($i.Repo)" }
     docker push $push | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "push failed: $($i.name)" }
+    if ($LASTEXITCODE -ne 0) { throw "push failed: $($i.Repo)" }
   }
 }
 
@@ -267,6 +314,11 @@ if (-not (kubectl get secret ramals-dev-runtime -n $Namespace --ignore-not-found
   Write-Host "secret ramals-dev-runtime already exists (kept)"
 }
 
+Write-Host "== verify images ==" -ForegroundColor Cyan
+# Runs on BOTH paths. After a build it confirms the pushes landed; with -SkipBuild it is the only
+# thing standing between a developer and a healthy environment repointed at tags that do not exist.
+Assert-ImagesPresent $gitSha
+
 Write-Host "== deploy ==" -ForegroundColor Cyan
 # kustomization.yaml pins a tag so that `kubectl kustomize` alone renders something valid and
 # reviewable. That committed tag is whatever commit last touched the package, which is almost never
@@ -280,6 +332,9 @@ $rendered = [regex]::Replace(
   "(?<repo>${registryHost}:${RegistryPort}/[A-Za-z0-9._/-]+):[A-Za-z0-9._-]+",
   "`${repo}:$gitSha")
 $rendered | kubectl apply -f - | Out-Host
+# PowerShell does not stop on a native command's non-zero exit, so every mandatory one is checked.
+# Without this, a failed apply would fall straight through to "Ready".
+if ($LASTEXITCODE -ne 0) { throw "kubectl apply failed; the cluster may be partially updated." }
 
 if ($EnableOpenAI) {
   Write-Host "== live provider execution (opt-in) ==" -ForegroundColor Yellow
@@ -306,11 +361,17 @@ if ($EnableOpenAI) {
 }
 
 Write-Host "== waiting for workloads ==" -ForegroundColor Cyan
-kubectl rollout status statefulset/postgres -n $Namespace --timeout=300s | Out-Host
-kubectl rollout status deployment/keycloak -n $Namespace --timeout=300s | Out-Host
-kubectl rollout status deployment/ramals-ai -n $Namespace --timeout=300s | Out-Host
-kubectl rollout status deployment/learning-platform -n $Namespace --timeout=420s | Out-Host
-kubectl rollout status deployment/web-ui -n $Namespace --timeout=300s | Out-Host
+foreach ($w in @(
+  @{ Ref = "statefulset/postgres";        Timeout = "300s" },
+  @{ Ref = "deployment/keycloak";         Timeout = "300s" },
+  @{ Ref = "deployment/ramals-ai";        Timeout = "300s" },
+  @{ Ref = "deployment/learning-platform"; Timeout = "420s" },
+  @{ Ref = "deployment/web-ui";           Timeout = "300s" })) {
+  kubectl rollout status $w.Ref -n $Namespace --timeout=$($w.Timeout) | Out-Host
+  # A timed-out rollout is a failure. Printing "Ready" after one is how a broken environment gets
+  # handed to somebody as a working one.
+  if ($LASTEXITCODE -ne 0) { throw "$($w.Ref) did not become ready within $($w.Timeout)." }
+}
 
 Write-Host "== local test users ==" -ForegroundColor Cyan
 #

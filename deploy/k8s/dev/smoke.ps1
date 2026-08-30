@@ -33,6 +33,23 @@ function Check {
   Write-Host ("{0,-46} {1}" -f $Name, $state) -ForegroundColor $colour
 }
 
+# Open a TCP connection from inside a pod.
+#
+# NOT `</dev/tcp/host/port`: that is a bash builtin, and these images run busybox or Alpine ash,
+# where the redirect is a plain file open on a path that does not exist. It fails identically
+# whether the port is open or closed, so the check reported failure for services that were working
+# -- a false negative that looks exactly like a real outage.
+#
+# `nc` is present in the platform and web-ui images and discriminates correctly.
+function Test-TcpFromPod {
+  param([string]$Selector, [string]$TargetHost, [int]$Port)
+  $pod = kubectl get pod -n $Namespace -l $Selector --field-selector status.phase=Running `
+           -o jsonpath='{.items[0].metadata.name}' 2>$null
+  if (-not $pod) { return $false }
+  kubectl exec -n $Namespace $pod -- sh -c "nc -z -w 5 $TargetHost $Port" 2>$null | Out-Null
+  return $LASTEXITCODE -eq 0
+}
+
 # Run a command inside a pod selected by label, returning $true when it exits 0.
 function Test-InPod {
   param([string]$Selector, [string[]]$Command)
@@ -59,13 +76,13 @@ foreach ($svc in @("postgres", "keycloak", "ramals-ai")) {
 }
 
 Check "platform -> PostgreSQL:5432 reachable" {
-  Test-InPod "app.kubernetes.io/name=learning-platform" @("sh", "-c", "timeout 5 sh -c '</dev/tcp/postgres/5432'")
+  Test-TcpFromPod "app.kubernetes.io/name=learning-platform" "postgres" 5432
 }
-Check "platform -> ramals-ai:8000 healthy" {
-  Test-InPod "app.kubernetes.io/name=learning-platform" @("sh", "-c", "timeout 5 sh -c '</dev/tcp/ramals-ai/8000'")
+Check "platform -> ramals-ai:8000 reachable" {
+  Test-TcpFromPod "app.kubernetes.io/name=learning-platform" "ramals-ai" 8000
 }
 Check "platform -> keycloak:8080 reachable" {
-  Test-InPod "app.kubernetes.io/name=learning-platform" @("sh", "-c", "timeout 5 sh -c '</dev/tcp/keycloak/8080'")
+  Test-TcpFromPod "app.kubernetes.io/name=learning-platform" "keycloak" 8080
 }
 Check "platform readiness endpoint UP" {
   Test-InPod "app.kubernetes.io/name=learning-platform" @("sh", "-c", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness | grep -q UP")
@@ -74,7 +91,7 @@ Check "ramals-ai readiness endpoint UP" {
   Test-InPod "app.kubernetes.io/name=ramals-ai" @("sh", "-c", "python -c `"import urllib.request,sys; sys.exit(0 if b'UP' in urllib.request.urlopen('http://127.0.0.1:8000/health/ready',timeout=5).read() else 1)`"")
 }
 Check "web-ui -> platform reachable" {
-  Test-InPod "app.kubernetes.io/name=web-ui" @("sh", "-c", "timeout 5 sh -c '</dev/tcp/learning-platform/8080'")
+  Test-TcpFromPod "app.kubernetes.io/name=web-ui" "learning-platform" 8080
 }
 
 Write-Host ""
