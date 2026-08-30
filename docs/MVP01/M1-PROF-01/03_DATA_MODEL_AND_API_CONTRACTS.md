@@ -35,12 +35,18 @@ Recommended fields or equivalents:
 - country_code
 - city (optional)
 - terms_version
+- terms_document_ref or immutable content/version identifier
+- privacy_version
+- privacy_document_ref or immutable content/version identifier
 - terms_accepted_at
+- privacy_accepted_at where separately captured
 - onboarding_state
 - created_at / updated_at
 - version
 
 Do not persist password.
+
+Terms/Privacy acceptance evidence must be reproducible later. Storing only `accepted=true` is insufficient. Persist the server-known immutable document/version reference that was accepted plus timestamp. If Terms and Privacy are one combined consent artifact, one immutable reference may be used; otherwise record both explicitly.
 
 ## 4. Mobile verification challenge
 
@@ -49,8 +55,8 @@ Recommended:
 - id (opaque UUID)
 - learner_id
 - mobile_e164
-- otp_hash
-- hash/key version if needed
+- otp_hmac
+- hmac_key_version
 - expires_at
 - attempt_count
 - max_attempts or policy version
@@ -60,7 +66,7 @@ Recommended:
 - superseded_at
 - created_at
 
-Do not persist plaintext OTP. Expired/consumed challenge retention must be bounded by policy and purgeable.
+Do not persist plaintext OTP. Do not persist a plain unkeyed fast hash of a low-entropy OTP. Expired/consumed challenge retention must be bounded by policy and purgeable.
 
 ## 5. Professional profile
 
@@ -95,7 +101,7 @@ Selected domains use child rows/references. Kafka is not inserted automatically 
 Required database-level controls:
 
 - unique Keycloak subject
-- verified mobile uniqueness (implementation may require a partial unique index depending on schema/state)
+- verified mobile uniqueness including disabled/soft-deleted identities unless an audited release/reassignment policy explicitly changes ownership
 - FK integrity
 - allowed lifecycle/status values via enum/check/application + migration conventions
 - non-negative/realistic weekly-hours bounds
@@ -120,7 +126,9 @@ Exact paths may be adapted to existing routing conventions.
 
 ### POST registration
 
-Request: firstName, lastName, email, mobileNumber, country, city?, password, confirmPassword, acceptedTermsVersion. Header: `Idempotency-Key` strongly recommended/required.
+Request: firstName, lastName, email, mobileNumber, country, city?, password, confirmPassword, acceptedTermsVersion/document reference as allowed by server contract. Header: `Idempotency-Key` required for the RAMALS-orchestrated path.
+
+The server MUST validate that the submitted consent version/reference corresponds to a currently acceptable server-known immutable artifact. A client cannot invent an arbitrary terms version and make it authoritative.
 
 Response: registrationId/opaque reference, lifecycle status, nextStep. Never echo password. Avoid revealing whether unrelated accounts exist beyond the chosen enumeration policy.
 
@@ -138,7 +146,7 @@ Returns new/current challenge metadata under policy. Previous OTP becomes unusab
 
 ### GET /me/onboarding
 
-Returns authoritative lifecycle and nextStep plus completion flags safe for UI.
+Returns authoritative lifecycle and nextStep plus completion flags safe for UI. It may trigger safe Keycloak email-verification reconciliation as specified in the HLD/LLD document.
 
 ### GET/PUT /me/profile
 
@@ -159,13 +167,15 @@ Only caller-owned journeys.
 - phone: parse with country context and normalize E.164 using a mature library.
 - country: ISO-style controlled value/catalog.
 - password: defer authoritative policy to Keycloak; frontend hints are advisory.
-- terms: accepted=true plus server-known current/accepted version.
+- terms/privacy: accepted artifact(s) must be server-known and immutable/versioned; record timestamp and reference.
 - free text: strict size limits and output encoding.
 - weekly hours: bounded numeric value.
 
 ## 11. Idempotency
 
-Registration and journey creation require a deterministic idempotency design. Persist key scope, request fingerprint, result reference and expiration according to existing RAMALS patterns. Same key + materially different request returns conflict. Do not cache secrets/passwords in idempotency payload storage.
+Registration and journey creation require a deterministic idempotency design. Persist key scope, non-secret request fingerprint, result reference and expiration according to existing RAMALS patterns. Same key + materially different request returns conflict.
+
+For registration, the idempotency fingerprint/storage MUST exclude plaintext password and any reversible credential representation. Retries after ambiguous identity-provider outcomes reconcile Keycloak state rather than replaying a durably stored credential.
 
 ## 12. PII API minimization
 
@@ -185,6 +195,7 @@ Emit/reuse structured audit events:
 - PROFESSIONAL_PROFILE_COMPLETED
 - LEARNING_JOURNEY_CREATED
 - ONBOARDING_COMPLETED
+- TERMS_ACCEPTED / PRIVACY_ACCEPTED or equivalent evidence event with immutable document/version reference only, never full credential/request payload
 
 Carry interactionId/traceId according to RAMALS conventions. Event payloads must be schema-controlled and PII-minimized.
 
