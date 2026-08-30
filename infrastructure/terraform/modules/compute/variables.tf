@@ -148,21 +148,6 @@ variable "ai_model_route" {
   default     = "ci-fake"
 }
 
-variable "ai_model_pins" {
-  description = <<-EOT
-    Per-route model pins, as the JSON string RAMALS_AI_MODEL_PINS expects.
-
-    Every route in the MVP-1 table is `claude-sonnet-5` primary with `gpt-4.1-2025-04-14` as an
-    alternate, so selecting OpenAI means pinning routes to the alternate -- there is no "openai
-    route" to choose. `pins_from_config` resolves route names rather than trusting them, so a
-    mistyped route stops the process instead of being silently dropped.
-
-    Empty by default, which leaves the route table's own primaries in force.
-  EOT
-  type        = string
-  default     = ""
-}
-
 variable "certificate_arn" {
   description = <<-EOT
     ACM certificate for the HTTPS listener.
