@@ -2,175 +2,203 @@
 
 ## 1. Security objective
 
-Public registration is an internet-facing abuse surface. Treat it as an identity-security capability, not a CRUD form.
+Public registration is an internet-facing identity and abuse surface. Treat it as a Zero-Trust security capability, not a CRUD form. Authentication, operational learner status, onboarding completion and authorization are distinct facts.
 
-## 2. Authentication/authorization rules
+## 2. Existing security invariants preserved
 
-- OIDC Authorization Code + PKCE for browser authentication per existing architecture.
-- Self-registration can only result in learner privileges.
-- Role/realm/client-role fields are absent from public registration requests.
-- Backend assigns allowed role through server-side policy.
-- Admin/service credentials used for Keycloak operations are externalized and least-privilege.
-- `/me` resources bind to token `sub`, not request-supplied learner IDs.
+- OIDC Authorization Code + PKCE remains the browser authentication architecture.
+- ADR 0001 OIDC-`sub` ownership and `/me` semantics remain authoritative.
+- `core.learner` remains PII-free.
+- `core.learner.status=ACTIVE` is not proof of onboarding completion.
+- Public self-registration creates only actual realm role `LEARNER`; `INSTRUCTOR`, `CONTENT_AUTHOR`, `ADMIN`, and `SERVICE` are forbidden public outcomes.
+- Existing Keycloak TOTP/MFA and `MfaAuthorization` remain separate from RAMALS SMS ownership verification.
+- ramals-ai remains unable to access authoritative PostgreSQL and receives no registration PII.
 
-## 3. Password rules
+## 3. Keycloak administrative registration credential
 
-Keycloak owns password hashing and policy. RAMALS must not persist, audit, trace, meter or log password values. Avoid passing password through more components than necessary. Redact request bodies at observability boundaries.
+M1-PROF-01 introduces a new privileged identity-plane credential because RAMALS-orchestrated registration must create/read Keycloak users and trigger verification actions.
 
-For a RAMALS-orchestrated registration endpoint that receives plaintext password, the following are mandatory: no request-body logging, no trace payload capture, no audit capture, no cache persistence, no idempotency payload persistence, no retry/outbox serialization, and no application-side password hashing. The password is transient secret material used only for the immediate Keycloak handoff.
+A dedicated confidential service-account client (implementation name expected to be `ramals-registration-admin` or repository-approved equivalent) MUST be used. It MUST NOT reuse `ramals-core-workload`.
 
-## 4. OTP policy baseline
+Required controls:
 
-Policy values must be configurable with secure production defaults and bounded ranges. Suggested starting baseline subject to security review:
+- grant only the minimum effective realm-management user permissions the implementation actually needs; expected upper bound is `manage-users` + `view-users` after verification that narrower permissions cannot satisfy the flow;
+- never grant `manage-realm` or broad unrelated administration;
+- public business API does not expose arbitrary role assignment; LEARNER assignment is a narrow server-side constant/policy;
+- client secret is externalized per environment and never committed;
+- rotate/revoke without code change;
+- restrict network path to Keycloak where deployment controls permit;
+- enable/retain Keycloak admin-event audit appropriate to the environment;
+- alert/review unexpected privileged role assignment or admin-client use anomalies;
+- treat compromise as critical because user-management privilege can create/modify identities.
 
-- numeric OTP: 6 digits generated with CSPRNG
-- TTL: approximately 5 minutes
-- verification attempts: maximum 5 per challenge
-- resend cooldown: approximately 30–60 seconds
-- bounded sends per mobile/account/IP over rolling windows
-- newest challenge supersedes older active challenge
-- successful challenge is consumed exactly once
+See M1-ADR-014.
 
-Do not weaken security by exposing OTP in API/UI/logs in production.
+## 4. Password rules
 
-## 5. Mandatory OTP storage construction
+Keycloak owns password hashing/policy. If RAMALS receives a password for immediate administrative user creation, it exists only transiently in request memory. It must never be persisted, audited, traced, metered, logged, cached, serialized to retry/outbox/idempotency state, or application-hashed as a substitute credential.
 
-A six-digit OTP has low entropy; an ordinary unkeyed fast hash is not acceptable because an attacker with database access can enumerate the small OTP space offline.
+After ambiguous Keycloak create outcome, reconcile by stable identity correlation before retry-create; do not require recovery of the password from durable state.
 
-RAMALS MUST use a keyed construction for persisted verification state. Baseline construction:
+## 5. Email verification authority
+
+Keycloak is the only verification authority for email ownership in this capability. Browser claims are untrusted.
+
+DEV/CI normal qualification configures Keycloak SMTP to a local non-billable sink such as Mailpit and follows the actual Keycloak verification link. An optional Admin-API verification shortcut may exist only under an explicit test profile and must be impossible to enable in production.
+
+Production/production-like environment must configure and exercise approved SMTP/provider delivery. Missing required email-verification delivery/configuration is fail-closed for production registration enablement.
+
+## 6. OTP policy baseline
+
+Configurable secure defaults with bounded ranges:
+
+- numeric 6-digit CSPRNG OTP;
+- TTL about 5 minutes;
+- maximum 5 verification attempts/challenge;
+- resend cooldown about 30–60 seconds;
+- bounded sends per subject/mobile/source/provider budget over rolling windows;
+- newest challenge supersedes older active challenge;
+- success consumes exactly once.
+
+## 7. Mandatory OTP storage construction
+
+A six-digit OTP is low entropy. Unkeyed hashing is prohibited.
+
+Baseline:
 
 `otp_hmac = HMAC-SHA-256(Kv, canonical(challengeId) || 0x00 || canonical(mobileE164) || 0x00 || canonical(otp))`
 
 Requirements:
 
-- `Kv` is a separately managed secret key/pepper identified by `hmac_key_version`.
-- `Kv` never enters Git or PostgreSQL.
-- challenge ID and normalized E.164 mobile are included as context/domain separation so equal OTPs across challenges do not yield reusable verification state.
-- the exact canonical byte encoding must be documented and deterministic in implementation; do not rely on ambiguous string concatenation.
-- compare HMAC values in constant time.
-- store `otp_hmac` and key version, never plaintext OTP or reversible OTP.
-- key rotation must support the current key and, only for the short lifetime of in-flight challenges, required previous key versions.
+- `Kv` is external secret material identified by persisted `hmac_key_version`;
+- key never enters Git/PostgreSQL/logs;
+- challenge and E.164 mobile provide context/domain separation;
+- canonical byte encoding is explicit/deterministic;
+- HMAC comparison is constant time;
+- persisted challenge records include both `max_attempts` and `policy_version`;
+- key rotation supports current and only needed previous versions for short-lived in-flight challenges;
+- stronger alternative requires explicit security review; unkeyed hash never qualifies.
 
-Equivalent stronger keyed constructions require explicit security review; an unkeyed hash does not satisfy this requirement.
+## 8. Pre-auth registration abuse controls
 
-Key material belongs in the platform secret manager/Kubernetes Secret according to environment standards, never Git.
+The current authenticated subject rate limiter cannot protect an unauthenticated registration endpoint because no subject exists yet. M1-PROF-01 requires a dedicated pre-auth limiter positioned so it executes for the public registration route before bearer-subject-dependent enforcement.
 
-## 6. Rate limiting / abuse controls
+Dimensions should combine source network/IP signal with privacy-safe normalized identity/request fingerprint. Responses remain enumeration-resistant. Edge/WAF controls complement rather than replace the application rule.
 
-Apply layered controls to registration, OTP send, resend and verify. Dimensions should include combinations of:
+Production multi-replica deployment requires shared/consistent enforcement at an authoritative application/shared edge layer; a per-pod in-memory counter alone is not sufficient.
 
-- normalized mobile
-- account/registration ID
-- source IP/network signal
-- device/session signal where safely available
-- provider-level quota
+## 9. Authenticated SMS abuse controls
 
-Return 429 with safe retry metadata where appropriate. Avoid revealing whether a phone/email belongs to another person.
+SMS send/resend/verify happens only after trusted email verification and authenticated sign-in. Apply layered limits using:
 
-Production edge/WAF rate limiting is complementary; application-level limits remain necessary for identity-aware controls.
+- authenticated subject;
+- normalized mobile;
+- challenge/registration identity;
+- source network/session signal;
+- rolling send/verify windows;
+- provider/global budget/quota.
 
-## 7. Enumeration resistance
+The existing subject limiter may contribute but does not replace mobile-keyed or provider-budget controls. Prevent SMS pumping even when an attacker distributes requests across accounts/IPs.
 
-Registration and password/verification-related responses should not unnecessarily disclose account existence. Where product requirements need explicit duplicate resolution for the legitimate owner, design a safe recovery/sign-in path rather than returning rich identity information.
+## 10. SMS ownership verification is not authentication MFA
 
-## 8. Mobile ownership and reuse
+RAMALS SMS OTP proves mobile ownership for onboarding only. It MUST NOT:
 
-Normalize to E.164 before comparison. One verified mobile maps to one active learner for this MVP. Enforce with DB constraint plus transactional handling. A mobile is not considered owned merely because an OTP was sent.
+- create or assert `amr=otp`;
+- increase `acr`;
+- satisfy `MfaAuthorization`;
+- alter Keycloak TOTP/OTP policy;
+- assume Keycloak password/TOTP brute-force protection applies to RAMALS challenges.
 
-For MVP-1, once a mobile is verified it remains reserved to that RAMALS identity even if the identity is disabled or soft-deleted. Ordinary registration MUST NOT automatically recycle/reassign the number. Release/reassignment requires a separate, audited account-deletion/administrative policy with stronger ownership proof. This rule must be represented in schema/constraints so a soft-delete flag does not accidentally free the unique number.
+See M1-ADR-015.
 
-## 9. Threat model
+## 11. Mobile ownership and reuse
+
+Normalize E.164 before comparison. Verified ownership is DB-enforced and transactionally established only after successful challenge verification.
+
+For MVP-1 a verified number stays reserved to the same RAMALS identity after disable/soft-delete. Ordinary registration cannot recycle it. Release/reassignment requires separate audited lifecycle policy and stronger ownership proof. Schema constraints must preserve this rule rather than condition uniqueness on an `active`/soft-delete predicate that frees the number.
+
+## 12. PII boundary
+
+Name, email, mobile, country/city and some professional attributes are PII. The existing PII-free `core.learner` baseline is preserved.
+
+Store contact/registration PII only in a separately permissioned boundary keyed to learner identity. Apply purpose limitation, least privilege, encryption in transit/storage controls, masking, retention/deletion/export compatibility, and no PII in metric dimensions. AI-plane access is prohibited.
+
+Do not claim regulatory compliance solely from these controls.
+
+See M1-ADR-013.
+
+## 13. Threat model
+
+### JIT onboarding bypass
+Threat: existing JIT provisioning creates operational `ACTIVE`, and a consumer mistakes that for onboarding completion.
+Controls: separate onboarding state ending ONBOARDED; professional product gates check it explicitly; regression tests inventory existing ACTIVE consumers.
+
+### Privileged Keycloak admin-client compromise
+Threat: credential can create/modify identities and potentially abuse role assignment.
+Controls: dedicated client, minimum user roles, no manage-realm, external secret/rotation, network restriction, admin audit, no generic role API, anomaly tests/monitoring.
 
 ### Automated account creation
-Controls: rate limits, provider quotas, optional bot/risk control at edge, email+mobile verification, monitoring.
+Controls: pre-auth limiter, provider quotas, optional edge bot/risk controls, email verification, monitoring.
 
-### OTP brute force
-Controls: short TTL, attempt ceiling, keyed HMAC, rate limit, lock/supersede, alerts.
-
-### OTP offline enumeration after DB compromise
-Controls: mandatory keyed HMAC with external secret; never unkeyed low-entropy hash.
-
-### OTP replay
-Controls: consumed_at, single successful transaction, old challenge invalidation, concurrency tests.
+### OTP brute force/offline enumeration/replay
+Controls: short TTL, max attempts, keyed HMAC, constant-time compare, send/verify limits, consumed/superseded state, concurrency tests.
 
 ### SMS pumping/cost abuse
-Controls: per-number/IP/account rolling limits, resend cooldown, global/provider budget alarms, country policy if required.
+Controls: mobile/subject/source windows, resend cooldown, provider/global budget alarms and hard ceilings.
 
-### Privilege escalation
-Controls: no public role input, server-side learner assignment, tests attempting admin/mentor injection.
+### Role escalation
+Controls: public role field absent; LEARNER server-controlled; negative tests for INSTRUCTOR, CONTENT_AUTHOR, ADMIN, SERVICE.
 
-### Account takeover through mobile change
-Controls: separate re-verification flow; do not overwrite verified number before proof.
-
-### Number recycling / deleted-account takeover
-Controls: verified number remains reserved in MVP-1; release only through explicit audited policy.
+### Account takeover through mobile change/number recycling
+Controls: pending re-verification; existing verified value not overwritten before proof; number remains reserved after disable/soft-delete.
 
 ### Duplicate identity/race
-Controls: DB uniqueness, transaction isolation/locking, idempotency, Keycloak reconciliation.
+Controls: DB uniqueness, transaction/locking, idempotency, Keycloak reconciliation.
 
-### PII leakage
-Controls: data minimization, masking, log redaction, restricted DB access, no PII in metrics labels, sanitized traces.
+### PII leakage / core invariant erosion
+Controls: separate PII boundary and narrow grants; no contact columns on `core.learner`; masking/redaction; no PII metric labels/traces/audit payloads.
 
-### CSRF/session attacks
-Controls: follow existing OIDC/token architecture; if cookies are used for authenticated mutation, apply SameSite/CSRF protections appropriate to deployment. Do not blindly add CSRF tokens to bearer-only flows; threat-model actual credential transport.
+### Email-verification spoofing
+Controls: browser cannot assert verification; trusted Keycloak claim/server lookup only; DEV/CI uses real Keycloak verification path.
 
-### XSS
-Controls: React escaping, no unsafe HTML for user profile fields, CSP/headers according to platform standard.
+### MFA confusion
+Controls: explicit SMS-vs-Keycloak-MFA contract and tests proving SMS verification does not grant MFA-protected authorization.
 
-### Injection
-Controls: parameterized persistence/JPA, DTO validation, no dynamic query construction from profile fields.
+### CSRF/session, XSS and injection
+Follow actual credential transport. Cookie-authenticated mutations require appropriate SameSite/CSRF defenses; bearer-only paths are not protected by adding irrelevant CSRF state. Use React escaping/CSP/platform headers, bounded DTOs and parameterized persistence.
 
-### Provider compromise/failure
-Controls: narrow credentials, secret rotation, timeouts, circuit/bulkhead where appropriate, audit provider result categories, no trust in callback unless authenticated.
+### Provider failure/compromise
+Use narrow credentials, external secrets/rotation, bounded timeouts, authenticated callbacks if any, circuit/bulkhead as appropriate, provider-result categorization and fail-closed production configuration.
 
-## 10. Terms and Privacy evidence
+## 14. Terms and Privacy evidence
 
-A boolean acceptance flag is not sufficient production evidence. Persist the exact server-known immutable Terms/Privacy artifact version/reference accepted and acceptance timestamp. If documents are separate, record each independently. Audit events may include the non-sensitive immutable version/reference, never passwords/OTP/full request bodies.
+Boolean acceptance is insufficient. Persist server-known immutable Terms/Privacy artifact reference/version plus timestamp. Reject client-invented versions. Audits may carry immutable references, never credential/OTP/full request data.
 
-The server must reject unknown/client-invented consent versions. Document content storage/version publication may live outside this capability, but the accepted reference must resolve to an immutable artifact under platform governance.
+## 15. Secret management
 
-## 11. Privacy / PII
+Production secrets include dedicated Keycloak registration-admin client secret, OTP HMAC key, SMS provider credentials and any SMTP/provider secret managed for Keycloak. None enter Git. Rotation must not require code modification.
 
-PII includes name, email, mobile, city and potentially professional attributes. Apply:
-
-- purpose limitation
-- data minimization
-- least-privilege access
-- encryption in transit
-- storage encryption through platform/infrastructure controls
-- masking in logs/UI where full value is unnecessary
-- retention/deletion policy
-- export/deletion compatibility
-- no PII in metric dimensions
-
-Do not claim GDPR/other regulatory compliance solely because these controls exist; compliance requires broader organizational/legal processes.
-
-## 12. Audit rules
-
-Security audit records contain actor/subject reference, event type, outcome, timestamp, interactionId/traceId, policy/provider category where safe. They must never contain password, OTP, bearer token, refresh token, provider secret or full request bodies.
-
-## 13. Secret management
-
-Production secrets include Keycloak service credentials, OTP HMAC key and SMS provider credentials. Externalize by environment. Rotation must be possible without code changes. OTP HMAC key rotation may verify challenges with current/previous key versions only for their short lifetime.
-
-## 14. Network policy
-
-Registration does not change the core invariant that ramals-ai cannot access authoritative PostgreSQL. Only learning-platform requires identity/provider egress. Do not broaden AI network access for this feature.
-
-## 15. Security qualification blockers
+## 16. Security qualification blockers
 
 BLOCK release if any occurs:
 
-- privileged role obtainable through public registration
-- plaintext password or OTP stored/logged/traced
-- registration password placed in idempotency/cache/retry/outbox storage
-- OTP protected only by an unkeyed hash
-- OTP reusable
-- unlimited OTP attempts/sends
-- verified mobile becomes automatically reusable after disable/soft-delete
-- mobile uniqueness only application-enforced with race vulnerability
-- client can force ACTIVE/VERIFIED state
-- `/me` authorization allows cross-user access
-- production can silently use fake SMS
-- secrets committed
-- sensitive values appear in traces/audit/logs
+- JIT/operational ACTIVE can bypass required onboarding;
+- PII is added to `core.learner` without a superseding reviewed ADR;
+- public registration can obtain INSTRUCTOR, CONTENT_AUTHOR, ADMIN or SERVICE;
+- registration reuses `ramals-core-workload` or grants unnecessarily broad Keycloak realm administration;
+- privileged Keycloak registration credential is committed/logged or lacks rotation/externalization;
+- browser can force email/mobile/ONBOARDED state;
+- production email verification can silently use a fake RAMALS adapter or run without approved Keycloak SMTP/provider configuration;
+- public registration lacks effective pre-auth abuse limiting;
+- SMS lacks per-mobile/subject/provider-budget protection across replicas;
+- RAMALS SMS verification satisfies/claims Keycloak MFA assurance;
+- plaintext password or OTP is stored/logged/traced;
+- password enters idempotency/cache/retry/outbox storage;
+- OTP uses unkeyed hashing, is replayable, or has unlimited attempts/sends;
+- verified mobile is automatically reusable after disable/soft-delete;
+- mobile uniqueness is only application-enforced;
+- `/me` allows cross-user access;
+- production silently uses fake SMS;
+- AI→authoritative PostgreSQL isolation is weakened;
+- sensitive values appear in logs/traces/audit/metric labels.
