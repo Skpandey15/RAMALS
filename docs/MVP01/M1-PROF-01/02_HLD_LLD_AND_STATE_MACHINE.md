@@ -3,211 +3,241 @@
 ## 1. High-level architecture
 
 ```text
-Browser
+Unauthenticated browser
   |
-  | HTTPS / OIDC Authorization Code + PKCE
+  | HTTPS
   v
-web-ui
+web-ui public /register
   |
-  | authenticated/public registration APIs as explicitly defined
+  | public registration API + pre-auth abuse controls
   v
 learning-platform
-  |-- Keycloak Admin/identity integration (narrow service credential)
-  |-- PostgreSQL (authoritative RAMALS application state)
-  |-- Email verification integration / Keycloak
-  `-- MobileVerificationSender
-         |-- Fake/DEV sender
-         `-- Production SMS adapter
+  |-- dedicated Keycloak registration-admin client
+  |-- PostgreSQL
+  `-- Keycloak verification-email trigger
+          |
+          v
+       SMTP provider
+
+Verified user -> hosted Keycloak login (OIDC Authorization Code + PKCE)
+                    |
+                    v
+               learning-platform /me/onboarding
+                    |
+                    +-- PostgreSQL PII/onboarding/profile/journey state
+                    +-- Keycloak trusted email state reconciliation
+                    `-- MobileVerificationSender -> SMS provider
 ```
 
-The AI plane is not involved in registration and receives no need-to-know registration PII.
+The AI plane is not involved and receives no registration PII.
 
-## 2. Trust boundaries
+## 2. Existing identity model compatibility
 
-1. Internet → ingress/web-ui/API.
-2. Browser → Keycloak for authentication.
-3. learning-platform → Keycloak administrative identity operations.
-4. learning-platform → PostgreSQL.
-5. learning-platform → external messaging provider.
+ADR 0001 remains authoritative that `core.learner` is keyed by OIDC `sub` and may be provisioned just in time on first authenticated contact. Existing JIT provisioning and operational learner status are **not** onboarding authority.
 
-Every boundary requires TLS where applicable, least privilege, bounded payloads, explicit timeout and sanitized telemetry.
+Two independent state dimensions exist:
 
-## 3. Component responsibilities
+```text
+core.learner.status                onboarding_state
+-------------------                ----------------
+ACTIVE                             IDENTITY_CREATED
+SUSPENDED                          EMAIL_PENDING
+CLOSED                             EMAIL_VERIFIED
+                                   MOBILE_PENDING
+                                   MOBILE_VERIFIED
+                                   PROFILE_PENDING
+                                   JOURNEY_PENDING
+                                   ONBOARDED
+```
+
+`ACTIVE` answers whether an operational learner record is active for existing platform workflows. `ONBOARDED` answers whether the professional learner has completed this product onboarding. Code requiring a fully onboarded professional learner must check the latter in addition to normal operational/authz requirements. Existing consumers whose business meaning is only operational `ACTIVE` keep that meaning.
+
+This decision is recorded in M1-ADR-012 and clarifies ADR 0001; it does not abandon OIDC-sub ownership or `/me` JIT identity anchoring.
+
+## 3. PII boundary
+
+`core.learner` remains PII-free. Registration/contact PII is stored in a separate least-privilege boundary keyed by learner ID/subject linkage, e.g. a repository-approved `identity.learner_contact`/equivalent table. Professional attributes are stored separately in `professional_profile`.
+
+The PII boundary is specified in M1-ADR-013. Do not add name, email, phone, country or city to `core.learner`.
+
+## 4. Component responsibilities
 
 ### RegistrationController
-Thin transport layer: validation envelope, correlation IDs, request/response mapping. No identity business rules in controller.
+Public, narrowly scoped transport layer for registration. Applies DTO validation/correlation and runs behind a dedicated **pre-auth** abuse limiter. No generic role field.
 
 ### RegistrationService
-Orchestrates account creation and lifecycle transitions. Handles idempotency and partial-failure recovery.
+Orchestrates Keycloak identity creation, consent evidence, RAMALS registration/contact state, idempotency and partial-failure reconciliation.
 
 ### IdentityProviderPort
-Abstraction for Keycloak operations: create learner identity, obtain subject, request email verification, query verification status. Must not permit caller-supplied privileged roles.
+Narrow Keycloak operations only: create learner identity, trigger verification email, locate by stable correlation, and read authoritative email-verification state. It does not expose arbitrary realm administration or arbitrary role assignment.
 
-### MobileVerificationService
-Creates/verifies/resends OTP challenges and atomically establishes verified mobile ownership.
-
-### MobileVerificationSender
-Sends message; does not decide verification state.
-
-### ProfessionalProfileService
-Owns professional profile validation and persistence.
-
-### LearningJourneyService
-Owns journey creation/access control. Journey context does not replace evidence/mastery authority.
+### KeycloakRegistrationAdminClient
+Dedicated confidential service account for `IdentityProviderPort`. Separate from `ramals-core-workload`. Minimum effective user-management permissions only; see M1-ADR-014.
 
 ### OnboardingService
-Computes next required onboarding step from authoritative server state.
+Computes next required product step from server state and performs safe trusted email reconciliation. It never treats operational `ACTIVE` as onboarding completion.
 
-## 4. Registration sequence
+### MobileVerificationService
+Authenticated service that creates/verifies/resends ownership challenges, applies SMS-specific rate/budget policy, and atomically establishes verified mobile ownership. It is not an authentication-MFA service.
 
-```text
-Client -> learning-platform: POST registration + Idempotency-Key
-learning-platform -> DB: reserve/create registration record
-learning-platform -> Keycloak: create ROLE_LEARNER identity
-Keycloak --> learning-platform: subject
-learning-platform -> DB: persist subject + IDENTITY_CREATED/EMAIL_PENDING
-learning-platform -> Keycloak: trigger verification email
-learning-platform --> Client: accepted + nextStep=EMAIL_VERIFICATION
-```
+### ProfessionalProfileService
+Owns professional profile validation/persistence outside `core.learner`.
 
-If Keycloak succeeds but DB persistence fails, subsequent retry/reconciliation must locate the existing identity rather than create another account.
+### LearningJourneyService
+Owns product journey orchestration and the explicit compatibility projection to existing `core.learner_goal`.
 
-If `learning-platform` receives the plaintext password, it must treat the value as transient secret material only: no persistence, request-body logging, tracing, audit capture, idempotency payload storage, retry queue or outbox serialization is allowed.
-
-## 5. Canonical email verification reconciliation
-
-Email ownership is verified by Keycloak. RAMALS MUST NOT accept a browser-supplied `emailVerified=true` flag or equivalent assertion.
-
-The canonical synchronization mechanism is:
-
-1. Keycloak completes its normal email verification flow.
-2. On the learner's next authenticated login/token refresh/onboarding request, `learning-platform` derives the Keycloak `sub` from the trusted access token.
-3. RAMALS evaluates the trusted `email_verified` claim when present and acceptable under the configured Keycloak token contract.
-4. When claim freshness is insufficient, absent, or a transition must be confirmed, `learning-platform` performs a server-to-server Keycloak lookup through `IdentityProviderPort` using `sub` and confirms `emailVerified=true`.
-5. RAMALS idempotently transitions `EMAIL_PENDING → EMAIL_VERIFIED → MOBILE_PENDING`.
-6. Repeated reconciliation of an already verified learner is a no-op/current-state result.
-
-Do not implement browser callbacks, browser booleans or periodic database polling as alternate authorities. Provider/admin lookup is the authoritative fallback.
-
-## 6. OTP send sequence
+## 5. Registration sequence
 
 ```text
-Client -> API: send OTP
-API -> rate limiter: account/mobile/IP/device dimensions
-API -> DB: invalidate/supersede eligible prior challenge; create challenge
-API -> sender: send OTP
-sender --> API: provider result/message reference
-API -> audit/metrics
-API --> Client: generic accepted response + resendAfter/expiresAt
+Browser -> public /register: registration + Idempotency-Key
+API -> pre-auth limiter: IP/network + privacy-safe identity fingerprint
+API -> DB: create/reserve non-secret registration orchestration state
+API -> Keycloak admin client: create user; server policy assigns LEARNER only
+Keycloak -> API: subject / identity reference
+API -> DB: link subject + contact/consent + onboarding EMAIL_PENDING
+API -> Keycloak: execute/send verification email action
+API -> Browser: generic accepted + nextStep=EMAIL_VERIFICATION
 ```
 
-Never return OTP.
+The password, when accepted by RAMALS for immediate Keycloak handoff, is transient request secret material and never enters durable retry/idempotency/logging/tracing/audit state.
 
-## 7. OTP verify sequence
+If Keycloak create has an ambiguous outcome, reconcile before retry-create.
 
-Within transaction/locking semantics appropriate to PostgreSQL:
+## 6. DEV/CI and production email verification
 
-1. Load active challenge by opaque challenge ID and learner context.
-2. Verify not expired/consumed/locked.
+Keycloak is the verification authority and email sender/orchestrator.
+
+- **DEV/CI normal path:** configure Keycloak SMTP to a local non-billable SMTP sink such as Mailpit. E2E obtains/follows the real Keycloak verification link and verifies Keycloak state.
+- **Test-only shortcut (optional):** a Keycloak Admin API `emailVerified` mutation may exist only under an explicit test profile/configuration, guarded so startup/configuration fails in production if enabled. It cannot be the normal DEV/CI qualification path.
+- **Production/production-like:** configure approved SMTP/provider through externalized environment secrets/settings and exercise the actual verification flow. Missing required configuration is fail-closed.
+
+A RAMALS fake-email adapter cannot substitute for Keycloak email verification.
+
+## 7. Canonical email reconciliation
+
+1. Keycloak completes email verification.
+2. Learner signs in through hosted Keycloak.
+3. `/me/onboarding` derives trusted `sub` from validated token; ADR 0001 ownership semantics apply.
+4. RAMALS may use trusted `email_verified` claim where the configured token contract guarantees it and freshness is sufficient.
+5. Otherwise/for transition confirmation, backend reads Keycloak user state using `IdentityProviderPort` and `sub`.
+6. `EMAIL_PENDING → EMAIL_VERIFIED → MOBILE_PENDING` is idempotent.
+7. Browser assertions such as `emailVerified=true` are ignored/rejected as authority.
+
+## 8. Mobile send/verify flow
+
+Mobile send/resend/verify occurs only after authenticated sign-in and trusted email verification. `/me` identity derives from token subject; no learner ID is accepted.
+
+Send applies subject + normalized mobile + source/network + challenge/provider budget limits. Existing `SubjectRateLimitFilter` may contribute after authentication but is not sufficient by itself.
+
+Verification transaction:
+
+1. Load active challenge for authenticated learner.
+2. Reject expired/consumed/locked/superseded challenge.
 3. Increment attempts safely.
-4. Derive the submitted verification value using the mandatory keyed HMAC construction defined in the security document.
-5. Constant-time compare against the stored HMAC.
-6. On mismatch, persist failed attempt and return generic failure.
-7. On match, acquire/validate verified-mobile uniqueness.
-8. Mark challenge consumed.
-9. Mark mobile verified and timestamped.
-10. Transition to PROFILE_PENDING.
+4. Derive mandatory keyed HMAC using documented canonical bytes.
+5. Constant-time compare.
+6. On mismatch persist failed attempt category only.
+7. On match acquire DB-enforced mobile uniqueness/reservation.
+8. Consume challenge exactly once.
+9. Mark mobile verified.
+10. Transition to `PROFILE_PENDING`.
 11. Commit.
 
-Concurrent verify requests must yield exactly one successful ownership transition.
+Concurrent verification yields exactly one ownership transition.
 
-## 8. Resend semantics
+## 9. SMS ownership verification is not Keycloak MFA
 
-Resend is not unlimited. Enforce cooldown, rolling-window send ceilings, and risk/rate limits. A new challenge supersedes prior active challenges for the same learner/mobile. Old OTPs must fail after resend.
+The existing Keycloak realm TOTP/OTP policy and `MfaAuthorization` remain unchanged.
 
-## 9. Onboarding state machine
+RAMALS SMS verification:
+
+- proves ownership/control of the registered mobile for the product onboarding requirement;
+- does **not** set or claim `amr=otp`;
+- does **not** raise `acr`;
+- does **not** satisfy `MfaAuthorization`;
+- does **not** inherit Keycloak password/TOTP brute-force protections.
+
+RAMALS therefore implements its own challenge attempts, send/resend ceilings and SMS-pumping controls. See M1-ADR-015.
+
+## 10. Onboarding state machine
 
 ```text
-REGISTRATION_STARTED
-   |
-   v
 IDENTITY_CREATED
-   |
-   v
-EMAIL_PENDING --trusted verification--> EMAIL_VERIFIED
-                                      |
-                                      v
-                                 MOBILE_PENDING
-                                      |
-                                verified OTP
-                                      v
-                                MOBILE_VERIFIED
-                                      |
-                                      v
-                                PROFILE_PENDING
-                                      |
-                                valid profile
-                                      v
-                                JOURNEY_PENDING
-                                      |
-                              >=1 valid journey
-                                      v
-                                    ACTIVE
+      |
+      v
+ EMAIL_PENDING -- trusted Keycloak verification --> EMAIL_VERIFIED
+                                                    |
+                                                    v
+                                               MOBILE_PENDING
+                                                    |
+                                             verified SMS ownership
+                                                    v
+                                               MOBILE_VERIFIED
+                                                    |
+                                                    v
+                                               PROFILE_PENDING
+                                                    |
+                                               valid profile
+                                                    v
+                                               JOURNEY_PENDING
+                                                    |
+                                      valid journey + goal projection
+                                                    v
+                                                ONBOARDED
 ```
 
 Forbidden examples:
 
-- EMAIL_PENDING → ACTIVE
-- MOBILE_PENDING → ACTIVE
-- Browser request directly setting ACTIVE
-- Self-registration assigning ADMIN/MENTOR/CONTENT_AUTHOR
-- Professional-profile update modifying verified identity attributes without dedicated re-verification flow
+- operational `core.learner.status=ACTIVE` being interpreted as ONBOARDED;
+- EMAIL_PENDING or MOBILE_PENDING → ONBOARDED;
+- browser setting verification/onboarding state;
+- public registration assigning `INSTRUCTOR`, `CONTENT_AUTHOR`, `ADMIN`, or `SERVICE`;
+- SMS verification satisfying Keycloak MFA policy;
+- profile mutation overwriting verified mobile/email without re-verification.
 
-## 10. Resume algorithm
+`REGISTRATION_STARTED` is an audit/orchestration event before identity creation, not necessarily a persistent learner onboarding enum.
 
-`GET /me/onboarding` should calculate the next step from trusted state and perform safe Keycloak email-verification reconciliation when applicable:
+## 11. Resume algorithm
 
-- email unverified → EMAIL_VERIFICATION
-- email verified + mobile unverified → MOBILE_VERIFICATION
-- verified + profile incomplete → PROFESSIONAL_PROFILE
-- profile complete + no valid journey → LEARNING_GOAL/JOURNEY
-- all gates complete → COMPLETE
+`GET /me/onboarding`:
 
-Frontend localStorage must not be authoritative for progress.
+- reconcile trusted email state;
+- email unverified → EMAIL_VERIFICATION;
+- email verified + mobile unverified → MOBILE_VERIFICATION;
+- mobile verified + profile incomplete → PROFESSIONAL_PROFILE;
+- profile complete + no valid initial journey/goal projection → LEARNING_GOAL/JOURNEY;
+- all gates complete → COMPLETE (`onboarding_state=ONBOARDED`).
 
-## 11. Mobile change after activation
+Frontend storage is never authoritative.
 
-Changing a verified mobile is a separate re-verification operation. Do not overwrite the verified number immediately. Store pending candidate/challenge; only switch verified ownership after successful verification and uniqueness check.
+## 12. LearningJourney and existing `core.learner_goal`
 
-## 12. Mobile reuse policy
+MVP-1 uses LearningJourney as product orchestration and retains `core.learner_goal` as the deterministic-core compatibility projection.
 
-For MVP-1, a verified mobile number remains reserved to the owning RAMALS identity even if that identity becomes disabled or enters a soft-deleted/retention state. It MUST NOT automatically become available for another registration.
+- one explicit primary journey/domain maps to the single current goal row;
+- journey creation/update and its goal projection are committed transactionally/idempotently in the authoritative DB where feasible;
+- existing GET `/me/goal` remains readable;
+- existing PUT `/me/goal` must have an explicit compatibility service: for learners with a journey it updates the primary journey/projection atomically; legacy learners without a journey retain existing behavior;
+- no destructive migration or silent retirement of `core.learner_goal` occurs in M1-PROF-01.
 
-Release/reassignment requires an explicit account-deletion/administrative policy and audited operation outside ordinary self-registration. This avoids immediate number-recycling/account-takeover ambiguity and keeps uniqueness deterministic. A future lifecycle capability may define verified reassignment after stronger proof and retention requirements.
+## 13. Mobile reuse/change
 
-## 13. Email change after activation
+Verified mobile remains reserved to the owning RAMALS identity after disable/soft-delete. Reassignment requires a separate audited account-deletion/admin policy. A mobile change uses pending candidate/challenge state; the current verified number is not overwritten until proof and uniqueness succeed.
 
-Delegate credential/identity semantics to Keycloak and require re-verification. RAMALS must resynchronize trusted identity claims/state rather than accepting an arbitrary profile email update.
+## 14. Failure/recovery matrix
 
-## 14. Deletion/disable considerations
+- DB unavailable before Keycloak call → fail without external mutation.
+- Keycloak timeout/unknown create → reconcile before retry-create.
+- Keycloak created, RAMALS write failed → recover by stable external identity correlation.
+- Keycloak verification-email dispatch failure → remain EMAIL_PENDING; safe resend.
+- production SMTP unavailable/misconfigured → fail closed for production enablement; never mark verified.
+- SMS timeout unknown outcome → bounded resend policy; do not fan out challenges.
+- OTP DB commit failure → not verified; retry idempotently.
+- goal projection failure → journey completion does not become ONBOARDED until consistent projection succeeds.
+- admin credential unavailable → registration unavailable; existing authenticated platform paths remain isolated from the failure where possible.
 
-Account deletion and retention are broader lifecycle capabilities. Schema and uniqueness rules must preserve the reserved-mobile policy above and remain compatible with future deletion/export requirements.
+## 15. Authorization and compatibility
 
-## 15. Failure matrix
+Public surface is limited to registration/recovery operations explicitly designed as unauthenticated. Mobile/profile/journey operations are authenticated `/me` operations after appropriate gates. Never accept arbitrary learner ID.
 
-- DB unavailable before Keycloak call: fail, no external mutation.
-- Keycloak timeout with unknown outcome: query/reconcile before retry-create.
-- Keycloak created, DB write failed: recover by external identity correlation.
-- Email dispatch failure: remain pending; safe resend.
-- SMS timeout unknown outcome: do not generate multiple uncontrolled challenges; safe resend policy.
-- OTP DB commit failure: verification not considered complete; retry idempotently.
-- Profile save timeout: idempotent PUT/upsert semantics.
-- Journey creation retry: Idempotency-Key prevents duplicate journey.
-
-## 16. Authorization
-
-Public endpoints are narrowly limited to registration/verification initiation where required. Authenticated onboarding APIs derive learner identity from token subject. Never accept arbitrary learnerId for `/me` mutations. Privileged role assignment is not present in public request DTOs.
-
-## 17. Compatibility
-
-Existing learners must continue to authenticate. Define a migration/backfill rule for legacy learners without the new onboarding state so rollout does not lock them out unexpectedly. Prefer an explicit compatibility decision rather than inferring incomplete registration from NULL fields.
+Existing learners require an explicit backfill/compatibility policy. Do not infer incomplete onboarding merely from absence of new rows without a rollout decision. Legacy deterministic workflows continue to use their established operational status/goal semantics until deliberately migrated.
