@@ -30,7 +30,7 @@ class AdminIdentityProviderClientTests {
 
     RestClient.Builder builder = RestClient.builder();
     server = MockRestServiceServer.bindTo(builder).build();
-    client = new AdminIdentityProviderClient(properties, builder.build());
+    client = AdminIdentityProviderClient.forTesting(properties, builder.build());
   }
 
   @Test
