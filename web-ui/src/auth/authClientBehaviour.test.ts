@@ -12,6 +12,7 @@ const keycloak = vi.hoisted(() => ({
   login: vi.fn(),
   logout: vi.fn(),
   updateToken: vi.fn(),
+  clearToken: vi.fn(),
 }));
 
 // authClient does `new Keycloak(config)`, so the mock must be constructible.
@@ -38,6 +39,7 @@ describe('authClient token handling', () => {
     vi.clearAllMocks();
     keycloak.authenticated = false;
     keycloak.token = undefined;
+    keycloak.updateToken.mockResolvedValue(false);
     interactionFetch.mockResolvedValue(new Response());
   });
 
@@ -48,26 +50,49 @@ describe('authClient token handling', () => {
     expect(interactionFetch).not.toHaveBeenCalled();
   });
 
-  it('refreshes the token before each call and sends it as a bearer credential', async () => {
+  it('revalidates the Keycloak session before each call and sends the bearer credential', async () => {
     keycloak.authenticated = true;
     keycloak.token = 'access-token-value';
 
     await authenticatedFetch(interaction, '/api/v1/me');
 
-    // The token is refreshed with a minimum validity so a call never rides an expiring token.
-    expect(keycloak.updateToken).toHaveBeenCalledWith(30);
+    expect(keycloak.updateToken).toHaveBeenCalledWith(-1);
     const [, , init] = interactionFetch.mock.calls[0] as [unknown, unknown, RequestInit];
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer access-token-value');
   });
 
-  it('fails closed when the adapter yields no token after refresh', async () => {
+  it('fails closed when the adapter yields no token after revalidation', async () => {
     keycloak.authenticated = true;
     keycloak.token = undefined;
 
     await expect(authenticatedFetch(interaction, '/api/v1/me')).rejects.toThrow(
       /no access token/i,
     );
+    expect(keycloak.clearToken).toHaveBeenCalled();
     expect(interactionFetch).not.toHaveBeenCalled();
+  });
+
+  it('clears local authentication state when Keycloak session revalidation fails', async () => {
+    keycloak.authenticated = true;
+    keycloak.token = 'stale-token';
+    keycloak.updateToken.mockRejectedValueOnce(new Error('remote session ended'));
+
+    await expect(authenticatedFetch(interaction, '/api/v1/me')).rejects.toThrow(
+      /session is no longer valid/i,
+    );
+    expect(keycloak.clearToken).toHaveBeenCalled();
+    expect(interactionFetch).not.toHaveBeenCalled();
+  });
+
+  it('clears local authentication state when the resource server returns 401', async () => {
+    keycloak.authenticated = true;
+    keycloak.token = 'token';
+    interactionFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    const response = await authenticatedFetch(interaction, '/api/v1/me');
+
+    expect(response.status).toBe(401);
+    expect(keycloak.clearToken).toHaveBeenCalled();
   });
 
   it('preserves caller headers while adding the credential', async () => {
@@ -99,7 +124,7 @@ describe('authClient token handling', () => {
     expect(keycloak.logout).toHaveBeenCalledWith({ redirectUri: window.location.origin });
   });
 
-  it('initializes with silent SSO check so a returning learner recovers their session', async () => {
+  it('recovers a returning session without browser-blocked background iframes', async () => {
     keycloak.init.mockResolvedValue(true);
 
     await initializeAuthentication();
@@ -109,7 +134,7 @@ describe('authClient token handling', () => {
         flow: 'standard',
         onLoad: 'check-sso',
         pkceMethod: 'S256',
-        checkLoginIframe: true,
+        checkLoginIframe: false,
       }),
     );
   });
