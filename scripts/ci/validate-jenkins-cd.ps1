@@ -45,6 +45,8 @@ Assert-True ($installer -match '\$jenkinsVersion\s*=') "Jenkins must be explicit
 Assert-True ($installer -match '\$temurinVersion\s*=') "Temurin must be explicitly version-pinned."
 Assert-True ($installer -match '\$jenkinsSha256\s*=\s*"[A-F0-9]{64}"') "Jenkins SHA256 must be pinned."
 Assert-True ($installer -match '\$temurinSha256\s*=\s*"[A-F0-9]{64}"') "Temurin SHA256 must be pinned."
+Assert-True ($installer -match 'install-plugin[\s\S]*\btimestamper\b') `
+  "Installer must provide the Timestamper plugin required by timestamps()."
 
 # Exercise the trusted-source boundary in disposable repositories without Docker or k3d.
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "ramals-jenkins-validation-$([guid]::NewGuid())"
