@@ -32,6 +32,14 @@ describe('App auth gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(hasRealmRole).mockReturnValue(false);
+    window.history.replaceState(null, '', '/');
+  });
+
+  it.each(['/register', '/register/'])('renders registration at %s', (path) => {
+    window.history.replaceState(null, '', path);
+    render(<App />);
+    expect(screen.getByRole('heading', { name: /create your learner account/i })).toBeInTheDocument();
+    expect(isAuthenticated).not.toHaveBeenCalled();
   });
 
   it('prompts unauthenticated visitors to log in', () => {
