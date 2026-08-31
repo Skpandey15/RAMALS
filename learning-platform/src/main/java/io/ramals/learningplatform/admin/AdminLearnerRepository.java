@@ -29,8 +29,10 @@ public class AdminLearnerRepository {
         .stream().findFirst();
   }
 
-  public int updateStatus(UUID learnerId, String status) {
-    return jdbcTemplate.update("UPDATE core.learner SET status = ? WHERE id = ?", status, learnerId);
+  public int updateStatus(UUID learnerId, String expectedStatus, String newStatus) {
+    return jdbcTemplate.update(
+        "UPDATE core.learner SET status = ? WHERE id = ? AND status = ?",
+        newStatus, learnerId, expectedStatus);
   }
 
   public long countAll() {
