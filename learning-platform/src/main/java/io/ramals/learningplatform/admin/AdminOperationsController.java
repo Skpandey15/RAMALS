@@ -10,24 +10,14 @@ import org.springframework.web.bind.annotation.RestController;
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminOperationsController {
 
-  private final AdminOperationsRepository repository;
+  private final AdminOperationsService service;
 
-  public AdminOperationsController(AdminOperationsRepository repository) {
-    this.repository = repository;
+  public AdminOperationsController(AdminOperationsService service) {
+    this.service = service;
   }
 
   @GetMapping("/snapshot")
   AdminOperationalSnapshot snapshot() {
-    return new AdminOperationalSnapshot(
-        repository.countLearners(),
-        repository.countLearners("ACTIVE"),
-        repository.countLearners("SUSPENDED"),
-        repository.countLearners("CLOSED"),
-        repository.countOnboarded(),
-        repository.countCurricula("DRAFT"),
-        repository.countCurricula("PUBLISHED"),
-        repository.countCurricula("RETIRED"),
-        repository.countAuthorizationDenials24h(),
-        repository.countAdminActions24h());
+    return service.snapshot();
   }
 }
