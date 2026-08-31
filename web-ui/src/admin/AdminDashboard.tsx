@@ -42,27 +42,32 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const refresh = useCallback(async () => {
     setBusy(true);
     setError(null);
-    try {
-      const [nextSnapshot, nextLearners, nextCurricula, nextIdentities, nextAdminAudit, nextSecurityAudit] =
-        await Promise.all([
-          getOperationalSnapshot(),
-          listLearners(),
-          listCurricula(),
-          listIdentities(),
-          listAdminAudit(),
-          listSecurityAudit(),
-        ]);
-      setSnapshot(nextSnapshot);
-      setLearners(nextLearners);
-      setCurricula(nextCurricula);
-      setIdentities(nextIdentities);
-      setAdminAudit(nextAdminAudit);
-      setSecurityAudit(nextSecurityAudit);
-    } catch (requestError) {
-      setError(message(requestError));
-    } finally {
-      setBusy(false);
+    const results = await Promise.allSettled([
+      getOperationalSnapshot(),
+      listLearners(),
+      listCurricula(),
+      listIdentities(),
+      listAdminAudit(),
+      listSecurityAudit(),
+    ] as const);
+
+    if (results[0].status === 'fulfilled') setSnapshot(results[0].value);
+    if (results[1].status === 'fulfilled') setLearners(results[1].value);
+    if (results[2].status === 'fulfilled') setCurricula(results[2].value);
+    if (results[3].status === 'fulfilled') setIdentities(results[3].value);
+    if (results[4].status === 'fulfilled') setAdminAudit(results[4].value);
+    if (results[5].status === 'fulfilled') setSecurityAudit(results[5].value);
+
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) {
+      const firstFailure = failures[0];
+      setError(
+        `${failures.length} administrative data source${failures.length === 1 ? '' : 's'} unavailable. ${
+          firstFailure.status === 'rejected' ? message(firstFailure.reason) : ''
+        }`,
+      );
     }
+    setBusy(false);
   }, []);
 
   useEffect(() => {
@@ -126,6 +131,9 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     }
   };
 
+  const protectedIdentity = (identity: AdminIdentityUser) =>
+    identity.realmRoles.some((role) => role === 'ADMIN' || role === 'SERVICE' || role === 'LEARNER');
+
   return (
     <main className="app admin-dashboard">
       <header className="app-header">
@@ -168,9 +176,10 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   <td>{learner.onboardingState ?? 'NOT_STARTED'}</td>
                   <td>{learner.status}</td>
                   <td className="admin-inline-actions">
-                    {learner.status !== 'ACTIVE' && <button type="button" onClick={() => void updateLearner(learner, 'ACTIVE')}>Activate</button>}
+                    {learner.status === 'SUSPENDED' && <button type="button" onClick={() => void updateLearner(learner, 'ACTIVE')}>Activate</button>}
                     {learner.status === 'ACTIVE' && <button type="button" onClick={() => void updateLearner(learner, 'SUSPENDED')}>Suspend</button>}
                     {learner.status !== 'CLOSED' && <button type="button" onClick={() => void updateLearner(learner, 'CLOSED')}>Close</button>}
+                    {learner.status === 'CLOSED' && <span>Terminal</span>}
                   </td>
                 </tr>
               ))}
@@ -208,11 +217,11 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
               {identities.map((identity) => (
                 <tr key={identity.id}>
                   <td><strong>{identity.username ?? identity.id}</strong><br /><small>{identity.email ?? identity.id}</small></td>
-                  <td><button type="button" onClick={() => void updateIdentityEnabled(identity)} disabled={identity.realmRoles.includes('ADMIN') || identity.realmRoles.includes('SERVICE')}>{identity.enabled ? 'Disable' : 'Enable'}</button></td>
+                  <td><button type="button" onClick={() => void updateIdentityEnabled(identity)} disabled={protectedIdentity(identity)}>{identity.enabled ? 'Disable' : 'Enable'}</button></td>
                   <td>{identity.realmRoles.filter((role) => ['ADMIN', 'LEARNER', 'INSTRUCTOR', 'CONTENT_AUTHOR', 'SERVICE'].includes(role)).join(', ') || 'none'}</td>
                   <td className="admin-inline-actions">
-                    <button type="button" onClick={() => void updateRole(identity, 'INSTRUCTOR')} disabled={identity.realmRoles.includes('ADMIN') || identity.realmRoles.includes('SERVICE') || identity.realmRoles.includes('LEARNER')}>{identity.realmRoles.includes('INSTRUCTOR') ? 'Remove instructor' : 'Add instructor'}</button>
-                    <button type="button" onClick={() => void updateRole(identity, 'CONTENT_AUTHOR')} disabled={identity.realmRoles.includes('ADMIN') || identity.realmRoles.includes('SERVICE') || identity.realmRoles.includes('LEARNER')}>{identity.realmRoles.includes('CONTENT_AUTHOR') ? 'Remove content author' : 'Add content author'}</button>
+                    <button type="button" onClick={() => void updateRole(identity, 'INSTRUCTOR')} disabled={protectedIdentity(identity)}>{identity.realmRoles.includes('INSTRUCTOR') ? 'Remove instructor' : 'Add instructor'}</button>
+                    <button type="button" onClick={() => void updateRole(identity, 'CONTENT_AUTHOR')} disabled={protectedIdentity(identity)}>{identity.realmRoles.includes('CONTENT_AUTHOR') ? 'Remove content author' : 'Add content author'}</button>
                   </td>
                 </tr>
               ))}
