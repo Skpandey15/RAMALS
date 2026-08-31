@@ -32,6 +32,14 @@ export function isAuthenticated(): boolean {
   return Boolean(keycloak.authenticated);
 }
 
+/**
+ * Realm-role authorization helper for coarse UI routing only.
+ * Backend authorization remains authoritative for every protected API.
+ */
+export function hasRealmRole(role: string): boolean {
+  return Boolean(keycloak.authenticated && keycloak.hasRealmRole(role));
+}
+
 export async function authenticatedFetch(
   interaction: Interaction,
   input: RequestInfo | URL,
