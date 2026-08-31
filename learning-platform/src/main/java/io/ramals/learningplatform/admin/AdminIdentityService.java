@@ -5,11 +5,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AdminIdentityService {
 
+  private static final Logger LOG = LoggerFactory.getLogger(AdminIdentityService.class);
   private static final Set<String> MANAGEABLE_HUMAN_ROLES =
       Set.of("INSTRUCTOR", "CONTENT_AUTHOR");
 
@@ -31,9 +34,10 @@ public class AdminIdentityService {
     requireDifferentIdentity(actorSubject, userId);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
     rejectProtectedTarget(roles);
+    String detail = enabled ? "enabled" : "disabled";
+    auditIntent(actorSubject, "SET_IDENTITY_ENABLED", userId, detail);
     identityProvider.setEnabled(userId, enabled);
-    audit(actorSubject, "SET_IDENTITY_ENABLED", userId, "SUCCESS",
-        enabled ? "enabled" : "disabled");
+    auditCompletion(actorSubject, "SET_IDENTITY_ENABLED", userId, detail);
     return findUser(userId);
   }
 
@@ -42,8 +46,9 @@ public class AdminIdentityService {
     String role = manageableRole(rawRole);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
     rejectProtectedTarget(roles);
+    auditIntent(actorSubject, "ADD_REALM_ROLE", userId, role);
     identityProvider.addRealmRole(userId, role);
-    audit(actorSubject, "ADD_REALM_ROLE", userId, "SUCCESS", role);
+    auditCompletion(actorSubject, "ADD_REALM_ROLE", userId, role);
     return findUser(userId);
   }
 
@@ -52,8 +57,9 @@ public class AdminIdentityService {
     String role = manageableRole(rawRole);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
     rejectProtectedTarget(roles);
+    auditIntent(actorSubject, "REMOVE_REALM_ROLE", userId, role);
     identityProvider.removeRealmRole(userId, role);
-    audit(actorSubject, "REMOVE_REALM_ROLE", userId, "SUCCESS", role);
+    auditCompletion(actorSubject, "REMOVE_REALM_ROLE", userId, role);
     return findUser(userId);
   }
 
@@ -86,6 +92,30 @@ public class AdminIdentityService {
   private static void requireDifferentIdentity(String actorSubject, String userId) {
     if (actorSubject.equals(userId)) {
       throw new IllegalArgumentException("Administrators cannot mutate their own identity.");
+    }
+  }
+
+  /**
+   * Persist the intended external mutation before calling Keycloak. If this write fails, the
+   * privileged mutation is not attempted. A surviving ATTEMPTED record is therefore a durable
+   * reconciliation marker for a command whose final outcome could not be recorded.
+   */
+  private void auditIntent(String actorSubject, String action, String userId, String detail) {
+    audit(actorSubject, action, userId, "ATTEMPTED", "requested: " + detail);
+  }
+
+  /**
+   * Keycloak cannot participate in the database transaction. Once Keycloak has accepted the
+   * mutation, failure to append the SUCCESS row must not misreport the external mutation as
+   * unsuccessful. The already-durable ATTEMPTED row remains available for reconciliation.
+   */
+  private void auditCompletion(String actorSubject, String action, String userId, String detail) {
+    try {
+      audit(actorSubject, action, userId, "SUCCESS", detail);
+    } catch (RuntimeException auditFailure) {
+      LOG.error(
+          "Identity mutation completed but completion audit failed; action={}, target={}, interactionId={}",
+          action, userId, CorrelationContext.currentInteractionId(), auditFailure);
     }
   }
 
