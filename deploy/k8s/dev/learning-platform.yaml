@@ -46,7 +46,11 @@ spec:
             - name: RAMALS_DB_MIGRATION_PASSWORD
               valueFrom: {secretKeyRef: {name: ramals-dev-runtime, key: db-migration-password}}
             - name: RAMALS_ADMIN_IDENTITY_CLIENT_SECRET
-              valueFrom: {secretKeyRef: {name: ramals-dev-runtime, key: identity-admin-client-secret}}
+              valueFrom:
+                secretKeyRef:
+                  name: ramals-dev-identity-admin
+                  key: RAMALS_ADMIN_IDENTITY_CLIENT_SECRET
+                  optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
