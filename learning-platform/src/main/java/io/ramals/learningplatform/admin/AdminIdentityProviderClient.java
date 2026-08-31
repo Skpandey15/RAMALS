@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -37,7 +38,8 @@ public class AdminIdentityProviderClient {
   private final RestClient http;
   private final AtomicReference<CachedToken> cachedToken = new AtomicReference<>();
 
-  /** The sole constructor Spring may select for the component. */
+  /** Explicitly selected because the class also has a private constructor for its test seam. */
+  @Autowired
   public AdminIdentityProviderClient(AdminIdentityProperties properties) {
     this(properties, newRestClient());
   }
@@ -47,7 +49,7 @@ public class AdminIdentityProviderClient {
     this.http = http;
   }
 
-  /** Package-scoped test seam without exposing a second constructor to Spring bean discovery. */
+  /** Package-scoped test seam without exposing a second injectable constructor to Spring. */
   static AdminIdentityProviderClient forTesting(AdminIdentityProperties properties, RestClient http) {
     return new AdminIdentityProviderClient(properties, http);
   }
