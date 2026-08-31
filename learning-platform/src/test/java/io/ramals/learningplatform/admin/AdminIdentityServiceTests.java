@@ -23,11 +23,14 @@ class AdminIdentityServiceTests {
   }
 
   @Test
-  void learnerCannotBePromotedIntoStaffPersona() {
+  void learnerIdentityCannotBeChangedThroughStaffAdministration() {
     when(provider.effectiveRealmRoles("learner-1")).thenReturn(Set.of("LEARNER"));
 
+    assertThatThrownBy(() -> service.setEnabled("admin-1", "learner-1", false))
+        .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> service.addRole("admin-1", "learner-1", "CONTENT_AUTHOR"))
         .isInstanceOf(IllegalArgumentException.class);
+    verify(provider, never()).setEnabled("learner-1", false);
     verify(provider, never()).addRealmRole("learner-1", "CONTENT_AUTHOR");
   }
 
