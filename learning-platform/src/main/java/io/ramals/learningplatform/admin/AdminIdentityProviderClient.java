@@ -31,43 +31,75 @@ public class AdminIdentityProviderClient {
   private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(3);
   private static final Duration READ_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration TOKEN_SKEW = Duration.ofSeconds(30);
+  private static final int USER_PAGE_SIZE = 200;
 
   private final AdminIdentityProperties properties;
   private final RestClient http;
   private final AtomicReference<CachedToken> cachedToken = new AtomicReference<>();
 
   public AdminIdentityProviderClient(AdminIdentityProperties properties) {
+    this(properties, newRestClient());
+  }
+
+  AdminIdentityProviderClient(AdminIdentityProperties properties, RestClient http) {
     this.properties = properties;
-    SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-    requestFactory.setConnectTimeout(CONNECT_TIMEOUT);
-    requestFactory.setReadTimeout(READ_TIMEOUT);
-    this.http = RestClient.builder().requestFactory(requestFactory).build();
+    this.http = http;
   }
 
   public List<AdminIdentityUser> listUsers() {
     requireConfigured();
     try {
-      List<Map<String, Object>> users = http.get()
-          .uri(realmBase() + "/users?first=0&max=200", properties.getRealm())
-          .headers(headers -> headers.setBearerAuth(accessToken()))
-          .retrieve()
-          .body(List.class);
-      if (users == null) {
-        return List.of();
-      }
       List<AdminIdentityUser> result = new ArrayList<>();
-      for (Map<String, Object> user : users) {
-        String id = String.valueOf(user.get("id"));
-        result.add(new AdminIdentityUser(
-            id,
-            string(user.get("username")),
-            string(user.get("email")),
-            Boolean.TRUE.equals(user.get("enabled")),
-            effectiveRealmRoles(id)));
+      int first = 0;
+      while (true) {
+        List<Map<String, Object>> users = http.get()
+            .uri(realmBase() + "/users?first={first}&max={max}",
+                properties.getRealm(), first, USER_PAGE_SIZE)
+            .headers(headers -> headers.setBearerAuth(accessToken()))
+            .retrieve()
+            .body(List.class);
+        if (users == null || users.isEmpty()) {
+          break;
+        }
+        for (Map<String, Object> user : users) {
+          result.add(toAdminIdentityUser(user));
+        }
+        if (users.size() < USER_PAGE_SIZE) {
+          break;
+        }
+        first += users.size();
       }
       return List.copyOf(result);
     } catch (RestClientException failure) {
       throw new AdminIdentityProviderException("listUsers", failure);
+    }
+  }
+
+  /** Fetches the post-mutation target directly, independent of list pagination. */
+  public AdminIdentityUser getUser(String userId) {
+    requireConfigured();
+    try {
+      return toAdminIdentityUser(fetchUserRepresentation(userId));
+    } catch (RestClientException failure) {
+      throw new AdminIdentityProviderException("getUser", failure);
+    }
+  }
+
+  /**
+   * Keycloak service accounts are workload identities even when they do not carry the RAMALS
+   * SERVICE realm role. Protect them using Keycloak's service-account metadata, with the canonical
+   * username prefix retained as defense in depth for older Keycloak representations.
+   */
+  public boolean isServiceAccount(String userId) {
+    requireConfigured();
+    try {
+      Map<String, Object> user = fetchUserRepresentation(userId);
+      Object serviceAccountClientId = user.get("serviceAccountClientId");
+      String username = string(user.get("username"));
+      return serviceAccountClientId != null
+          || (username != null && username.startsWith("service-account-"));
+    } catch (RestClientException failure) {
+      throw new AdminIdentityProviderException("isServiceAccount", failure);
     }
   }
 
@@ -152,6 +184,29 @@ public class AdminIdentityProviderClient {
     }
   }
 
+  private AdminIdentityUser toAdminIdentityUser(Map<String, Object> user) {
+    String id = String.valueOf(user.get("id"));
+    return new AdminIdentityUser(
+        id,
+        string(user.get("username")),
+        string(user.get("email")),
+        Boolean.TRUE.equals(user.get("enabled")),
+        effectiveRealmRoles(id));
+  }
+
+  private Map<String, Object> fetchUserRepresentation(String userId) {
+    Map<String, Object> user = http.get()
+        .uri(realmBase() + "/users/{userId}", properties.getRealm(), userId)
+        .headers(headers -> headers.setBearerAuth(accessToken()))
+        .retrieve()
+        .body(Map.class);
+    if (user == null || user.get("id") == null) {
+      throw new AdminIdentityProviderException(
+          "getUser", new IllegalStateException("Identity provider omitted user representation."));
+    }
+    return user;
+  }
+
   private Map<String, Object> findAvailableRole(String userId, String roleName) {
     try {
       List<Map<String, Object>> roles = http.get()
@@ -226,12 +281,19 @@ public class AdminIdentityProviderClient {
     if (properties.getClientSecret() == null || properties.getClientSecret().isBlank()) {
       throw new AdminIdentityProviderException(
           "configuration",
-          new IllegalStateException("RAMALS_IDENTITY_ADMIN_CLIENT_SECRET is not configured."));
+          new IllegalStateException("RAMALS_ADMIN_IDENTITY_CLIENT_SECRET is not configured."));
     }
   }
 
   private String realmBase() {
     return properties.getBaseUrl() + "/admin/realms/{realm}";
+  }
+
+  private static RestClient newRestClient() {
+    SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+    requestFactory.setConnectTimeout(CONNECT_TIMEOUT);
+    requestFactory.setReadTimeout(READ_TIMEOUT);
+    return RestClient.builder().requestFactory(requestFactory).build();
   }
 
   private static String string(Object value) {
