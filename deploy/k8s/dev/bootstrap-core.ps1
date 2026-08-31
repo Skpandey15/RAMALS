@@ -16,6 +16,8 @@ param(
   [string]$RegistryName = "ramals-registry",
   [int]$RegistryPort = 5000,
   [string]$Namespace = "ramals-dev",
+  [string]$ApplicationImageTag,
+  [string]$InfrastructureImageTag,
   [switch]$SkipBuild,
   [int]$IngressPort = 8080,
   [switch]$EnableOpenAI,
@@ -49,6 +51,16 @@ if ((git status --porcelain --untracked-files=no)) {
   throw "Working tree has uncommitted tracked changes; images would be tagged '$gitSha' but not match it. Commit or stash first."
 }
 Write-Host "commit: $gitSha"
+$deploymentConfigImageTag = if ($InfrastructureImageTag) { $InfrastructureImageTag } else { $gitSha }
+$applicationReleaseImageTag = if ($ApplicationImageTag) { $ApplicationImageTag } else { $gitSha }
+foreach ($tag in @($deploymentConfigImageTag, $applicationReleaseImageTag)) {
+  if ($tag -notmatch '^[0-9a-f]{7,40}$') { throw "Invalid local image tag '$tag'." }
+}
+if (-not $SkipBuild -and $applicationReleaseImageTag -ne $gitSha) {
+  throw "A local application build must use the current source commit tag '$gitSha'."
+}
+Write-Host "application image tag: $applicationReleaseImageTag"
+Write-Host "infrastructure image tag: $deploymentConfigImageTag"
 
 Write-Host "== registry ==" -ForegroundColor Cyan
 if (-not (k3d registry list -o json | ConvertFrom-Json | Where-Object { $_.name -eq $registryHost })) {
@@ -77,11 +89,11 @@ kubectl wait --for=condition=Ready node --all --timeout=180s | Out-Host
 # and the code prefixed it again -- the manifests asked for `ramals-ai`, nothing had pushed that, and
 # the pod sat in ImagePullBackOff. An explicit name cannot drift from the manifests by construction.
 $ramalsImages = @(
-  @{ Repo = "ramals-postgres";          File = "infrastructure/docker/postgres-init/Dockerfile" },
-  @{ Repo = "ramals-keycloak";          File = "infrastructure/docker/keycloak/Dockerfile" },
-  @{ Repo = "ramals-ai";                File = "ramals-ai/Dockerfile" },
-  @{ Repo = "ramals-web-ui";            File = "web-ui/Dockerfile" },
-  @{ Repo = "ramals-learning-platform"; File = "learning-platform/Dockerfile" }
+  @{ Repo = "ramals-postgres";          File = "infrastructure/docker/postgres-init/Dockerfile"; Kind = "infrastructure" },
+  @{ Repo = "ramals-keycloak";          File = "infrastructure/docker/keycloak/Dockerfile"; Kind = "infrastructure" },
+  @{ Repo = "ramals-ai";                File = "ramals-ai/Dockerfile"; Kind = "application" },
+  @{ Repo = "ramals-web-ui";            File = "web-ui/Dockerfile"; Kind = "application" },
+  @{ Repo = "ramals-learning-platform"; File = "learning-platform/Dockerfile"; Kind = "application" }
 )
 
 # Every expected tag must exist in the registry before Kubernetes is touched.
@@ -90,17 +102,18 @@ $ramalsImages = @(
 # used to repoint healthy Deployments at tags that did not exist, turning a working environment into
 # five ImagePullBackOffs. Verification first means the worst case is an early exit with nothing
 # mutated.
-function Assert-ImagesPresent([string]$sha) {
+function Assert-ImagesPresent {
   $missing = @()
   foreach ($i in $ramalsImages) {
-    $url = "http://localhost:$RegistryPort/v2/$($i.Repo)/manifests/$sha"
+    $tag = if ($i.Kind -eq 'application') { $applicationReleaseImageTag } else { $deploymentConfigImageTag }
+    $url = "http://localhost:$RegistryPort/v2/$($i.Repo)/manifests/$tag"
     try {
       $r = Invoke-WebRequest -Uri $url -Method Head -TimeoutSec 15 -UseBasicParsing `
              -Headers @{ Accept = "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json" } `
              -ErrorAction Stop
-      if ($r.StatusCode -ne 200) { $missing += "$($i.Repo):$sha" }
+      if ($r.StatusCode -ne 200) { $missing += "$($i.Repo):$tag" }
     } catch {
-      $missing += "$($i.Repo):$sha"
+      $missing += "$($i.Repo):$tag"
     }
   }
   if ($missing.Count -gt 0) {
@@ -108,12 +121,13 @@ function Assert-ImagesPresent([string]$sha) {
 Required images are not in the registry, so Kubernetes has NOT been touched.
 
   missing : $($missing -join ", ")
-  commit  : $sha
+  application tag    : $applicationReleaseImageTag
+  infrastructure tag : $deploymentConfigImageTag
 
 Re-run without -SkipBuild to build them. The running environment is unchanged.
 "@
   }
-  Write-Host "  all $($ramalsImages.Count) images present at :$sha" -ForegroundColor DarkGray
+  Write-Host "  all $($ramalsImages.Count) application/infrastructure images present" -ForegroundColor DarkGray
 }
 
 # Classify a failed `docker pull` from its output alone.
@@ -252,7 +266,8 @@ Container environment is not ready; stopping before the image builds.
   foreach ($i in $ramalsImages) {
     # Push through localhost; the cluster pulls the same repository under the registry's in-network
     # name. Both names address one registry, so one push serves both.
-    $push = "localhost:${RegistryPort}/$($i.Repo):$gitSha"
+    $tag = if ($i.Kind -eq 'application') { $applicationReleaseImageTag } else { $deploymentConfigImageTag }
+    $push = "localhost:${RegistryPort}/$($i.Repo):$tag"
     Write-Host "building $($i.Repo)" -ForegroundColor DarkCyan
 
     # web-ui's VITE_* values are inlined at build time, so the OIDC issuer is a property of the
@@ -276,7 +291,7 @@ Container environment is not ready; stopping before the image builds.
 Write-Host "== verify images ==" -ForegroundColor Cyan
 # Runs on BOTH paths. After a build it confirms the pushes landed; with -SkipBuild it is the only
 # thing standing between a developer and a healthy environment repointed at tags that do not exist.
-Assert-ImagesPresent $gitSha
+Assert-ImagesPresent
 
 Write-Host "== cluster DNS ==" -ForegroundColor Cyan
 # The browser and the platform must agree on ONE issuer URL. `keycloak.localhost` resolves to
@@ -327,10 +342,14 @@ Write-Host "== deploy ==" -ForegroundColor Cyan
 # The pattern matches the tag on this registry's images only; it cannot touch the digest-pinned
 # upstream base images, which must not be rewritten.
 $rendered = (kubectl kustomize deploy/k8s/dev) -join "`n"
-$rendered = [regex]::Replace(
-  $rendered,
-  "(?<repo>${registryHost}:${RegistryPort}/[A-Za-z0-9._/-]+):[A-Za-z0-9._-]+",
-  "`${repo}:$gitSha")
+$applicationRepos = 'ramals-learning-platform|ramals-web-ui|ramals-ai'
+$infrastructureRepos = 'ramals-postgres|ramals-keycloak'
+$rendered = [regex]::Replace($rendered,
+  "(?<repo>${registryHost}:${RegistryPort}/(?:$applicationRepos)):[A-Za-z0-9._-]+",
+  "`${repo}:$applicationReleaseImageTag")
+$rendered = [regex]::Replace($rendered,
+  "(?<repo>${registryHost}:${RegistryPort}/(?:$infrastructureRepos)):[A-Za-z0-9._-]+",
+  "`${repo}:$deploymentConfigImageTag")
 $rendered | kubectl apply -f - | Out-Host
 # PowerShell does not stop on a native command's non-zero exit, so every mandatory one is checked.
 # Without this, a failed apply would fall straight through to "Ready".

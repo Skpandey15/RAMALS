@@ -10,6 +10,8 @@ param(
   [string]$RegistryName = "ramals-registry",
   [int]$RegistryPort = 5000,
   [string]$Namespace = "ramals-dev",
+  [string]$ApplicationImageTag,
+  [string]$InfrastructureImageTag,
   [switch]$SkipBuild,
   [int]$IngressPort = 8080,
   [switch]$EnableOpenAI,
@@ -27,6 +29,8 @@ $coreArgs = @{
   IngressPort = $IngressPort
 }
 if ($SkipBuild) { $coreArgs.SkipBuild = $true }
+if ($ApplicationImageTag) { $coreArgs.ApplicationImageTag = $ApplicationImageTag }
+if ($InfrastructureImageTag) { $coreArgs.InfrastructureImageTag = $InfrastructureImageTag }
 if ($EnableOpenAI) { $coreArgs.EnableOpenAI = $true }
 if ($RepairDockerCredentials) { $coreArgs.RepairDockerCredentials = $true }
 if ($ShowTestCredentials) { $coreArgs.ShowTestCredentials = $true }

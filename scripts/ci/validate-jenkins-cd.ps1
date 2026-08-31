@@ -16,11 +16,19 @@ function Assert-PowerShellParses([string]$Path) {
 }
 
 $deployScript = Join-Path $repositoryRoot "deploy\jenkins\deploy-main.ps1"
+$prepareImagesScript = Join-Path $repositoryRoot "deploy\jenkins\prepare-ghcr-images.ps1"
 $installScript = Join-Path $repositoryRoot "deploy\jenkins\install-local.ps1"
 $jobConfigPath = Join-Path $repositoryRoot "deploy\jenkins\job-config.xml"
 $jenkinsfilePath = Join-Path $repositoryRoot "Jenkinsfile"
+$desiredVersionPath = Join-Path $repositoryRoot "deploy\desired-version.json"
+$releaseWorkflowPath = Join-Path $repositoryRoot ".github\workflows\release.yml"
+$bootstrapPath = Join-Path $repositoryRoot "deploy\k8s\dev\bootstrap.ps1"
+$bootstrapCorePath = Join-Path $repositoryRoot "deploy\k8s\dev\bootstrap-core.ps1"
 Assert-PowerShellParses $deployScript
+Assert-PowerShellParses $prepareImagesScript
 Assert-PowerShellParses $installScript
+Assert-PowerShellParses $bootstrapPath
+Assert-PowerShellParses $bootstrapCorePath
 Assert-PowerShellParses $PSCommandPath
 
 [xml]$jobConfig = Get-Content $jobConfigPath -Raw
@@ -43,6 +51,69 @@ foreach ($invariant in @(
 }
 
 $installer = Get-Content $installScript -Raw
+$deploymentBoundary = Get-Content $deployScript -Raw
+$imagePreparation = Get-Content $prepareImagesScript -Raw
+$releaseWorkflow = Get-Content $releaseWorkflowPath -Raw
+Assert-True ($deploymentBoundary.Contains('prepare-ghcr-images.ps1')) `
+  "Jenkins deployment must prepare immutable GHCR application images."
+Assert-True ($deploymentBoundary -match 'bootstrap\.ps1[\s\S]*-SkipBuild') `
+  "Jenkins must not rebuild application images after mirroring GHCR."
+Assert-True ($imagePreparation.Contains('deploy\desired-version.json')) `
+  "Jenkins must select application images from the approved desired-version manifest."
+Assert-True ($imagePreparation -notmatch '\$applicationReleaseCommit\s+-ne\s+\$Commit') `
+  "Deployment configuration and application release commits must remain independent."
+Assert-True ($imagePreparation -match '\$source\s*=\s*"\$\{sourceImage\}@\$\{sourceDigest\}"') `
+  "GHCR application images must be pulled by approved digest."
+Assert-True ($imagePreparation -notmatch 'sourceTag|:sha-\$Commit') `
+  "A mutable SHA tag must not be the GHCR deployment identity."
+Assert-True ($imagePreparation.Contains('$applicationShortCommit = $applicationReleaseCommit.Substring(0, 7)')) `
+  "Local application tags must derive from the approved application release commit."
+Assert-True ($imagePreparation.Contains('$deploymentConfigShortCommit = $deploymentConfigCommit.Substring(0, 7)')) `
+  "Local infrastructure tags must derive from the deployment configuration commit."
+Assert-True ($imagePreparation -match '\$revision\s+-ne\s+\$applicationReleaseCommit') `
+  "Every OCI revision must equal the approved application release commit."
+Assert-True ($imagePreparation.Contains('$componentRevisions.Count -ne 1')) `
+  "The three application components must resolve to one OCI revision."
+foreach ($applicationDockerfile in @(
+    'learning-platform/Dockerfile', 'web-ui/Dockerfile', 'ramals-ai/Dockerfile')) {
+  Assert-True (-not $imagePreparation.Contains($applicationDockerfile)) `
+    "Jenkins must not build application image $applicationDockerfile."
+}
+foreach ($evidenceInvariant in @(
+    'deploymentConfigCommit', 'applicationReleaseCommit', 'sourceImage = $image.sourceImage',
+    'sourceDigest = $image.digest', 'ociRevision = $image.revision',
+    'localMirroredImage = $local')) {
+  Assert-True ($imagePreparation.Contains($evidenceInvariant)) `
+    "GHCR deployment evidence invariant missing: $evidenceInvariant"
+}
+Assert-True ($releaseWorkflow.Contains('VITE_KEYCLOAK_URL=http://keycloak.localhost:8080')) `
+  "The released DEV web UI must use the local k3d Keycloak ingress URL."
+Assert-True ($releaseWorkflow -match 'VITE_API_BASE_URL=\s') `
+  "The released DEV web UI must use same-origin API routing."
+
+$desiredVersion = Get-Content $desiredVersionPath -Raw | ConvertFrom-Json
+Assert-True ($desiredVersion.manifest_version -eq 1) "Unexpected desired-version manifest version."
+Assert-True ([string]$desiredVersion.release.commit -match '^[0-9a-f]{40}$') `
+  "The approved release commit must be a full SHA."
+foreach ($component in @('learning-platform', 'web-ui', 'ramals-ai')) {
+  $approved = $desiredVersion.components.$component
+  Assert-True ([string]$approved.image -match '^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+$') `
+    "Invalid approved GHCR image for $component."
+  Assert-True ([string]$approved.digest -match '^sha256:[0-9a-f]{64}$') `
+    "Invalid approved digest for $component."
+}
+
+$bootstrapCore = Get-Content $bootstrapCorePath -Raw
+Assert-True ($deploymentBoundary -match '-ApplicationImageTag\s+\$applicationImageTag') `
+  "Jenkins must pass the application release tag to bootstrap."
+Assert-True ($deploymentBoundary -match '-InfrastructureImageTag\s+\$infrastructureImageTag') `
+  "Jenkins must pass the deployment configuration tag to bootstrap."
+Assert-True ($bootstrapCore.Contains('Kind = "application"')) `
+  "Bootstrap must classify application images separately from infrastructure."
+Assert-True ($bootstrapCore.Contains('$applicationReleaseImageTag')) `
+  "Bootstrap must render application images with the application release tag."
+Assert-True ($bootstrapCore.Contains('$deploymentConfigImageTag')) `
+  "Bootstrap must render infrastructure images with the deployment configuration tag."
 Assert-True ($installer -notmatch '/latest/') "Installer downloads must not use mutable latest URLs."
 Assert-True ($installer -match '\$jenkinsVersion\s*=') "Jenkins must be explicitly version-pinned."
 Assert-True ($installer -match '\$temurinVersion\s*=') "Temurin must be explicitly version-pinned."

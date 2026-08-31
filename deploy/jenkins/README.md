@@ -2,11 +2,20 @@
 
 Jenkins deploys qualified `main` commits to the local `ramals-dev` k3d cluster. GitHub Actions
 continues to own tests, security checks, and merge qualification; Jenkins owns deployment only.
+GitHub Actions builds the application images once and publishes them to GHCR. After their digests are
+approved in `deploy/desired-version.json`, Jenkins pulls those exact `image@sha256:...` identities
+(never a mutable tag), verifies their OCI revision, and mirrors them into the local k3d registry,
+builds only the PostgreSQL and Keycloak development infrastructure images, and deploys with
+`-SkipBuild` so application code is never rebuilt during deployment.
 
 ## Safety contract
 
 - The job checks out only `Skpandey15/RAMALS` `main`.
 - `deploy-main.ps1` independently verifies the origin and exact `origin/main` SHA.
+- `deploy/desired-version.json` is the human-approved application artifact boundary; source images
+  are selected and pulled by digest, while local short-SHA tags are only k3d deployment handles.
+- The trusted `main` SHA is the deployment-configuration identity. The approved release SHA is a
+  separate application identity shared by all application OCI revisions and their local tags.
 - Deployments are serialized with `disableConcurrentBuilds()`.
 - The canonical `deploy/k8s/dev/bootstrap.ps1` and `smoke.ps1` remain the deployment authority.
 - No repository credential is needed because the repository is public.
@@ -45,6 +54,7 @@ Windows sign-in
   -> a new main commit triggers the Jenkins pipeline
   -> deploy-main.ps1 validates the exact trusted main commit
   -> ramals-admin approves or rejects the local/dev k3d deployment
+  -> Jenkins pulls and verifies the approved GHCR image digests
   -> deploy/k8s/dev/bootstrap.ps1 deploys to ramals-dev
   -> deploy/k8s/dev/smoke.ps1 validates the deployment
 ```
