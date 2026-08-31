@@ -34,6 +34,9 @@ $jenkinsfile = Get-Content $jenkinsfilePath -Raw
 foreach ($invariant in @(
     'disableConcurrentBuilds',
     "pollSCM('H/2 * * * *')",
+    "stage('Approve local k3d DEV')",
+    'Do you want to deploy to the local/dev k3d environment?',
+    "submitter: 'ramals-admin'",
     'deploy\\jenkins\\deploy-main.ps1 -ValidateOnly',
     'deploy\\jenkins\\deploy-main.ps1')) {
   Assert-True ($jenkinsfile.Contains($invariant)) "Jenkinsfile invariant missing: $invariant"

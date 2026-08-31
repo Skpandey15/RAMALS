@@ -44,6 +44,7 @@ Windows sign-in
   -> RAMALS-main polls GitHub main every two minutes
   -> a new main commit triggers the Jenkins pipeline
   -> deploy-main.ps1 validates the exact trusted main commit
+  -> ramals-admin approves or rejects the local/dev k3d deployment
   -> deploy/k8s/dev/bootstrap.ps1 deploys to ramals-dev
   -> deploy/k8s/dev/smoke.ps1 validates the deployment
 ```

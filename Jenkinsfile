@@ -33,6 +33,15 @@ pwsh -NoProfile -NonInteractive -File .\\deploy\\jenkins\\deploy-main.ps1 -Valid
       }
     }
 
+    stage('Approve local k3d DEV') {
+      steps {
+        timeout(time: 30, unit: 'MINUTES') {
+          input message: 'Do you want to deploy to the local/dev k3d environment?',
+            ok: 'Deploy', submitter: 'ramals-admin'
+        }
+      }
+    }
+
     stage('Deploy local k3d DEV') {
       steps {
         bat label: 'Bootstrap and smoke-test RAMALS', script: '''@echo off
