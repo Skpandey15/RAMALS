@@ -112,6 +112,11 @@ $initScript | Set-Content (Join-Path $jenkinsHome "init.groovy.d\10-ramals-secur
 
 $startScript = @"
 `$env:JENKINS_HOME = '$jenkinsHome'
+# Scope Windows long-path support to Jenkins and every Git process it launches. RAMALS contains
+# legitimate tracked paths that exceed Git for Windows' legacy 260-character checkout limit.
+`$env:GIT_CONFIG_COUNT = '1'
+`$env:GIT_CONFIG_KEY_0 = 'core.longpaths'
+`$env:GIT_CONFIG_VALUE_0 = 'true'
 `$java = '$java'
 `$war = '$war'
 `$log = '$installRoot\jenkins.log'

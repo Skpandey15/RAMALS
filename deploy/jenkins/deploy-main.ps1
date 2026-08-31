@@ -73,8 +73,10 @@ try {
     (Join-Path $evidenceDirectory "pods.txt") -Encoding utf8
   kubectl get deployments,statefulsets -n $Namespace -o json | Out-File `
     (Join-Path $evidenceDirectory "workloads.json") -Encoding utf8
-  kubectl get deployment -n $Namespace -o jsonpath=`
-    '{range .items[*]}{.metadata.name}{"="}{.spec.template.spec.containers[0].image}{"\n"}{end}' |
+  $deploymentJson = kubectl get deployment -n $Namespace -o json
+  if ($LASTEXITCODE -ne 0) { throw "Collecting deployed image evidence failed." }
+  $deploymentJson | ConvertFrom-Json | Select-Object -ExpandProperty items |
+    ForEach-Object { "{0}={1}" -f $_.metadata.name, $_.spec.template.spec.containers[0].image } |
     Out-File (Join-Path $evidenceDirectory "images.txt") -Encoding utf8
 
   [ordered]@{
