@@ -13,4 +13,17 @@ describe('OIDC token storage policy', () => {
     expect(source).toContain("flow: 'standard'");
     expect(source).toContain("pkceMethod: 'S256'");
   });
+
+  it('revalidates the Keycloak session before protected API requests when the login iframe is disabled', () => {
+    const source = readFileSync(resolve('src/auth/authClient.ts'), 'utf8');
+    expect(source).toContain('checkLoginIframe: false');
+    expect(source).toContain('await keycloak.updateToken(-1)');
+    expect(source).toContain('keycloak.clearToken()');
+  });
+
+  it('fails closed when the resource server rejects an authenticated request', () => {
+    const source = readFileSync(resolve('src/auth/authClient.ts'), 'utf8');
+    expect(source).toContain('response.status === 401');
+    expect(source).toContain('keycloak.clearToken()');
+  });
 });
