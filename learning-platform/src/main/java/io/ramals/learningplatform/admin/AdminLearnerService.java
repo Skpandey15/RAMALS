@@ -46,9 +46,10 @@ public class AdminLearnerService {
           CorrelationContext.currentInteractionId(), CorrelationContext.currentTraceId());
       throw new AdminLearnerStateConflictException("Closed learners cannot be reactivated");
     }
-    int changed = learnerRepository.updateStatus(learnerId, status);
+    int changed = learnerRepository.updateStatus(learnerId, current.status(), status);
     if (changed != 1) {
-      throw new AdminLearnerNotFoundException(learnerId);
+      throw new AdminLearnerStateConflictException(
+          "Learner status changed concurrently; refresh and retry the requested transition");
     }
     auditRepository.appendWithinTransaction(actorSubject, "CHANGE_LEARNER_STATUS", "LEARNER", learnerId,
         "SUCCESS", current.status() + " -> " + status,
