@@ -48,6 +48,10 @@ spec:
             - {name: KC_HEALTH_ENABLED, value: "true"}
             - {name: KC_METRICS_ENABLED, value: "true"}
             - {name: KC_HTTP_ENABLED, value: "true"}
+            # Keycloak must generate browser-facing links with the same ingress hostname used by
+            # the SPA and the backend issuer configuration. Without this, action emails can contain
+            # the in-cluster service URL (http://keycloak:8080), which Windows cannot resolve.
+            - {name: KC_HOSTNAME, value: "http://keycloak.localhost:8080"}
             - {name: KC_HOSTNAME_STRICT, value: "false"}
             - {name: KC_CACHE, value: local}
           securityContext:
