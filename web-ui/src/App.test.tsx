@@ -59,11 +59,40 @@ describe('App auth gate', () => {
     expect(authenticatedFetch).not.toHaveBeenCalled();
   });
 
-  it('keeps non-admin authenticated users behind learner onboarding', async () => {
+  it('keeps authenticated LEARNER users behind learner onboarding', async () => {
     vi.mocked(isAuthenticated).mockReturnValue(true);
+    vi.mocked(hasRealmRole).mockImplementation((role) => role === 'LEARNER');
+
     render(<App />);
+
     expect(
       await screen.findByRole('heading', { name: /your kafka learning/i }),
     ).toBeInTheDocument();
+    expect(authenticatedFetch).toHaveBeenCalled();
+  });
+
+  it.each(['INSTRUCTOR', 'CONTENT_AUTHOR', 'SERVICE', 'FUTURE_ROLE'])(
+    'fails closed for authenticated unsupported role %s',
+    (role) => {
+      vi.mocked(isAuthenticated).mockReturnValue(true);
+      vi.mocked(hasRealmRole).mockImplementation((candidate) => candidate === role);
+
+      render(<App />);
+
+      expect(screen.getByRole('heading', { name: /access not configured/i })).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(/does not have access/i);
+      expect(screen.queryByRole('heading', { name: /admin dashboard/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /your kafka learning/i })).not.toBeInTheDocument();
+      expect(authenticatedFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('fails closed when an authenticated identity has no supported application role', () => {
+    vi.mocked(isAuthenticated).mockReturnValue(true);
+
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: /access not configured/i })).toBeInTheDocument();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
   });
 });
