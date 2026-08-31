@@ -69,6 +69,30 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # Realm import is create-only. Reconcile the confidential administrative workload client on every
+  # start so persistent Keycloak volumes converge to the current contract instead of silently
+  # missing a client introduced after the realm was first created.
+  keycloak-identity-admin-reconcile:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/keycloak/Dockerfile
+    entrypoint: ["/bin/sh", "/opt/keycloak/bin/reconcile-identity-admin.sh"]
+    environment:
+      KEYCLOAK_ADMIN_SERVER: http://keycloak:8080
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${RAMALS_KEYCLOAK_ADMIN:?Set RAMALS_KEYCLOAK_ADMIN in .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${RAMALS_KEYCLOAK_ADMIN_PASSWORD:?Set RAMALS_KEYCLOAK_ADMIN_PASSWORD in .env}
+      RAMALS_ADMIN_IDENTITY_REALM: ${RAMALS_ADMIN_IDENTITY_REALM:-ramals}
+      RAMALS_ADMIN_IDENTITY_CLIENT_ID: ${RAMALS_ADMIN_IDENTITY_CLIENT_ID:-ramals-identity-admin}
+      RAMALS_ADMIN_IDENTITY_CLIENT_SECRET: ${RAMALS_ADMIN_IDENTITY_CLIENT_SECRET:?Set RAMALS_ADMIN_IDENTITY_CLIENT_SECRET in .env}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - data
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
   mailpit:
     image: axllent/mailpit:v1.27.11
     networks:
@@ -104,14 +128,18 @@ services:
       RAMALS_KEYCLOAK_ADMIN_BASE_URL: ${RAMALS_KEYCLOAK_ADMIN_BASE_URL:-http://keycloak:8080}
       RAMALS_REGISTRATION_ADMIN_CLIENT_ID: ${RAMALS_REGISTRATION_ADMIN_CLIENT_ID:-ramals-registration-admin}
       RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET: ${RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET:-}
+      RAMALS_ADMIN_IDENTITY_BASE_URL: ${RAMALS_ADMIN_IDENTITY_BASE_URL:-http://keycloak:8080}
+      RAMALS_ADMIN_IDENTITY_REALM: ${RAMALS_ADMIN_IDENTITY_REALM:-ramals}
+      RAMALS_ADMIN_IDENTITY_CLIENT_ID: ${RAMALS_ADMIN_IDENTITY_CLIENT_ID:-ramals-identity-admin}
+      RAMALS_ADMIN_IDENTITY_CLIENT_SECRET: ${RAMALS_ADMIN_IDENTITY_CLIENT_SECRET:?Set RAMALS_ADMIN_IDENTITY_CLIENT_SECRET in .env}
       RAMALS_OTP_HMAC_KEY_VERSION: ${RAMALS_OTP_HMAC_KEY_VERSION:-v1}
       RAMALS_OTP_HMAC_KEYS: ${RAMALS_OTP_HMAC_KEYS:-}
       RAMALS_SMS_PROVIDER: ${RAMALS_SMS_PROVIDER:-fake}
     depends_on:
       postgres:
         condition: service_healthy
-      keycloak:
-        condition: service_healthy
+      keycloak-identity-admin-reconcile:
+        condition: service_completed_successfully
     networks:
       - data
       - edge
