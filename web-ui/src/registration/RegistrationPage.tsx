@@ -3,6 +3,28 @@ import { beginInteraction, interactionFetch, toApiError } from '../platform/apiC
 
 const API = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
 
+const COUNTRIES = [
+  ['IN', 'India'],
+  ['US', 'United States'],
+  ['GB', 'United Kingdom'],
+  ['CA', 'Canada'],
+  ['AU', 'Australia'],
+  ['AE', 'United Arab Emirates'],
+  ['SG', 'Singapore'],
+  ['DE', 'Germany'],
+  ['FR', 'France'],
+  ['NL', 'Netherlands'],
+  ['IE', 'Ireland'],
+  ['CH', 'Switzerland'],
+  ['SE', 'Sweden'],
+  ['JP', 'Japan'],
+  ['KR', 'South Korea'],
+  ['NZ', 'New Zealand'],
+  ['BR', 'Brazil'],
+  ['MX', 'Mexico'],
+  ['ZA', 'South Africa'],
+] as const;
+
 /**
  * The consent revisions this build was shipped against.
  *
@@ -18,21 +40,6 @@ const CONSENT = {
   adultStatementVersion: 'adult-18-v1',
 } as const;
 
-/**
- * The Idempotency-Key held for the payload currently being submitted.
- *
- * <p>A key minted per submission defeats the server's lost-response recovery: if the first POST
- * succeeds and the response is lost, the retry arrives under a new key, so the server treats it as a
- * fresh registration instead of replaying the completed one. The key therefore has to outlive a
- * failed attempt.
- *
- * <p>It is keyed by a fingerprint of the submitted values, so editing the form after a failure - a
- * corrected email, a different number - mints a new key rather than replaying an old key against a
- * materially different body, which the server refuses outright.
- *
- * <p>Held in a ref, never in web storage: it must not survive a reload, and the browser-storage
- * prohibition covers it as much as anything else.
- */
 interface RegistrationAttempt {
   readonly fingerprint: string;
   readonly idempotencyKey: string;
@@ -61,19 +68,10 @@ type Status =
   | { kind: 'submitted' }
   | { kind: 'failed'; message: string; supportCode: string };
 
-/**
- * Public professional registration.
- *
- * <p>Hosted Keycloak remains the sign-in UI; this form only creates the account. Nothing is written
- * to browser storage — not the password, not the response, not any onboarding state — because the
- * server is the only authority for what a learner has completed, and a value cached here would be
- * both a stale copy and a tamperable one.
- */
 export function RegistrationPage() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const attempt = useRef<RegistrationAttempt | null>(null);
 
-  /** Returns the key for this payload, reusing it only when the payload is unchanged. */
   function idempotencyKeyFor(payload: Record<string, unknown>): string {
     const fingerprint = fingerprintOf(payload);
     if (attempt.current?.fingerprint === fingerprint) {
@@ -111,8 +109,6 @@ export function RegistrationPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Stable across retries of the same payload, so a retry after a lost response replays the
-          // completed operation instead of starting a second one.
           'Idempotency-Key': idempotencyKeyFor(payload),
         },
         body: JSON.stringify(payload),
@@ -120,17 +116,13 @@ export function RegistrationPage() {
       if (!response.ok) {
         throw await toApiError(response, interaction.interactionId);
       }
-      // Definitive success: retire the key so a later, independent registration from this same page
-      // cannot be answered as a replay of this one.
       attempt.current = null;
-      // Reset before rendering the confirmation, so the password does not remain in the DOM.
       form.reset();
       setStatus({ kind: 'submitted' });
     } catch (error) {
       setStatus({
         kind: 'failed',
-        message:
-          error instanceof Error ? error.message : 'Registration could not be completed.',
+        message: error instanceof Error ? error.message : 'Registration could not be completed.',
         supportCode:
           error && typeof error === 'object' && 'supportCode' in error
             ? String((error as { supportCode: unknown }).supportCode)
@@ -148,9 +140,7 @@ export function RegistrationPage() {
           If that address can be registered, we have asked Keycloak to send a verification link.
           Follow it, then sign in to continue setting up your account.
         </p>
-        <p>
-          <a href="/">Continue to sign in</a>
-        </p>
+        <p><a href="/">Continue to sign in</a></p>
       </main>
     );
   }
@@ -178,16 +168,12 @@ export function RegistrationPage() {
           <input name="mobileNumber" type="tel" required maxLength={32} autoComplete="tel" />
         </label>
         <label>
-          Country code
-          <input
-            name="country"
-            required
-            minLength={2}
-            maxLength={2}
-            pattern="[A-Za-z]{2}"
-            placeholder="IN"
-            autoComplete="country"
-          />
+          Country
+          <select name="country" required defaultValue="IN" autoComplete="country">
+            {COUNTRIES.map(([code, name]) => (
+              <option key={code} value={code}>{code} ({name})</option>
+            ))}
+          </select>
         </label>
         <label>
           City (optional)
@@ -195,25 +181,11 @@ export function RegistrationPage() {
         </label>
         <label>
           Password
-          <input
-            name="password"
-            type="password"
-            required
-            minLength={12}
-            maxLength={128}
-            autoComplete="new-password"
-          />
+          <input name="password" type="password" required minLength={12} maxLength={128} autoComplete="new-password" />
         </label>
         <label>
           Confirm password
-          <input
-            name="confirmPassword"
-            type="password"
-            required
-            minLength={12}
-            maxLength={128}
-            autoComplete="new-password"
-          />
+          <input name="confirmPassword" type="password" required minLength={12} maxLength={128} autoComplete="new-password" />
         </label>
         <label className="check">
           <input name="termsAccepted" type="checkbox" required />I accept the Terms.
@@ -222,8 +194,7 @@ export function RegistrationPage() {
           <input name="privacyAccepted" type="checkbox" required />I accept the Privacy Notice.
         </label>
         <label className="check">
-          <input name="adultConfirmed" type="checkbox" required />I confirm that I am 18 years or
-          older.
+          <input name="adultConfirmed" type="checkbox" required />I confirm that I am 18 years or older.
         </label>
         <button disabled={busy}>{busy ? 'Submitting…' : 'Register'}</button>
         {status.kind === 'failed' && (
@@ -233,9 +204,7 @@ export function RegistrationPage() {
           </div>
         )}
       </form>
-      <p>
-        <a href="/">Already registered? Sign in</a>
-      </p>
+      <p><a href="/">Already registered? Sign in</a></p>
     </main>
   );
 }
