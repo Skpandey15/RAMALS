@@ -32,8 +32,9 @@ public class AdminIdentityService {
 
   public AdminIdentityUser setEnabled(String actorSubject, String userId, boolean enabled) {
     requireDifferentIdentity(actorSubject, userId);
+    rejectWorkloadTarget(userId);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
-    rejectProtectedTarget(roles);
+    rejectProtectedRoles(roles);
     String detail = enabled ? "enabled" : "disabled";
     auditIntent(actorSubject, "SET_IDENTITY_ENABLED", userId, detail);
     identityProvider.setEnabled(userId, enabled);
@@ -44,8 +45,9 @@ public class AdminIdentityService {
   public AdminIdentityUser addRole(String actorSubject, String userId, String rawRole) {
     requireDifferentIdentity(actorSubject, userId);
     String role = manageableRole(rawRole);
+    rejectWorkloadTarget(userId);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
-    rejectProtectedTarget(roles);
+    rejectProtectedRoles(roles);
     auditIntent(actorSubject, "ADD_REALM_ROLE", userId, role);
     identityProvider.addRealmRole(userId, role);
     auditCompletion(actorSubject, "ADD_REALM_ROLE", userId, role);
@@ -55,8 +57,9 @@ public class AdminIdentityService {
   public AdminIdentityUser removeRole(String actorSubject, String userId, String rawRole) {
     requireDifferentIdentity(actorSubject, userId);
     String role = manageableRole(rawRole);
+    rejectWorkloadTarget(userId);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
-    rejectProtectedTarget(roles);
+    rejectProtectedRoles(roles);
     auditIntent(actorSubject, "REMOVE_REALM_ROLE", userId, role);
     identityProvider.removeRealmRole(userId, role);
     auditCompletion(actorSubject, "REMOVE_REALM_ROLE", userId, role);
@@ -64,10 +67,7 @@ public class AdminIdentityService {
   }
 
   private AdminIdentityUser findUser(String userId) {
-    return identityProvider.listUsers().stream()
-        .filter(user -> user.id().equals(userId))
-        .findFirst()
-        .orElseThrow(() -> new IllegalArgumentException("Identity no longer exists."));
+    return identityProvider.getUser(userId);
   }
 
   private static String manageableRole(String rawRole) {
@@ -82,7 +82,14 @@ public class AdminIdentityService {
     return role;
   }
 
-  private static void rejectProtectedTarget(Set<String> roles) {
+  private void rejectWorkloadTarget(String userId) {
+    if (identityProvider.isServiceAccount(userId)) {
+      throw new IllegalArgumentException(
+          "Keycloak service accounts are workload identities and cannot be managed from the staff identity surface.");
+    }
+  }
+
+  private static void rejectProtectedRoles(Set<String> roles) {
     if (roles.contains("ADMIN") || roles.contains("SERVICE") || roles.contains("LEARNER")) {
       throw new IllegalArgumentException(
           "ADMIN, SERVICE, and LEARNER identities are outside staff identity administration.");
