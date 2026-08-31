@@ -139,11 +139,28 @@ jobs:
       - name: Build Keycloak image
         run: docker build --pull=false -f infrastructure/docker/keycloak/Dockerfile -t ramals-keycloak:pr .
 
+  jenkins-cd-validation:
+    name: Jenkins/CD validation
+    needs: detect-changes
+    if: needs.detect-changes.outputs.infrastructure == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out untrusted PR without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Validate Jenkins CD boundary
+        shell: pwsh
+        run: ./scripts/ci/validate-jenkins-cd.ps1
+
   ci-gate:
     name: ci-gate
     if: always()
     needs: [detect-changes, backend-ci, frontend-ci, python-ci, contract-ci, security-ci,
-            image-learning-platform, image-web-ui, image-ai, image-keycloak]
+            image-learning-platform, image-web-ui, image-ai, image-keycloak, jenkins-cd-validation]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate required and conditional jobs
@@ -158,9 +175,10 @@ jobs:
           IMAGE_WEBUI_RESULT: ${{ needs.image-web-ui.result }}
           IMAGE_AI_RESULT: ${{ needs.image-ai.result }}
           IMAGE_KEYCLOAK_RESULT: ${{ needs.image-keycloak.result }}
+          JENKINS_CD_RESULT: ${{ needs.jenkins-cd-validation.result }}
         run: |
           required=("detect-changes:$DETECT_RESULT" "security-ci:$SECURITY_RESULT")
-          conditional=("backend-ci:$BACKEND_RESULT" "frontend-ci:$FRONTEND_RESULT" "python-ci:$PYTHON_RESULT" "contract-ci:$CONTRACT_RESULT" "image-learning-platform:$IMAGE_BACKEND_RESULT" "image-web-ui:$IMAGE_WEBUI_RESULT" "image-ai:$IMAGE_AI_RESULT" "image-keycloak:$IMAGE_KEYCLOAK_RESULT")
+          conditional=("backend-ci:$BACKEND_RESULT" "frontend-ci:$FRONTEND_RESULT" "python-ci:$PYTHON_RESULT" "contract-ci:$CONTRACT_RESULT" "image-learning-platform:$IMAGE_BACKEND_RESULT" "image-web-ui:$IMAGE_WEBUI_RESULT" "image-ai:$IMAGE_AI_RESULT" "image-keycloak:$IMAGE_KEYCLOAK_RESULT" "jenkins-cd-validation:$JENKINS_CD_RESULT")
 
           for entry in "${required[@]}"; do
             name="${entry%%:*}"

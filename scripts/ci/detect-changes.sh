@@ -37,7 +37,7 @@ for path in "${changed[@]}"; do
       python=true
       docs_only=false
       ;;
-    infrastructure/*|.github/*|scripts/ci/*)
+    deploy/jenkins/*|infrastructure/*|.github/*|scripts/ci/*)
       infrastructure=true
       docs_only=false
       ;;
@@ -76,4 +76,3 @@ done
   echo "infrastructure=$infrastructure"
   echo "docs_only=$docs_only"
 } >> "$output_file"
-
