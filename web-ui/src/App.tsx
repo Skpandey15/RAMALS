@@ -47,11 +47,14 @@ export function App() {
     );
   }
 
-  // Route only explicitly authorised application personas. Authentication alone never implies
-  // learner access: an instructor, content author, service identity, future role, or malformed token
-  // must not fall through into the learner application simply because it is not ADMIN.
+  // Route only explicitly authorised, mutually exclusive application personas. Authentication alone
+  // never implies learner access, and an identity carrying both ADMIN and LEARNER is an ambiguous
+  // privileged persona that fails closed rather than inheriting whichever branch happens to run first.
   // These checks shape the UI only; backend services remain authoritative for every operation.
-  if (hasRealmRole('ADMIN')) {
+  const isAdmin = hasRealmRole('ADMIN');
+  const isLearner = hasRealmRole('LEARNER');
+
+  if (isAdmin && !isLearner) {
     return (
       <AdminDashboard
         onLogout={() => {
@@ -61,7 +64,7 @@ export function App() {
     );
   }
 
-  if (hasRealmRole('LEARNER')) {
+  if (isLearner && !isAdmin) {
     return (
       <OnboardingResume><LearnerDashboard
         onLogout={() => {
@@ -71,7 +74,8 @@ export function App() {
     );
   }
 
-  // Zero Trust fail-closed default: authenticated but unsupported identities receive no application
-  // persona and no protected learner/admin API bootstrap from this route.
+  // Zero Trust fail-closed default: unsupported identities, identities with no application persona,
+  // and ADMIN+LEARNER role collisions receive no application surface and trigger no protected
+  // learner/admin API bootstrap from this route.
   return <AccessDenied />;
 }
