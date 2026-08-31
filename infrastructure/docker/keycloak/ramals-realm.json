@@ -28,21 +28,11 @@
   "maxFailureWaitSeconds": 900,
   "roles": {
     "realm": [
-      {
-        "name": "LEARNER"
-      },
-      {
-        "name": "INSTRUCTOR"
-      },
-      {
-        "name": "CONTENT_AUTHOR"
-      },
-      {
-        "name": "ADMIN"
-      },
-      {
-        "name": "SERVICE"
-      }
+      { "name": "LEARNER" },
+      { "name": "INSTRUCTOR" },
+      { "name": "CONTENT_AUTHOR" },
+      { "name": "ADMIN" },
+      { "name": "SERVICE" }
     ]
   },
   "clients": [
@@ -54,14 +44,8 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "implicitFlowEnabled": false,
-      "redirectUris": [
-        "http://localhost:5173/*",
-        "http://localhost:8080/*"
-      ],
-      "webOrigins": [
-        "http://localhost:5173",
-        "http://localhost:8080"
-      ],
+      "redirectUris": ["http://localhost:5173/*", "http://localhost:8080/*"],
+      "webOrigins": ["http://localhost:5173", "http://localhost:8080"],
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:5173/*##http://localhost:8080/*"
@@ -140,6 +124,17 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "implicitFlowEnabled": false
+    },
+    {
+      "clientId": "ramals-identity-admin",
+      "name": "RAMALS interactive identity administration",
+      "description": "Dedicated least-privilege identity for server-side staff user administration (M1-ADR-017). Secret is external and absent from Git.",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false
     }
   ],
   "users": [
@@ -148,10 +143,15 @@
       "enabled": true,
       "serviceAccountClientId": "ramals-registration-admin",
       "clientRoles": {
-        "realm-management": [
-          "manage-users",
-          "view-users"
-        ]
+        "realm-management": ["manage-users", "view-users"]
+      }
+    },
+    {
+      "username": "service-account-ramals-identity-admin",
+      "enabled": true,
+      "serviceAccountClientId": "ramals-identity-admin",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users"]
       }
     }
   ],

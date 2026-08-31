@@ -1,9 +1,8 @@
 # Deployment topology for the shared dev environment.
 #
 # Unlike infrastructure/docker/compose.yml, which builds from source for local development, this
-# file never builds: it consumes the exact immutable digests exported by deploy-controller.sh from
-# the approved desired-version manifest. That is what makes build-once/promote-the-same-artifact
-# real — the bytes running here are the bytes that were built, scanned and attested in CI.
+# file never builds application services: it consumes the exact immutable digests exported by
+# deploy-controller.sh from the approved desired-version manifest.
 name: ramals-deploy
 
 services:
@@ -65,15 +64,27 @@ services:
     restart: unless-stopped
     security_opt: [no-new-privileges:true]
 
-  # Published, digest-pinned artefacts. deploy-controller.sh exports these from the manifest and
-  # refuses to proceed unless they are sha256 digests.
+  keycloak-identity-admin-reconcile:
+    build:
+      context: ../
+      dockerfile: infrastructure/docker/keycloak/Dockerfile
+    entrypoint: ["/bin/sh", "/opt/keycloak/bin/reconcile-identity-admin.sh"]
+    environment:
+      KEYCLOAK_ADMIN_SERVER: http://keycloak:8080
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${RAMALS_KEYCLOAK_ADMIN:?Set RAMALS_KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${RAMALS_KEYCLOAK_ADMIN_PASSWORD:?Set RAMALS_KEYCLOAK_ADMIN_PASSWORD}
+      RAMALS_ADMIN_IDENTITY_REALM: ${RAMALS_ADMIN_IDENTITY_REALM:-ramals}
+      RAMALS_ADMIN_IDENTITY_CLIENT_ID: ${RAMALS_ADMIN_IDENTITY_CLIENT_ID:-ramals-identity-admin}
+      RAMALS_ADMIN_IDENTITY_CLIENT_SECRET: ${RAMALS_ADMIN_IDENTITY_CLIENT_SECRET:?Set RAMALS_ADMIN_IDENTITY_CLIENT_SECRET}
+    depends_on:
+      keycloak: {condition: service_healthy}
+    networks: [data]
+    restart: "no"
+    security_opt: [no-new-privileges:true]
+
   backend:
     image: ${RAMALS_BACKEND_IMAGE:?deploy-controller.sh must export RAMALS_BACKEND_IMAGE}
     environment:
-      # Without this the default profile wins and Spring's console pattern drops the MDC fields,
-      # so interactionId never reaches the log stream. The diagnosis procedure in
-      # docs/architecture/observability-correlation.md then cannot be carried out at all: the
-      # support code the learner was shown matches nothing. Guarded by DeploymentLoggingTests.
       SPRING_PROFILES_ACTIVE: ${RAMALS_SPRING_PROFILES:-shared}
       RAMALS_DB_URL: jdbc:postgresql://postgres:5432/${RAMALS_DB_NAME:?Set RAMALS_DB_NAME}
       RAMALS_DB_USER: ${RAMALS_DB_RUNTIME_USER:-ramals_core_runtime}
@@ -83,6 +94,10 @@ services:
       RAMALS_OIDC_ISSUER_URI: ${RAMALS_OIDC_ISSUER_URI:-http://keycloak:8080/realms/ramals}
       RAMALS_OIDC_AUDIENCE: ${RAMALS_OIDC_AUDIENCE:-ramals-api}
       RAMALS_WEB_ORIGIN: ${RAMALS_WEB_ORIGIN:-http://localhost:5173}
+      RAMALS_ADMIN_IDENTITY_BASE_URL: ${RAMALS_ADMIN_IDENTITY_BASE_URL:-http://keycloak:8080}
+      RAMALS_ADMIN_IDENTITY_REALM: ${RAMALS_ADMIN_IDENTITY_REALM:-ramals}
+      RAMALS_ADMIN_IDENTITY_CLIENT_ID: ${RAMALS_ADMIN_IDENTITY_CLIENT_ID:-ramals-identity-admin}
+      RAMALS_ADMIN_IDENTITY_CLIENT_SECRET: ${RAMALS_ADMIN_IDENTITY_CLIENT_SECRET:?Set RAMALS_ADMIN_IDENTITY_CLIENT_SECRET}
       RAMALS_AI_BASE_URL: ${RAMALS_AI_BASE_URL:-}
       RAMALS_AI_WORKLOAD_TOKEN_URL: ${RAMALS_AI_WORKLOAD_TOKEN_URL:-http://keycloak:8080/realms/ramals/protocol/openid-connect/token}
       RAMALS_AI_WORKLOAD_CLIENT_ID: ${RAMALS_AI_WORKLOAD_CLIENT_ID:-ramals-core-workload}
@@ -97,7 +112,7 @@ services:
       RAMALS_AI_DISPATCHER_MAX_BACKOFF_MS: ${RAMALS_AI_DISPATCHER_MAX_BACKOFF_MS:-60000}
     depends_on:
       postgres: {condition: service_healthy}
-      keycloak: {condition: service_healthy}
+      keycloak-identity-admin-reconcile: {condition: service_completed_successfully}
     networks: [data, edge]
     ports: ["127.0.0.1:${RAMALS_BACKEND_PORT:-8080}:8080"]
     healthcheck:
@@ -111,24 +126,11 @@ services:
     tmpfs: ["/tmp:size=64m,mode=1777"]
     security_opt: [no-new-privileges:true]
 
-  # The AI plane, deployed when the manifest pins it.
-  #
-  # It was published, digest-pinned, scanned and validated by deploy-controller.sh -- and then not
-  # deployed by anything, because no compose file in the repository defined it. MVP-1's defining
-  # capability shipped as an artifact nobody could start by the documented path, and the gap was
-  # invisible because health-gates.sh skips the plane when AI_URL is unset and reports the
-  # deterministic core unaffected, which is true and was passing.
-  #
-  # Behind a profile so that remains true. A manifest without a ramals-ai component still deploys the
-  # core alone; deploy-controller.sh activates this profile only when a digest is actually pinned, so
-  # the manifest decides the topology rather than a flag somebody has to remember.
   ramals-ai:
     profiles: [ai-plane]
     image: ${RAMALS_AI_IMAGE:?deploy-controller.sh exports RAMALS_AI_IMAGE when the manifest pins ramals-ai}
     environment:
       RAMALS_AI_ENVIRONMENT: ${RAMALS_AI_ENVIRONMENT:-dev}
-      # Workload authentication is the only thing separating the core workload from a replayed
-      # learner token, and the plane refuses to start with it disabled outside a local run.
       RAMALS_AI_WORKLOAD_AUTH_ENABLED: "true"
       RAMALS_AI_OIDC_ISSUER: ${RAMALS_AI_OIDC_ISSUER:-http://keycloak:8080/realms/ramals}
       RAMALS_AI_OIDC_AUDIENCE: ${RAMALS_AI_WORKLOAD_AUDIENCE:-ramals-ai}
@@ -136,12 +138,6 @@ services:
       RAMALS_AI_AI_ENABLED: ${RAMALS_AI_AI_ENABLED:-false}
       RAMALS_AI_MODEL_ROUTE: ${RAMALS_AI_MODEL_ROUTE:-ci-fake}
       RAMALS_AI_PROVIDER_API_KEY: ${RAMALS_AI_PROVIDER_API_KEY:-}
-      # M1-ADR-008's rollback levers. Without these two passed through, withdrawing a bad prompt or
-      # repointing a route needs an image build and a release -- which is the remedy the ADR
-      # rejected, because it makes the fastest available fix as slow and as risky as shipping. Both
-      # are validated at startup against what the image ships, so a bad pin stops the process.
-      # They also select which approved provider serves a route:
-      #   RAMALS_AI_MODEL_PINS='{"adaptation-default": "gpt-4.1-2025-04-14"}'
       RAMALS_AI_PROMPT_PINS: ${RAMALS_AI_PROMPT_PINS:-{}}
       RAMALS_AI_MODEL_PINS: ${RAMALS_AI_MODEL_PINS:-{}}
       RAMALS_AI_LOG_LEVEL: ${RAMALS_AI_LOG_LEVEL:-INFO}
@@ -149,8 +145,6 @@ services:
       keycloak: {condition: service_healthy}
     networks: [edge]
     ports: ["127.0.0.1:${RAMALS_AI_PORT:-8000}:8000"]
-    # Probed with the interpreter the image already has. The runtime stage carries no curl or wget,
-    # so a shell-tool healthcheck would report unhealthy for want of a binary rather than a service.
     healthcheck:
       test:
         - CMD
