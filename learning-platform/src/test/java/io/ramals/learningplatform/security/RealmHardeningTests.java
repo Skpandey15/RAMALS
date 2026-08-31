@@ -9,9 +9,8 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * Verifies the Keycloak realm mints the claims the API depends on. The API authorizes learner
- * resources by the learner_id claim and MFA by acr/amr, so the realm must be configured to emit
- * them; this guards against the deployed realm silently dropping those mappers.
+ * Verifies the Keycloak realm mints the claims the API depends on and preserves workload-identity
+ * separation for AI, registration, and interactive identity administration.
  */
 class RealmHardeningTests {
 
@@ -28,9 +27,6 @@ class RealmHardeningTests {
 
   @Test
   void realmDeclaresTheWorkloadClientWithTheAiAudience() throws IOException {
-    // M1-ADR-003. The live drill in scripts/validation/workload-identity-e2e.py proves the mapper
-    // actually mints the claim; this proves the committed realm still declares it, so a regression
-    // fails in CI rather than waiting for someone to run a drill against a live Keycloak.
     String realm = realm();
     assertThat(realm)
         .contains("\"ramals-core-workload\"")
@@ -40,8 +36,6 @@ class RealmHardeningTests {
 
   @Test
   void workloadClientCannotObtainAUserToken() throws IOException {
-    // The workload identity must never be able to represent a person: that separation is the only
-    // thing distinguishing "the learner asked for this" from "a model decided to do this".
     String workloadClient = clientBlock("ramals-core-workload");
     assertThat(workloadClient)
         .contains("\"serviceAccountsEnabled\": true")
@@ -53,11 +47,35 @@ class RealmHardeningTests {
 
   @Test
   void realmNeverCommitsTheWorkloadSecret() throws IOException {
-    // The client is confidential; its secret belongs to the environment's secret management. A
-    // committed secret would be a credential in source control that also happens to work.
     assertThat(clientBlock("ramals-core-workload"))
         .as("the workload client secret must not be committed")
         .doesNotContain("\"secret\"");
+  }
+
+  @Test
+  void identityAdministrationUsesADifferentConfidentialClientFromRegistration() throws IOException {
+    String identityAdmin = clientBlock("ramals-identity-admin");
+    assertThat(identityAdmin)
+        .contains("\"publicClient\": false")
+        .contains("\"serviceAccountsEnabled\": true")
+        .contains("\"standardFlowEnabled\": false")
+        .contains("\"directAccessGrantsEnabled\": false")
+        .doesNotContain("\"secret\"");
+    assertThat(identityAdmin).doesNotContain("ramals-registration-admin");
+  }
+
+  @Test
+  void identityAdminHasOnlyUserManagementRealmPermissions() throws IOException {
+    String realm = realm();
+    int userStart = realm.indexOf("\"serviceAccountClientId\": \"ramals-identity-admin\"");
+    assertThat(userStart).as("identity-admin service-account user present").isNotNegative();
+    int nextUser = realm.indexOf("\"serviceAccountClientId\":", userStart + 1);
+    String serviceAccount = nextUser < 0 ? realm.substring(userStart) : realm.substring(userStart, nextUser);
+    assertThat(serviceAccount)
+        .contains("\"manage-users\"")
+        .contains("\"view-users\"")
+        .doesNotContain("\"manage-realm\"")
+        .doesNotContain("\"manage-clients\"");
   }
 
   /** The JSON text of one client definition, so assertions cannot pass on a neighbouring client. */
@@ -66,6 +84,9 @@ class RealmHardeningTests {
     int start = realm.indexOf("\"clientId\": \"" + clientId + "\"");
     assertThat(start).as("client %s present in the realm", clientId).isNotNegative();
     int end = realm.indexOf("\"clientId\":", start + 1);
+    if (end < 0) {
+      end = realm.indexOf("\"users\":", start);
+    }
     return end < 0 ? realm.substring(start) : realm.substring(start, end);
   }
 
