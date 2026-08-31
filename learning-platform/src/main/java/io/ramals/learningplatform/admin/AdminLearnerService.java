@@ -44,7 +44,7 @@ public class AdminLearnerService {
       auditRepository.append(actorSubject, "CHANGE_LEARNER_STATUS", "LEARNER", learnerId,
           "REJECTED", "closed learner cannot be reactivated",
           CorrelationContext.currentInteractionId(), CorrelationContext.currentTraceId());
-      throw new IllegalStateException("Closed learners cannot be reactivated");
+      throw new AdminLearnerStateConflictException("Closed learners cannot be reactivated");
     }
     int changed = learnerRepository.updateStatus(learnerId, status);
     if (changed != 1) {
