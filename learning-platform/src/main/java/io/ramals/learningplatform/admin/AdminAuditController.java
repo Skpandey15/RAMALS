@@ -13,22 +13,22 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminAuditController {
 
   private static final int MAX_LIMIT = 200;
-  private final AdminAuditQueryRepository repository;
+  private final AdminAuditService service;
 
-  public AdminAuditController(AdminAuditQueryRepository repository) {
-    this.repository = repository;
+  public AdminAuditController(AdminAuditService service) {
+    this.service = service;
   }
 
   @GetMapping("/admin-activity")
   List<AdminAuditQueryRepository.AdminActivityView> adminActivity(
       @RequestParam(defaultValue = "50") int limit) {
-    return repository.recentAdminActivity(normalizeLimit(limit));
+    return service.recentAdminActivity(normalizeLimit(limit));
   }
 
   @GetMapping("/security")
   List<AdminAuditQueryRepository.SecurityAuditView> securityActivity(
       @RequestParam(defaultValue = "50") int limit) {
-    return repository.recentSecurityActivity(normalizeLimit(limit));
+    return service.recentSecurityActivity(normalizeLimit(limit));
   }
 
   private int normalizeLimit(int limit) {
