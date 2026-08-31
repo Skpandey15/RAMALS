@@ -2,8 +2,8 @@ package io.ramals.learningplatform.admin;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class AdminIdentityServiceTests {
@@ -65,7 +66,8 @@ class AdminIdentityServiceTests {
     when(provider.effectiveRealmRoles("user-2")).thenReturn(Set.of("CONTENT_AUTHOR"));
     doThrow(new IllegalStateException("audit unavailable"))
         .when(audit).append(eq("admin-1"), eq("SET_IDENTITY_ENABLED"), eq("IDENTITY_USER"),
-            any(), eq("ATTEMPTED"), eq("requested: disabled"), any(), any());
+            nullable(UUID.class), eq("ATTEMPTED"), eq("requested: disabled"),
+            nullable(String.class), nullable(String.class));
 
     assertThatThrownBy(() -> service.setEnabled("admin-1", "user-2", false))
         .isInstanceOf(IllegalStateException.class);
@@ -80,7 +82,8 @@ class AdminIdentityServiceTests {
             Set.of("CONTENT_AUTHOR"))));
     doThrow(new IllegalStateException("completion audit unavailable"))
         .when(audit).append(eq("admin-1"), eq("SET_IDENTITY_ENABLED"), eq("IDENTITY_USER"),
-            any(), eq("SUCCESS"), eq("disabled"), any(), any());
+            nullable(UUID.class), eq("SUCCESS"), eq("disabled"),
+            nullable(String.class), nullable(String.class));
 
     AdminIdentityUser result = service.setEnabled("admin-1", "user-2", false);
 
