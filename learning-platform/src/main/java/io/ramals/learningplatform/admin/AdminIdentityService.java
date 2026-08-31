@@ -30,7 +30,7 @@ public class AdminIdentityService {
   public AdminIdentityUser setEnabled(String actorSubject, String userId, boolean enabled) {
     requireDifferentIdentity(actorSubject, userId);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
-    rejectPrivilegedTarget(roles);
+    rejectProtectedTarget(roles);
     identityProvider.setEnabled(userId, enabled);
     audit(actorSubject, "SET_IDENTITY_ENABLED", userId, "SUCCESS",
         enabled ? "enabled" : "disabled");
@@ -41,11 +41,7 @@ public class AdminIdentityService {
     requireDifferentIdentity(actorSubject, userId);
     String role = manageableRole(rawRole);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
-    rejectPrivilegedTarget(roles);
-    if (roles.contains("LEARNER")) {
-      throw new IllegalArgumentException(
-          "Learner identities cannot be converted into privileged staff identities.");
-    }
+    rejectProtectedTarget(roles);
     identityProvider.addRealmRole(userId, role);
     audit(actorSubject, "ADD_REALM_ROLE", userId, "SUCCESS", role);
     return findUser(userId);
@@ -55,7 +51,7 @@ public class AdminIdentityService {
     requireDifferentIdentity(actorSubject, userId);
     String role = manageableRole(rawRole);
     Set<String> roles = identityProvider.effectiveRealmRoles(userId);
-    rejectPrivilegedTarget(roles);
+    rejectProtectedTarget(roles);
     identityProvider.removeRealmRole(userId, role);
     audit(actorSubject, "REMOVE_REALM_ROLE", userId, "SUCCESS", role);
     return findUser(userId);
@@ -80,10 +76,10 @@ public class AdminIdentityService {
     return role;
   }
 
-  private static void rejectPrivilegedTarget(Set<String> roles) {
-    if (roles.contains("ADMIN") || roles.contains("SERVICE")) {
+  private static void rejectProtectedTarget(Set<String> roles) {
+    if (roles.contains("ADMIN") || roles.contains("SERVICE") || roles.contains("LEARNER")) {
       throw new IllegalArgumentException(
-          "ADMIN and SERVICE identities require out-of-band privileged identity administration.");
+          "ADMIN, SERVICE, and LEARNER identities are outside staff identity administration.");
     }
   }
 
