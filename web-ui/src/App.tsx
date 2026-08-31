@@ -3,9 +3,10 @@ import { hasRealmRole, isAuthenticated, login, logout } from './auth/authClient'
 import { LearnerDashboard } from './learning/LearnerDashboard';
 import { RegistrationPage } from './registration/RegistrationPage';
 import { OnboardingResume } from './registration/OnboardingResume';
+import { isRegistrationPath } from './routing';
 
 export function App() {
-  if (window.location.pathname === '/register') return <RegistrationPage />;
+  if (isRegistrationPath()) return <RegistrationPage />;
   if (!isAuthenticated()) {
     return (
       <main className="app">
