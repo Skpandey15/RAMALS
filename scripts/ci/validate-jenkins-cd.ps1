@@ -34,6 +34,9 @@ $jenkinsfile = Get-Content $jenkinsfilePath -Raw
 foreach ($invariant in @(
     'disableConcurrentBuilds',
     "pollSCM('H/2 * * * *')",
+    "stage('Approve local k3d DEV')",
+    'Do you want to deploy to the local/dev k3d environment?',
+    "submitter: 'ramals-admin'",
     'deploy\\jenkins\\deploy-main.ps1 -ValidateOnly',
     'deploy\\jenkins\\deploy-main.ps1')) {
   Assert-True ($jenkinsfile.Contains($invariant)) "Jenkinsfile invariant missing: $invariant"
@@ -47,6 +50,8 @@ Assert-True ($installer -match '\$jenkinsSha256\s*=\s*"[A-F0-9]{64}"') "Jenkins 
 Assert-True ($installer -match '\$temurinSha256\s*=\s*"[A-F0-9]{64}"') "Temurin SHA256 must be pinned."
 Assert-True ($installer -match 'install-plugin[\s\S]*\btimestamper\b') `
   "Installer must provide the Timestamper plugin required by timestamps()."
+Assert-True ($installer -match 'install-plugin[\s\S]*\bblueocean\b') `
+  "Installer must provide the requested Blue Ocean pipeline UI."
 
 # Exercise the trusted-source boundary in disposable repositories without Docker or k3d.
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "ramals-jenkins-validation-$([guid]::NewGuid())"
