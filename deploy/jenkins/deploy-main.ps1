@@ -28,7 +28,9 @@ function Invoke-Checked {
   }
 }
 
-foreach ($tool in @("git", "pwsh", "docker", "k3d", "kubectl")) {
+$requiredTools = @("git")
+if (-not $ValidateOnly) { $requiredTools += @("pwsh", "docker", "k3d", "kubectl") }
+foreach ($tool in $requiredTools) {
   if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
     throw "$tool is required on the Jenkins agent PATH."
   }

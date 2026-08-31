@@ -25,10 +25,23 @@ foreach ($directory in @($installRoot, $jenkinsHome, $downloads,
   New-Item -ItemType Directory -Force -Path $directory | Out-Null
 }
 
-function Download-IfMissing([string]$Uri, [string]$Destination) {
-  if (-not (Test-Path $Destination)) {
-    Write-Host "Downloading $Uri"
-    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing
+function Install-VerifiedDownload(
+  [string]$Uri,
+  [string]$Destination,
+  [string]$ExpectedSha256
+) {
+  if (Test-Path $Destination) {
+    $actualHash = (Get-FileHash $Destination -Algorithm SHA256).Hash
+    if ($actualHash -eq $ExpectedSha256) { return }
+    Write-Host "Removing cached file with an unexpected checksum: $Destination"
+    Remove-Item -LiteralPath $Destination
+  }
+  Write-Host "Downloading pinned artifact $Uri"
+  Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing
+  $actualHash = (Get-FileHash $Destination -Algorithm SHA256).Hash
+  if ($actualHash -ne $ExpectedSha256) {
+    Remove-Item -LiteralPath $Destination
+    throw "Checksum mismatch for $Uri."
   }
 }
 
@@ -43,29 +56,27 @@ function Wait-Jenkins([int]$TimeoutSeconds = 240) {
   throw "Jenkins did not become ready at $jenkinsUrl within $TimeoutSeconds seconds."
 }
 
-# Jenkins LTS is tested on Java 21; do not use an unrelated system Java release for the controller.
-$jdkArchive = Join-Path $downloads "temurin-21.zip"
-if (-not (Get-ChildItem $installRoot -Directory -Filter "jdk-21*" -ErrorAction SilentlyContinue)) {
-  Download-IfMissing `
-    "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse" `
-    $jdkArchive
+# Keep the controller runtime reproducible. Upgrades are explicit changes to this version/hash pair.
+$temurinVersion = "21.0.12.1+1"
+$temurinSha256 = "F9D6E191AB098C0D416E7D588A24420A8621CD2F4720DAB2459B8B7B2D2D8B4E"
+$jdkDirectory = "jdk-$temurinVersion"
+$jdkArchive = Join-Path $downloads "OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.zip"
+$jdkHome = Join-Path $installRoot $jdkDirectory
+if (-not (Test-Path $jdkHome)) {
+  Install-VerifiedDownload `
+    "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.zip" `
+    $jdkArchive $temurinSha256
   Expand-Archive -Path $jdkArchive -DestinationPath $installRoot -Force
 }
-$jdkHome = (Get-ChildItem $installRoot -Directory -Filter "jdk-21*" |
-  Sort-Object Name -Descending | Select-Object -First 1).FullName
-if (-not $jdkHome) { throw "Java 21 extraction did not produce a jdk-21 directory." }
+if (-not (Test-Path $jdkHome)) { throw "Java extraction did not produce $jdkDirectory." }
 $java = Join-Path $jdkHome "bin\java.exe"
 
-$war = Join-Path $installRoot "jenkins.war"
-$warChecksum = Join-Path $downloads "jenkins.war.sha256"
-Download-IfMissing "https://get.jenkins.io/war-stable/latest/jenkins.war" $war
-Invoke-WebRequest -Uri "https://get.jenkins.io/war-stable/latest/jenkins.war.sha256" `
-  -OutFile $warChecksum -UseBasicParsing
-$expectedHash = ((Get-Content $warChecksum -Raw).Trim() -split '\s+')[0].ToUpperInvariant()
-$actualHash = (Get-FileHash $war -Algorithm SHA256).Hash
-if ($actualHash -ne $expectedHash) {
-  throw "Downloaded Jenkins WAR checksum mismatch."
-}
+$jenkinsVersion = "2.568.2"
+$jenkinsSha256 = "9BBB2B329E52730BA7DECD1A7A1095987F6250EC761FB21157DBB2CBCD1EF590"
+$war = Join-Path $installRoot "jenkins-$jenkinsVersion.war"
+Install-VerifiedDownload `
+  "https://get.jenkins.io/war-stable/$jenkinsVersion/jenkins.war" `
+  $war $jenkinsSha256
 
 $passwordFile = Join-Path $jenkinsHome "secrets\ramals-admin-password"
 if (-not (Test-Path $passwordFile)) {
