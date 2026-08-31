@@ -103,7 +103,12 @@ if (!(instance.securityRealm instanceof HudsonPrivateSecurityRealm)) {
   instance.setSecurityRealm(realm)
 }
 def realm = (HudsonPrivateSecurityRealm) instance.securityRealm
-if (User.getById('ramals-admin', false) == null) {
+// A Jenkins User object can exist without a HudsonPrivateSecurityRealm password (for example when
+// created implicitly by SCM metadata). Check the realm password property, not only User existence.
+def adminUser = User.getById('ramals-admin', false)
+def hasPrivateRealmCredentials = adminUser != null &&
+    adminUser.getProperty(HudsonPrivateSecurityRealm.Details.class) != null
+if (!hasPrivateRealmCredentials) {
   realm.createAccount('ramals-admin', passwordFile.text.trim())
 }
 def authorization = new FullControlOnceLoggedInAuthorizationStrategy()
@@ -174,10 +179,31 @@ function Restart-LocalJenkins {
   Wait-Jenkins 360
 }
 
+# A rerun must apply the current bootstrap script before attempting authenticated CLI operations.
+# This also repairs installations created by older versions where the User existed without a
+# HudsonPrivateSecurityRealm password and every CLI/browser login returned HTTP 401.
+if ($running) {
+  Write-Host "Restarting existing Jenkins controller to apply bootstrap configuration"
+  Restart-LocalJenkins
+}
+
 $cli = Join-Path $installRoot "jenkins-cli.jar"
 Invoke-WebRequest -Uri "$jenkinsUrl/jnlpJars/jenkins-cli.jar" -OutFile $cli -UseBasicParsing
 $adminPassword = (Get-Content $passwordFile -Raw).Trim()
 $auth = "ramals-admin:$adminPassword"
+
+function Wait-JenkinsCliAuthentication([int]$TimeoutSeconds = 60) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    & $java -jar $cli -s $jenkinsUrl -auth $auth who-am-i *> $null
+    if ($LASTEXITCODE -eq 0) { return }
+    Start-Sleep -Seconds 2
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "Jenkins bootstrap account authentication failed for ramals-admin. See $installRoot\jenkins-error.log."
+}
+
+Write-Host "Verifying Jenkins bootstrap authentication"
+Wait-JenkinsCliAuthentication
 
 Write-Host "Installing required pipeline and Git plugins"
 & $java -jar $cli -s $jenkinsUrl -auth $auth install-plugin `
@@ -185,6 +211,7 @@ Write-Host "Installing required pipeline and Git plugins"
 if ($LASTEXITCODE -ne 0) { throw "Required Jenkins plugin installation failed." }
 # User-mode Jenkins has no service lifecycle, so restart the verified controller process ourselves.
 Restart-LocalJenkins
+Wait-JenkinsCliAuthentication
 
 $jobConfig = Get-Content (Join-Path $PSScriptRoot "job-config.xml") -Raw
 $jobExists = $false
