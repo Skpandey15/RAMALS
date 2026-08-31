@@ -1,7 +1,8 @@
-# Developer entry points. Two hosts, one port, no port-forwarding.
+# Developer entry points. Three hosts, one port, no port-forwarding.
 #
-#   http://localhost:8080           -> web-ui  (which proxies /api/ to the platform itself)
-#   http://keycloak.localhost:8080  -> keycloak
+#   http://localhost:8080             -> web-ui  (which proxies /api/ to the platform itself)
+#   http://keycloak.localhost:8080    -> keycloak
+#   http://mailpit.localhost:8080     -> mailpit inbox
 #
 # `*.localhost` resolves to 127.0.0.1 in Chrome, Edge and Firefox without a hosts-file entry
 # (RFC 6761), which is what lets this work on a fresh machine.
@@ -29,8 +30,8 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    # The UI. Host-less would also match, but naming it keeps the two rules symmetrical and stops
-    # this one from swallowing requests meant for Keycloak.
+    # The UI. Host-less would also match, but naming it keeps the rules explicit and prevents this
+    # route from swallowing requests meant for Keycloak or Mailpit.
     - host: localhost
       http:
         paths:
@@ -52,3 +53,14 @@ spec:
                 name: keycloak
                 port:
                   number: 8080
+
+    - host: mailpit.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mailpit
+                port:
+                  number: 8025
