@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import './AdminDashboard.css';
 import {
   addIdentityRole,
   changeLearnerStatus,
@@ -65,7 +66,10 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    const timer = window.setTimeout(() => {
+      void refresh();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [refresh]);
 
   const updateLearner = async (learner: AdminLearner, status: AdminLearner['status']) => {
