@@ -86,3 +86,4 @@ try {
 }
 
 Write-Host "Jenkins/CD validation passed."
+exit 0
