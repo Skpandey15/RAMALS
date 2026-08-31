@@ -35,8 +35,8 @@ class AdminOperationsApiContractTests {
 
   @Autowired MockMvc mockMvc;
   @MockitoBean AdminLearnerService learnerService;
-  @MockitoBean AdminOperationsRepository operationsRepository;
-  @MockitoBean AdminAuditQueryRepository auditRepository;
+  @MockitoBean AdminOperationsService operationsService;
+  @MockitoBean AdminAuditService auditService;
   @MockitoBean AdminIdentityService identityService;
 
   @Test
@@ -50,20 +50,12 @@ class AdminOperationsApiContractTests {
 
   @Test
   void adminCanReadOperationalSurfaces() throws Exception {
-    when(operationsRepository.countLearners()).thenReturn(4L);
-    when(operationsRepository.countLearners("ACTIVE")).thenReturn(3L);
-    when(operationsRepository.countLearners("SUSPENDED")).thenReturn(1L);
-    when(operationsRepository.countLearners("CLOSED")).thenReturn(0L);
-    when(operationsRepository.countOnboarded()).thenReturn(2L);
-    when(operationsRepository.countCurricula("DRAFT")).thenReturn(1L);
-    when(operationsRepository.countCurricula("PUBLISHED")).thenReturn(2L);
-    when(operationsRepository.countCurricula("RETIRED")).thenReturn(1L);
-    when(operationsRepository.countAuthorizationDenials24h()).thenReturn(5L);
-    when(operationsRepository.countAdminActions24h()).thenReturn(6L);
+    when(operationsService.snapshot()).thenReturn(new AdminOperationalSnapshot(
+        4L, 3L, 1L, 0L, 2L, 1L, 2L, 1L, 5L, 6L));
     when(identityService.listUsers()).thenReturn(List.of(
         new AdminIdentityUser("user-2", "staff", "staff@example.test", true,
             Set.of("CONTENT_AUTHOR"))));
-    when(auditRepository.recentSecurityActivity(anyInt())).thenReturn(List.of());
+    when(auditService.recentSecurityActivity(anyInt())).thenReturn(List.of());
 
     var admin = jwt().jwt(token -> token.subject("admin-1"))
         .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
