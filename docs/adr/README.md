@@ -38,8 +38,9 @@ Which task each earlier decision gates is recorded in [the MVP-1 release board](
 | [M1-ADR-013](M1-ADR-013-professional-learner-pii-storage-boundary.md) | Professional learner contact PII stays outside the PII-free `core.learner` boundary |
 | [M1-ADR-014](M1-ADR-014-keycloak-administrative-client-for-learner-registration.md) | Learner registration uses a dedicated least-privilege Keycloak administrative client, separate from `ramals-core-workload` |
 | [M1-ADR-015](M1-ADR-015-professional-registration-email-mobile-and-mfa-boundary.md) | RAMALS orchestrates registration; Keycloak verifies email; authenticated SMS proves mobile ownership but does not satisfy Keycloak MFA |
+| [M1-ADR-016](M1-ADR-016-administrative-identity-and-ui-access-boundary.md) | Administrative and learner personas are mutually exclusive; UI routing fails closed and backend authorization remains authoritative |
 
-M1-ADR-011 through M1-ADR-015 are repository-native follow-on decisions rather than registrations from the external MVP-1 Canonical Package. M1-ADR-012 through M1-ADR-015 are the architecture authority for the M1-PROF-01 professional learner registration/onboarding capability.
+M1-ADR-011 through M1-ADR-016 are repository-native follow-on decisions rather than registrations from the external MVP-1 Canonical Package. M1-ADR-012 through M1-ADR-015 are the architecture authority for the M1-PROF-01 professional learner registration/onboarding capability; M1-ADR-016 governs the administrative identity and UI access boundary.
 
 Not yet authored: none. Every decision the package registers is authored and Accepted. Each was
 written just before the task it gates rather than as a batch, so it had the information its
