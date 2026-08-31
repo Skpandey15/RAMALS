@@ -1,11 +1,16 @@
 package io.ramals.learningplatform.admin;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -53,5 +58,33 @@ class AdminIdentityServiceTests {
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> service.addRole("admin-1", "user-2", "LEARNER"))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void identityMutationIsNotAttemptedWhenDurableIntentAuditFails() {
+    when(provider.effectiveRealmRoles("user-2")).thenReturn(Set.of("CONTENT_AUTHOR"));
+    doThrow(new IllegalStateException("audit unavailable"))
+        .when(audit).append(eq("admin-1"), eq("SET_IDENTITY_ENABLED"), eq("IDENTITY_USER"),
+            any(), eq("ATTEMPTED"), eq("requested: disabled"), any(), any());
+
+    assertThatThrownBy(() -> service.setEnabled("admin-1", "user-2", false))
+        .isInstanceOf(IllegalStateException.class);
+    verify(provider, never()).setEnabled("user-2", false);
+  }
+
+  @Test
+  void completedIdentityMutationIsNotMisreportedWhenSuccessAuditFails() {
+    when(provider.effectiveRealmRoles("user-2")).thenReturn(Set.of("CONTENT_AUTHOR"));
+    when(provider.listUsers()).thenReturn(List.of(
+        new AdminIdentityUser("user-2", "staff", "staff@example.test", false,
+            Set.of("CONTENT_AUTHOR"))));
+    doThrow(new IllegalStateException("completion audit unavailable"))
+        .when(audit).append(eq("admin-1"), eq("SET_IDENTITY_ENABLED"), eq("IDENTITY_USER"),
+            any(), eq("SUCCESS"), eq("disabled"), any(), any());
+
+    AdminIdentityUser result = service.setEnabled("admin-1", "user-2", false);
+
+    assertThat(result.enabled()).isFalse();
+    verify(provider).setEnabled("user-2", false);
   }
 }
