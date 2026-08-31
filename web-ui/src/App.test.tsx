@@ -71,6 +71,21 @@ describe('App auth gate', () => {
     expect(authenticatedFetch).toHaveBeenCalled();
   });
 
+  it('fails closed when an authenticated identity has both ADMIN and LEARNER roles', () => {
+    vi.mocked(isAuthenticated).mockReturnValue(true);
+    vi.mocked(hasRealmRole).mockImplementation(
+      (role) => role === 'ADMIN' || role === 'LEARNER',
+    );
+
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: /access not configured/i })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/does not have access/i);
+    expect(screen.queryByRole('heading', { name: /admin dashboard/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /your kafka learning/i })).not.toBeInTheDocument();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
   it.each(['INSTRUCTOR', 'CONTENT_AUTHOR', 'SERVICE', 'FUTURE_ROLE'])(
     'fails closed for authenticated unsupported role %s',
     (role) => {
