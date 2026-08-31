@@ -37,13 +37,19 @@ public class AdminIdentityProviderClient {
   private final RestClient http;
   private final AtomicReference<CachedToken> cachedToken = new AtomicReference<>();
 
+  /** The sole constructor Spring may select for the component. */
   public AdminIdentityProviderClient(AdminIdentityProperties properties) {
     this(properties, newRestClient());
   }
 
-  AdminIdentityProviderClient(AdminIdentityProperties properties, RestClient http) {
+  private AdminIdentityProviderClient(AdminIdentityProperties properties, RestClient http) {
     this.properties = properties;
     this.http = http;
+  }
+
+  /** Package-scoped test seam without exposing a second constructor to Spring bean discovery. */
+  static AdminIdentityProviderClient forTesting(AdminIdentityProperties properties, RestClient http) {
+    return new AdminIdentityProviderClient(properties, http);
   }
 
   public List<AdminIdentityUser> listUsers() {
