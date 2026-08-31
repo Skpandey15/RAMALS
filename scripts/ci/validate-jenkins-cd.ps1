@@ -47,6 +47,8 @@ Assert-True ($installer -match '\$jenkinsSha256\s*=\s*"[A-F0-9]{64}"') "Jenkins 
 Assert-True ($installer -match '\$temurinSha256\s*=\s*"[A-F0-9]{64}"') "Temurin SHA256 must be pinned."
 Assert-True ($installer -match 'install-plugin[\s\S]*\btimestamper\b') `
   "Installer must provide the Timestamper plugin required by timestamps()."
+Assert-True ($installer -match 'install-plugin[\s\S]*\bblueocean\b') `
+  "Installer must provide the requested Blue Ocean pipeline UI."
 
 # Exercise the trusted-source boundary in disposable repositories without Docker or k3d.
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "ramals-jenkins-validation-$([guid]::NewGuid())"

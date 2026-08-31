@@ -18,6 +18,7 @@ continues to own tests, security checks, and merge qualification; Jenkins owns d
 The local installation runs under the Windows user that owns Rancher Desktop and the kubeconfig.
 This is intentional: a Windows service account would not automatically have access to that desktop
 Docker daemon or Kubernetes context. The controller binds to `127.0.0.1:8090`.
+After sign-in, Blue Ocean is available at `http://127.0.0.1:8090/blue/`.
 
 The `RAMALS-main` pipeline polls GitHub every two minutes. A webhook can replace polling when the
 machine has a safely authenticated inbound endpoint.
