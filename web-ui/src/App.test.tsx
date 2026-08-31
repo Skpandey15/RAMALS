@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./auth/authClient', () => ({
   isAuthenticated: vi.fn(),
+  hasRealmRole: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
   authenticatedFetch: vi.fn().mockResolvedValue({
@@ -25,11 +26,12 @@ vi.mock('./learning/api', () => ({
 }));
 
 import { App } from './App';
-import { isAuthenticated } from './auth/authClient';
+import { authenticatedFetch, hasRealmRole, isAuthenticated } from './auth/authClient';
 
 describe('App auth gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(hasRealmRole).mockReturnValue(false);
   });
 
   it('prompts unauthenticated visitors to log in', () => {
@@ -38,7 +40,18 @@ describe('App auth gate', () => {
     expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument();
   });
 
-  it('shows the learner dashboard when authenticated', async () => {
+  it('routes an authenticated ADMIN directly to the admin dashboard', () => {
+    vi.mocked(isAuthenticated).mockReturnValue(true);
+    vi.mocked(hasRealmRole).mockImplementation((role) => role === 'ADMIN');
+
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: /admin dashboard/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /your kafka learning/i })).not.toBeInTheDocument();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-admin authenticated users behind learner onboarding', async () => {
     vi.mocked(isAuthenticated).mockReturnValue(true);
     render(<App />);
     expect(
