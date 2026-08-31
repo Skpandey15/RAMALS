@@ -1,6 +1,5 @@
 package io.ramals.learningplatform.admin;
 
-import io.ramals.learningplatform.registration.RegistrationProperties;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -21,9 +20,10 @@ import org.springframework.web.client.RestClientException;
 /**
  * Server-side Keycloak administration adapter for human administrative operations.
  *
- * <p>The browser never receives the confidential client credential. The adapter reuses the
- * dedicated least-privilege service account already used for registration; the realm grants it
- * manage-users/view-users only. It therefore cannot mutate realm configuration or clients.
+ * <p>The browser never receives the confidential client credential. M1-ADR-017 gives this surface
+ * its own {@code ramals-identity-admin} workload identity rather than reusing the registration
+ * credential. The effective realm permission ceiling remains manage-users/view-users; realm and
+ * client administration are outside this adapter's trust domain.
  */
 @Component
 public class AdminIdentityProviderClient {
@@ -32,11 +32,11 @@ public class AdminIdentityProviderClient {
   private static final Duration READ_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration TOKEN_SKEW = Duration.ofSeconds(30);
 
-  private final RegistrationProperties properties;
+  private final AdminIdentityProperties properties;
   private final RestClient http;
   private final AtomicReference<CachedToken> cachedToken = new AtomicReference<>();
 
-  public AdminIdentityProviderClient(RegistrationProperties properties) {
+  public AdminIdentityProviderClient(AdminIdentityProperties properties) {
     this.properties = properties;
     SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
     requestFactory.setConnectTimeout(CONNECT_TIMEOUT);
@@ -45,9 +45,10 @@ public class AdminIdentityProviderClient {
   }
 
   public List<AdminIdentityUser> listUsers() {
+    requireConfigured();
     try {
       List<Map<String, Object>> users = http.get()
-          .uri(realmBase() + "/users?first=0&max=200", properties.getKeycloak().getRealm())
+          .uri(realmBase() + "/users?first=0&max=200", properties.getRealm())
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .retrieve()
           .body(List.class);
@@ -71,10 +72,11 @@ public class AdminIdentityProviderClient {
   }
 
   public Set<String> effectiveRealmRoles(String userId) {
+    requireConfigured();
     try {
       List<Map<String, Object>> roles = http.get()
           .uri(realmBase() + "/users/{userId}/role-mappings/realm/composite",
-              properties.getKeycloak().getRealm(), userId)
+              properties.getRealm(), userId)
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .retrieve()
           .body(List.class);
@@ -95,9 +97,10 @@ public class AdminIdentityProviderClient {
   }
 
   public void setEnabled(String userId, boolean enabled) {
+    requireConfigured();
     try {
       http.put()
-          .uri(realmBase() + "/users/{userId}", properties.getKeycloak().getRealm(), userId)
+          .uri(realmBase() + "/users/{userId}", properties.getRealm(), userId)
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .contentType(MediaType.APPLICATION_JSON)
           .body(Map.of("enabled", enabled))
@@ -109,6 +112,7 @@ public class AdminIdentityProviderClient {
   }
 
   public void addRealmRole(String userId, String roleName) {
+    requireConfigured();
     Map<String, Object> role = findAvailableRole(userId, roleName);
     if (role == null) {
       if (effectiveRealmRoles(userId).contains(roleName)) {
@@ -118,8 +122,7 @@ public class AdminIdentityProviderClient {
     }
     try {
       http.post()
-          .uri(realmBase() + "/users/{userId}/role-mappings/realm",
-              properties.getKeycloak().getRealm(), userId)
+          .uri(realmBase() + "/users/{userId}/role-mappings/realm", properties.getRealm(), userId)
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .contentType(MediaType.APPLICATION_JSON)
           .body(List.of(role))
@@ -131,14 +134,14 @@ public class AdminIdentityProviderClient {
   }
 
   public void removeRealmRole(String userId, String roleName) {
+    requireConfigured();
     Map<String, Object> assigned = findAssignedRole(userId, roleName);
     if (assigned == null) {
       return;
     }
     try {
       http.method(HttpMethod.DELETE)
-          .uri(realmBase() + "/users/{userId}/role-mappings/realm",
-              properties.getKeycloak().getRealm(), userId)
+          .uri(realmBase() + "/users/{userId}/role-mappings/realm", properties.getRealm(), userId)
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .contentType(MediaType.APPLICATION_JSON)
           .body(List.of(assigned))
@@ -152,8 +155,7 @@ public class AdminIdentityProviderClient {
   private Map<String, Object> findAvailableRole(String userId, String roleName) {
     try {
       List<Map<String, Object>> roles = http.get()
-          .uri(realmBase() + "/users/{userId}/role-mappings/realm/available",
-              properties.getKeycloak().getRealm(), userId)
+          .uri(realmBase() + "/users/{userId}/role-mappings/realm/available", properties.getRealm(), userId)
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .retrieve()
           .body(List.class);
@@ -166,8 +168,7 @@ public class AdminIdentityProviderClient {
   private Map<String, Object> findAssignedRole(String userId, String roleName) {
     try {
       List<Map<String, Object>> roles = http.get()
-          .uri(realmBase() + "/users/{userId}/role-mappings/realm",
-              properties.getKeycloak().getRealm(), userId)
+          .uri(realmBase() + "/users/{userId}/role-mappings/realm", properties.getRealm(), userId)
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .retrieve()
           .body(List.class);
@@ -198,17 +199,18 @@ public class AdminIdentityProviderClient {
     try {
       MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
       form.add("grant_type", "client_credentials");
-      form.add("client_id", properties.getKeycloak().getClientId());
-      form.add("client_secret", properties.getKeycloak().getClientSecret());
+      form.add("client_id", properties.getClientId());
+      form.add("client_secret", properties.getClientSecret());
       Map<String, Object> response = http.post()
-          .uri(properties.getKeycloak().getBaseUrl()
-              + "/realms/{realm}/protocol/openid-connect/token", properties.getKeycloak().getRealm())
+          .uri(properties.getBaseUrl() + "/realms/{realm}/protocol/openid-connect/token",
+              properties.getRealm())
           .contentType(MediaType.APPLICATION_FORM_URLENCODED)
           .body(form)
           .retrieve()
           .body(Map.class);
       if (response == null || response.get("access_token") == null) {
-        throw new IllegalStateException("Identity provider omitted access_token.");
+        throw new AdminIdentityProviderException(
+            "accessToken", new IllegalStateException("Identity provider omitted access_token."));
       }
       long expiresIn = response.get("expires_in") instanceof Number number ? number.longValue() : 60L;
       CachedToken refreshed = new CachedToken(
@@ -220,8 +222,16 @@ public class AdminIdentityProviderClient {
     }
   }
 
+  private void requireConfigured() {
+    if (properties.getClientSecret() == null || properties.getClientSecret().isBlank()) {
+      throw new AdminIdentityProviderException(
+          "configuration",
+          new IllegalStateException("RAMALS_IDENTITY_ADMIN_CLIENT_SECRET is not configured."));
+    }
+  }
+
   private String realmBase() {
-    return properties.getKeycloak().getBaseUrl() + "/admin/realms/{realm}";
+    return properties.getBaseUrl() + "/admin/realms/{realm}";
   }
 
   private static String string(Object value) {
