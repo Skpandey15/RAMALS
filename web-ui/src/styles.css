@@ -238,9 +238,73 @@ legend {
   grid-column: 1 / -1;
 }
 
-/* One column on narrow viewports: the paired fields stack rather than being squeezed. */
+.admin-dashboard {
+  width: min(72rem, calc(100% - 3rem));
+}
+
+.admin-intro {
+  max-width: 44rem;
+  margin: 0;
+  color: #52657d;
+}
+
+.admin-role-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  padding: 0 0.65rem;
+  border: 1px solid #b9cbed;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #234b7c;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.admin-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.admin-card {
+  min-height: 10rem;
+  padding: 1.25rem;
+  border: 1px solid #dce5f0;
+  border-radius: 0.75rem;
+  background: #f9fbfe;
+}
+
+.admin-card h3 {
+  margin: 0 0 0.65rem;
+  font-size: 1.05rem;
+}
+
+.admin-card p {
+  margin: 0 0 1rem;
+  color: #52657d;
+  line-height: 1.55;
+}
+
+.admin-status {
+  display: inline-block;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #315c91;
+}
+
+/* One column on narrow viewports: the paired fields and admin cards stack. */
 @media (max-width: 42rem) {
-  .registration-form {
+  .registration-form,
+  .admin-card-grid {
     grid-template-columns: 1fr;
+  }
+
+  .app-header,
+  .panel-heading-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
