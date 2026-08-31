@@ -99,7 +99,7 @@ describe('authClient token handling', () => {
     expect(keycloak.logout).toHaveBeenCalledWith({ redirectUri: window.location.origin });
   });
 
-  it('initializes with silent SSO check so a returning learner recovers their session', async () => {
+  it('recovers a returning session without browser-blocked background iframes', async () => {
     keycloak.init.mockResolvedValue(true);
 
     await initializeAuthentication();
@@ -109,7 +109,7 @@ describe('authClient token handling', () => {
         flow: 'standard',
         onLoad: 'check-sso',
         pkceMethod: 'S256',
-        checkLoginIframe: true,
+        checkLoginIframe: false,
       }),
     );
   });

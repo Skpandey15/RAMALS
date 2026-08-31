@@ -15,8 +15,10 @@ export async function initializeAuthentication(): Promise<boolean> {
     flow: 'standard',
     onLoad: 'check-sso',
     pkceMethod: 'S256',
-    silentCheckSsoRedirectUri: `${window.location.origin}/silent-check-sso.html`,
-    checkLoginIframe: true,
+    // Use the top-level check-sso redirect instead of the hidden silent-SSO and session iframes.
+    // Browsers can block or indefinitely defer those third-party-cookie checks, leaving the React
+    // root empty on a later visit until the entire browser process is restarted.
+    checkLoginIframe: false,
   });
 }
 
