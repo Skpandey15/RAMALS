@@ -207,7 +207,7 @@ Wait-JenkinsCliAuthentication
 
 Write-Host "Installing required pipeline and Git plugins"
 & $java -jar $cli -s $jenkinsUrl -auth $auth install-plugin `
-  workflow-aggregator git pipeline-stage-view timestamper
+  workflow-aggregator git pipeline-stage-view timestamper blueocean
 if ($LASTEXITCODE -ne 0) { throw "Required Jenkins plugin installation failed." }
 # User-mode Jenkins has no service lifecycle, so restart the verified controller process ourselves.
 Restart-LocalJenkins
