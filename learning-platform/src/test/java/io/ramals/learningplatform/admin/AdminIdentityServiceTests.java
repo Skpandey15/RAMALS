@@ -10,7 +10,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -26,6 +25,24 @@ class AdminIdentityServiceTests {
     assertThatThrownBy(() -> service.setEnabled("same-subject", "same-subject", false))
         .isInstanceOf(IllegalArgumentException.class);
     verify(provider, never()).setEnabled("same-subject", false);
+  }
+
+  @Test
+  void keycloakServiceAccountCannotBeChangedEvenWithoutServiceRealmRole() {
+    when(provider.isServiceAccount("service-account-id")).thenReturn(true);
+    when(provider.effectiveRealmRoles("service-account-id")).thenReturn(Set.of());
+
+    assertThatThrownBy(() -> service.setEnabled("admin-1", "service-account-id", false))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("workload identities");
+    assertThatThrownBy(
+        () -> service.addRole("admin-1", "service-account-id", "CONTENT_AUTHOR"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("workload identities");
+
+    verify(provider, never()).setEnabled("service-account-id", false);
+    verify(provider, never()).addRealmRole("service-account-id", "CONTENT_AUTHOR");
+    verify(provider, never()).effectiveRealmRoles("service-account-id");
   }
 
   @Test
@@ -77,9 +94,9 @@ class AdminIdentityServiceTests {
   @Test
   void completedIdentityMutationIsNotMisreportedWhenSuccessAuditFails() {
     when(provider.effectiveRealmRoles("user-2")).thenReturn(Set.of("CONTENT_AUTHOR"));
-    when(provider.listUsers()).thenReturn(List.of(
+    when(provider.getUser("user-2")).thenReturn(
         new AdminIdentityUser("user-2", "staff", "staff@example.test", false,
-            Set.of("CONTENT_AUTHOR"))));
+            Set.of("CONTENT_AUTHOR")));
     doThrow(new IllegalStateException("completion audit unavailable"))
         .when(audit).append(eq("admin-1"), eq("SET_IDENTITY_ENABLED"), eq("IDENTITY_USER"),
             nullable(UUID.class), eq("SUCCESS"), eq("disabled"),
@@ -89,5 +106,7 @@ class AdminIdentityServiceTests {
 
     assertThat(result.enabled()).isFalse();
     verify(provider).setEnabled("user-2", false);
+    verify(provider).getUser("user-2");
+    verify(provider, never()).listUsers();
   }
 }
