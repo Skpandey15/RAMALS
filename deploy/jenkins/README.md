@@ -22,6 +22,34 @@ Docker daemon or Kubernetes context. The controller binds to `127.0.0.1:8090`.
 The `RAMALS-main` pipeline polls GitHub every two minutes. A webhook can replace polling when the
 machine has a safely authenticated inbound endpoint.
 
+### Start Jenkins automatically after Windows sign-in
+
+After the controller has been installed once, register its user-mode Windows logon task:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\deploy\jenkins\configure-autostart.ps1 -StartNow
+```
+
+This creates or reconciles the `RAMALS-Jenkins-Local` Scheduled Task for the current Windows user.
+The task runs with limited interactive-user privileges, starts Jenkins only when the loopback
+controller is not already responding, and therefore preserves access to Rancher Desktop and the
+current user's kubeconfig without creating duplicate Jenkins controllers.
+
+After that one-time setup the normal flow is automatic:
+
+```text
+Windows sign-in
+  -> RAMALS-Jenkins-Local starts Jenkins
+  -> RAMALS-main polls GitHub main every two minutes
+  -> a new main commit triggers the Jenkins pipeline
+  -> deploy-main.ps1 validates the exact trusted main commit
+  -> deploy/k8s/dev/bootstrap.ps1 deploys to ramals-dev
+  -> deploy/k8s/dev/smoke.ps1 validates the deployment
+```
+
+You do not need to rerun `install-local.ps1` for normal deployments. Use it only to install or
+reconcile the Jenkins controller itself.
+
 ## Manual pipeline validation
 
 ```powershell
