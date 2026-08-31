@@ -26,7 +26,17 @@ public class AdminApiExceptionHandler {
   ResponseEntity<ApiProblem> learnerStateConflict(
       AdminLearnerStateConflictException exception, HttpServletRequest request) {
     return problem(HttpStatus.CONFLICT, "Learner state conflict", "ADMIN_LEARNER_STATE_CONFLICT",
-        "The requested learner lifecycle transition is not permitted.", request);
+        "The requested learner lifecycle transition is not permitted or the learner changed concurrently.",
+        request);
+  }
+
+  @ExceptionHandler(IllegalArgumentException.class)
+  ResponseEntity<ApiProblem> invalidAdministrativeRequest(
+      IllegalArgumentException exception, HttpServletRequest request) {
+    return problem(HttpStatus.BAD_REQUEST, "Invalid administrative request",
+        "ADMIN_INVALID_REQUEST",
+        "The administrative request violates the supported input or identity-management policy.",
+        request);
   }
 
   @ExceptionHandler(AdminIdentityProviderException.class)
