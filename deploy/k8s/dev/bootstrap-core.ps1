@@ -336,11 +336,25 @@ if (-not (kubectl get secret ramals-dev-runtime -n $Namespace --ignore-not-found
 
 # Registration is enabled in DEV. Its confidential Keycloak client therefore needs a stable secret
 # before the platform starts. Generate it once, keep it across redeploys, and reconcile Keycloak to
-# this value after Keycloak is ready. The value never enters Git, a command line, or terminal output.
+# this value after Keycloak is ready. The credential is delivered to kubectl on stdin, not argv.
 if (-not (kubectl get secret ramals-dev-registration-admin -n $Namespace --ignore-not-found -o name)) {
-  kubectl create secret generic ramals-dev-registration-admin -n $Namespace `
-    --from-literal=RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET=$(New-RandomSecret) `
-    --dry-run=client -o yaml | kubectl apply -f - | Out-Host
+  $registrationSecretValue = New-RandomSecret
+  $registrationSecretManifest = [ordered]@{
+    apiVersion = "v1"
+    kind = "Secret"
+    metadata = [ordered]@{
+      name = "ramals-dev-registration-admin"
+      namespace = $Namespace
+    }
+    type = "Opaque"
+    stringData = [ordered]@{
+      RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET = $registrationSecretValue
+    }
+  } | ConvertTo-Json -Depth 6
+  $registrationSecretManifest | kubectl apply -f - | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "Failed to create ramals-dev-registration-admin Secret." }
+  $registrationSecretValue = $null
+  $registrationSecretManifest = $null
   Write-Host "secret ramals-dev-registration-admin generated"
 } else {
   Write-Host "secret ramals-dev-registration-admin already exists (kept)"
@@ -425,9 +439,10 @@ if [ -z "$CLIENT_UUID" ]; then
   echo "registration client $CLIENT_ID is missing from realm ramals" >&2
   exit 1
 fi
-$K update clients/$CLIENT_UUID -r ramals -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true \
-  -s standardFlowEnabled=false -s directAccessGrantsEnabled=false -s implicitFlowEnabled=false \
-  -s "secret=$SECRET" $A >/dev/null
+$K update clients/$CLIENT_UUID -r ramals -f /dev/stdin $A >/dev/null <<EOF
+{"enabled":true,"publicClient":false,"serviceAccountsEnabled":true,"standardFlowEnabled":false,"directAccessGrantsEnabled":false,"implicitFlowEnabled":false,"secret":"$SECRET"}
+EOF
+SECRET=
 SERVICE_USER="service-account-$CLIENT_ID"
 $K remove-roles -r ramals --uusername "$SERVICE_USER" --cclientid realm-management --rolename realm-admin $A >/dev/null 2>&1 || true
 $K remove-roles -r ramals --uusername "$SERVICE_USER" --cclientid realm-management --rolename manage-realm $A >/dev/null 2>&1 || true
