@@ -17,8 +17,22 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ErrorView = "ConciseView"
+$env:NO_COLOR = "1"
+$env:CLICOLOR = "0"
+$env:TERM = "dumb"
+if ($null -ne (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue)) {
+  $PSStyle.OutputRendering = "PlainText"
+}
+
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repositoryRoot
+
+function ConvertTo-PlainLogText {
+  param([AllowNull()][object]$Value)
+  if ($null -eq $Value) { return "" }
+  return ([string]$Value -replace "`e\[[0-9;?]*[ -/]*[@-~]", "").Trim()
+}
 
 function Invoke-Checked {
   param([string]$Description, [scriptblock]$Command)
@@ -26,6 +40,20 @@ function Invoke-Checked {
   if ($LASTEXITCODE -ne 0) {
     throw "$Description failed with exit code $LASTEXITCODE."
   }
+}
+
+function Assert-DockerRuntimeReady {
+  Write-Host "[preflight] Checking Docker runtime..."
+  $probeOutput = & docker info --format '{{.ServerVersion}}' 2>&1
+  $probeExitCode = $LASTEXITCODE
+  $plainOutput = @($probeOutput | ForEach-Object { ConvertTo-PlainLogText $_ } | Where-Object { $_ })
+  if ($probeExitCode -ne 0) {
+    $detail = ($plainOutput -join " | ")
+    if (-not $detail) { $detail = "docker info returned no diagnostic output" }
+    throw "Docker runtime is unavailable. $detail"
+  }
+  $serverVersion = ($plainOutput -join " ").Trim()
+  Write-Host "[preflight] Docker runtime ready: $serverVersion"
 }
 
 $requiredTools = @("git")
@@ -53,7 +81,7 @@ if (git status --porcelain --untracked-files=no) {
   throw "Refusing deployment from a checkout with tracked modifications."
 }
 
-Write-Host "Validated trusted main commit $head" -ForegroundColor Green
+Write-Host "Validated trusted main commit $head"
 if ($ValidateOnly) { return }
 
 $evidenceDirectory = Join-Path $repositoryRoot "artifacts\jenkins"
@@ -61,25 +89,31 @@ New-Item -ItemType Directory -Force -Path $evidenceDirectory | Out-Null
 $applicationReleaseCommit = $null
 
 try {
+  Assert-DockerRuntimeReady
+
   $ghcrEvidence = Join-Path $evidenceDirectory "ghcr-images.json"
   $desiredVersion = Get-Content (Join-Path $repositoryRoot "deploy\desired-version.json") -Raw | ConvertFrom-Json
   $applicationReleaseCommit = [string]$desiredVersion.release.commit
   $applicationImageTag = $applicationReleaseCommit.Substring(0, 7)
   $infrastructureImageTag = $head.Substring(0, 7)
-  & pwsh -NoProfile -NonInteractive -File `
+
+  Write-Host "[deploy] Preparing immutable GHCR application images..."
+  & pwsh -NoLogo -NoProfile -NonInteractive -File `
     (Join-Path $repositoryRoot "deploy\jenkins\prepare-ghcr-images.ps1") `
     -Commit $head -EvidencePath $ghcrEvidence
   if ($LASTEXITCODE -ne 0) { throw "Preparing immutable GHCR images failed." }
 
-  & pwsh -NoProfile -NonInteractive -File `
+  Write-Host "[deploy] Bootstrapping local k3d DEV..."
+  & pwsh -NoLogo -NoProfile -NonInteractive -File `
     (Join-Path $repositoryRoot "deploy\k8s\dev\bootstrap.ps1") `
     -Namespace $Namespace -ClusterName $ClusterName `
     -ApplicationImageTag $applicationImageTag `
     -InfrastructureImageTag $infrastructureImageTag -SkipBuild
   if ($LASTEXITCODE -ne 0) { throw "RAMALS bootstrap failed." }
 
+  Write-Host "[deploy] Running smoke suite..."
   $smokeLog = Join-Path $evidenceDirectory "smoke.log"
-  & pwsh -NoProfile -NonInteractive -File `
+  & pwsh -NoLogo -NoProfile -NonInteractive -File `
     (Join-Path $repositoryRoot "deploy\k8s\dev\smoke.ps1") `
     -Namespace $Namespace -ClusterName $ClusterName 2>&1 | Tee-Object -FilePath $smokeLog
   if ($LASTEXITCODE -ne 0) { throw "RAMALS smoke suite failed." }
@@ -104,7 +138,10 @@ try {
     namespace = $Namespace
     completedAt = [DateTimeOffset]::UtcNow.ToString("O")
   } | ConvertTo-Json | Out-File (Join-Path $evidenceDirectory "summary.json") -Encoding utf8
+
+  Write-Host "[deploy] RAMALS local DEV deployment completed successfully."
 } catch {
+  $failureReason = ConvertTo-PlainLogText $_.Exception.Message
   [ordered]@{
     outcome = "FAILED"
     deploymentConfigCommit = $head
@@ -114,7 +151,11 @@ try {
     cluster = $ClusterName
     namespace = $Namespace
     failedAt = [DateTimeOffset]::UtcNow.ToString("O")
-    reason = $_.Exception.Message
+    reason = $failureReason
   } | ConvertTo-Json | Out-File (Join-Path $evidenceDirectory "summary.json") -Encoding utf8
-  throw
+
+  Write-Host ""
+  Write-Host "ERROR: $failureReason"
+  Write-Host "Deployment stopped. See artifacts/jenkins/summary.json for failure evidence."
+  exit 1
 }
