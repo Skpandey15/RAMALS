@@ -58,11 +58,24 @@ if ($ValidateOnly) { return }
 
 $evidenceDirectory = Join-Path $repositoryRoot "artifacts\jenkins"
 New-Item -ItemType Directory -Force -Path $evidenceDirectory | Out-Null
+$applicationReleaseCommit = $null
 
 try {
+  $ghcrEvidence = Join-Path $evidenceDirectory "ghcr-images.json"
+  $desiredVersion = Get-Content (Join-Path $repositoryRoot "deploy\desired-version.json") -Raw | ConvertFrom-Json
+  $applicationReleaseCommit = [string]$desiredVersion.release.commit
+  $applicationImageTag = $applicationReleaseCommit.Substring(0, 7)
+  $infrastructureImageTag = $head.Substring(0, 7)
+  & pwsh -NoProfile -NonInteractive -File `
+    (Join-Path $repositoryRoot "deploy\jenkins\prepare-ghcr-images.ps1") `
+    -Commit $head -EvidencePath $ghcrEvidence
+  if ($LASTEXITCODE -ne 0) { throw "Preparing immutable GHCR images failed." }
+
   & pwsh -NoProfile -NonInteractive -File `
     (Join-Path $repositoryRoot "deploy\k8s\dev\bootstrap.ps1") `
-    -Namespace $Namespace -ClusterName $ClusterName
+    -Namespace $Namespace -ClusterName $ClusterName `
+    -ApplicationImageTag $applicationImageTag `
+    -InfrastructureImageTag $infrastructureImageTag -SkipBuild
   if ($LASTEXITCODE -ne 0) { throw "RAMALS bootstrap failed." }
 
   $smokeLog = Join-Path $evidenceDirectory "smoke.log"
@@ -83,7 +96,8 @@ try {
 
   [ordered]@{
     outcome = "SUCCESS"
-    commit = $head
+    deploymentConfigCommit = $head
+    applicationReleaseCommit = $applicationReleaseCommit
     buildNumber = $env:BUILD_NUMBER
     buildUrl = $env:BUILD_URL
     cluster = $ClusterName
@@ -93,7 +107,8 @@ try {
 } catch {
   [ordered]@{
     outcome = "FAILED"
-    commit = $head
+    deploymentConfigCommit = $head
+    applicationReleaseCommit = $applicationReleaseCommit
     buildNumber = $env:BUILD_NUMBER
     buildUrl = $env:BUILD_URL
     cluster = $ClusterName

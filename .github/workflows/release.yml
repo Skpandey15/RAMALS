@@ -78,8 +78,14 @@ jobs:
         include:
           - component: learning-platform
             dockerfile: learning-platform/Dockerfile
+            build_args: ''
           - component: web-ui
             dockerfile: web-ui/Dockerfile
+            # Vite embeds these values into the static bundle. This release profile targets the
+            # shared local DEV ingress used by the approved desired-version deployment.
+            build_args: |-
+              VITE_KEYCLOAK_URL=http://keycloak.localhost:8080
+              VITE_API_BASE_URL=
           # M1-T17. The AI plane is a released component, not a development convenience: it is built
           # once, digest-addressed, scanned and attested on the same path as the other two. An image
           # that only ever exists on a developer's machine cannot be rolled back to.
@@ -89,6 +95,7 @@ jobs:
           # directory keeps its name; only the matrix key is the component.
           - component: ai
             dockerfile: ramals-ai/Dockerfile
+            build_args: ''
     outputs:
       learning_platform_digest: ${{ steps.export.outputs.learning_platform_digest }}
       web_ui_digest: ${{ steps.export.outputs.web_ui_digest }}
@@ -145,6 +152,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
           provenance: mode=max
           sbom: true
 
