@@ -9,11 +9,11 @@ COPY web-ui/ ./
 # OIDC issuer a property of the image, which is why it is a build argument rather than a default
 # somebody edits in source.
 #
-# The default matches authClient.ts's own fallback, so an unparameterised build behaves exactly as
-# before. Local Kubernetes overrides it with a URL that resolves identically from the browser and
-# from inside the cluster -- see deploy/k8s/dev/README.md; a browser-only URL produces tokens whose
-# `iss` the platform then rejects.
-ARG VITE_KEYCLOAK_URL=http://localhost:8081
+# The default matches authClient.ts's own fallback. Local Kubernetes uses the same URL, which
+# resolves from the browser and, via the CoreDNS rewrite bootstrap.ps1 installs, from inside the
+# cluster -- see deploy/k8s/dev/README.md. One issuer URL avoids tokens whose `iss` the platform
+# then rejects.
+ARG VITE_KEYCLOAK_URL=http://keycloak.localhost:8080
 ARG VITE_KEYCLOAK_REALM=ramals
 ARG VITE_KEYCLOAK_CLIENT_ID=ramals-web-ui
 ARG VITE_API_BASE_URL=http://localhost:8080
@@ -37,17 +37,13 @@ RUN grep -rq "$VITE_KEYCLOAK_URL" dist/assets/*.js \
 # why the image cannot pick up a security fix on its own: the digest is frozen, so a CVE published
 # after it was chosen stays in the image until somebody acts.
 #
-# CVE-2026-14456 (openssl, HIGH) is that case. Alpine v3.24/main carries the fix in 3.5.8-r0, but
-# upstream nginx-unprivileged has not rebuilt against it, so there is no newer digest to move to --
-# checked, rather than assumed: the current :alpine tag still ships 3.5.7-r0.
-#
-# Patching the packages here is therefore the fix, not a workaround for one. Re-pinning to a
-# rebuilt upstream digest later is strictly better and this line should go when that exists.
+# The pinned base can therefore accumulate newly published fixable HIGH findings after it was
+# selected. Keep the runtime packages that Trivy gates explicitly upgraded to the patched versions
+# available from the same Alpine release repository while retaining the reproducible base digest.
 FROM nginxinc/nginx-unprivileged:alpine@sha256:334d92979f15aaecd5dd50af5105e1230e2bb70765d45b1e2f964e7c5eda81c3
-# The base image runs as uid 101. Root is needed to install and is given up again on the next line,
-# so the running container is unprivileged exactly as before -- the whole point of this base.
+# The base image runs as uid 101. Root is needed to patch packages and is dropped immediately after.
 USER root
-RUN apk upgrade --no-cache libcrypto3 libssl3
+RUN apk upgrade --no-cache libcrypto3 libssl3 libexpat
 USER 101
 COPY infrastructure/docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
