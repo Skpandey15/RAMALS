@@ -106,6 +106,9 @@ Check "registration admin secret is stored" {
     -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
   return -not [string]::IsNullOrWhiteSpace($v)
 }
+# Prove the Kubernetes-owned credential and Keycloak's confidential client agree. The secret is
+# decoded only in this PowerShell process, sent as an HTTP form body (not process argv), and neither
+# the secret nor the returned access token is written to the console.
 Check "registration admin client credentials authenticate" {
   $encoded = kubectl get secret ramals-dev-registration-admin -n $Namespace `
     -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
