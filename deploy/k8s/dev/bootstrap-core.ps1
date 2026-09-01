@@ -266,7 +266,7 @@ Container environment is not ready; stopping before the image builds.
   foreach ($i in $ramalsImages) {
     # Push through localhost; the cluster pulls the same repository under the registry's in-network
     # name. Both names address one registry, so one push serves both.
-    $tag = if ($i.Kind -eq 'application') { $applicationReleaseImageTag } else { $deploymentConfigImageTag }
+    $tag = if ($i.Kind -eq "application") { $applicationReleaseImageTag } else { $deploymentConfigImageTag }
     $push = "localhost:${RegistryPort}/$($i.Repo):$tag"
     Write-Host "building $($i.Repo)" -ForegroundColor DarkCyan
 
@@ -334,31 +334,63 @@ if (-not (kubectl get secret ramals-dev-runtime -n $Namespace --ignore-not-found
   Write-Host "secret ramals-dev-runtime already exists (kept)"
 }
 
-# Registration is enabled in DEV. Its confidential Keycloak client therefore needs a stable secret
-# before the platform starts. Generate it once, keep it across redeploys, and reconcile Keycloak to
-# this value after Keycloak is ready. The credential is delivered to kubectl on stdin, not argv.
-if (-not (kubectl get secret ramals-dev-registration-admin -n $Namespace --ignore-not-found -o name)) {
-  $registrationSecretValue = New-RandomSecret
-  $registrationSecretManifest = [ordered]@{
-    apiVersion = "v1"
-    kind = "Secret"
-    metadata = [ordered]@{
-      name = "ramals-dev-registration-admin"
-      namespace = $Namespace
-    }
-    type = "Opaque"
-    stringData = [ordered]@{
-      RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET = $registrationSecretValue
-    }
-  } | ConvertTo-Json -Depth 6
-  $registrationSecretManifest | kubectl apply -f - | Out-Host
-  if ($LASTEXITCODE -ne 0) { throw "Failed to create ramals-dev-registration-admin Secret." }
-  $registrationSecretValue = $null
-  $registrationSecretManifest = $null
-  Write-Host "secret ramals-dev-registration-admin generated"
+# Registration is enabled in DEV and needs two independent, stable credentials before the platform
+# starts: the confidential Keycloak registration-admin client secret and the OTP HMAC key ring. Both
+# are generated in memory, kept across redeploys, and delivered to kubectl on stdin rather than argv.
+# Re-applying the complete two-key Secret also repairs clusters created by #220, which have the
+# Keycloak credential but not the OTP key ring.
+$registrationAdminKey = "RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET"
+$registrationOtpKey = "RAMALS_OTP_HMAC_KEYS"
+$registrationSecretName = "ramals-dev-registration-admin"
+
+$registrationAdminEncoded = kubectl get secret $registrationSecretName -n $Namespace `
+  --ignore-not-found -o "jsonpath={.data.$registrationAdminKey}" 2>$null
+$registrationOtpEncoded = kubectl get secret $registrationSecretName -n $Namespace `
+  --ignore-not-found -o "jsonpath={.data.$registrationOtpKey}" 2>$null
+
+$registrationAdminValue = if ($registrationAdminEncoded) {
+  [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($registrationAdminEncoded))
 } else {
-  Write-Host "secret ramals-dev-registration-admin already exists (kept)"
+  New-RandomSecret
 }
+$registrationOtpValue = if ($registrationOtpEncoded) {
+  [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($registrationOtpEncoded))
+} else {
+  "v1:$(New-RandomSecret)"
+}
+
+$registrationSecretManifest = [ordered]@{
+  apiVersion = "v1"
+  kind = "Secret"
+  metadata = [ordered]@{
+    name = $registrationSecretName
+    namespace = $Namespace
+  }
+  type = "Opaque"
+  stringData = [ordered]@{
+    $registrationAdminKey = $registrationAdminValue
+    $registrationOtpKey = $registrationOtpValue
+  }
+} | ConvertTo-Json -Depth 6
+$registrationSecretManifest | kubectl apply -f - | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "Failed to reconcile $registrationSecretName Secret." }
+
+if (-not $registrationAdminEncoded) {
+  Write-Host "secret $registrationSecretName registration-admin credential generated"
+} else {
+  Write-Host "secret $registrationSecretName registration-admin credential kept"
+}
+if (-not $registrationOtpEncoded) {
+  Write-Host "secret $registrationSecretName OTP HMAC key ring generated"
+} else {
+  Write-Host "secret $registrationSecretName OTP HMAC key ring kept"
+}
+
+$registrationAdminEncoded = $null
+$registrationOtpEncoded = $null
+$registrationAdminValue = $null
+$registrationOtpValue = $null
+$registrationSecretManifest = $null
 
 Write-Host "== deploy ==" -ForegroundColor Cyan
 # kustomization.yaml pins a tag so that `kubectl kustomize` alone renders something valid and
