@@ -54,6 +54,32 @@ spec:
             - {name: KC_HOSTNAME, value: "http://keycloak.localhost:8080"}
             - {name: KC_HOSTNAME_STRICT, value: "false"}
             - {name: KC_CACHE, value: local}
+          lifecycle:
+            # Startup realm import uses IGNORE_EXISTING. That is safe for persisted DEV users, but it
+            # also means an older persisted realm never receives later SMTP settings from
+            # ramals-realm.json. Reconcile only the DEV SMTP map after Keycloak is reachable so both
+            # fresh and already-existing clusters deterministically deliver verification mail to the
+            # in-cluster Mailpit service.
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -ec
+                  - |
+                    K=/opt/keycloak/bin/kcadm.sh
+                    until "$K" get realms/ramals \
+                      --no-config --server http://localhost:8080 --realm master \
+                      --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" \
+                      >/dev/null 2>&1; do
+                      sleep 2
+                    done
+                    cat >/tmp/ramals-dev-smtp.json <<'EOF'
+                    {"smtpServer":{"host":"mailpit","port":"1025","from":"no-reply@ramals.local","fromDisplayName":"RAMALS","auth":"false","ssl":"false","starttls":"false"}}
+                    EOF
+                    "$K" update realms/ramals -f /tmp/ramals-dev-smtp.json \
+                      --no-config --server http://localhost:8080 --realm master \
+                      --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD"
+                    rm -f /tmp/ramals-dev-smtp.json
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
