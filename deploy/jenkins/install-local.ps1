@@ -56,6 +56,17 @@ function Wait-Jenkins([int]$TimeoutSeconds = 240) {
   throw "Jenkins did not become ready at $jenkinsUrl within $TimeoutSeconds seconds."
 }
 
+function Wait-PortReleased([int]$TimeoutSeconds = 30) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if (-not $listener) { return }
+    Start-Sleep -Milliseconds 500
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "Port $Port is still listening after $TimeoutSeconds seconds."
+}
+
 # Keep the controller runtime reproducible. Upgrades are explicit changes to this version/hash pair.
 $temurinVersion = "21.0.12.1+1"
 $temurinSha256 = "F9D6E191AB098C0D416E7D588A24420A8621CD2F4720DAB2459B8B7B2D2D8B4E"
@@ -81,8 +92,13 @@ Install-VerifiedDownload `
 $passwordFile = Join-Path $jenkinsHome "secrets\ramals-admin-password"
 if (-not (Test-Path $passwordFile)) {
   $bytes = New-Object byte[] 32
-  [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
   [Convert]::ToBase64String($bytes) | Set-Content $passwordFile -NoNewline -Encoding ascii
+}
+$storedPassword = (Get-Content $passwordFile -Raw).Trim()
+if ([string]::IsNullOrWhiteSpace($storedPassword)) {
+  throw "Jenkins recovery credential is missing or empty: $passwordFile"
 }
 # Restrict the controller home and recovery credential to this Windows account.
 & icacls $jenkinsHome /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" | Out-Null
@@ -98,19 +114,21 @@ import jenkins.model.JenkinsLocationConfiguration
 
 def instance = Jenkins.get()
 def passwordFile = new File(instance.rootDir, 'secrets/ramals-admin-password')
+if (!passwordFile.exists()) {
+  throw new IllegalStateException('ramals-admin password file is missing')
+}
+def adminPassword = passwordFile.text.trim()
+if (adminPassword.isEmpty()) {
+  throw new IllegalStateException('ramals-admin password file is empty')
+}
 if (!(instance.securityRealm instanceof HudsonPrivateSecurityRealm)) {
-  def realm = new HudsonPrivateSecurityRealm(false)
-  instance.setSecurityRealm(realm)
+  instance.setSecurityRealm(new HudsonPrivateSecurityRealm(false))
 }
-def realm = (HudsonPrivateSecurityRealm) instance.securityRealm
-// A Jenkins User object can exist without a HudsonPrivateSecurityRealm password (for example when
-// created implicitly by SCM metadata). Check the realm password property, not only User existence.
-def adminUser = User.getById('ramals-admin', false)
-def hasPrivateRealmCredentials = adminUser != null &&
-    adminUser.getProperty(HudsonPrivateSecurityRealm.Details.class) != null
-if (!hasPrivateRealmCredentials) {
-  realm.createAccount('ramals-admin', passwordFile.text.trim())
-}
+// The restricted recovery file is the bootstrap credential authority. Reconcile the Jenkins
+// password property on every controller startup so browser/CLI login cannot drift from that file.
+def adminUser = User.getById('ramals-admin', true)
+adminUser.addProperty(HudsonPrivateSecurityRealm.Details.fromPlainPassword(adminPassword))
+adminUser.save()
 def authorization = new FullControlOnceLoggedInAuthorizationStrategy()
 authorization.setAllowAnonymousRead(false)
 instance.setAuthorizationStrategy(authorization)
@@ -121,6 +139,7 @@ instance.save()
 def location = JenkinsLocationConfiguration.get()
 location.setUrl('__JENKINS_URL__/')
 location.save()
+println('RAMALS Jenkins admin credential synchronized successfully')
 '@
 $initScript = $initScript.Replace('__JENKINS_URL__', $jenkinsUrl)
 $initScript | Set-Content (Join-Path $jenkinsHome "init.groovy.d\10-ramals-security.groovy") `
@@ -164,24 +183,33 @@ if (-not $running) {
 
 function Restart-LocalJenkins {
   $pidFile = Join-Path $installRoot "jenkins.pid"
+  $controllerPid = $null
   if (Test-Path $pidFile) {
-    $controllerPid = [int](Get-Content $pidFile -Raw)
-    $controller = Get-Process -Id $controllerPid -ErrorAction SilentlyContinue
-    if ($controller) {
-      if ($controller.Path -notlike "$installRoot\jdk-21*\bin\java.exe") {
-        throw "Refusing to stop unexpected PID $controllerPid at $($controller.Path)."
-      }
-      Stop-Process -Id $controllerPid
-      Wait-Process -Id $controllerPid -ErrorAction SilentlyContinue
+    $recordedPid = 0
+    if ([int]::TryParse((Get-Content $pidFile -Raw).Trim(), [ref]$recordedPid)) {
+      if (Get-Process -Id $recordedPid -ErrorAction SilentlyContinue) { $controllerPid = $recordedPid }
     }
+  }
+  if (-not $controllerPid) {
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if ($listener) { $controllerPid = $listener.OwningProcess }
+  }
+  if ($controllerPid) {
+    $controller = Get-Process -Id $controllerPid -ErrorAction Stop
+    if ($controller.Path -notlike "$installRoot\jdk-21*\bin\java.exe") {
+      throw "Refusing to stop unexpected PID $controllerPid at $($controller.Path)."
+    }
+    Stop-Process -Id $controllerPid
+    Wait-Process -Id $controllerPid -ErrorAction SilentlyContinue
+    Wait-PortReleased
   }
   & pwsh -NoProfile -NonInteractive -File $startPath
   Wait-Jenkins 360
 }
 
 # A rerun must apply the current bootstrap script before attempting authenticated CLI operations.
-# This also repairs installations created by older versions where the User existed without a
-# HudsonPrivateSecurityRealm password and every CLI/browser login returned HTTP 401.
+# This also repairs an existing Jenkins credential that drifted from the protected recovery file.
 if ($running) {
   Write-Host "Restarting existing Jenkins controller to apply bootstrap configuration"
   Restart-LocalJenkins

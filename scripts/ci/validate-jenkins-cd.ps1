@@ -124,6 +124,28 @@ Assert-True ($installer -match 'install-plugin[\s\S]*\btimestamper\b') `
 Assert-True ($installer -match 'install-plugin[\s\S]*\bblueocean\b') `
   "Installer must provide the requested Blue Ocean pipeline UI."
 
+# Persistent local Jenkins credential contract.
+Assert-True ($installer.Contains('[Security.Cryptography.RandomNumberGenerator]::Create()')) `
+  "Password generation must be compatible with Windows PowerShell 5.1."
+Assert-True ($installer.Contains('Jenkins recovery credential is missing or empty')) `
+  "The installer must fail closed when the protected recovery credential is empty."
+Assert-True ($installer.Contains("if (!passwordFile.exists())")) `
+  "The Jenkins bootstrap must fail closed when the recovery credential file is missing."
+Assert-True ($installer.Contains("if (adminPassword.isEmpty())")) `
+  "The Jenkins bootstrap must fail closed when the recovery credential is empty."
+Assert-True ($installer.Contains("User.getById('ramals-admin', true)")) `
+  "The Jenkins bootstrap must resolve or create ramals-admin deterministically."
+Assert-True ($installer.Contains('HudsonPrivateSecurityRealm.Details.fromPlainPassword(adminPassword)')) `
+  "The protected recovery credential must be reconciled into Jenkins on every startup."
+Assert-True ($installer -notmatch 'hasPrivateRealmCredentials') `
+  "Credential synchronization must not be conditional on an existing Jenkins password property."
+Assert-True ($installer.Contains('Get-NetTCPConnection -LocalPort $Port -State Listen')) `
+  "Restart must recover from a stale PID file by inspecting the actual loopback listener."
+Assert-True ($installer.Contains('Refusing to stop unexpected PID')) `
+  "Restart must never stop a process outside the verified RAMALS Jenkins runtime."
+Assert-True ($installer.Contains('Wait-PortReleased')) `
+  "Restart must wait for the Jenkins port to be released before starting a replacement controller."
+
 # Exercise the trusted-source boundary in disposable repositories without Docker or k3d.
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "ramals-jenkins-validation-$([guid]::NewGuid())"
 $remote = Join-Path $temporaryRoot "origin.git"
