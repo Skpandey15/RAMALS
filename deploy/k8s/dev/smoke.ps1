@@ -109,6 +109,9 @@ Check "registration admin secret is stored" {
 # Prove the Kubernetes-owned credential and Keycloak's confidential client agree. The secret is
 # decoded only in this PowerShell process, sent as an HTTP form body (not process argv), and neither
 # the secret nor the returned access token is written to the console.
+# Use the loopback address for the host-side request because Windows PowerShell/.NET DNS does not
+# consistently resolve the special-use *.localhost names that browsers resolve. The Host header
+# keeps Traefik routing through the same keycloak.localhost ingress rule used by the browser.
 Check "registration admin client credentials authenticate" {
   $encoded = kubectl get secret ramals-dev-registration-admin -n $Namespace `
     -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
@@ -119,7 +122,8 @@ Check "registration admin client credentials authenticate" {
   $tokenResponse = $null
   try {
     $tokenResponse = Invoke-RestMethod `
-      -Uri "http://keycloak.localhost:$IngressPort/realms/ramals/protocol/openid-connect/token" `
+      -Uri "http://127.0.0.1:$IngressPort/realms/ramals/protocol/openid-connect/token" `
+      -Headers @{ Host = "keycloak.localhost" } `
       -Method Post `
       -ContentType "application/x-www-form-urlencoded" `
       -Body @{
