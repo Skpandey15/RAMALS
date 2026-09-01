@@ -16,6 +16,11 @@ data:
   RAMALS_ADMIN_IDENTITY_BASE_URL: http://keycloak:8080
   RAMALS_ADMIN_IDENTITY_REALM: ramals
   RAMALS_ADMIN_IDENTITY_CLIENT_ID: ramals-identity-admin
+  RAMALS_REGISTRATION_ENABLED: "true"
+  RAMALS_ENVIRONMENT: dev
+  RAMALS_KEYCLOAK_ADMIN_BASE_URL: http://keycloak:8080
+  RAMALS_KEYCLOAK_REALM: ramals
+  RAMALS_REGISTRATION_ADMIN_CLIENT_ID: ramals-registration-admin
   # Requests reach the platform from the Traefik ingress and the web-ui pod, both inside the cluster
   # pod network, and only those may set X-Forwarded-For on our behalf. k3d's default pod CIDR; widen
   # or narrow to match the cluster, and never set 0.0.0.0/0 -- that trusts every caller's header.

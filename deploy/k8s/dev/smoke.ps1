@@ -12,7 +12,8 @@
 [CmdletBinding()]
 param(
   [string]$Namespace = "ramals-dev",
-  [string]$ClusterName = "ramals-dev"
+  [string]$ClusterName = "ramals-dev",
+  [int]$IngressPort = 8080
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,6 +93,49 @@ Check "ramals-ai readiness endpoint UP" {
 }
 Check "web-ui -> platform reachable" {
   Test-TcpFromPod "app.kubernetes.io/name=web-ui" "learning-platform" 8080
+}
+
+Write-Host ""
+Write-Host "== professional registration ==" -ForegroundColor Cyan
+Check "professional registration enabled in DEV" {
+  (kubectl get configmap ramals-dev-config -n $Namespace `
+    -o jsonpath='{.data.RAMALS_REGISTRATION_ENABLED}' 2>$null) -eq "true"
+}
+Check "registration admin secret is stored" {
+  $v = kubectl get secret ramals-dev-registration-admin -n $Namespace `
+    -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
+  return -not [string]::IsNullOrWhiteSpace($v)
+}
+# Prove the Kubernetes-owned credential and Keycloak's confidential client agree. The secret is
+# decoded only in this PowerShell process, sent as an HTTP form body (not process argv), and neither
+# the secret nor the returned access token is written to the console.
+Check "registration admin client credentials authenticate" {
+  $encoded = kubectl get secret ramals-dev-registration-admin -n $Namespace `
+    -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
+  if ([string]::IsNullOrWhiteSpace($encoded)) { return $false }
+
+  $secret = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+  $encoded = $null
+  $tokenResponse = $null
+  try {
+    $tokenResponse = Invoke-RestMethod `
+      -Uri "http://keycloak.localhost:$IngressPort/realms/ramals/protocol/openid-connect/token" `
+      -Method Post `
+      -ContentType "application/x-www-form-urlencoded" `
+      -Body @{
+        grant_type    = "client_credentials"
+        client_id     = "ramals-registration-admin"
+        client_secret = $secret
+      } `
+      -TimeoutSec 10 `
+      -ErrorAction Stop
+    return -not [string]::IsNullOrWhiteSpace($tokenResponse.access_token)
+  } catch {
+    return $false
+  } finally {
+    $secret = $null
+    $tokenResponse = $null
+  }
 }
 
 Write-Host ""
