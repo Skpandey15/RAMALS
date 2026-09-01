@@ -47,13 +47,15 @@ function Assert-DockerRuntimeReady {
   $probeOutput = & docker info --format '{{.ServerVersion}}' 2>&1
   $probeExitCode = $LASTEXITCODE
   $plainOutput = @($probeOutput | ForEach-Object { ConvertTo-PlainLogText $_ } | Where-Object { $_ })
-  if ($probeExitCode -ne 0) {
+  $serverVersion = @($plainOutput | Where-Object { $_ -match '^v?\d+(\.\d+){1,3}([+-][0-9A-Za-z.-]+)?$' } | Select-Object -First 1)
+
+  if ($probeExitCode -ne 0 -or $serverVersion.Count -ne 1) {
     $detail = ($plainOutput -join " | ")
     if (-not $detail) { $detail = "docker info returned no diagnostic output" }
     throw "Docker runtime is unavailable. $detail"
   }
-  $serverVersion = ($plainOutput -join " ").Trim()
-  Write-Host "[preflight] Docker runtime ready: $serverVersion"
+
+  Write-Host "[preflight] Docker runtime ready: $($serverVersion[0])"
 }
 
 $requiredTools = @("git")

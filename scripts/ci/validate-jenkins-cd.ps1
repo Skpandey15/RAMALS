@@ -119,10 +119,26 @@ Assert-True ($installer -match '\$jenkinsVersion\s*=') "Jenkins must be explicit
 Assert-True ($installer -match '\$temurinVersion\s*=') "Temurin must be explicitly version-pinned."
 Assert-True ($installer -match '\$jenkinsSha256\s*=\s*"[A-F0-9]{64}"') "Jenkins SHA256 must be pinned."
 Assert-True ($installer -match '\$temurinSha256\s*=\s*"[A-F0-9]{64}"') "Temurin SHA256 must be pinned."
-Assert-True ($installer -match 'install-plugin[\s\S]*\btimestamper\b') `
-  "Installer must provide the Timestamper plugin required by timestamps()."
 Assert-True ($installer -match 'install-plugin[\s\S]*\bblueocean\b') `
-  "Installer must provide the requested Blue Ocean pipeline UI."
+  "Installer must request the Blue Ocean pipeline UI."
+Assert-True ($installer.Contains('function Assert-BlueOceanReady')) `
+  "Installer must verify Blue Ocean after Jenkins restarts."
+Assert-True ($installer.Contains("list-plugins")) `
+  "Installer must verify the active Jenkins plugin set."
+Assert-True ($installer.Contains("$jenkinsUrl/blue/")) `
+  "Installer must verify the Blue Ocean HTTP endpoint."
+Assert-True ($installer.Contains('Blue Ocean plugin is not active after installation and restart.')) `
+  "Installer must fail closed when Blue Ocean does not activate."
+Assert-True ($deploymentBoundary.Contains('function Assert-DockerRuntimeReady')) `
+  "Deployment must have an explicit Docker runtime preflight."
+Assert-True ($imagePreparation.Contains('function Assert-DockerRuntimeReady')) `
+  "Image preparation must independently verify Docker runtime readiness."
+Assert-True ($deploymentBoundary -match '\$serverVersion\.Count\s+-ne\s+1') `
+  "Docker preflight must reject daemon error text even when docker.exe reports an unexpected success exit code."
+Assert-True ($imagePreparation -match '\$serverVersion\.Count\s+-ne\s+1') `
+  "Image preparation Docker preflight must reject daemon error text before k3d is invoked."
+Assert-True ($deploymentBoundary.Contains('Docker runtime is unavailable.')) `
+  "Docker preflight must emit an actionable failure reason."
 
 # Persistent local Jenkins credential contract.
 Assert-True ($installer.Contains('[Security.Cryptography.RandomNumberGenerator]::Create()')) `

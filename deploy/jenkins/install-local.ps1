@@ -230,16 +230,41 @@ function Wait-JenkinsCliAuthentication([int]$TimeoutSeconds = 60) {
   throw "Jenkins bootstrap account authentication failed for ramals-admin. See $installRoot\jenkins-error.log."
 }
 
+function Assert-BlueOceanReady {
+  Write-Host "Verifying Blue Ocean plugin and UI endpoint"
+  $pluginList = & $java -jar $cli -s $jenkinsUrl -auth $auth list-plugins 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not verify installed Jenkins plugins after restart."
+  }
+  if (-not ($pluginList -match '(?m)^blueocean\s')) {
+    throw "Blue Ocean plugin is not active after installation and restart."
+  }
+
+  $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($auth))
+  try {
+    $response = Invoke-WebRequest -Uri "$jenkinsUrl/blue/" -Headers @{ Authorization = "Basic $basic" } `
+      -TimeoutSec 15 -MaximumRedirection 5 -UseBasicParsing
+    if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 400) {
+      throw "Blue Ocean endpoint returned HTTP $($response.StatusCode)."
+    }
+  } catch {
+    throw "Blue Ocean plugin is installed but the UI endpoint is not reachable at $jenkinsUrl/blue/. $($_.Exception.Message)"
+  }
+
+  Write-Host "Blue Ocean ready: $jenkinsUrl/blue/"
+}
+
 Write-Host "Verifying Jenkins bootstrap authentication"
 Wait-JenkinsCliAuthentication
 
-Write-Host "Installing required pipeline and Git plugins"
+Write-Host "Installing required pipeline, Git, and UI plugins"
 & $java -jar $cli -s $jenkinsUrl -auth $auth install-plugin `
   workflow-aggregator git pipeline-stage-view timestamper blueocean
 if ($LASTEXITCODE -ne 0) { throw "Required Jenkins plugin installation failed." }
 # User-mode Jenkins has no service lifecycle, so restart the verified controller process ourselves.
 Restart-LocalJenkins
 Wait-JenkinsCliAuthentication
+Assert-BlueOceanReady
 
 $jobConfig = Get-Content (Join-Path $PSScriptRoot "job-config.xml") -Raw
 $jobExists = $false
@@ -253,6 +278,7 @@ if ($jobExists) {
 if ($LASTEXITCODE -ne 0) { throw "Could not create or update the RAMALS-main Jenkins job." }
 
 Write-Host "Jenkins ready: $jenkinsUrl" -ForegroundColor Green
+Write-Host "Blue Ocean: $jenkinsUrl/blue/" -ForegroundColor Green
 Write-Host "User: ramals-admin"
 Write-Host "Password is stored with restricted ACLs at: $passwordFile"
 
