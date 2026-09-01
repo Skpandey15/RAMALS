@@ -334,6 +334,18 @@ if (-not (kubectl get secret ramals-dev-runtime -n $Namespace --ignore-not-found
   Write-Host "secret ramals-dev-runtime already exists (kept)"
 }
 
+# Registration is enabled in DEV. Its confidential Keycloak client therefore needs a stable secret
+# before the platform starts. Generate it once, keep it across redeploys, and reconcile Keycloak to
+# this value after Keycloak is ready. The value never enters Git, a command line, or terminal output.
+if (-not (kubectl get secret ramals-dev-registration-admin -n $Namespace --ignore-not-found -o name)) {
+  kubectl create secret generic ramals-dev-registration-admin -n $Namespace `
+    --from-literal=RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET=$(New-RandomSecret) `
+    --dry-run=client -o yaml | kubectl apply -f - | Out-Host
+  Write-Host "secret ramals-dev-registration-admin generated"
+} else {
+  Write-Host "secret ramals-dev-registration-admin already exists (kept)"
+}
+
 Write-Host "== deploy ==" -ForegroundColor Cyan
 # kustomization.yaml pins a tag so that `kubectl kustomize` alone renders something valid and
 # reviewable. That committed tag is whatever commit last touched the package, which is almost never
@@ -391,6 +403,45 @@ foreach ($w in @(
   # handed to somebody as a working one.
   if ($LASTEXITCODE -ne 0) { throw "$($w.Ref) did not become ready within $($w.Timeout)." }
 }
+
+Write-Host "== registration identity ==" -ForegroundColor Cyan
+$keycloakPod = kubectl get pod -n $Namespace -l app.kubernetes.io/name=keycloak -o jsonpath='{.items[0].metadata.name}'
+$registrationAdminSecret = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(
+  (kubectl get secret ramals-dev-registration-admin -n $Namespace `
+    -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}')))
+
+# Reconcile the confidential client to the Kubernetes-owned secret. The realm import deliberately
+# carries no credential, and --import-realm skips an already-existing realm, so relying on Keycloak's
+# generated value makes the platform and Keycloak drift. stdin keeps the credential out of argv.
+$registrationScript = @'
+set -eu
+read -r SECRET
+SECRET=$(printf %s "$SECRET" | sed -e 's/[[:cntrl:]]*$//')
+K=/opt/keycloak/bin/kcadm.sh
+A="--no-config --server http://localhost:8080 --realm master --user $KC_BOOTSTRAP_ADMIN_USERNAME --password $KC_BOOTSTRAP_ADMIN_PASSWORD"
+CLIENT_ID=ramals-registration-admin
+CLIENT_UUID=$($K get clients -r ramals -q clientId=$CLIENT_ID --fields id --format csv --noquotes $A 2>/dev/null | head -1)
+if [ -z "$CLIENT_UUID" ]; then
+  echo "registration client $CLIENT_ID is missing from realm ramals" >&2
+  exit 1
+fi
+$K update clients/$CLIENT_UUID -r ramals -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true \
+  -s standardFlowEnabled=false -s directAccessGrantsEnabled=false -s implicitFlowEnabled=false \
+  -s "secret=$SECRET" $A >/dev/null
+SERVICE_USER="service-account-$CLIENT_ID"
+$K remove-roles -r ramals --uusername "$SERVICE_USER" --cclientid realm-management --rolename realm-admin $A >/dev/null 2>&1 || true
+$K remove-roles -r ramals --uusername "$SERVICE_USER" --cclientid realm-management --rolename manage-realm $A >/dev/null 2>&1 || true
+$K add-roles -r ramals --uusername "$SERVICE_USER" --cclientid realm-management --rolename manage-users $A >/dev/null
+$K add-roles -r ramals --uusername "$SERVICE_USER" --cclientid realm-management --rolename view-users $A >/dev/null
+$K add-roles -r ramals --uusername "$SERVICE_USER" --rolename SERVICE $A >/dev/null 2>&1 || true
+echo "reconciled $CLIENT_ID"
+'@
+$registrationRaw = ($registrationAdminSecret | kubectl exec -i -n $Namespace $keycloakPod -- sh -c $registrationScript 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0 -or $registrationRaw -notmatch 'reconciled ramals-registration-admin') {
+  throw "Failed to reconcile Keycloak registration client. kcadm said:`n$registrationRaw"
+}
+Write-Host "  ramals-registration-admin reconciled"
+$registrationAdminSecret = $null
 
 Write-Host "== local test users ==" -ForegroundColor Cyan
 #
