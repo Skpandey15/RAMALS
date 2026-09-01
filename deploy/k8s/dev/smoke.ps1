@@ -12,7 +12,8 @@
 [CmdletBinding()]
 param(
   [string]$Namespace = "ramals-dev",
-  [string]$ClusterName = "ramals-dev"
+  [string]$ClusterName = "ramals-dev",
+  [int]$IngressPort = 8080
 )
 
 $ErrorActionPreference = "Stop"
@@ -115,7 +116,7 @@ Check "registration admin client credentials authenticate" {
   $tokenResponse = $null
   try {
     $tokenResponse = Invoke-RestMethod `
-      -Uri "http://keycloak.localhost:8080/realms/ramals/protocol/openid-connect/token" `
+      -Uri "http://keycloak.localhost:$IngressPort/realms/ramals/protocol/openid-connect/token" `
       -Method Post `
       -ContentType "application/x-www-form-urlencoded" `
       -Body @{
