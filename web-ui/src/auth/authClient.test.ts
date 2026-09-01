@@ -14,6 +14,12 @@ describe('OIDC token storage policy', () => {
     expect(source).toContain("pkceMethod: 'S256'");
   });
 
+  it('uses the shared k3d Keycloak ingress as the local OIDC fallback', () => {
+    const source = readFileSync(resolve('src/auth/authClient.ts'), 'utf8');
+    expect(source).toContain("VITE_KEYCLOAK_URL ?? 'http://keycloak.localhost:8080'");
+    expect(source).not.toContain('http://localhost:8081');
+  });
+
   it('revalidates the Keycloak session before protected API requests when the login iframe is disabled', () => {
     const source = readFileSync(resolve('src/auth/authClient.ts'), 'utf8');
     expect(source).toContain('checkLoginIframe: false');
