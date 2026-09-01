@@ -95,6 +95,45 @@ Check "web-ui -> platform reachable" {
 }
 
 Write-Host ""
+Write-Host "== professional registration ==" -ForegroundColor Cyan
+Check "professional registration enabled in DEV" {
+  (kubectl get configmap ramals-dev-config -n $Namespace `
+    -o jsonpath='{.data.RAMALS_REGISTRATION_ENABLED}' 2>$null) -eq "true"
+}
+Check "registration admin secret is stored" {
+  $v = kubectl get secret ramals-dev-registration-admin -n $Namespace `
+    -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
+  return -not [string]::IsNullOrWhiteSpace($v)
+}
+Check "registration admin client credentials authenticate" {
+  $encoded = kubectl get secret ramals-dev-registration-admin -n $Namespace `
+    -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
+  if ([string]::IsNullOrWhiteSpace($encoded)) { return $false }
+
+  $secret = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+  $tokenResponse = $null
+  try {
+    $tokenResponse = Invoke-RestMethod `
+      -Uri "http://keycloak.localhost:8080/realms/ramals/protocol/openid-connect/token" `
+      -Method Post `
+      -ContentType "application/x-www-form-urlencoded" `
+      -Body @{
+        grant_type    = "client_credentials"
+        client_id     = "ramals-registration-admin"
+        client_secret = $secret
+      } `
+      -TimeoutSec 10 `
+      -ErrorAction Stop
+    return -not [string]::IsNullOrWhiteSpace($tokenResponse.access_token)
+  } catch {
+    return $false
+  } finally {
+    $secret = $null
+    $tokenResponse = $null
+  }
+}
+
+Write-Host ""
 Write-Host "== isolation (negative controls) ==" -ForegroundColor Cyan
 
 # The invariant the whole architecture rests on. This asserts the connection FAILS. If the AI plane
