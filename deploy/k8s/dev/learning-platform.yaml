@@ -51,6 +51,11 @@ spec:
                   name: ramals-dev-identity-admin
                   key: RAMALS_ADMIN_IDENTITY_CLIENT_SECRET
                   optional: true
+            - name: RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ramals-dev-registration-admin
+                  key: RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
