@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - postgres.yaml
+  - mailpit.yaml
   - keycloak.yaml
   - learning-platform.yaml
   - ramals-ai.yaml
