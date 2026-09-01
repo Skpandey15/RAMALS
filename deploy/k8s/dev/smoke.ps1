@@ -111,6 +111,7 @@ Check "registration admin client credentials authenticate" {
   if ([string]::IsNullOrWhiteSpace($encoded)) { return $false }
 
   $secret = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+  $encoded = $null
   $tokenResponse = $null
   try {
     $tokenResponse = Invoke-RestMethod `
