@@ -451,12 +451,17 @@ $K add-roles -r ramals --uusername "$SERVICE_USER" --cclientid realm-management 
 $K add-roles -r ramals --uusername "$SERVICE_USER" --rolename SERVICE $A >/dev/null 2>&1 || true
 echo "reconciled $CLIENT_ID"
 '@
-$registrationRaw = ($registrationAdminSecret | kubectl exec -i -n $Namespace $keycloakPod -- sh -c $registrationScript 2>&1 | Out-String)
-if ($LASTEXITCODE -ne 0 -or $registrationRaw -notmatch 'reconciled ramals-registration-admin') {
-  throw "Failed to reconcile Keycloak registration client. kcadm said:`n$registrationRaw"
+$registrationRaw = $null
+try {
+  $registrationRaw = ($registrationAdminSecret | kubectl exec -i -n $Namespace $keycloakPod -- sh -c $registrationScript 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0 -or $registrationRaw -notmatch 'reconciled ramals-registration-admin') {
+    throw "Failed to reconcile Keycloak registration client. kcadm said:`n$registrationRaw"
+  }
+  Write-Host "  ramals-registration-admin reconciled"
+} finally {
+  $registrationAdminSecret = $null
+  $registrationRaw = $null
 }
-Write-Host "  ramals-registration-admin reconciled"
-$registrationAdminSecret = $null
 
 Write-Host "== local test users ==" -ForegroundColor Cyan
 #
