@@ -49,6 +49,8 @@ foreach ($invariant in @(
     'deploy\\jenkins\\deploy-main.ps1')) {
   Assert-True ($jenkinsfile.Contains($invariant)) "Jenkinsfile invariant missing: $invariant"
 }
+Assert-True (-not $jenkinsfile.Contains('timestamps()')) `
+  "Jenkinsfile must not depend on the optional Timestamper plugin to compile."
 
 $installer = Get-Content $installScript -Raw
 $deploymentBoundary = Get-Content $deployScript -Raw
@@ -119,8 +121,6 @@ Assert-True ($installer -match '\$jenkinsVersion\s*=') "Jenkins must be explicit
 Assert-True ($installer -match '\$temurinVersion\s*=') "Temurin must be explicitly version-pinned."
 Assert-True ($installer -match '\$jenkinsSha256\s*=\s*"[A-F0-9]{64}"') "Jenkins SHA256 must be pinned."
 Assert-True ($installer -match '\$temurinSha256\s*=\s*"[A-F0-9]{64}"') "Temurin SHA256 must be pinned."
-Assert-True ($installer -match 'install-plugin[\s\S]*\btimestamper\b') `
-  "Installer must provide the Timestamper plugin required by timestamps()."
 Assert-True ($installer -match 'install-plugin[\s\S]*\bblueocean\b') `
   "Installer must provide the requested Blue Ocean pipeline UI."
 
