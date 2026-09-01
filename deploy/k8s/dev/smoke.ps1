@@ -113,7 +113,6 @@ Check "registration admin client credentials authenticate" {
 
   $secret = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
   $encoded = $null
-  $tokenResponse = $null
   try {
     $tokenResponse = Invoke-RestMethod `
       -Uri "http://keycloak.localhost:$IngressPort/realms/ramals/protocol/openid-connect/token" `
@@ -126,12 +125,13 @@ Check "registration admin client credentials authenticate" {
       } `
       -TimeoutSec 10 `
       -ErrorAction Stop
-    return -not [string]::IsNullOrWhiteSpace($tokenResponse.access_token)
+    $authenticated = -not [string]::IsNullOrWhiteSpace($tokenResponse.access_token)
+    $tokenResponse = $null
+    return $authenticated
   } catch {
     return $false
   } finally {
     $secret = $null
-    $tokenResponse = $null
   }
 }
 
