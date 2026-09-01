@@ -12,7 +12,7 @@ data:
   # keycloak Service inside the cluster. One URL, both sides.
   RAMALS_OIDC_ISSUER_URI: http://keycloak.localhost:8080/realms/ramals
   RAMALS_OIDC_AUDIENCE: ramals-api
-  RAMALS_WEB_ORIGIN: http://localhost:5173
+  RAMALS_WEB_ORIGIN: http://localhost:8080
   RAMALS_ADMIN_IDENTITY_BASE_URL: http://keycloak:8080
   RAMALS_ADMIN_IDENTITY_REALM: ramals
   RAMALS_ADMIN_IDENTITY_CLIENT_ID: ramals-identity-admin
