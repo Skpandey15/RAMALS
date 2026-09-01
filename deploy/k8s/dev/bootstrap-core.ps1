@@ -439,7 +439,7 @@ if [ -z "$CLIENT_UUID" ]; then
   echo "registration client $CLIENT_ID is missing from realm ramals" >&2
   exit 1
 fi
-$K update clients/$CLIENT_UUID -r ramals -f /dev/stdin $A >/dev/null <<EOF
+$K update clients/$CLIENT_UUID -r ramals -f - $A >/dev/null <<EOF
 {"enabled":true,"publicClient":false,"serviceAccountsEnabled":true,"standardFlowEnabled":false,"directAccessGrantsEnabled":false,"implicitFlowEnabled":false,"secret":"$SECRET"}
 EOF
 SECRET=
