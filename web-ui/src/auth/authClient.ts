@@ -2,7 +2,7 @@ import Keycloak, { type KeycloakConfig } from 'keycloak-js';
 import { interactionFetch, type Interaction } from '../platform/apiClient';
 
 const config: KeycloakConfig = {
-  url: import.meta.env.VITE_KEYCLOAK_URL ?? 'http://localhost:8081',
+  url: import.meta.env.VITE_KEYCLOAK_URL ?? 'http://keycloak.localhost:8080',
   realm: import.meta.env.VITE_KEYCLOAK_REALM ?? 'ramals',
   clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID ?? 'ramals-web-ui',
 };
