@@ -42,11 +42,23 @@ export function RegistrationPage() {
     event.preventDefault();
     const form = event.currentTarget;
     const fields = new FormData(form);
+    const password = String(fields.get('password') ?? '');
+    const confirmPassword = String(fields.get('confirmPassword') ?? '');
+    const confirmInput = form.elements.namedItem('confirmPassword') as HTMLInputElement | null;
+
+    if (password !== confirmPassword) {
+      confirmInput?.setCustomValidity('The password and its confirmation do not match.');
+      confirmInput?.reportValidity();
+      setStatus({ kind: 'idle' });
+      return;
+    }
+    confirmInput?.setCustomValidity('');
+
     setStatus({ kind: 'submitting' });
     const payload = {
       firstName: fields.get('firstName'), lastName: fields.get('lastName'), email: fields.get('email'),
       mobileNumber: fields.get('mobileNumber'), country: fields.get('country'), city: fields.get('city') || null,
-      password: fields.get('password'), confirmPassword: fields.get('confirmPassword'), ...CONSENT,
+      password, confirmPassword, ...CONSENT,
       termsAccepted: fields.has('termsAccepted'), privacyAccepted: fields.has('privacyAccepted'),
       adultConfirmed: fields.has('adultConfirmed'),
     };
@@ -90,7 +102,7 @@ export function RegistrationPage() {
         </label>
         <label>City (optional)<input name="city" maxLength={120} autoComplete="address-level2" /></label>
         <label>Password<input name="password" type="password" required minLength={12} maxLength={128} autoComplete="new-password" /></label>
-        <label>Confirm password<input name="confirmPassword" type="password" required minLength={12} maxLength={128} autoComplete="new-password" /></label>
+        <label>Confirm password<input name="confirmPassword" type="password" required minLength={12} maxLength={128} autoComplete="new-password" onInput={(event) => event.currentTarget.setCustomValidity('')} /></label>
         <label className="check"><input name="termsAccepted" type="checkbox" required />I accept the Terms.</label>
         <label className="check"><input name="privacyAccepted" type="checkbox" required />I accept the Privacy Notice.</label>
         <label className="check"><input name="adultConfirmed" type="checkbox" required />I confirm that I am 18 years or older.</label>
