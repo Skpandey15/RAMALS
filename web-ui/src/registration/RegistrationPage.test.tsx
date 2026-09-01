@@ -63,6 +63,16 @@ function fillAndSubmit(overrides: Record<string, string> = {}) {
   fireEvent.submit(screen.getByRole('button', { name: 'Register' }).closest('form')!);
 }
 
+it('rejects mismatched passwords in the browser without calling the registration API', () => {
+  render(<RegistrationPage />);
+  fillAndSubmit({ 'Confirm password': 'different horse battery' });
+
+  const confirmation = screen.getByLabelText('Confirm password') as HTMLInputElement;
+  expect(confirmation.validationMessage).toBe('The password and its confirmation do not match.');
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Register' })).toBeEnabled();
+});
+
 it('sends the server-known consent versions, not only the acceptance booleans', async () => {
   fetchMock.mockReturnValue(accepted());
   render(<RegistrationPage />);
@@ -70,8 +80,6 @@ it('sends the server-known consent versions, not only the acceptance booleans', 
 
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
-  // A boolean alone is not evidence of what was accepted; the server rejects a version it did not
-  // issue, so the acceptance is always bound to a specific document revision.
   expect(body.termsVersion).toBe('terms-v1');
   expect(body.privacyVersion).toBe('privacy-v1');
   expect(body.adultStatementVersion).toBe('adult-18-v1');
@@ -85,8 +93,6 @@ it('carries an Idempotency-Key so a lost response does not create a second accou
   fillAndSubmit();
 
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-  // interactionFetch normalises init.headers into a Headers instance to add the correlation header,
-  // so the assertion has to read it as one rather than as a plain object.
   const headers = fetchMock.mock.calls[0][1].headers as Headers;
   expect(headers.get('Idempotency-Key')).toBeTruthy();
   expect(headers.get('X-Interaction-Id')).toBeTruthy();
@@ -94,8 +100,6 @@ it('carries an Idempotency-Key so a lost response does not create a second accou
 
 it('never collects a date of birth', () => {
   render(<RegistrationPage />);
-  // Adult status is an attested statement version, not a birth date: the professional product can
-  // prove the attestation without holding a date it has no present use for.
   expect(screen.queryByLabelText(/date of birth/i)).toBeNull();
   expect(screen.queryByLabelText(/birth/i)).toBeNull();
 });
@@ -113,8 +117,6 @@ it('writes nothing to browser storage, before or after submitting', async () => 
   fillAndSubmit();
 
   await screen.findByText('Check your email');
-  // The password most of all, but also the response: onboarding state cached here would be both a
-  // stale copy and one the learner could edit.
   expect(localStorage.length).toBe(0);
   expect(sessionStorage.length).toBe(0);
 });
@@ -134,8 +136,6 @@ it('confirms without revealing whether the address was already registered', asyn
   fillAndSubmit();
 
   const confirmation = await screen.findByText(/If that address can be registered/);
-  // The server answers a duplicate identically; the wording must not undo that by implying the
-  // account is new.
   expect(confirmation).toBeInTheDocument();
   expect(document.body.textContent).not.toMatch(/already (registered|exists)/i);
 });
@@ -158,8 +158,6 @@ it('shows the server detail and a support code when the request is refused', asy
   fillAndSubmit();
 
   const alert = await screen.findByRole('alert');
-  // The detail is the actionable half of an RFC 7807 problem; the title alone would say only that
-  // something was rejected.
   expect(alert).toHaveTextContent('is not one this service issued');
   expect(alert).toHaveTextContent('int-9');
 });
@@ -178,8 +176,6 @@ function keyOf(call: number): string {
 }
 
 it('reuses the Idempotency-Key when a transport failure is retried', async () => {
-  // The bug: a key minted per submission means a retry after a lost response arrives under a new
-  // key, so the server starts a second registration instead of replaying the completed one.
   fetchMock.mockRejectedValueOnce(new Error('connection reset'));
   render(<RegistrationPage />);
   fillAndSubmit();
@@ -222,7 +218,6 @@ it('retires the key after success, so an independent registration gets a new one
   fillAndSubmit({ Email: 'second@example.com' });
   await screen.findByText('Check your email');
 
-  // Replaying a completed key for a different registration would have it answered as that one.
   expect(keyOf(0)).not.toBe(keyOf(1));
 });
 
@@ -233,8 +228,6 @@ it('mints a new key when the registration data materially changes', async () => 
   await screen.findByRole('alert');
 
   fetchMock.mockReturnValueOnce(accepted());
-  // Corrected email after the failure: the same key against a different body is refused by the
-  // server as an idempotency conflict, so the client must not send it.
   fillAndSubmit({ Email: 'corrected@example.com' });
   await screen.findByText('Check your email');
 
