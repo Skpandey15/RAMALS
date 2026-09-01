@@ -9,11 +9,11 @@ COPY web-ui/ ./
 # OIDC issuer a property of the image, which is why it is a build argument rather than a default
 # somebody edits in source.
 #
-# The default matches authClient.ts's own fallback, so an unparameterised build behaves exactly as
-# before. Local Kubernetes overrides it with a URL that resolves identically from the browser and
-# from inside the cluster -- see deploy/k8s/dev/README.md; a browser-only URL produces tokens whose
-# `iss` the platform then rejects.
-ARG VITE_KEYCLOAK_URL=http://localhost:8081
+# The default matches authClient.ts's own fallback. Local Kubernetes uses the same URL, which
+# resolves from the browser and, via the CoreDNS rewrite bootstrap.ps1 installs, from inside the
+# cluster -- see deploy/k8s/dev/README.md. One issuer URL avoids tokens whose `iss` the platform
+# then rejects.
+ARG VITE_KEYCLOAK_URL=http://keycloak.localhost:8080
 ARG VITE_KEYCLOAK_REALM=ramals
 ARG VITE_KEYCLOAK_CLIENT_ID=ramals-web-ui
 ARG VITE_API_BASE_URL=http://localhost:8080
