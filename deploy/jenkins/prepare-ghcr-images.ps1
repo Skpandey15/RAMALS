@@ -58,6 +58,22 @@ function Invoke-NativeCommand {
   return ,$plainOutput
 }
 
+function Assert-DockerRuntimeReady {
+  Write-Host "[preflight] Verifying Docker runtime..."
+  $probeOutput = & docker info --format '{{.ServerVersion}}' 2>&1
+  $probeExitCode = $LASTEXITCODE
+  $plainOutput = @($probeOutput | ForEach-Object { ConvertTo-PlainLogText $_ } | Where-Object { $_ })
+  $serverVersion = @($plainOutput | Where-Object { $_ -match '^v?\d+(\.\d+){1,3}([+-][0-9A-Za-z.-]+)?$' } | Select-Object -First 1)
+
+  if ($probeExitCode -ne 0 -or $serverVersion.Count -ne 1) {
+    $detail = ($plainOutput -join " | ")
+    if (-not $detail) { $detail = "docker info returned no diagnostic output" }
+    throw "Docker runtime is unavailable. $detail"
+  }
+
+  Write-Host "[preflight] Docker runtime ready: $($serverVersion[0])"
+}
+
 $desiredVersion = Get-Content $DesiredVersionPath -Raw | ConvertFrom-Json
 if ($desiredVersion.manifest_version -ne 1 -or $desiredVersion.environment -ne "dev") {
   throw "Unsupported desired-version manifest: $DesiredVersionPath"
@@ -71,11 +87,7 @@ foreach ($tool in @("docker", "k3d")) {
   if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool is required on PATH." }
 }
 
-Write-Host "[preflight] Verifying Docker runtime..."
-$dockerVersion = Invoke-NativeCommand -Description "Docker runtime probe" -Quiet -Command {
-  docker info --format '{{.ServerVersion}}'
-}
-Write-Host "[preflight] Docker runtime ready: $(($dockerVersion -join ' ').Trim())"
+Assert-DockerRuntimeReady
 
 $deploymentConfigCommit = $Commit
 $deploymentConfigShortCommit = $deploymentConfigCommit.Substring(0, 7)
