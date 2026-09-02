@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -175,6 +176,20 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
       return user != null && Boolean.TRUE.equals(user.get("emailVerified"));
     } catch (RestClientException failure) {
       throw providerFailure("emailVerified", null, failure);
+    }
+  }
+
+  @Override
+  public Optional<String> unverifiedSubjectForEmail(String email) {
+    try {
+      ProviderUser user = findByEmail(email);
+      // Absent and already-verified deliberately produce the same empty result. See the port.
+      if (user == null || user.emailVerified()) {
+        return Optional.empty();
+      }
+      return Optional.of(user.subject());
+    } catch (RestClientException failure) {
+      throw providerFailure("unverifiedSubjectForEmail", null, failure);
     }
   }
 

@@ -42,6 +42,10 @@ public class SecurityConfig {
         .authorizeHttpRequests(authorize -> authorize
             .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll()
             .requestMatchers(HttpMethod.POST, "/api/v1/registration").permitAll()
+            // Unauthenticated by necessity: this route is what unblocks a learner who cannot log
+            // in. Exact path, not a prefix -- "/api/v1/registration/**" would open every future
+            // sibling route by default, which is how an admin operation ends up public.
+            .requestMatchers(HttpMethod.POST, "/api/v1/registration/verification/resend").permitAll()
             .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
             .anyRequest().authenticated())
         .oauth2ResourceServer(resourceServer -> resourceServer

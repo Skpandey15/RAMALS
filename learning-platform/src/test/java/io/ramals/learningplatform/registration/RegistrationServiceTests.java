@@ -15,6 +15,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -354,5 +355,99 @@ class RegistrationServiceTests {
         .isInstanceOf(RegistrationException.class)
         .extracting(failure -> ((RegistrationException) failure).code())
         .isEqualTo(expectedCode);
+  }
+
+  // -- resend verification -------------------------------------------------------------------
+
+  private static final String RESEND_EMAIL = "learner@example.com";
+
+  @Test
+  @DisplayName("a resend for an unverified identity sends the provider's mail")
+  void resendSendsForUnverifiedIdentity() {
+    when(identities.unverifiedSubjectForEmail(RESEND_EMAIL)).thenReturn(Optional.of("subject-9"));
+
+    RegistrationService.ResendVerificationResponse response =
+        service.resendVerification(new ResendVerificationRequest(RESEND_EMAIL));
+
+    verify(identities).sendVerificationEmail("subject-9");
+    assertThat(response.status()).isEqualTo("EMAIL_VERIFICATION");
+  }
+
+  @Test
+  @DisplayName("an unknown address is answered identically and mails nobody")
+  void resendForUnknownAddressIsIndistinguishable() {
+    when(identities.unverifiedSubjectForEmail(anyString())).thenReturn(Optional.empty());
+
+    RegistrationService.ResendVerificationResponse response =
+        service.resendVerification(new ResendVerificationRequest("nobody@example.com"));
+
+    // The response is the caller's only signal. If it varied here, the route would answer the
+    // question "does this address have an account?" for anyone who asked.
+    assertThat(response.status()).isEqualTo("EMAIL_VERIFICATION");
+    verify(identities, never()).sendVerificationEmail(anyString());
+  }
+
+  @Test
+  @DisplayName("an already-verified address is answered identically and mails nobody")
+  void resendForVerifiedAddressIsIndistinguishable() {
+    // The port collapses already-verified into the same empty result as absent, so the service
+    // cannot tell them apart even if a later change tried to.
+    when(identities.unverifiedSubjectForEmail(anyString())).thenReturn(Optional.empty());
+
+    assertThat(service.resendVerification(new ResendVerificationRequest(RESEND_EMAIL)).status())
+        .isEqualTo("EMAIL_VERIFICATION");
+    verify(identities, never()).sendVerificationEmail(anyString());
+  }
+
+  @Test
+  @DisplayName("the address is normalized before it reaches the provider")
+  void resendNormalizesTheAddress() {
+    when(identities.unverifiedSubjectForEmail(anyString())).thenReturn(Optional.empty());
+
+    service.resendVerification(new ResendVerificationRequest("  Learner@Example.COM  "));
+
+    // Without this, one account is reachable under many spellings and each spelling carries its
+    // own rate-limit bucket -- which multiplies the ceiling by the number of spellings.
+    verify(identities).unverifiedSubjectForEmail(RESEND_EMAIL);
+  }
+
+  @Test
+  @DisplayName("quota is charged before the provider is consulted, for every address")
+  void resendChargesQuotaBeforeLookup() {
+    when(ceilings.consume(eq("registration-resend:" + RESEND_EMAIL), anyInt(), anyInt()))
+        .thenReturn(false);
+
+    assertThatThrownBy(() -> service.resendVerification(new ResendVerificationRequest(RESEND_EMAIL)))
+        .isInstanceOf(RegistrationException.class);
+
+    // The ordering is the security property: if the ceiling were charged only for addresses that
+    // resolve, being rate-limited would itself prove the account exists -- moving the oracle from
+    // the body into the status code rather than removing it.
+    verify(identities, never()).unverifiedSubjectForEmail(anyString());
+    verify(identities, never()).sendVerificationEmail(anyString());
+  }
+
+  @Test
+  @DisplayName("the resend ceiling is its own dimension, not the registration one")
+  void resendUsesADistinctCeilingDimension() {
+    when(identities.unverifiedSubjectForEmail(anyString())).thenReturn(Optional.empty());
+
+    service.resendVerification(new ResendVerificationRequest(RESEND_EMAIL));
+
+    // Sharing the registration counter would let a resend for an address the caller does not own
+    // exhaust that address's genuine registration allowance.
+    verify(ceilings).consume(eq("registration-resend:" + RESEND_EMAIL), anyInt(), anyInt());
+    verify(ceilings, never()).consume(eq("registration-email:" + RESEND_EMAIL), anyInt(), anyInt());
+  }
+
+  @Test
+  @DisplayName("resend is refused when registration is disabled")
+  void resendRefusedWhenRegistrationDisabled() {
+    properties.setEnabled(false);
+
+    assertThatThrownBy(() -> service.resendVerification(new ResendVerificationRequest(RESEND_EMAIL)))
+        .isInstanceOf(RegistrationException.class);
+
+    verify(identities, never()).sendVerificationEmail(anyString());
   }
 }

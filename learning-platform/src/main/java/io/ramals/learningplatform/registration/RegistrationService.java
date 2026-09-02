@@ -35,6 +35,16 @@ class RegistrationService {
   /** Ceiling per normalized email per hour: enough for genuine retries, not enough to mail-bomb. */
   private static final int EMAIL_ATTEMPT_LIMIT = 5;
   private static final int EMAIL_ATTEMPT_WINDOW_SECONDS = 3600;
+  /**
+   * Resend ceiling per normalized email per hour.
+   *
+   * <p>Lower than {@link #EMAIL_ATTEMPT_LIMIT} and counted on its own dimension. Its own, because
+   * sharing the registration counter would let a resend exhaust a genuine registration's allowance
+   * for an address the caller does not own. Lower, because a resend needs no form filled in, so it
+   * is the cheaper of the two to abuse as a mailer.
+   */
+  private static final int RESEND_ATTEMPT_LIMIT = 3;
+  private static final int RESEND_ATTEMPT_WINDOW_SECONDS = 3600;
   private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 128;
 
   private final RegistrationProperties properties;
@@ -108,6 +118,76 @@ class RegistrationService {
       count("failure", "UNEXPECTED_ERROR");
       throw unexpected;
     }
+  }
+
+  /**
+   * Re-sends the provider's verification mail for an address that has not completed verification.
+   *
+   * <p>This route exists because the two behaviours around it combine into a dead end. Verification
+   * mail is the only way to finish registering, and {@link #complete} deliberately sends none when
+   * the identity already exists — so a learner whose mail was lost cannot recover by registering
+   * again, and previously had no route at all. That was closed by hand against the provider's admin
+   * API, which is not a thing a learner can do.
+   *
+   * <p>Every path returns the same value. Unknown address, already-verified address, address that
+   * exists and was mailed: all indistinguishable to the caller, because the response is the only
+   * signal a caller gets and any variation in it is an account-enumeration oracle. That is also why
+   * quota is charged <em>before</em> the provider is consulted — a rate-limit rejection that could
+   * only be reached for addresses that exist would reintroduce the oracle in the timing and the
+   * status code, having removed it from the body. The distinction is recorded in audit and metrics,
+   * where an operator can see it and an anonymous caller cannot.
+   */
+  ResendVerificationResponse resendVerification(ResendVerificationRequest request) {
+    if (!properties.isEnabled()) {
+      throw RegistrationException.disabled();
+    }
+    String email = request.email().trim().toLowerCase(Locale.ROOT);
+
+    // Charged first, and on every call, so the ceiling does not depend on whether the address
+    // resolves. See the class comment above on why that ordering is the security property.
+    if (!ceilings.consume(
+        "registration-resend:" + email, RESEND_ATTEMPT_LIMIT, RESEND_ATTEMPT_WINDOW_SECONDS)) {
+      countResend("rate_limited");
+      throw RegistrationException.registrationRateLimited("resend", RESEND_ATTEMPT_WINDOW_SECONDS);
+    }
+
+    // Empty covers both "no such identity" and "already verified"; the port refuses to say which.
+    identities.unverifiedSubjectForEmail(email).ifPresentOrElse(
+        subject -> {
+          identities.sendVerificationEmail(subject);
+          BusinessEventLogger.info(LOGGER, "registration.verification.resent",
+              "Verification mail re-sent for an unverified identity",
+              Map.of("emailFingerprint", emailFingerprint(email), "outcome", "SUCCESS"));
+          countResend("sent");
+        },
+        () -> {
+          // Not a warning: an unknown or already-verified address is an ordinary outcome here, and
+          // logging it louder than a real send would rebuild the oracle inside the log file.
+          BusinessEventLogger.info(LOGGER, "registration.verification.resend.noop",
+              "Resend requested for an address with no unverified identity; nothing was sent",
+              Map.of("emailFingerprint", emailFingerprint(email), "outcome", "SUCCESS"));
+          countResend("noop");
+        });
+
+    return new ResendVerificationResponse("EMAIL_VERIFICATION");
+  }
+
+  /**
+   * A stable, non-reversible handle for an address, so operators can correlate repeated resends.
+   *
+   * <p>The address itself is never logged. Reuses the same digest the registration fingerprint is
+   * built from, so the two can be joined without either carrying the plaintext.
+   */
+  private static String emailFingerprint(String email) {
+    return RegistrationRepository.sha256("resend:" + email).substring(0, 16);
+  }
+
+  private void countResend(String outcome) {
+    meterRegistry.counter("ramals.registration.resend", "outcome", outcome).increment();
+  }
+
+  /** The acknowledgement. Carries no operation id: there is no operation row to point at. */
+  record ResendVerificationResponse(String status) {
   }
 
   /**
