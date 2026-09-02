@@ -393,51 +393,62 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
       <main className="app">
         <h1>Your professional background</h1>
         <p>This shapes the learning we build for you. You can change it later.</p>
-        <label htmlFor="currentRole">Current role</label>
-        <input
-          id="currentRole"
-          value={profile.currentRole}
-          maxLength={120}
-          onChange={(event) => setProfile({ ...profile, currentRole: event.target.value })}
-        />
-        <label htmlFor="experienceBand">Years of experience</label>
-        <select
-          id="experienceBand"
-          value={profile.experienceBand}
-          onChange={(event) => setProfile({ ...profile, experienceBand: event.target.value })}
-        >
-          <option value="">Select</option>
-          {EXPERIENCE_BANDS.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="primaryExpertise">Primary expertise</label>
-        <input
-          id="primaryExpertise"
-          value={profile.primaryExpertise}
-          maxLength={120}
-          onChange={(event) => setProfile({ ...profile, primaryExpertise: event.target.value })}
-        />
-        <label htmlFor="declaredSkillLevel">How would you rate yourself? (optional)</label>
-        <select
-          id="declaredSkillLevel"
-          value={profile.declaredSkillLevel}
-          onChange={(event) => setProfile({ ...profile, declaredSkillLevel: event.target.value })}
-        >
-          <option value="">Prefer not to say</option>
-          {SKILL_LEVELS.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        {/* Disabled only as a courtesy. The server validates every field and owns the transition, so
-            a learner who re-enables this button gets a 400, not a skipped gate. */}
-        <button type="button" onClick={() => void saveProfile()} disabled={busy || !complete}>
-          Continue
-        </button>
+        {/* The same `registration-form` grid the public registration page uses: labels wrap their
+            control and stack above it. Bare sibling labels and inputs flow inline instead, which
+            renders each label beside the previous field rather than above its own. */}
+        <form className="registration-form" onSubmit={(event) => event.preventDefault()}>
+          <label>
+            Current role
+            <input
+              value={profile.currentRole}
+              maxLength={120}
+              onChange={(event) => setProfile({ ...profile, currentRole: event.target.value })}
+            />
+          </label>
+          <label>
+            Years of experience
+            <select
+              value={profile.experienceBand}
+              onChange={(event) => setProfile({ ...profile, experienceBand: event.target.value })}
+            >
+              <option value="">Select</option>
+              {EXPERIENCE_BANDS.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Primary expertise
+            <input
+              value={profile.primaryExpertise}
+              maxLength={120}
+              onChange={(event) => setProfile({ ...profile, primaryExpertise: event.target.value })}
+            />
+          </label>
+          <label>
+            How would you rate yourself? (optional)
+            <select
+              value={profile.declaredSkillLevel}
+              onChange={(event) =>
+                setProfile({ ...profile, declaredSkillLevel: event.target.value })
+              }
+            >
+              <option value="">Prefer not to say</option>
+              {SKILL_LEVELS.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* Disabled only as a courtesy. The server validates every field and owns the transition,
+              so a learner who re-enables this button gets a 400, not a skipped gate. */}
+          <button type="button" onClick={() => void saveProfile()} disabled={busy || !complete}>
+            Continue
+          </button>
+        </form>
         {notice && <p role="status">{notice}</p>}
         {error && <p role="alert">{error}</p>}
       </main>
@@ -456,84 +467,99 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
       <main className="app">
         <h1>Your first learning goal</h1>
         <p>This is the last step. You can change any of it later.</p>
-        <label htmlFor="goalType">What are you aiming for?</label>
-        <select
-          id="goalType"
-          value={journey.goalType}
-          onChange={(event) => setJourney({ ...journey, goalType: event.target.value })}
-        >
-          <option value="">Select</option>
-          {GOAL_TYPES.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="targetRole">Role you are working towards</label>
-        <input
-          id="targetRole"
-          value={journey.targetRole}
-          maxLength={120}
-          onChange={(event) => setJourney({ ...journey, targetRole: event.target.value })}
-        />
-        <label htmlFor="primaryDomainCode">What do you want to learn?</label>
-        <select
-          id="primaryDomainCode"
-          value={journey.primaryDomainCode}
-          onChange={(event) => setJourney({ ...journey, primaryDomainCode: event.target.value })}
-        >
-          <option value="">Select</option>
-          {domains.map((domain) => (
-            <option key={domain.code} value={domain.code}>
-              {domain.name}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="targetProficiency">How far do you want to take it?</label>
-        <select
-          id="targetProficiency"
-          value={journey.targetProficiency}
-          onChange={(event) => setJourney({ ...journey, targetProficiency: event.target.value })}
-        >
-          <option value="">Select</option>
-          {PROFICIENCIES.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="learningIntensity">Pace</label>
-        <select
-          id="learningIntensity"
-          value={journey.learningIntensity}
-          onChange={(event) => setJourney({ ...journey, learningIntensity: event.target.value })}
-        >
-          <option value="">Select</option>
-          {INTENSITIES.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="weeklyHours">Hours per week</label>
-        <input
-          id="weeklyHours"
-          type="number"
-          min={1}
-          max={40}
-          value={journey.weeklyHours}
-          onChange={(event) => setJourney({ ...journey, weeklyHours: event.target.value })}
-        />
-        <label htmlFor="targetDate">Target date (optional)</label>
-        <input
-          id="targetDate"
-          type="date"
-          value={journey.targetDate}
-          onChange={(event) => setJourney({ ...journey, targetDate: event.target.value })}
-        />
-        <button type="button" onClick={() => void saveJourney()} disabled={busy || !ready}>
-          Finish
-        </button>
+        <form className="registration-form" onSubmit={(event) => event.preventDefault()}>
+          <label>
+            What are you aiming for?
+            <select
+              value={journey.goalType}
+              onChange={(event) => setJourney({ ...journey, goalType: event.target.value })}
+            >
+              <option value="">Select</option>
+              {GOAL_TYPES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Role you are working towards
+            <input
+              value={journey.targetRole}
+              maxLength={120}
+              onChange={(event) => setJourney({ ...journey, targetRole: event.target.value })}
+            />
+          </label>
+          <label>
+            What do you want to learn?
+            <select
+              value={journey.primaryDomainCode}
+              onChange={(event) =>
+                setJourney({ ...journey, primaryDomainCode: event.target.value })
+              }
+            >
+              <option value="">Select</option>
+              {domains.map((domain) => (
+                <option key={domain.code} value={domain.code}>
+                  {domain.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            How far do you want to take it?
+            <select
+              value={journey.targetProficiency}
+              onChange={(event) =>
+                setJourney({ ...journey, targetProficiency: event.target.value })
+              }
+            >
+              <option value="">Select</option>
+              {PROFICIENCIES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Pace
+            <select
+              value={journey.learningIntensity}
+              onChange={(event) =>
+                setJourney({ ...journey, learningIntensity: event.target.value })
+              }
+            >
+              <option value="">Select</option>
+              {INTENSITIES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Hours per week
+            <input
+              type="number"
+              min={1}
+              max={40}
+              value={journey.weeklyHours}
+              onChange={(event) => setJourney({ ...journey, weeklyHours: event.target.value })}
+            />
+          </label>
+          <label>
+            Target date (optional)
+            <input
+              type="date"
+              value={journey.targetDate}
+              onChange={(event) => setJourney({ ...journey, targetDate: event.target.value })}
+            />
+          </label>
+          <button type="button" onClick={() => void saveJourney()} disabled={busy || !ready}>
+            Finish
+          </button>
+        </form>
         {notice && <p role="status">{notice}</p>}
         {error && <p role="alert">{error}</p>}
       </main>

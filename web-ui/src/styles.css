@@ -212,13 +212,18 @@ legend {
   font-weight: 600;
 }
 
-.registration-form input {
+/* Selects are styled with inputs rather than left to the browser default. The onboarding steps mix
+   the two heavily -- experience band, pace, proficiency -- and an unstyled select beside a styled
+   input reads as a broken field rather than a different control. */
+.registration-form input,
+.registration-form select {
   box-sizing: border-box;
   width: 100%;
   padding: 0.65rem;
   border: 1px solid #b9c7d8;
   border-radius: 0.4rem;
   font: inherit;
+  background: #fff;
 }
 
 .registration-form .check {
