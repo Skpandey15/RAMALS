@@ -1,8 +1,10 @@
 package io.ramals.learningplatform.registration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -93,7 +95,10 @@ class ResendVerificationEndpointApiTests {
         .andExpect(status().isAccepted())
         .andExpect(jsonPath("$.status").value("EMAIL_VERIFICATION"));
 
-    verify(identities).sendVerificationEmail("subject-1");
+    // Enqueued, not sent: the provider call is the worker's job precisely so that its duration is
+    // not part of the response the caller can time.
+    verify(registrations).enqueueVerificationResend(any(), eq("subject-1"), any());
+    verify(identities, never()).sendVerificationEmail(anyString());
   }
 
   @Test
