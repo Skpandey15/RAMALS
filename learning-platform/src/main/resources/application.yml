@@ -110,6 +110,8 @@ ramals:
       realm: ${RAMALS_KEYCLOAK_REALM:ramals}
       client-id: ${RAMALS_REGISTRATION_ADMIN_CLIENT_ID:ramals-registration-admin}
       client-secret: ${RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET:}
+      verification-client-id: ${RAMALS_REGISTRATION_VERIFICATION_CLIENT_ID:ramals-web-ui}
+      verification-redirect-uri: "${RAMALS_REGISTRATION_VERIFICATION_REDIRECT_URI:http://localhost:5173/}"
     consent:
       terms-version: ${RAMALS_TERMS_VERSION:terms-v1}
       terms-ref: ${RAMALS_TERMS_REF:terms-v1}

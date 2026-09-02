@@ -57,6 +57,8 @@ class RegistrationStartupConfigurationTests {
         "ramals.registration.keycloak.realm=ramals",
         "ramals.registration.keycloak.client-id=ramals-registration-admin",
         "ramals.registration.keycloak.client-secret=test-secret",
+        "ramals.registration.keycloak.verification-client-id=ramals-web-ui",
+        "ramals.registration.keycloak.verification-redirect-uri=http://localhost:8080/",
         "ramals.registration.consent.terms-version=terms-v1",
         "ramals.registration.consent.terms-ref=terms/v1",
         "ramals.registration.consent.privacy-version=privacy-v1",

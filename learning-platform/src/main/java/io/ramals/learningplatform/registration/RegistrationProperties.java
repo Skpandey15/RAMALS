@@ -77,6 +77,8 @@ public class RegistrationProperties {
     private String realm;
     private String clientId;
     private String clientSecret;
+    private String verificationClientId;
+    private String verificationRedirectUri;
 
     public String getBaseUrl() {
       return baseUrl;
@@ -110,11 +112,28 @@ public class RegistrationProperties {
       this.clientSecret = clientSecret;
     }
 
+    public String getVerificationClientId() {
+      return verificationClientId;
+    }
+
+    public void setVerificationClientId(String verificationClientId) {
+      this.verificationClientId = verificationClientId;
+    }
+
+    public String getVerificationRedirectUri() {
+      return verificationRedirectUri;
+    }
+
+    public void setVerificationRedirectUri(String verificationRedirectUri) {
+      this.verificationRedirectUri = verificationRedirectUri;
+    }
+
     /** Never renders the secret: this object reaches actuator and diagnostic output. */
     @Override
     public String toString() {
       return "Keycloak[baseUrl=" + baseUrl + ", realm=" + realm + ", clientId=" + clientId
-          + ", clientSecret=REDACTED]";
+          + ", clientSecret=REDACTED, verificationClientId=" + verificationClientId
+          + ", verificationRedirectUri=" + verificationRedirectUri + "]";
     }
   }
 
