@@ -11,6 +11,10 @@ and writes non-secret deployment evidence for Jenkins to archive.
 [CmdletBinding()]
 param(
   [switch]$ValidateOnly,
+  # Who authorised the deployment, from the Jenkins input's submitterParameter. Recorded in the
+  # evidence bundle: the build number and URL survive in summary.json, but the approver was the one
+  # fact a human gate establishes and nothing captured it.
+  [string]$ApprovedBy,
   [string]$ExpectedRepository = "https://github.com/Skpandey15/RAMALS.git",
   [string]$Namespace = "ramals-dev",
   [string]$ClusterName = "ramals-dev"
@@ -89,6 +93,15 @@ if ($ValidateOnly) { return }
 $evidenceDirectory = Join-Path $repositoryRoot "artifacts\jenkins"
 New-Item -ItemType Directory -Force -Path $evidenceDirectory | Out-Null
 $applicationReleaseCommit = $null
+# An unset submitterParameter arrives as the literal "%RAMALS_APPROVER%" from cmd when the variable
+# does not exist, so an unrecorded approver is written as UNRECORDED rather than as shell noise --
+# evidence that says nothing is better than evidence that looks like a name and is not one.
+$approvedBy = if ([string]::IsNullOrWhiteSpace($ApprovedBy) -or $ApprovedBy -match '^%.*%$') {
+  "UNRECORDED"
+} else {
+  $ApprovedBy.Trim()
+}
+Write-Host "[deploy] Approved by: $approvedBy"
 
 try {
   Assert-DockerRuntimeReady
@@ -134,6 +147,7 @@ try {
     outcome = "SUCCESS"
     deploymentConfigCommit = $head
     applicationReleaseCommit = $applicationReleaseCommit
+    approvedBy = $approvedBy
     buildNumber = $env:BUILD_NUMBER
     buildUrl = $env:BUILD_URL
     cluster = $ClusterName
@@ -148,6 +162,7 @@ try {
     outcome = "FAILED"
     deploymentConfigCommit = $head
     applicationReleaseCommit = $applicationReleaseCommit
+    approvedBy = $approvedBy
     buildNumber = $env:BUILD_NUMBER
     buildUrl = $env:BUILD_URL
     cluster = $ClusterName
