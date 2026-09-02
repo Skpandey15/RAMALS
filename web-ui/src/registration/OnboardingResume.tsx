@@ -52,6 +52,53 @@ const SKILL_LEVELS: ReadonlyArray<readonly [string, string]> = [
   ['EXPERT', 'Expert'],
 ];
 
+interface LearningDomain {
+  readonly code: string;
+  readonly name: string;
+}
+
+interface JourneyForm {
+  goalType: string;
+  targetRole: string;
+  learningIntensity: string;
+  weeklyHours: string;
+  primaryDomainCode: string;
+  targetProficiency: string;
+  targetDate: string;
+}
+
+const EMPTY_JOURNEY: JourneyForm = {
+  goalType: '',
+  targetRole: '',
+  learningIntensity: '',
+  weeklyHours: '',
+  // No default, deliberately. Doc 03 requires that Kafka is never auto-selected, and preselecting
+  // the only catalog entry would choose for the learner rather than let them choose.
+  primaryDomainCode: '',
+  targetProficiency: '',
+  targetDate: '',
+};
+
+const GOAL_TYPES: ReadonlyArray<readonly [string, string]> = [
+  ['ROLE_TRANSITION', 'Move into a new role'],
+  ['DEPTH_IN_CURRENT_ROLE', 'Go deeper in my current role'],
+  ['CERTIFICATION', 'Prepare for a certification'],
+  ['EXPLORATION', 'Explore something new'],
+];
+
+const INTENSITIES: ReadonlyArray<readonly [string, string]> = [
+  ['CASUAL', 'Casual'],
+  ['STEADY', 'Steady'],
+  ['INTENSIVE', 'Intensive'],
+];
+
+const PROFICIENCIES: ReadonlyArray<readonly [string, string]> = [
+  ['0.500', 'Working knowledge'],
+  ['0.700', 'Confident'],
+  ['0.850', 'Strong'],
+  ['1.000', 'Mastery'],
+];
+
 /**
  * Reads the server's view of onboarding.
  *
@@ -89,6 +136,8 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [profile, setProfile] = useState<ProfileForm>(EMPTY_PROFILE);
+  const [journey, setJourney] = useState<JourneyForm>(EMPTY_JOURNEY);
+  const [domains, setDomains] = useState<readonly LearningDomain[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -155,6 +204,60 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
       await refresh();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Your profile could not be saved.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Loaded only once the server has actually placed the learner on the journey step, so the catalog
+  // is not fetched for learners who will never see it.
+  useEffect(() => {
+    if (state?.nextStep !== 'LEARNING_JOURNEY') {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await call('/api/v1/me/learning-domains');
+        const loaded = (await response.json()) as LearningDomain[];
+        if (!cancelled) {
+          setDomains(loaded);
+        }
+      } catch {
+        if (!cancelled) {
+          setError('The list of learning domains could not be loaded.');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [state?.nextStep]);
+
+  async function saveJourney() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await call('/api/v1/me/learning-journeys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          goalType: journey.goalType,
+          targetRole: journey.targetRole.trim(),
+          learningIntensity: journey.learningIntensity,
+          weeklyHours: Number(journey.weeklyHours),
+          primaryDomainCode: journey.primaryDomainCode,
+          targetProficiency: journey.targetProficiency,
+          // An unset date is absent rather than an empty string, which the server would reject.
+          targetDate: journey.targetDate || null,
+        }),
+      });
+      // Re-read rather than assume. Onboarding completes only if the server both stored the journey
+      // and projected the goal; a 200 here is not the same claim as "you are onboarded".
+      await refresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Your learning goal could not be saved.');
     } finally {
       setBusy(false);
     }
@@ -342,13 +445,97 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
   }
 
   if (state.nextStep === 'LEARNING_JOURNEY') {
+    const ready =
+      journey.goalType !== '' &&
+      journey.targetRole.trim() !== '' &&
+      journey.learningIntensity !== '' &&
+      journey.weeklyHours !== '' &&
+      journey.primaryDomainCode !== '' &&
+      journey.targetProficiency !== '';
     return (
       <main className="app">
-        <h1>Your profile is saved</h1>
-        <p>
-          Choosing your first learning goal is the last step before your dashboard. That step is
-          coming shortly — your progress is saved, so you can pick up here when it arrives.
-        </p>
+        <h1>Your first learning goal</h1>
+        <p>This is the last step. You can change any of it later.</p>
+        <label htmlFor="goalType">What are you aiming for?</label>
+        <select
+          id="goalType"
+          value={journey.goalType}
+          onChange={(event) => setJourney({ ...journey, goalType: event.target.value })}
+        >
+          <option value="">Select</option>
+          {GOAL_TYPES.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="targetRole">Role you are working towards</label>
+        <input
+          id="targetRole"
+          value={journey.targetRole}
+          maxLength={120}
+          onChange={(event) => setJourney({ ...journey, targetRole: event.target.value })}
+        />
+        <label htmlFor="primaryDomainCode">What do you want to learn?</label>
+        <select
+          id="primaryDomainCode"
+          value={journey.primaryDomainCode}
+          onChange={(event) => setJourney({ ...journey, primaryDomainCode: event.target.value })}
+        >
+          <option value="">Select</option>
+          {domains.map((domain) => (
+            <option key={domain.code} value={domain.code}>
+              {domain.name}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="targetProficiency">How far do you want to take it?</label>
+        <select
+          id="targetProficiency"
+          value={journey.targetProficiency}
+          onChange={(event) => setJourney({ ...journey, targetProficiency: event.target.value })}
+        >
+          <option value="">Select</option>
+          {PROFICIENCIES.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="learningIntensity">Pace</label>
+        <select
+          id="learningIntensity"
+          value={journey.learningIntensity}
+          onChange={(event) => setJourney({ ...journey, learningIntensity: event.target.value })}
+        >
+          <option value="">Select</option>
+          {INTENSITIES.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="weeklyHours">Hours per week</label>
+        <input
+          id="weeklyHours"
+          type="number"
+          min={1}
+          max={40}
+          value={journey.weeklyHours}
+          onChange={(event) => setJourney({ ...journey, weeklyHours: event.target.value })}
+        />
+        <label htmlFor="targetDate">Target date (optional)</label>
+        <input
+          id="targetDate"
+          type="date"
+          value={journey.targetDate}
+          onChange={(event) => setJourney({ ...journey, targetDate: event.target.value })}
+        />
+        <button type="button" onClick={() => void saveJourney()} disabled={busy || !ready}>
+          Finish
+        </button>
+        {notice && <p role="status">{notice}</p>}
+        {error && <p role="alert">{error}</p>}
       </main>
     );
   }

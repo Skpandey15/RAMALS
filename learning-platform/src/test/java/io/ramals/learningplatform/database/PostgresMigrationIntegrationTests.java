@@ -82,10 +82,10 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 43 with V043 (professional profile). Asserting the count rather than merely that the upgrade
+    // 44 with V044 (learning journey). Asserting the count rather than merely that the upgrade
     // succeeds is what makes an accidentally unapplied migration visible -- it caught V029 the first
     // time it ran, V042 the first time this suite saw a real PostgreSQL, and V043 in CI.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(43);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(44);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 

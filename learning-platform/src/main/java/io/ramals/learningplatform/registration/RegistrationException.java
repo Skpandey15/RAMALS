@@ -200,6 +200,19 @@ public class RegistrationException extends RuntimeException {
             + currentState + ".");
   }
 
+  /**
+   * Refuses a learning journey submitted before the professional profile was completed.
+   *
+   * <p>The journey-step counterpart of {@link #mobileVerificationRequired(String)}. Doc 03 section
+   * 10 forbids reaching ONBOARDED from an unfinished gate; refusing here means the projection is
+   * never written for a learner the transition could not have moved anyway.
+   */
+  static RegistrationException professionalProfileRequired(String currentState) {
+    return new RegistrationException("PROFESSIONAL_PROFILE_REQUIRED", HttpStatus.CONFLICT,
+        "A completed professional profile is required before the learning journey; current state is "
+            + currentState + ".");
+  }
+
   static RegistrationException onboardingIncomplete(String currentState) {
     return new RegistrationException("ONBOARDING_INCOMPLETE", HttpStatus.FORBIDDEN,
         "Professional onboarding is incomplete; current state is " + currentState + ".");

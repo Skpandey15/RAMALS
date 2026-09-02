@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
@@ -32,12 +33,14 @@ class OnboardingController {
   private final OnboardingService onboarding;
   private final MobileVerificationService mobileVerification;
   private final ProfessionalProfileService professionalProfile;
+  private final LearningJourneyService learningJourney;
 
   OnboardingController(OnboardingService onboarding, MobileVerificationService mobileVerification,
-      ProfessionalProfileService professionalProfile) {
+      ProfessionalProfileService professionalProfile, LearningJourneyService learningJourney) {
     this.onboarding = onboarding;
     this.mobileVerification = mobileVerification;
     this.professionalProfile = professionalProfile;
+    this.learningJourney = learningJourney;
   }
 
   /**
@@ -80,6 +83,41 @@ class OnboardingController {
   ProfessionalProfileService.ProfessionalProfileResponse saveProfessionalProfile(
       Authentication authentication, @Valid @RequestBody ProfessionalProfileRequest request) {
     return professionalProfile.save(authentication.getName(), request);
+  }
+
+  /**
+   * The active learning domains the journey step may offer.
+   *
+   * <p>Served rather than hard-coded in the client, which is what keeps Doc 03 section 8's rule that
+   * no domain is auto-selected true by construction: the UI renders whatever the catalog holds, with
+   * no preselection, so a domain is only ever the one the learner picked.
+   */
+  @GetMapping("/learning-domains")
+  List<LearningJourneyService.LearningDomainResponse> learningDomains() {
+    return learningJourney.availableDomains();
+  }
+
+  /** The caller's learning journey, or 404 before they have completed the step. */
+  @GetMapping("/learning-journeys")
+  ResponseEntity<LearningJourneyService.LearningJourneyResponse> learningJourney(
+      Authentication authentication) {
+    return learningJourney.current(authentication.getName())
+        .map(ResponseEntity::ok)
+        .orElseGet(() -> ResponseEntity.notFound().build());
+  }
+
+  /**
+   * Records the learning journey, projects the primary goal, and completes onboarding.
+   *
+   * <p>POST rather than PUT to match Doc 03 section 12's {@code POST/GET /me/learning-journeys},
+   * though the handler is idempotent: one journey per learner, upserted. The response carries the
+   * journey, not the onboarding state -- the client re-reads {@code /me/onboarding} for that, so
+   * there is one authority on where a learner stands rather than two that can disagree.
+   */
+  @PostMapping("/learning-journeys")
+  LearningJourneyService.LearningJourneyResponse saveLearningJourney(
+      Authentication authentication, @Valid @RequestBody LearningJourneyRequest request) {
+    return learningJourney.save(authentication.getName(), request);
   }
 
   @PostMapping("/mobile/send-otp")
