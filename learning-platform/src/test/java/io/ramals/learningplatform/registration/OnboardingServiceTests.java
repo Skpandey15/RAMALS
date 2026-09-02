@@ -93,6 +93,59 @@ class OnboardingServiceTests {
   }
 
   @Test
+  @DisplayName("a mobile-verified learner without a profile resumes at the profile step")
+  void mobileVerifiedLearnerResumesAtProfile() {
+    fullyVerifiedContact();
+    when(registrations.findOnboardingState(LEARNER_ID)).thenReturn(Optional.of("PROFILE_PENDING"));
+
+    OnboardingService.OnboardingResponse response = service.current(SUBJECT, false);
+
+    assertThat(response.nextStep()).isEqualTo("PROFESSIONAL_PROFILE");
+    assertThat(response.onboardingState()).isEqualTo("PROFILE_PENDING");
+  }
+
+  @Test
+  @DisplayName("a learner with a profile but no journey resumes at the journey step")
+  void journeyPendingLearnerResumesAtJourney() {
+    fullyVerifiedContact();
+    when(registrations.findOnboardingState(LEARNER_ID)).thenReturn(Optional.of("JOURNEY_PENDING"));
+
+    OnboardingService.OnboardingResponse response = service.current(SUBJECT, false);
+
+    // Before this existed, JOURNEY_PENDING fell into the profile branch and the learner was sent
+    // back to a step they had already completed -- with no way to reach the one they had not.
+    assertThat(response.nextStep()).isEqualTo("LEARNING_JOURNEY");
+  }
+
+  @Test
+  @DisplayName("only ONBOARDED reports COMPLETE")
+  void onlyOnboardedIsComplete() {
+    fullyVerifiedContact();
+    when(registrations.findOnboardingState(LEARNER_ID)).thenReturn(Optional.of("ONBOARDED"));
+
+    assertThat(service.current(SUBJECT, false).nextStep()).isEqualTo("COMPLETE");
+  }
+
+  @Test
+  @DisplayName("an unrecognised state falls back to the profile step, never to COMPLETE")
+  void unknownStateFailsTowardsAnEarlierStep() {
+    fullyVerifiedContact();
+    when(registrations.findOnboardingState(LEARNER_ID))
+        .thenReturn(Optional.of("SOME_FUTURE_STATE"));
+
+    // The direction of the fallback is the point. Sending a learner to a step they have already
+    // completed is recoverable; reporting COMPLETE for a state this build cannot evaluate would
+    // open the dashboard to a learner whose gates were never checked.
+    assertThat(service.current(SUBJECT, false).nextStep()).isEqualTo("PROFESSIONAL_PROFILE");
+  }
+
+  private void fullyVerifiedContact() {
+    when(registrations.findContact(LEARNER_ID)).thenReturn(Optional.of(
+        new RegistrationRepository.Contact(
+            "a@example.com", "+919876543210", Instant.now(), Instant.now())));
+  }
+
+  @Test
   @DisplayName("a stored verification flag avoids any provider call")
   void storedFlagShortCircuitsTheProviderCall() {
     when(registrations.findContact(LEARNER_ID)).thenReturn(Optional.of(

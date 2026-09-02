@@ -28,6 +28,7 @@ class OnboardingService {
   private static final Logger LOGGER = LoggerFactory.getLogger(OnboardingService.class);
 
   static final String NOT_REGISTERED = "NOT_REGISTERED";
+  static final String JOURNEY_PENDING = "JOURNEY_PENDING";
   static final String ONBOARDED = "ONBOARDED";
 
   private final LearnerRepository learners;
@@ -85,6 +86,19 @@ class OnboardingService {
     return new OnboardingResponse(state, nextStep, emailVerified, mobileVerified);
   }
 
+  /**
+   * The resume algorithm of Doc 03 section 11, in the order the gates are ordered.
+   *
+   * <p>This used to collapse everything past the mobile gate into PROFESSIONAL_PROFILE, because
+   * PROFILE_PENDING was the last state anything wrote. That made the step after it unreachable and
+   * unnameable: a learner who completed their profile had nowhere to be sent, and COMPLETE could
+   * never be returned because ONBOARDED was never stored.
+   *
+   * <p>JOURNEY_PENDING is resolved explicitly rather than folded into a default, so a state this
+   * build does not recognise falls through to the profile step instead of being reported as
+   * COMPLETE. Failing towards an earlier step is recoverable; failing towards COMPLETE would open
+   * the dashboard to a learner whose gates were never checked.
+   */
   private static String nextStep(boolean emailVerified, boolean mobileVerified, String state) {
     if (!emailVerified) {
       return "EMAIL_VERIFICATION";
@@ -92,7 +106,13 @@ class OnboardingService {
     if (!mobileVerified) {
       return "MOBILE_VERIFICATION";
     }
-    return ONBOARDED.equals(state) ? "COMPLETE" : "PROFESSIONAL_PROFILE";
+    if (ONBOARDED.equals(state)) {
+      return "COMPLETE";
+    }
+    if (JOURNEY_PENDING.equals(state)) {
+      return "LEARNING_JOURNEY";
+    }
+    return "PROFESSIONAL_PROFILE";
   }
 
   /**

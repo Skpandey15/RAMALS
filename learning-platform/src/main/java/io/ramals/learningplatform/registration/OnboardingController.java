@@ -8,8 +8,10 @@ import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -29,10 +31,13 @@ class OnboardingController {
 
   private final OnboardingService onboarding;
   private final MobileVerificationService mobileVerification;
+  private final ProfessionalProfileService professionalProfile;
 
-  OnboardingController(OnboardingService onboarding, MobileVerificationService mobileVerification) {
+  OnboardingController(OnboardingService onboarding, MobileVerificationService mobileVerification,
+      ProfessionalProfileService professionalProfile) {
     this.onboarding = onboarding;
     this.mobileVerification = mobileVerification;
+    this.professionalProfile = professionalProfile;
   }
 
   /**
@@ -44,6 +49,37 @@ class OnboardingController {
     boolean tokenEmailVerified = authentication instanceof JwtAuthenticationToken jwt
         && Boolean.TRUE.equals(jwt.getToken().getClaim("email_verified"));
     return onboarding.current(authentication.getName(), tokenEmailVerified);
+  }
+
+  /**
+   * The caller's professional profile, or 404 before they have completed the step.
+   *
+   * <p>Deliberately NOT {@code /me/profile}: {@link
+   * io.ramals.learningplatform.learner.LearnerController} already serves that path with the
+   * operational learner profile. Doc 03 section 12 lists {@code /me/profile} among candidate
+   * contracts, but the two are different resources -- M1-ADR-012 keeps operational identity and
+   * professional attributes on opposite sides of a boundary -- and collapsing them onto one path
+   * would merge exactly what the LLD separates.
+   */
+  @GetMapping("/professional-profile")
+  ResponseEntity<ProfessionalProfileService.ProfessionalProfileResponse> professionalProfile(
+      Authentication authentication) {
+    return professionalProfile.current(authentication.getName())
+        .map(ResponseEntity::ok)
+        .orElseGet(() -> ResponseEntity.notFound().build());
+  }
+
+  /**
+   * Stores the professional profile, advancing onboarding when it completes the step.
+   *
+   * <p>The response reports the stored profile, not the onboarding state: the client re-reads
+   * {@code /me/onboarding} for that, so there is exactly one authority on where a learner stands and
+   * no second copy for the two to disagree about.
+   */
+  @PutMapping("/professional-profile")
+  ProfessionalProfileService.ProfessionalProfileResponse saveProfessionalProfile(
+      Authentication authentication, @Valid @RequestBody ProfessionalProfileRequest request) {
+    return professionalProfile.save(authentication.getName(), request);
   }
 
   @PostMapping("/mobile/send-otp")

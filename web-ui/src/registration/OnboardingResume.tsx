@@ -16,6 +16,42 @@ interface Challenge {
   readonly resendAfter: string;
 }
 
+interface ProfileForm {
+  currentRole: string;
+  experienceBand: string;
+  primaryExpertise: string;
+  declaredSkillLevel: string;
+}
+
+const EMPTY_PROFILE: ProfileForm = {
+  currentRole: '',
+  experienceBand: '',
+  primaryExpertise: '',
+  declaredSkillLevel: '',
+};
+
+/**
+ * The controlled vocabularies the server accepts, with the wording the learner reads.
+ *
+ * The values are the server's; only the labels are presentational. Sending a label, or inventing a
+ * value the API does not know, is a 400 -- so the pairing lives here rather than being assembled at
+ * render time where a typo would only surface as a rejected submission.
+ */
+const EXPERIENCE_BANDS: ReadonlyArray<readonly [string, string]> = [
+  ['LESS_THAN_ONE_YEAR', 'Less than a year'],
+  ['ONE_TO_THREE_YEARS', '1 to 3 years'],
+  ['THREE_TO_FIVE_YEARS', '3 to 5 years'],
+  ['FIVE_TO_TEN_YEARS', '5 to 10 years'],
+  ['OVER_TEN_YEARS', 'More than 10 years'],
+];
+
+const SKILL_LEVELS: ReadonlyArray<readonly [string, string]> = [
+  ['BEGINNER', 'Beginner'],
+  ['INTERMEDIATE', 'Intermediate'],
+  ['ADVANCED', 'Advanced'],
+  ['EXPERT', 'Expert'],
+];
+
 /**
  * Reads the server's view of onboarding.
  *
@@ -52,6 +88,7 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [profile, setProfile] = useState<ProfileForm>(EMPTY_PROFILE);
 
   const refresh = useCallback(async () => {
     try {
@@ -94,6 +131,33 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
       throw await toApiError(response, interaction.interactionId);
     }
     return response;
+  }
+
+  async function saveProfile() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await call('/api/v1/me/professional-profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentRole: profile.currentRole.trim(),
+          experienceBand: profile.experienceBand,
+          primaryExpertise: profile.primaryExpertise.trim(),
+          // Optional and non-authoritative: an unanswered self-rating is sent as absent rather than
+          // as an empty string, which the server would reject as an unknown level.
+          declaredSkillLevel: profile.declaredSkillLevel || null,
+        }),
+      });
+      // Re-read rather than assume, exactly as the mobile step does. A 200 means the profile was
+      // stored; only the server can say which step that leaves the learner on.
+      await refresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Your profile could not be saved.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function sendCode() {
@@ -218,12 +282,72 @@ export function OnboardingResume({ children }: { children: ReactNode }) {
   }
 
   if (state.nextStep === 'PROFESSIONAL_PROFILE') {
+    const complete =
+      profile.currentRole.trim() !== '' &&
+      profile.experienceBand !== '' &&
+      profile.primaryExpertise.trim() !== '';
     return (
       <main className="app">
-        <h1>Identity verified</h1>
+        <h1>Your professional background</h1>
+        <p>This shapes the learning we build for you. You can change it later.</p>
+        <label htmlFor="currentRole">Current role</label>
+        <input
+          id="currentRole"
+          value={profile.currentRole}
+          maxLength={120}
+          onChange={(event) => setProfile({ ...profile, currentRole: event.target.value })}
+        />
+        <label htmlFor="experienceBand">Years of experience</label>
+        <select
+          id="experienceBand"
+          value={profile.experienceBand}
+          onChange={(event) => setProfile({ ...profile, experienceBand: event.target.value })}
+        >
+          <option value="">Select</option>
+          {EXPERIENCE_BANDS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="primaryExpertise">Primary expertise</label>
+        <input
+          id="primaryExpertise"
+          value={profile.primaryExpertise}
+          maxLength={120}
+          onChange={(event) => setProfile({ ...profile, primaryExpertise: event.target.value })}
+        />
+        <label htmlFor="declaredSkillLevel">How would you rate yourself? (optional)</label>
+        <select
+          id="declaredSkillLevel"
+          value={profile.declaredSkillLevel}
+          onChange={(event) => setProfile({ ...profile, declaredSkillLevel: event.target.value })}
+        >
+          <option value="">Prefer not to say</option>
+          {SKILL_LEVELS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        {/* Disabled only as a courtesy. The server validates every field and owns the transition, so
+            a learner who re-enables this button gets a 400, not a skipped gate. */}
+        <button type="button" onClick={() => void saveProfile()} disabled={busy || !complete}>
+          Continue
+        </button>
+        {notice && <p role="status">{notice}</p>}
+        {error && <p role="alert">{error}</p>}
+      </main>
+    );
+  }
+
+  if (state.nextStep === 'LEARNING_JOURNEY') {
+    return (
+      <main className="app">
+        <h1>Your profile is saved</h1>
         <p>
-          Your email and mobile number are confirmed. Building your professional profile and first
-          learning journey is the next step.
+          Choosing your first learning goal is the last step before your dashboard. That step is
+          coming shortly — your progress is saved, so you can pick up here when it arrives.
         </p>
       </main>
     );
