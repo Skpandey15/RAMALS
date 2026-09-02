@@ -161,4 +161,24 @@ class RegistrationStartupConfigurationTests {
             .rootCause()
             .hasMessageContaining("hmac-key-version"));
   }
+
+  @Test
+  @DisplayName("a DEV deployment on the mailpit SMS sink starts")
+  void devWithMailpitSinkStarts() {
+    contextWith("ramals.registration.environment=dev", "ramals.registration.sms.provider=mailpit")
+        .run(context -> assertThat(context).hasNotFailed());
+  }
+
+  @Test
+  @DisplayName("production refuses to start on the mailpit SMS sink")
+  void productionRefusesTheMailpitSink() {
+    // The sink delivers real codes to a local inbox. That is a legitimate DEV affordance and an
+    // exfiltration channel anywhere else, so it must fail on the same startup check that stops the
+    // discarding fake -- not on a reviewer noticing the environment variable.
+    contextWith("ramals.registration.environment=prod",
+        "ramals.registration.sms.provider=mailpit")
+        .run(context -> assertThat(context).getFailure()
+            .rootCause()
+            .hasMessageContaining("no production-capable adapter"));
+  }
 }

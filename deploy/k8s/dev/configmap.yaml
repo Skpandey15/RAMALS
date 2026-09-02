@@ -18,6 +18,16 @@ data:
   RAMALS_ADMIN_IDENTITY_CLIENT_ID: ramals-identity-admin
   RAMALS_REGISTRATION_ENABLED: "true"
   RAMALS_ENVIRONMENT: dev
+  # DEV only. `fake` discards the code, which is right for CI and leaves a person unable to finish
+  # onboarding by hand. `mailpit` delivers it to the in-cluster inbox instead of a handset. It is
+  # absent from SmsProviderCatalog.PRODUCTION_CAPABLE, so a production context naming it fails at
+  # startup -- selecting it here changes where a DEV code goes and nothing about what production
+  # will accept. The application.yml default stays `fake`, so this opt-in lives only in DEV.
+  RAMALS_SMS_PROVIDER: mailpit
+  # The sink's transport. Absent in production, so no JavaMailSender is created there at all and
+  # the sink has nothing to send through even if it were somehow selected.
+  SPRING_MAIL_HOST: mailpit
+  SPRING_MAIL_PORT: "1025"
   RAMALS_KEYCLOAK_ADMIN_BASE_URL: http://keycloak:8080
   RAMALS_KEYCLOAK_REALM: ramals
   RAMALS_REGISTRATION_ADMIN_CLIENT_ID: ramals-registration-admin

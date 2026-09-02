@@ -18,6 +18,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>No real gateway adapter ships in this change, so a production deployment must configure a
  * provider this class does not recognise and will fail closed at startup.
+ *
+ * <p>{@code mailpit} is the DEV sink ({@link MailpitSmsInbox}): the same discarding-versus-real
+ * distinction, except the code is delivered to a local inbox so a person can actually finish
+ * onboarding. It is validated by the identical production checks below, so selecting it changes
+ * where a DEV code goes and nothing about what production will accept.
  */
 @Component
 class ConfiguredMobileVerificationSender implements MobileVerificationSender {
@@ -26,9 +31,12 @@ class ConfiguredMobileVerificationSender implements MobileVerificationSender {
       LoggerFactory.getLogger(ConfiguredMobileVerificationSender.class);
 
   private final RegistrationProperties properties;
+  private final MailpitSmsInbox devSmsInbox;
 
-  ConfiguredMobileVerificationSender(RegistrationProperties properties) {
+  ConfiguredMobileVerificationSender(RegistrationProperties properties,
+      MailpitSmsInbox devSmsInbox) {
     this.properties = properties;
+    this.devSmsInbox = devSmsInbox;
   }
 
   @Override
@@ -42,6 +50,12 @@ class ConfiguredMobileVerificationSender implements MobileVerificationSender {
       throw new IllegalStateException(
           "Provider '" + provider + "' is not production-capable in this build.");
     }
+    // Dispatched after both guards, never before: a sink is still a delivery, and it must not be
+    // reachable on any path the discarding fake would not also have been reachable on.
+    if (SmsProviderCatalog.MAILPIT.equals(provider)) {
+      return devSmsInbox.deliver(mobileE164, otp);
+    }
+
     // The code is deliberately absent from this event. A DEV log that printed it would be the
     // easiest place in the system to harvest live codes, and habits formed in DEV are the ones that
     // get copied into the production adapter. Tests substitute a capturing fake for this bean.

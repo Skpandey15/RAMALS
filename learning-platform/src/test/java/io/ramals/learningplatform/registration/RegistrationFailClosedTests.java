@@ -130,7 +130,7 @@ class RegistrationFailClosedTests {
     RegistrationProperties properties = valid();
     properties.setEnvironment("prod");
     properties.getSms().setProvider("fake");
-    assertThatThrownBy(() -> new ConfiguredMobileVerificationSender(properties)
+    assertThatThrownBy(() -> new ConfiguredMobileVerificationSender(properties, sinkThatMustNotBeUsed())
         .send("+919876543210", "123456"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("not production-capable");
@@ -143,7 +143,7 @@ class RegistrationFailClosedTests {
     // rather than reporting delivery for messages nobody sent.
     RegistrationProperties properties = valid();
     properties.getSms().setProvider("twilio");
-    assertThatThrownBy(() -> new ConfiguredMobileVerificationSender(properties)
+    assertThatThrownBy(() -> new ConfiguredMobileVerificationSender(properties, sinkThatMustNotBeUsed())
         .send("+919876543210", "123456"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("No SMS adapter is available");
@@ -224,5 +224,34 @@ class RegistrationFailClosedTests {
           .isInstanceOf(RegistrationException.class)
           .satisfies(failure -> assertThat(failure.getMessage()).doesNotContain(candidate));
     }
+  }
+
+  /**
+   * A sink that fails if it is ever reached.
+   *
+   * <p>Every case in this class rejects the send before dispatch, so the sink being untouched is
+   * part of what each one asserts: a guard that ran after delivery would pass an exception-type
+   * check while the code had already left the building.
+   */
+  private static MailpitSmsInbox sinkThatMustNotBeUsed() {
+    return new MailpitSmsInbox(
+        org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class),
+        new RegistrationProperties()) {
+    };
+  }
+
+  @Test
+  @DisplayName("the mailpit sink refuses to dispatch in production")
+  void mailpitSinkRefusesAtDispatchTimeToo() {
+    // Same second line of defence as the fake, for the same reason: startup validated an
+    // environment marker that a later change could flip. A DEV sink reached in production would be
+    // delivering live verification codes into a mailbox.
+    RegistrationProperties properties = valid();
+    properties.setEnvironment("prod");
+    properties.getSms().setProvider("mailpit");
+    assertThatThrownBy(() -> new ConfiguredMobileVerificationSender(properties, sinkThatMustNotBeUsed())
+        .send("+919876543210", "123456"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("not production-capable");
   }
 }
