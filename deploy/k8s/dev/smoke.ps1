@@ -116,6 +116,72 @@ Check "registration admin secret is stored" {
     -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
   return -not [string]::IsNullOrWhiteSpace($v)
 }
+
+Write-Host ""
+Write-Host "== login page registration route ==" -ForegroundColor Cyan
+# M1-ADR-015 keeps Keycloak self-registration off. That decision also strips the login page of any
+# route to an account, stranding an unregistered learner, so the RAMALS theme adds one that points
+# back at RAMALS-owned /register.
+#
+# Both halves are asserted, and the negative one is the one that matters: a positive check alone
+# would still pass if somebody "fixed" the dead end by flipping registrationAllowed to true. That
+# would put a second registration entry point in front of learners -- one that records no consent
+# evidence, no terms/privacy version and no mobile -- which is precisely what the ADR forbids.
+$webOrigin = kubectl get configmap ramals-dev-config -n $Namespace `
+  -o jsonpath='{.data.RAMALS_WEB_ORIGIN}' 2>$null
+$loginPage = $null
+try {
+  # ramals-web-ui enforces PKCE: an authorization request without a challenge is bounced with a 302
+  # to an error page and never renders the form, so the checks below would fail for the wrong reason.
+  $verifier = [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try { $digest = $sha256.ComputeHash([Text.Encoding]::ASCII.GetBytes($verifier)) }
+  finally { $sha256.Dispose() }
+  $challenge = [Convert]::ToBase64String($digest).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+  # Addressed as 127.0.0.1 with an explicit Host header rather than by the `keycloak.localhost`
+  # name. curl resolves *.localhost itself (RFC 6761); .NET does not, so Invoke-WebRequest fails
+  # with "No such host is known" and every assertion below would fail for a DNS reason that has
+  # nothing to do with the login page. The ingress routes on the Host header regardless.
+  $authUrl = "http://127.0.0.1:8080/realms/ramals/protocol/openid-connect/auth" +
+    "?client_id=ramals-web-ui" +
+    "&redirect_uri=$([uri]::EscapeDataString("$webOrigin/"))" +
+    "&response_type=code&scope=openid" +
+    "&code_challenge=$challenge&code_challenge_method=S256"
+  $loginPage = (Invoke-WebRequest -Uri $authUrl -Headers @{ Host = "keycloak.localhost" } `
+      -UseBasicParsing -TimeoutSec 20).Content
+} catch {
+  $loginPage = $null
+}
+
+Check "login page offers the RAMALS registration route" {
+  if ([string]::IsNullOrWhiteSpace($loginPage) -or [string]::IsNullOrWhiteSpace($webOrigin)) { return $false }
+  return ($loginPage -match 'id="ramals-register-link"') -and
+         ($loginPage -match [regex]::Escape("$webOrigin/register"))
+}
+Check "login page links back to RAMALS" {
+  if ([string]::IsNullOrWhiteSpace($loginPage)) { return $false }
+  return $loginPage -match 'id="ramals-home-link"'
+}
+Check "login form itself still renders" {
+  if ([string]::IsNullOrWhiteSpace($loginPage)) { return $false }
+  return ($loginPage -match 'id="kc-form-login"') -and ($loginPage -match 'name="username"')
+}
+# NEGATIVE control: Keycloak's own registration block must be absent from the rendered page.
+Check "Keycloak native self-registration stays absent" {
+  if ([string]::IsNullOrWhiteSpace($loginPage)) { return $false }
+  return ($loginPage -notmatch 'id="kc-registration"') -and ($loginPage -notmatch 'registrationUrl')
+}
+# NEGATIVE control: and the endpoint behind it must refuse, not merely be unlinked.
+Check "Keycloak registration endpoint serves no form" {
+  try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8080/realms/ramals/login-actions/registration" `
+      -Headers @{ Host = "keycloak.localhost" } -UseBasicParsing -TimeoutSec 15 -SkipHttpErrorCheck
+    return [int]$r.StatusCode -ge 400
+  } catch {
+    # A thrown non-success status is itself the refusal being asserted.
+    return $true
+  }
+}
 # Prove the Kubernetes-owned credential and Keycloak's confidential client agree. The secret is
 # decoded only in this PowerShell process, sent as an HTTP form body (not process argv), and neither
 # the secret nor the returned access token is written to the console.
