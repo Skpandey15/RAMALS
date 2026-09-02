@@ -3,23 +3,23 @@
   "manifest_version": 1,
   "environment": "dev",
   "approved_by": "ramals-admin",
-  "approved_at": "2026-09-01T07:50:21Z",
+  "approved_at": "2026-09-02T06:00:52Z",
   "release": {
-    "commit": "114a7e5203b3b6c4c4ee029968d0df3e8fc8dd7e",
-    "version": "v0.1.0-rc8+dev.114a7e5"
+    "commit": "2bb9a4a6ed59ba42cdee77218479c1df11a768d2",
+    "version": "v0.1.0-rc8+dev.2bb9a4a"
   },
   "components": {
     "learning-platform": {
       "image": "ghcr.io/skpandey15/ramals-learning-platform",
-      "digest": "sha256:aaa19bf45bba162e871b0d04d6ce0da86b55fe43c8eb12a62367e5aa2ab59f0f"
+      "digest": "sha256:934ed5b1476fa570d146c2be44ff15c50c4e3c3b9d57f10798ebce2922d00b12"
     },
     "web-ui": {
       "image": "ghcr.io/skpandey15/ramals-web-ui",
-      "digest": "sha256:e3ed920bd9d9580a868ab11ddb3e1c1dece65e8cd33494d6619050e467d20a7d"
+      "digest": "sha256:76e5fdcb07a52bb74a69a3d535284a93ee90715b0f1e864e25eb28adb14deb30"
     },
     "ramals-ai": {
       "image": "ghcr.io/skpandey15/ramals-ai",
-      "digest": "sha256:d82497b8993e96eaab562377d33ada5f94635ee3cabc7cb55fc0183a1ec6b5ec"
+      "digest": "sha256:0c562424e3ea3ddeea1221d426c4297e0d5b11c45d2e276780913cc474a6e35a"
     }
   }
 }
