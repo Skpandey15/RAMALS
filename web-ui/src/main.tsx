@@ -2,7 +2,6 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { initializeAuthentication } from './auth/authClient';
-import { isRegistrationPath } from './routing';
 import './styles.css';
 
 function renderApplication() {
@@ -13,11 +12,8 @@ function renderApplication() {
   );
 }
 
-// Registration is deliberately public. Do not make its first paint depend on Keycloak's
-// third-party-cookie/silent-SSO iframe: privacy settings can delay or block that handshake and
-// would otherwise leave the public form as an empty page.
-if (isRegistrationPath()) {
-  renderApplication();
-} else {
-  initializeAuthentication().then(renderApplication).catch(renderApplication);
-}
+// Resolve the top-level SSO check on every route, including public registration. Registration must
+// know whether another identity is active or Keycloak will reject the new learner's later email
+// action as belonging to a different authenticated user. Authentication failure still renders the
+// public application; Keycloak's session is never treated as required for the registration form.
+initializeAuthentication().then(renderApplication).catch(renderApplication);

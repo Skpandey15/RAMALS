@@ -7,6 +7,7 @@ vi.mock('./auth/authClient', () => ({
   hasRealmRole: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
+  logoutToRegistration: vi.fn(),
   authenticatedFetch: vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({ onboardingState: 'ONBOARDED', nextStep: 'COMPLETE' }),
@@ -26,7 +27,9 @@ vi.mock('./learning/api', () => ({
 }));
 
 import { App } from './App';
-import { authenticatedFetch, hasRealmRole, isAuthenticated } from './auth/authClient';
+import {
+  authenticatedFetch, hasRealmRole, isAuthenticated, logoutToRegistration,
+} from './auth/authClient';
 
 describe('App auth gate', () => {
   beforeEach(() => {
@@ -36,10 +39,21 @@ describe('App auth gate', () => {
   });
 
   it.each(['/register', '/register/'])('renders registration at %s', (path) => {
+    vi.mocked(isAuthenticated).mockReturnValue(false);
     window.history.replaceState(null, '', path);
     render(<App />);
     expect(screen.getByRole('heading', { name: /create your learner account/i })).toBeInTheDocument();
-    expect(isAuthenticated).not.toHaveBeenCalled();
+  });
+
+  it('requires an existing Keycloak session to end before registering another identity', () => {
+    vi.mocked(isAuthenticated).mockReturnValue(true);
+    window.history.replaceState(null, '', '/register');
+
+    render(<App />);
+    screen.getByRole('button', { name: /sign out and register/i }).click();
+
+    expect(screen.queryByRole('heading', { name: /create your learner account/i })).not.toBeInTheDocument();
+    expect(logoutToRegistration).toHaveBeenCalledOnce();
   });
 
   it('prompts unauthenticated visitors to log in', () => {

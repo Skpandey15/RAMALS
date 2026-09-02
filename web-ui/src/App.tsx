@@ -1,5 +1,7 @@
 import { AdminDashboard } from './admin/AdminDashboard';
-import { hasRealmRole, isAuthenticated, login, logout } from './auth/authClient';
+import {
+  hasRealmRole, isAuthenticated, login, logout, logoutToRegistration,
+} from './auth/authClient';
 import { LearnerDashboard } from './learning/LearnerDashboard';
 import { RegistrationPage } from './registration/RegistrationPage';
 import { OnboardingResume } from './registration/OnboardingResume';
@@ -27,7 +29,27 @@ function AccessDenied() {
 }
 
 export function App() {
-  if (isRegistrationPath()) return <RegistrationPage />;
+  if (isRegistrationPath()) {
+    // Keycloak binds email-verification actions to the browser's current SSO identity. Creating a
+    // second identity while another user is signed in makes the verification link fail with
+    // "already authenticated as different user". Require the existing session to end first.
+    if (isAuthenticated()) {
+      return (
+        <main className="app">
+          <p className="eyebrow">RAMALS professional</p>
+          <h1>Sign out before registering</h1>
+          <p>
+            You are already signed in. Sign out before creating a different learner account so its
+            email-verification link opens under the correct identity.
+          </p>
+          <button type="button" onClick={() => void logoutToRegistration()}>
+            Sign out and register
+          </button>
+        </main>
+      );
+    }
+    return <RegistrationPage />;
+  }
   if (!isAuthenticated()) {
     return (
       <main className="app">
