@@ -1,30 +1,9 @@
-# Mailpit stores captured mail in a SQLite database. Left at its default under /tmp that database
-# lives in the container filesystem, so every restart silently destroys every message. In DEV that
-# is not a cosmetic loss: email verification links are the only way to finish registration, and the
-# registration API deliberately returns the same response whether or not an address already exists
-# (anti-enumeration), so a learner whose verification mail was discarded cannot recover it by
-# registering again. The mailbox is therefore state worth keeping, and gets a volume like Postgres.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: mailpit-data
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: local-path
-  resources:
-    requests: {storage: 1Gi}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mailpit
 spec:
   replicas: 1
-  # ReadWriteOnce cannot be held by an old and a new pod at once, and a RollingUpdate waits for the
-  # new pod before removing the old -- which never resolves. Recreate is the only strategy that
-  # terminates.
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: mailpit
@@ -37,9 +16,6 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
-        # A freshly provisioned local-path volume is root-owned. Without fsGroup the non-root
-        # container cannot create its database on the very volume added to preserve it.
-        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -51,18 +27,11 @@ spec:
             capabilities:
               drop:
                 - ALL
-          env:
-            # Explicit, and on the mounted volume. The default path is under /tmp.
-            - name: MP_DATABASE
-              value: /data/mailpit.db
           ports:
             - name: smtp
               containerPort: 1025
             - name: http
               containerPort: 8025
-          volumeMounts:
-            - name: mailpit-data
-              mountPath: /data
           readinessProbe:
             httpGet:
               path: /readyz
@@ -86,10 +55,6 @@ spec:
             limits:
               cpu: 250m
               memory: 128Mi
-      volumes:
-        - name: mailpit-data
-          persistentVolumeClaim:
-            claimName: mailpit-data
 ---
 apiVersion: v1
 kind: Service
