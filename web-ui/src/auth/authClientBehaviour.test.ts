@@ -30,7 +30,10 @@ vi.mock('../platform/apiClient', async (importOriginal) => ({
   interactionFetch: (...args: unknown[]) => interactionFetch(...args),
 }));
 
-import { authenticatedFetch, initializeAuthentication, isAuthenticated, login, logout } from './authClient';
+import {
+  authenticatedFetch, initializeAuthentication, isAuthenticated, login, logout,
+  logoutToRegistration,
+} from './authClient';
 
 const interaction = { interactionId: 'int-1' };
 
@@ -122,6 +125,11 @@ describe('authClient token handling', () => {
     await logout();
     // Logout returns the learner to the application origin, never to an attacker-supplied URL.
     expect(keycloak.logout).toHaveBeenCalledWith({ redirectUri: window.location.origin });
+
+    await logoutToRegistration();
+    expect(keycloak.logout).toHaveBeenLastCalledWith({
+      redirectUri: new URL('/register', window.location.origin).href,
+    });
   });
 
   it('recovers a returning session without browser-blocked background iframes', async () => {
