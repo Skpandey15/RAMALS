@@ -185,6 +185,21 @@ public class RegistrationException extends RuntimeException {
         "Mobile number is already verified against a different learner identity.");
   }
 
+  /**
+   * Refuses a professional profile submitted before mobile ownership was proved.
+   *
+   * <p>The gate is ordered, so this is the profile-step counterpart of
+   * {@link #emailVerificationRequired()}: a learner still at EMAIL_PENDING or MOBILE_PENDING cannot
+   * be walked forward by submitting the next step's payload. Without it the profile write would
+   * succeed, the guarded transition would silently match no rows, and the learner would sit in a
+   * state their stored data no longer describes.
+   */
+  static RegistrationException mobileVerificationRequired(String currentState) {
+    return new RegistrationException("MOBILE_VERIFICATION_REQUIRED", HttpStatus.CONFLICT,
+        "Verified mobile ownership is required before the professional profile; current state is "
+            + currentState + ".");
+  }
+
   static RegistrationException onboardingIncomplete(String currentState) {
     return new RegistrationException("ONBOARDING_INCOMPLETE", HttpStatus.FORBIDDEN,
         "Professional onboarding is incomplete; current state is " + currentState + ".");

@@ -125,11 +125,92 @@ it('re-reads the server state after a successful verification rather than assumi
   fireEvent.change(input, { target: { value: '123456' } });
   fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
 
-  await screen.findByText('Identity verified');
+  // The step after mobile verification is now the profile form rather than a message with nothing
+  // to do: reaching PROFILE_PENDING must hand the learner something that advances them.
+  await screen.findByText('Your professional background');
   // Four calls: the initial read, the send, the verify, and the re-read. Trusting the verify's 200
   // to mean a particular next state would put that decision back in the browser.
   await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(4));
   expect(String(authenticatedFetch.mock.calls[3][1])).toContain('/api/v1/me/onboarding');
+});
+
+it('submits the profile and re-reads the server state rather than assuming the next step', async () => {
+  authenticatedFetch
+    .mockReturnValueOnce(
+      json(onboarding('PROFESSIONAL_PROFILE', {
+        onboardingState: 'PROFILE_PENDING',
+        mobileVerified: true,
+      })) as never,
+    )
+    .mockReturnValueOnce(json({ currentRole: 'Staff Engineer' }) as never)
+    .mockReturnValueOnce(
+      json(onboarding('LEARNING_JOURNEY', {
+        onboardingState: 'JOURNEY_PENDING',
+        mobileVerified: true,
+      })) as never,
+    );
+
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+
+  fireEvent.change(await screen.findByLabelText('Current role'), {
+    target: { value: 'Staff Engineer' },
+  });
+  fireEvent.change(screen.getByLabelText('Years of experience'), {
+    target: { value: 'FIVE_TO_TEN_YEARS' },
+  });
+  fireEvent.change(screen.getByLabelText('Primary expertise'), {
+    target: { value: 'Distributed systems' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+  // The server moved the learner to the journey step; the component renders what it was told.
+  await screen.findByText('Your profile is saved');
+  expect(screen.queryByText('dashboard')).toBeNull();
+
+  const put = authenticatedFetch.mock.calls[1];
+  expect(String(put[1])).toContain('/api/v1/me/professional-profile');
+  expect((put[2] as RequestInit).method).toBe('PUT');
+  // No onboarding state in the payload: the client describes the learner, never their position.
+  const body = JSON.parse(String((put[2] as RequestInit).body));
+  expect(body).not.toHaveProperty('onboardingState');
+  expect(body).not.toHaveProperty('nextStep');
+  // An unanswered optional self-rating is absent, not an empty string the server would reject.
+  expect(body.declaredSkillLevel).toBeNull();
+});
+
+it('resumes at the profile step on a fresh mount, holding no local position', async () => {
+  // mockImplementation, not mockReturnValue: a Response body can be consumed once, so a single
+  // shared Response would make the second mount fail to parse and mask what this test asserts.
+  authenticatedFetch.mockImplementation(
+    () =>
+      json(onboarding('PROFESSIONAL_PROFILE', {
+        onboardingState: 'PROFILE_PENDING',
+        mobileVerified: true,
+      })) as never,
+  );
+
+  const { unmount } = render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  await screen.findByText('Your professional background');
+  unmount();
+
+  // Signing out and back in is the same thing as a remount here: the step comes from the server on
+  // every mount, so there is no cached wizard position to go stale or be edited.
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  await screen.findByText('Your professional background');
+  expect(localStorage.length).toBe(0);
+  expect(sessionStorage.length).toBe(0);
 });
 
 it('never sends a learner identifier; ownership comes from the token', async () => {
@@ -251,7 +332,9 @@ it('does not render the dashboard for JOURNEY_PENDING', async () => {
       <p>dashboard</p>
     </OnboardingResume>,
   );
-  await screen.findByText('Onboarding is not complete');
+  // JOURNEY_PENDING now renders its own step rather than the unrecognised-state message, but the
+  // assertion that matters is unchanged: a completed profile is not a completed onboarding.
+  await screen.findByText('Your profile is saved');
   expect(screen.queryByText('dashboard')).toBeNull();
 });
 
