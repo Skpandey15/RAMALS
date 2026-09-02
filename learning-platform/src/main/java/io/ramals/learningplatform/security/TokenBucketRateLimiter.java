@@ -2,8 +2,6 @@ package io.ramals.learningplatform.security;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +36,28 @@ import org.slf4j.LoggerFactory;
  * rather than admitting them is deliberate. The alternative to a bounded map is not a more generous
  * service, it is the heap filling and every client losing the service at once; shedding new arrivals
  * keeps established clients working through exactly the flood that would otherwise end them.
+ *
+ * <h2>Why admission is serialised and the rest is not</h2>
+ *
+ * <p>The ceiling was first written as a size check followed by {@code computeIfAbsent}. Those are two
+ * operations, so under concurrency they do not compose: N threads arriving with N unseen keys can
+ * each read {@code size() == maxBuckets - 1}, each conclude there is room, and each then insert. The
+ * table ends up at {@code maxBuckets - 1 + N}. The bound held in every sequential test and was not a
+ * bound at all — and a key-rotation flood, the thing it exists to survive, is precisely the workload
+ * that arrives concurrently with unseen keys.
+ *
+ * <p>So every mutation of the map — the size check, the sweep and the insert — happens under
+ * {@link #admissionLock}, which makes {@code trackedBuckets() <= maxBuckets} an invariant rather
+ * than a likelihood. Traffic from a key that already has a bucket never touches that lock: it is
+ * served by a {@code get} on a {@link ConcurrentHashMap} and then synchronises on its own bucket, so
+ * established clients are unaffected by contention among newcomers. Serialising first-seen keys is
+ * acceptable precisely because a flood of them is the abuse case; the work under the lock is a map
+ * get, a size read and a put, with the O(n) sweep throttled to at most one per
+ * {@link #MIN_SWEEP_INTERVAL_MILLIS}.
+ *
+ * <p>Lock ordering is one-way and therefore deadlock-free: the sweeper takes {@code admissionLock}
+ * and then individual bucket monitors, while {@code tryAcquire} takes a bucket monitor while holding
+ * nothing. No path takes them in the opposite order.
  */
 public class TokenBucketRateLimiter {
 
@@ -64,9 +84,18 @@ public class TokenBucketRateLimiter {
   private final RateLimitTier tier;
   private final LongSupplier clockMillis;
   private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
-  private final AtomicLong nextSweepMillis = new AtomicLong(Long.MIN_VALUE);
-  private final AtomicBoolean sweeping = new AtomicBoolean();
-  private final AtomicBoolean shedding = new AtomicBoolean();
+
+  /**
+   * Guards every mutation of {@link #buckets}, and nothing else.
+   *
+   * <p>A dedicated object rather than {@code this}: the monitor is an implementation detail of
+   * admission, and a caller holding a reference to the limiter must not be able to join or stall it.
+   */
+  private final Object admissionLock = new Object();
+
+  /** Guarded by {@link #admissionLock}. Plain fields: the lock already orders every access. */
+  private long nextSweepMillis = Long.MIN_VALUE;
+  private boolean shedding;
 
   public TokenBucketRateLimiter(RateLimitTier tier) {
     this(tier, System::currentTimeMillis);
@@ -103,31 +132,47 @@ public class TokenBucketRateLimiter {
    * reclamation has been given its chance on this very request.
    */
   private Bucket admit(String key, long now) {
-    int maxBuckets = tier.getMaxBuckets();
-    if (buckets.size() >= maxBuckets) {
-      sweepFullBuckets(now);
-      if (buckets.size() >= maxBuckets) {
-        if (shedding.compareAndSet(false, true)) {
-          LOGGER.warn(
-              "Rate-limit bucket table reached its {} entry ceiling; requests from keys without an "
-                  + "existing bucket are being shed until a sweep reclaims capacity",
-              maxBuckets);
-        }
-        return null;
+    synchronized (admissionLock) {
+      // Re-read inside the lock. Between the caller's miss and this point another thread may have
+      // admitted the same key; returning its bucket rather than a second one is what keeps a key's
+      // allowance single-valued.
+      Bucket existing = buckets.get(key);
+      if (existing != null) {
+        return existing;
       }
+      int maxBuckets = tier.getMaxBuckets();
+      if (buckets.size() >= maxBuckets) {
+        sweepFullBuckets(now);
+        if (buckets.size() >= maxBuckets) {
+          if (!shedding) {
+            shedding = true;
+            LOGGER.warn(
+                "Rate-limit bucket table reached its {} entry ceiling; requests from keys without "
+                    + "an existing bucket are being shed until a sweep reclaims capacity",
+                maxBuckets);
+          }
+          return null;
+        }
+      }
+      if (shedding) {
+        shedding = false;
+        LOGGER.info("Rate-limit bucket table recovered below its ceiling; no longer shedding new keys");
+      }
+      // put, not computeIfAbsent: the absence was established above under this same lock, so the
+      // atomicity computeIfAbsent provides is already held and would only obscure that.
+      Bucket created = new Bucket(tier.getCapacity(), now);
+      buckets.put(key, created);
+      return created;
     }
-    if (shedding.compareAndSet(true, false)) {
-      LOGGER.info("Rate-limit bucket table recovered below its ceiling; no longer shedding new keys");
-    }
-    return buckets.computeIfAbsent(key, ignored -> new Bucket(tier.getCapacity(), now));
   }
 
   /**
    * Removes every bucket that has refilled to capacity.
    *
-   * <p>Single-sweeper and interval-throttled: concurrent callers that lose the CAS carry on without
-   * waiting, because a sweep is an optimisation and blocking request threads behind it would make
-   * the limiter a source of latency under precisely the load it exists to survive.
+   * <p>Called only from {@link #admit}, so {@link #admissionLock} is already held: the lock is the
+   * single-sweeper guarantee, and the explicit CAS this used to carry was redundant beside it.
+   * Interval throttling remains, and matters more now — a sweep walks every entry, so at the ceiling
+   * it must not run per arriving request.
    *
    * <p>A bucket can be removed while another thread holds a reference to it and is about to consume
    * from it. That thread's decrement then applies to a detached bucket and is lost, so the key gets
@@ -136,7 +181,7 @@ public class TokenBucketRateLimiter {
    * not restricting. Holding a global lock to close it would cost far more than it protects.
    */
   private void sweepFullBuckets(long now) {
-    if (now < nextSweepMillis.get() || !sweeping.compareAndSet(false, true)) {
+    if (now < nextSweepMillis) {
       return;
     }
     try {
@@ -148,8 +193,7 @@ public class TokenBucketRateLimiter {
         }
       });
     } finally {
-      nextSweepMillis.set(now + MIN_SWEEP_INTERVAL_MILLIS);
-      sweeping.set(false);
+      nextSweepMillis = now + MIN_SWEEP_INTERVAL_MILLIS;
     }
   }
 

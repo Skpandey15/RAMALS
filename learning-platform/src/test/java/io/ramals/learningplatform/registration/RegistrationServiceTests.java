@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,6 +16,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -362,15 +364,56 @@ class RegistrationServiceTests {
   private static final String RESEND_EMAIL = "learner@example.com";
 
   @Test
-  @DisplayName("a resend for an unverified identity sends the provider's mail")
-  void resendSendsForUnverifiedIdentity() {
+  @DisplayName("a resend for an unverified identity enqueues the send rather than performing it")
+  void resendEnqueuesForUnverifiedIdentity() {
     when(identities.unverifiedSubjectForEmail(RESEND_EMAIL)).thenReturn(Optional.of("subject-9"));
 
     RegistrationService.ResendVerificationResponse response =
         service.resendVerification(new ResendVerificationRequest(RESEND_EMAIL));
 
-    verify(identities).sendVerificationEmail("subject-9");
+    verify(registrations).enqueueVerificationResend(any(), eq("subject-9"), any());
+    // Not sent inline. That is the timing fix: if the provider call happened here, only this case
+    // would pay for it and response time would separate it from the two below.
+    verify(identities, never()).sendVerificationEmail(anyString());
     assertThat(response.status()).isEqualTo("EMAIL_VERIFICATION");
+  }
+
+  @Test
+  @DisplayName("the request path does identical work whether or not the address resolves")
+  void resendPerformsTheSameWorkForEveryOutcome() {
+    // The response body and status were already uniform. This asserts the other observable: the
+    // work done before replying. One lookup and one enqueue in both cases, and no provider send in
+    // either, so there is no branch left whose cost an attacker could time.
+    when(identities.unverifiedSubjectForEmail("known@example.com")).thenReturn(Optional.of("subject-9"));
+    when(identities.unverifiedSubjectForEmail("unknown@example.com")).thenReturn(Optional.empty());
+
+    service.resendVerification(new ResendVerificationRequest("known@example.com"));
+    service.resendVerification(new ResendVerificationRequest("unknown@example.com"));
+
+    verify(identities).unverifiedSubjectForEmail("known@example.com");
+    verify(identities).unverifiedSubjectForEmail("unknown@example.com");
+    // A row is written even when there is nothing to send, so the write is not itself the tell.
+    verify(registrations).enqueueVerificationResend(any(), eq("subject-9"), any());
+    verify(registrations).enqueueVerificationResend(any(), isNull(), any());
+    verify(identities, never()).sendVerificationEmail(anyString());
+  }
+
+  @Test
+  @DisplayName("no log or metric carries an address-derived value")
+  void resendRecordsNothingDerivedFromTheAddress() {
+    when(identities.unverifiedSubjectForEmail(anyString())).thenReturn(Optional.empty());
+
+    service.resendVerification(new ResendVerificationRequest(RESEND_EMAIL));
+
+    // An earlier revision logged a truncated SHA-256 of the address and called it non-reversible.
+    // Email addresses are guessable, so that digest is recoverable offline by anyone holding the
+    // logs. The metric must stay outcome-tagged only, for the same cardinality and PII reasons.
+    assertThat(meterRegistry.get("ramals.registration.resend").tag("outcome", "accepted").counter()
+        .count()).isEqualTo(1.0);
+    assertThat(meterRegistry.getMeters())
+        .allSatisfy(meter -> assertThat(meter.getId().getTags())
+            .noneMatch(tag -> tag.getKey().toLowerCase(Locale.ROOT).contains("email")
+                || tag.getValue().contains("@")));
   }
 
   @Test
