@@ -107,6 +107,15 @@ class RateLimitPropertiesContractTests {
     assertThat(Double.parseDouble(yaml.get("refill-per-second")))
         .as("the IP tier's refill rate must match RateLimitProperties")
         .isEqualTo(javaDefaults.getRefillPerSecond());
+
+    // The key ceiling is bound for the same reason as the other two: unbound, it is reachable only
+    // by editing Java, and it is the one value an operator needs during a key-rotation flood.
+    assertThat(yaml)
+        .as("the IP tier's key ceiling must be bound so it can be raised without a rebuild")
+        .containsKey("max-buckets");
+    assertThat(Integer.parseInt(yaml.get("max-buckets")))
+        .as("the IP tier's key ceiling must match RateLimitProperties")
+        .isEqualTo(javaDefaults.getMaxBuckets());
   }
 
   @Test
@@ -126,6 +135,34 @@ class RateLimitPropertiesContractTests {
     assertThat(Double.parseDouble(yaml.get("subject.refill-per-second")))
         .as("the per-learner refill rate must match RateLimitProperties")
         .isEqualTo(javaDefaults.getRefillPerSecond());
+
+    assertThat(yaml)
+        .as("the subject tier's key ceiling must be bound")
+        .containsKey("subject.max-buckets");
+    assertThat(Integer.parseInt(yaml.get("subject.max-buckets")))
+        .as("the per-learner key ceiling must match RateLimitProperties")
+        .isEqualTo(javaDefaults.getMaxBuckets());
+  }
+
+  @Test
+  @DisplayName("every tier bounds the number of buckets it will retain")
+  void everyTierBoundsItsBucketTable() {
+    RateLimitProperties properties = new RateLimitProperties();
+
+    // The unbounded map was the finding (TD-M2-SEC-01). Asserted as an invariant over both tiers so
+    // that a tier added later cannot reintroduce it by simply omitting the ceiling.
+    assertThat(properties.getMaxBuckets())
+        .as("the IP tier must bound its bucket table; unbounded, address rotation grows the heap")
+        .isPositive();
+    assertThat(properties.getSubject().getMaxBuckets())
+        .as("the subject tier must bound its bucket table")
+        .isPositive();
+
+    assertThat(properties.getMaxBuckets())
+        .as(
+            "the IP tier's key space is the reachable internet and the subject tier's is the set of "
+                + "authenticated learners, so the IP ceiling must be the larger of the two")
+        .isGreaterThan(properties.getSubject().getMaxBuckets());
   }
 
   @Test
