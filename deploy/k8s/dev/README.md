@@ -161,6 +161,27 @@ Three things therefore have to agree, and `bootstrap.ps1` sets all three:
 2. `RAMALS_OIDC_ISSUER_URI` in `configmap.yaml`, the same URL
 3. a CoreDNS rewrite mapping `keycloak.localhost` to the in-cluster Keycloak Service
 
+### The login page's route back to registration
+
+M1-ADR-015 keeps registration in RAMALS, so `registrationAllowed` stays `false`. A side effect is
+that Keycloak's stock login page renders no route to an account at all: a learner who clicks **Log
+in** before registering lands there with nowhere to go.
+
+The `ramals` login theme (`infrastructure/docker/keycloak/themes/ramals`) adds that route. It does
+**not** enable Keycloak self-registration -- it links out to the RAMALS-owned `/register`, which
+remains the only entry point that records consent evidence, terms/privacy versions and mobile
+onboarding.
+
+The destination is not hard-coded. The theme renders `${client.baseUrl}/register`, and
+`bootstrap-core.ps1` sets that client's `baseUrl` from the same `RAMALS_WEB_ORIGIN` the platform
+consumes, so the login page and the application cannot disagree about where RAMALS lives. A client
+with no `baseUrl` renders no link rather than a broken one, so an environment that has not been
+reconciled degrades to the stock page instead of offering a dead link.
+
+`smoke.ps1` asserts both halves: the RAMALS link is present, **and** Keycloak's native registration
+block is absent. The negative half is the one that matters -- it fails if somebody ever "fixes" the
+dead end by turning `registrationAllowed` back on.
+
 ### VITE_API_BASE_URL must be empty
 
 `api.ts` already prefixes every request with `/api/v1/...`. A non-empty base produces

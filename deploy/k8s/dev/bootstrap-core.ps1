@@ -497,6 +497,46 @@ try {
   $registrationRaw = $null
 }
 
+Write-Host "== login page registration route ==" -ForegroundColor Cyan
+# M1-ADR-015 keeps registrationAllowed false. That is correct, and it also means Keycloak's stock
+# login page renders no route to an account at all -- an unregistered learner who reaches it is
+# stranded with no way forward. The RAMALS login theme adds that route, pointing at the RAMALS-owned
+# /register rather than enabling Keycloak self-registration.
+#
+# The theme reads its destination from this client's baseUrl instead of hard-coding an origin, so one
+# image serves local DEV, AWS DEV and production. The value is read back from the ConfigMap the
+# platform itself consumes, which means the login page and the application cannot disagree about
+# where RAMALS lives -- there is one origin, not two that must be kept in step by hand.
+$webOrigin = (kubectl get configmap ramals-dev-config -n $Namespace -o jsonpath='{.data.RAMALS_WEB_ORIGIN}')
+if ([string]::IsNullOrWhiteSpace($webOrigin)) {
+  throw "RAMALS_WEB_ORIGIN is missing from configmap/ramals-dev-config; the login page would have no registration route."
+}
+
+$loginThemeScript = @'
+set -eu
+read -r ORIGIN
+ORIGIN=$(printf %s "$ORIGIN" | sed -e 's/[[:cntrl:]]*$//')
+K=/opt/keycloak/bin/kcadm.sh
+A="--no-config --server http://localhost:8080 --realm master --user $KC_BOOTSTRAP_ADMIN_USERNAME --password $KC_BOOTSTRAP_ADMIN_PASSWORD"
+CLIENT_UUID=$($K get clients -r ramals -q clientId=ramals-web-ui --fields id --format csv --noquotes $A 2>/dev/null | head -1)
+if [ -z "$CLIENT_UUID" ]; then
+  echo "client ramals-web-ui is missing from realm ramals" >&2
+  exit 1
+fi
+$K update clients/$CLIENT_UUID -r ramals -s baseUrl="$ORIGIN" $A >/dev/null
+# registrationAllowed is re-asserted rather than assumed. The theme deliberately does not depend on
+# it, so a drift to true would quietly offer Keycloak-native registration next to the RAMALS route --
+# two entry points, only one of which records consent. Pinning it here makes the invariant active.
+$K update realms/ramals -s loginTheme=ramals -s registrationAllowed=false $A >/dev/null
+echo "reconciled login theme"
+'@
+
+$loginThemeRaw = ($webOrigin | kubectl exec -i -n $Namespace $keycloakPod -- sh -c $loginThemeScript 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0 -or $loginThemeRaw -notmatch 'reconciled login theme') {
+  throw "Failed to reconcile the RAMALS login theme. kcadm said:`n$loginThemeRaw"
+}
+Write-Host "  login page offers $webOrigin/register"
+
 Write-Host "== local test users ==" -ForegroundColor Cyan
 #
 # Two users that exist so a developer can log in immediately. They are NOT in the realm import and
