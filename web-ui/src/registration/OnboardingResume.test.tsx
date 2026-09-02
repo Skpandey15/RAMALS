@@ -378,6 +378,73 @@ it('submits the journey and admits the learner once the server reports completio
   expect(body.targetDate).toBeNull();
 });
 
+it('surfaces a failure to load the learning domains rather than an empty picker', async () => {
+  authenticatedFetch
+    .mockReturnValueOnce(
+      json(onboarding('LEARNING_JOURNEY', {
+        onboardingState: 'JOURNEY_PENDING',
+        mobileVerified: true,
+      })) as never,
+    )
+    .mockReturnValueOnce(json({ detail: 'boom' }, 500) as never);
+
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+
+  // An empty select with no explanation reads as "there is nothing to learn" rather than as a
+  // failed request, and the learner has no way to tell the difference.
+  await screen.findByRole('alert');
+  expect(screen.queryByText('dashboard')).toBeNull();
+});
+
+it('keeps the learner on the journey step when the submission fails', async () => {
+  authenticatedFetch
+    .mockReturnValueOnce(
+      json(onboarding('LEARNING_JOURNEY', {
+        onboardingState: 'JOURNEY_PENDING',
+        mobileVerified: true,
+      })) as never,
+    )
+    .mockReturnValueOnce(json([{ code: 'KAFKA', name: 'Apache Kafka' }]) as never)
+    .mockReturnValueOnce(json({ detail: 'projection failed' }, 503) as never);
+
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+
+  fireEvent.change(await screen.findByLabelText('What are you aiming for?'), {
+    target: { value: 'CERTIFICATION' },
+  });
+  fireEvent.change(screen.getByLabelText('Role you are working towards'), {
+    target: { value: 'Platform Engineer' },
+  });
+  fireEvent.change(await screen.findByLabelText('What do you want to learn?'), {
+    target: { value: 'KAFKA' },
+  });
+  fireEvent.change(screen.getByLabelText('How far do you want to take it?'), {
+    target: { value: '1.000' },
+  });
+  fireEvent.change(screen.getByLabelText('Pace'), { target: { value: 'INTENSIVE' } });
+  fireEvent.change(screen.getByLabelText('Hours per week'), { target: { value: '20' } });
+  // An optional date, supplied this time: it must be sent as a value rather than dropped.
+  fireEvent.change(screen.getByLabelText('Target date (optional)'), {
+    target: { value: '2027-06-30' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
+
+  await screen.findByRole('alert');
+  // The server rejected it, so the learner is not onboarded and must not see the app.
+  expect(screen.queryByText('dashboard')).toBeNull();
+  const body = JSON.parse(String((authenticatedFetch.mock.calls[2][2] as RequestInit).body));
+  expect(body.targetDate).toBe('2027-06-30');
+  expect(body.weeklyHours).toBe(20);
+});
+
 it('does not preselect a learning domain', async () => {
   authenticatedFetch
     .mockReturnValueOnce(
