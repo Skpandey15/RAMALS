@@ -32,6 +32,12 @@ export async function logout(): Promise<void> {
   await keycloak.logout({ redirectUri: window.location.origin });
 }
 
+/** End the current SSO session before allowing a different learner identity to be registered. */
+export async function logoutToRegistration(): Promise<void> {
+  const redirectUri = new URL('/register', window.location.origin).href;
+  await keycloak.logout({ redirectUri });
+}
+
 export function isAuthenticated(): boolean {
   return Boolean(keycloak.authenticated);
 }
