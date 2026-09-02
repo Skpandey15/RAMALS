@@ -49,12 +49,38 @@ strong{{font-size:1.3rem;letter-spacing:.15rem}}</style></head><body><h1>RAMALS 
 </body></html>""".encode()
         return self.reply(200, "text/html; charset=utf-8", page)
 
+    def read_body(self):
+        """Read the request body under either HTTP/1.1 framing.
+
+        Content-Length alone is not enough. Spring's RestClient streams this POST with
+        `Transfer-Encoding: chunked` and sends no Content-Length, so reading the header returned 0,
+        the body was discarded unread, and the handler answered 400 for a request that was perfectly
+        well formed. The platform surfaced that as SMS_PROVIDER_UNAVAILABLE -- "Verification messages
+        are temporarily unavailable" -- which points at the provider being down rather than at this
+        parser, and the sink logs nothing, so nothing anywhere named the real cause.
+
+        Chunked is mandatory for an HTTP/1.1 server. A real SMS gateway accepts it, so a fake that
+        does not is not a smaller gateway, it is a differently-behaving one -- and the difference
+        only shows up as a failed OTP.
+        """
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            chunks = []
+            while True:
+                # A chunk header may carry extensions after ";" -- size is the part before it.
+                size = int(self.rfile.readline().split(b";")[0], 16)
+                if size == 0:
+                    self.rfile.readline()  # consume the trailer-terminating CRLF
+                    break
+                chunks.append(self.rfile.read(size))
+                self.rfile.readline()  # consume the CRLF that ends this chunk
+            return b"".join(chunks)
+        return self.rfile.read(int(self.headers.get("Content-Length", "0")))
+
     def do_POST(self):
         if self.path != "/api/messages":
             return self.reply(404, "text/plain", b"not found")
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length))
+            payload = json.loads(self.read_body())
             destination, code = str(payload["to"]), str(payload["code"])
             if not destination or len(code) != 6 or not code.isdigit():
                 raise ValueError()
