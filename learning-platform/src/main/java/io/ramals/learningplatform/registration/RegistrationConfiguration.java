@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.registration;
 
 import jakarta.annotation.PostConstruct;
+import java.net.URI;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
@@ -36,6 +37,12 @@ class RegistrationConfiguration {
     requirePresent(keycloak.getRealm(), "ramals.registration.keycloak.realm");
     requirePresent(keycloak.getClientId(), "ramals.registration.keycloak.client-id");
     requirePresent(keycloak.getClientSecret(), "ramals.registration.keycloak.client-secret");
+    requirePresent(keycloak.getVerificationClientId(),
+        "ramals.registration.keycloak.verification-client-id");
+    requirePresent(keycloak.getVerificationRedirectUri(),
+        "ramals.registration.keycloak.verification-redirect-uri");
+    validateAbsoluteHttpUri(keycloak.getVerificationRedirectUri(),
+        "ramals.registration.keycloak.verification-redirect-uri");
 
     // The AI plane's workload identity must never be reused for realm administration (M1-ADR-014).
     // It holds a different, non-administrative grant, and pointing registration at it would either
@@ -112,6 +119,19 @@ class RegistrationConfiguration {
     if (value == null || value.isBlank()) {
       throw new IllegalStateException(
           property + " is required when ramals.registration.enabled is true.");
+    }
+  }
+
+  private static void validateAbsoluteHttpUri(String value, String property) {
+    try {
+      URI uri = URI.create(value);
+      if (!uri.isAbsolute() || uri.getHost() == null
+          || !("http".equalsIgnoreCase(uri.getScheme())
+              || "https".equalsIgnoreCase(uri.getScheme()))) {
+        throw new IllegalArgumentException();
+      }
+    } catch (IllegalArgumentException failure) {
+      throw new IllegalStateException(property + " must be an absolute HTTP(S) URI.");
     }
   }
 }

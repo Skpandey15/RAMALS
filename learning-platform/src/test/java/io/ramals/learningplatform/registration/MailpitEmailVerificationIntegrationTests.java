@@ -73,6 +73,8 @@ class MailpitEmailVerificationIntegrationTests {
     properties.getKeycloak().setRealm(REALM);
     properties.getKeycloak().setClientId("ramals-registration-admin");
     properties.getKeycloak().setClientSecret(secret);
+    properties.getKeycloak().setVerificationClientId("ramals-web-ui");
+    properties.getKeycloak().setVerificationRedirectUri("http://localhost:5173/");
     adapter = new KeycloakRegistrationAdminClient(properties);
 
     deleteAllMail();

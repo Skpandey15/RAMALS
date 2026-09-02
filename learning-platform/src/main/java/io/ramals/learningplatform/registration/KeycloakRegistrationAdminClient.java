@@ -65,14 +65,22 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
   private final AtomicReference<CachedToken> cachedToken = new AtomicReference<>();
 
   KeycloakRegistrationAdminClient(RegistrationProperties properties) {
+    this(properties, clientWithTimeouts());
+  }
+
+  KeycloakRegistrationAdminClient(RegistrationProperties properties, RestClient http) {
     this.properties = properties;
+    this.http = http;
+  }
+
+  private static RestClient clientWithTimeouts() {
     SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
     requestFactory.setConnectTimeout(CONNECT_TIMEOUT);
     requestFactory.setReadTimeout(READ_TIMEOUT);
     // Timeouts are not optional here. This adapter is called from a public, unauthenticated route;
     // an unbounded read against a wedged Keycloak would hold a request thread per attempt and turn
     // a provider stall into a platform outage.
-    this.http = RestClient.builder().requestFactory(requestFactory).build();
+    return RestClient.builder().requestFactory(requestFactory).build();
   }
 
   /**
@@ -195,10 +203,13 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
 
   @Override
   public void sendVerificationEmail(String subject) {
+    RegistrationProperties.Keycloak keycloak = properties.getKeycloak();
     try {
       http.put()
-          .uri(realmBase() + "/users/{subject}/send-verify-email",
-              properties.getKeycloak().getRealm(), subject)
+          .uri(realmBase() + "/users/{subject}/send-verify-email"
+                  + "?client_id={verificationClientId}&redirect_uri={verificationRedirectUri}",
+              keycloak.getRealm(), subject, keycloak.getVerificationClientId(),
+              keycloak.getVerificationRedirectUri())
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .retrieve()
           .toBodilessEntity();
