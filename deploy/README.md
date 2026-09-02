@@ -1,8 +1,12 @@
 # RAMALS MVP-0 deployment (controlled pull-based)
 
 Build once, promote the same artifact. CI publishes immutable images and **never pushes to an
-environment**; the dev host **pulls** an approved desired-version manifest. There is no deployment
+environment**; controlled environments **pull** an approved desired-version manifest. There is no deployment
 credential in CI, so a pull request cannot reach an environment even if it could run code.
+
+The local Jenkins development path is intentionally faster: after human approval it deploys the
+qualified images for the exact current `main` commit, verifies their OCI revisions, and records their
+resolved immutable digests. It does not use `desired-version.json`; staging/production-style paths do.
 
 ## Pipeline
 

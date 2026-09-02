@@ -107,8 +107,9 @@ try {
   Assert-DockerRuntimeReady
 
   $ghcrEvidence = Join-Path $evidenceDirectory "ghcr-images.json"
-  $desiredVersion = Get-Content (Join-Path $repositoryRoot "deploy\desired-version.json") -Raw | ConvertFrom-Json
-  $applicationReleaseCommit = [string]$desiredVersion.release.commit
+  # Local/dev follows current main. Image preparation waits for GitHub Actions to publish this
+  # exact commit and verifies every OCI revision before anything reaches the cluster.
+  $applicationReleaseCommit = $head
   $applicationImageTag = $applicationReleaseCommit.Substring(0, 7)
   $infrastructureImageTag = $head.Substring(0, 7)
 
