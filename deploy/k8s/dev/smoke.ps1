@@ -111,6 +111,37 @@ Check "development SMS inbox configured" {
     -o jsonpath='{.data.RAMALS_SMS_SINK_URL}' 2>$null
   return $provider -eq "local-sink" -and $sink -eq "http://sms-sink:8080"
 }
+# The platform sends this POST with `Transfer-Encoding: chunked` and no Content-Length, because
+# that is how Spring's RestClient streams a body. A sink that reads only Content-Length reads zero
+# bytes and answers 400 for a perfectly well-formed request; the platform then reports
+# SMS_PROVIDER_UNAVAILABLE -- "Verification messages are temporarily unavailable" -- which names the
+# provider rather than the parser, while the sink logs nothing at all.
+#
+# "sms-sink is reachable" and "sms-sink accepts what the platform actually sends" are therefore
+# different claims, and only the second one is worth anything. curl and every hand-written probe
+# send Content-Length, so they pass against a sink that cannot serve a single real OTP.
+Check "sms-sink accepts chunked request bodies" {
+  $pod = kubectl get pod -n $Namespace -l app.kubernetes.io/name=learning-platform `
+           -o jsonpath='{.items[0].metadata.name}' 2>$null
+  if (-not $pod) { return $false }
+  $probe = @'
+BODY="{\"to\":\"SMOKE-CHUNKED-PROBE\",\"code\":\"000000\"}"
+HEX=$(printf "%x" $(printf %s "$BODY" | wc -c))
+printf "POST /api/messages HTTP/1.1\r\nHost: sms-sink:8080\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n%s\r\n%s\r\n0\r\n\r\n" "$HEX" "$BODY" | nc -w 5 sms-sink 8080 | head -1
+'@
+  $response = (kubectl exec -n $Namespace $pod -- sh -c $probe 2>$null | Out-String)
+
+  # Remove the probe row, so a developer reading the inbox sees only real verification codes.
+  $cleanup = @'
+import os, sqlite3
+connection = sqlite3.connect(os.environ.get("SMS_DB", "/tmp/sms.db"))
+connection.execute("DELETE FROM messages WHERE destination = 'SMOKE-CHUNKED-PROBE'")
+connection.commit()
+'@
+  $cleanup | kubectl exec -i -n $Namespace deploy/sms-sink -- python - 2>$null | Out-Null
+
+  return $response -match "202"
+}
 Check "registration admin secret is stored" {
   $v = kubectl get secret ramals-dev-registration-admin -n $Namespace `
     -o jsonpath='{.data.RAMALS_REGISTRATION_ADMIN_CLIENT_SECRET}' 2>$null
