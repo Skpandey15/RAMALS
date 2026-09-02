@@ -203,7 +203,7 @@ integrationTest.configure {
 }
 
 tasks.named('check') {
-  dependsOn integrationTest, architectureTest, governanceTest
+  dependsOn integrationTest, architectureTest, governanceTest, tasks.named('jacocoTestCoverageVerification')
 }
 
 tasks.named('test') {
@@ -231,5 +231,32 @@ tasks.named('jacocoTestReport') {
     xml.required = true
     html.required = true
     csv.required = true
+  }
+}
+
+// Coverage was measured and reported for the whole of MVP-0 through MVP-2, and enforced nowhere:
+// no verification task, no vitest threshold, and a CI summariser that exited 0 when the report was
+// absent. A number nothing acts on is a number that can fall to zero between two green builds --
+// which is the one thing a coverage report is supposed to make impossible.
+//
+// The minima are a ratchet, not a target. They sit just under the figures the suite actually
+// achieved when the gate was introduced (line 62.9%, branch 53.5%), so the gate blocks regression
+// without inventing a standard the codebase has not already met. Raise them when the real figure
+// rises; never lower them to make a red build green.
+tasks.named('jacocoTestCoverageVerification') {
+  dependsOn tasks.named('jacocoTestReport')
+  violationRules {
+    rule {
+      limit {
+        counter = 'LINE'
+        value = 'COVEREDRATIO'
+        minimum = 0.62
+      }
+      limit {
+        counter = 'BRANCH'
+        value = 'COVEREDRATIO'
+        minimum = 0.52
+      }
+    }
   }
 }

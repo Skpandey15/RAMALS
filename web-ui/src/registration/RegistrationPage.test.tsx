@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RegistrationPage } from './RegistrationPage';
 
@@ -255,4 +255,82 @@ it('keeps the retry key out of browser storage', async () => {
 
   expect(localStorage.length).toBe(0);
   expect(sessionStorage.length).toBe(0);
+});
+
+describe('resending the verification email', () => {
+  /** Registers successfully, leaving the "Check your email" panel on screen. */
+  async function reachCheckYourEmail() {
+    fetchMock.mockReturnValue(accepted());
+    render(<RegistrationPage />);
+    fillAndSubmit();
+    await screen.findByRole('heading', { name: 'Check your email' });
+    fetchMock.mockClear();
+  }
+
+  it('posts the registered address to the resend route', async () => {
+    await reachCheckYourEmail();
+    fetchMock.mockReturnValue(
+      Promise.resolve(new Response(JSON.stringify({ status: 'EMAIL_VERIFICATION' }), {
+        status: 202, headers: { 'Content-Type': 'application/json' },
+      })),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send it again' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toMatch(/\/api\/v1\/registration\/verification\/resend$/);
+    expect(init.method).toBe('POST');
+    // The form was reset on submit, so the address has to have been captured before that.
+    expect(JSON.parse(String(init.body))).toEqual({ email: 'asha@example.com' });
+  });
+
+  it('sends no Idempotency-Key, because there is no operation to fork', async () => {
+    await reachCheckYourEmail();
+    fetchMock.mockReturnValue(
+      Promise.resolve(new Response(null, { status: 202 })),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send it again' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const headers = new Headers(fetchMock.mock.calls[0][1].headers);
+    expect(headers.get('Idempotency-Key')).toBeNull();
+  });
+
+  it('confirms without revealing whether the address is registered', async () => {
+    await reachCheckYourEmail();
+    fetchMock.mockReturnValue(Promise.resolve(new Response(null, { status: 202 })));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send it again' }));
+
+    // "another link is on its way" only if the address is awaiting verification -- never a flat
+    // "sent". A definite confirmation here would answer the enumeration question the server's
+    // uniform response exists to refuse.
+    const confirmation = await screen.findByRole('status');
+    expect(confirmation).toHaveTextContent(/If that address is awaiting verification/);
+    expect(confirmation.textContent).not.toMatch(/\bsent\b/i);
+  });
+
+  it('keeps the instructions on screen when the resend fails', async () => {
+    await reachCheckYourEmail();
+    fetchMock.mockReturnValue(Promise.resolve(new Response(null, { status: 429 })));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send it again' }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    // The learner is mid-recovery. Replacing the panel with an error would remove the very
+    // instructions they came back to act on.
+    expect(screen.getByRole('heading', { name: 'Check your email' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send it again' })).toBeEnabled();
+  });
+
+  it('survives a transport failure without an unhandled rejection', async () => {
+    await reachCheckYourEmail();
+    fetchMock.mockRejectedValue(new TypeError('network down'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send it again' }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+  });
 });

@@ -16,6 +16,10 @@ public class RateLimitProperties implements RateLimitTier {
   private boolean enabled = true;
   private int capacity = 600;
   private double refillPerSecond = 300.0;
+  // The reachable internet is this tier's key space, so the ceiling is sized to be unreachable in
+  // normal operation and cheap if reached: ~100k entries is single-digit megabytes, and a bucket
+  // refills fully 3.3ms after one request, so residency is measured in milliseconds.
+  private int maxBuckets = 100_000;
   private final Subject subject = new Subject();
 
   public boolean isEnabled() {
@@ -44,6 +48,15 @@ public class RateLimitProperties implements RateLimitTier {
     this.refillPerSecond = refillPerSecond;
   }
 
+  @Override
+  public int getMaxBuckets() {
+    return maxBuckets;
+  }
+
+  public void setMaxBuckets(int maxBuckets) {
+    this.maxBuckets = maxBuckets;
+  }
+
   public Subject getSubject() {
     return subject;
   }
@@ -58,6 +71,9 @@ public class RateLimitProperties implements RateLimitTier {
 
     private int capacity = 120;
     private double refillPerSecond = 60.0;
+    // Bounded by the learners authenticated against one instance, not by the internet, so it sits
+    // well below the IP tier: minting a subject key costs a validated JWT.
+    private int maxBuckets = 50_000;
 
     @Override
     public int getCapacity() {
@@ -75,6 +91,15 @@ public class RateLimitProperties implements RateLimitTier {
 
     public void setRefillPerSecond(double refillPerSecond) {
       this.refillPerSecond = refillPerSecond;
+    }
+
+    @Override
+    public int getMaxBuckets() {
+      return maxBuckets;
+    }
+
+    public void setMaxBuckets(int maxBuckets) {
+      this.maxBuckets = maxBuckets;
     }
   }
 }

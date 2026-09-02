@@ -48,8 +48,12 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Build and test backend
+        id: backend-build
         # Database-backed suites reset shared schemas and roles. Keep Gradle task workers
         # serialized as well as the individual test forks.
+        #
+        # `check` now also runs jacocoTestCoverageVerification, so a coverage regression fails
+        # here rather than being reported to a summary nobody gates on.
         run: ./gradlew --no-daemon --max-workers=1 clean check
       # JaCoCo currently reports the fast unit-test task; integration coverage is kept separate
       # because it requires the PostgreSQL-backed integrationTest task.
@@ -57,7 +61,17 @@ jobs:
         if: always()
         run: |
           report=learning-platform/build/reports/jacoco/test/jacocoTestReport.csv
-          if [ ! -f "$report" ]; then echo "no coverage report produced"; exit 0; fi
+          if [ ! -f "$report" ]; then
+            # A missing report after a failed build is expected: the run stopped before JaCoCo.
+            # After a *successful* build it is not, and exiting 0 either way is how coverage could
+            # silently stop being measured while the job stayed green.
+            if [ "${{ steps.backend-build.outcome }}" = "success" ]; then
+              echo "::error::check succeeded but produced no JaCoCo report at $report -- coverage was not measured"
+              exit 1
+            fi
+            echo "no coverage report produced (the build failed before JaCoCo ran)"
+            exit 0
+          fi
           awk -F, 'NR>1 {lm+=$8; lc+=$9; bm+=$6; bc+=$7}
             END {
               printf "Line coverage:   %.1f%% (%d/%d)\n", 100*lc/(lc+lm), lc, lc+lm;

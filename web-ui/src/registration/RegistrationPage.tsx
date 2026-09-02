@@ -23,12 +23,43 @@ function fingerprintOf(payload: Record<string, unknown>): string {
     .map((value) => String(value ?? '').trim().toLowerCase()).join('\u0000');
 }
 
-type Status = { kind: 'idle' } | { kind: 'submitting' } | { kind: 'submitted' } |
+type Status = { kind: 'idle' } | { kind: 'submitting' } | { kind: 'submitted'; email: string } |
   { kind: 'failed'; message: string; supportCode: string };
+
+/**
+ * The resend affordance's own state, kept apart from Status.
+ *
+ * A failed resend must not tear down the "check your email" panel: the learner is mid-recovery, and
+ * replacing the instructions with an error would take away the very thing they came back for.
+ */
+type ResendState = { kind: 'idle' } | { kind: 'sending' } | { kind: 'done' } | { kind: 'failed' };
 
 export function RegistrationPage() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [resendState, setResendState] = useState<ResendState>({ kind: 'idle' });
   const attempt = useRef<RegistrationAttempt | null>(null);
+
+  /**
+   * Asks for another verification email.
+   *
+   * <p>No Idempotency-Key: the route creates nothing a replay could fork, and repetition is bounded
+   * server-side per address. Deliberately reports success for any accepted response, because the
+   * server answers identically whether or not the address exists and the UI has nothing finer to
+   * report even if it wanted to.
+   */
+  async function resend(email: string) {
+    setResendState({ kind: 'sending' });
+    const interaction = beginInteraction();
+    try {
+      const response = await interactionFetch(
+        interaction, `${API}/api/v1/registration/verification/resend`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }) });
+      setResendState(response.ok ? { kind: 'done' } : { kind: 'failed' });
+    } catch {
+      setResendState({ kind: 'failed' });
+    }
+  }
 
   function idempotencyKeyFor(payload: Record<string, unknown>): string {
     const fingerprint = fingerprintOf(payload);
@@ -69,9 +100,11 @@ export function RegistrationPage() {
         body: JSON.stringify(payload),
       });
       if (!response.ok) throw await toApiError(response, interaction.interactionId);
+      // Captured before reset(): the resend route needs the address, and the form no longer has it.
+      const email = String(fields.get('email') ?? '').trim();
       attempt.current = null;
       form.reset();
-      setStatus({ kind: 'submitted' });
+      setStatus({ kind: 'submitted', email });
     } catch (error) {
       setStatus({ kind: 'failed',
         message: error instanceof Error ? error.message : 'Registration could not be completed.',
@@ -83,6 +116,22 @@ export function RegistrationPage() {
   if (status.kind === 'submitted') return (
     <main className="app"><p className="eyebrow">RAMALS professional</p><h1>Check your email</h1>
       <p>If that address can be registered, we have asked Keycloak to send a verification link. Follow it, then sign in to continue setting up your account.</p>
+      <p>
+        Nothing arrived?{' '}
+        <button type="button" className="link-button" onClick={() => void resend(status.email)}
+          disabled={resendState.kind === 'sending'}>
+          {resendState.kind === 'sending' ? 'Sending…' : 'Send it again'}
+        </button>
+      </p>
+      {resendState.kind === 'done' && (
+        // Worded exactly like the panel above it. Confirming that a mail *was* sent would answer
+        // "is this address registered?" for anyone who asked, which is what the endpoint's own
+        // uniform response is built to prevent -- the UI must not undo it.
+        <p role="status">If that address is awaiting verification, another link is on its way.</p>
+      )}
+      {resendState.kind === 'failed' && (
+        <p role="alert">We could not request another email just now. Please try again shortly.</p>
+      )}
       <p><a href="/">Continue to sign in</a></p></main>
   );
 
