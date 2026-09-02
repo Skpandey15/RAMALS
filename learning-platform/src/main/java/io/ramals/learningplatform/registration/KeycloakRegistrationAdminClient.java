@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -64,15 +65,33 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
   private final RestClient http;
   private final AtomicReference<CachedToken> cachedToken = new AtomicReference<>();
 
+  /**
+   * The constructor Spring uses.
+   *
+   * <p>Annotated because this class now declares two. Spring selects a constructor automatically
+   * only when there is exactly one; with several and none annotated it falls back to the no-arg
+   * constructor, which does not exist here — so every context that wires this bean failed with
+   * {@code NoSuchMethodException: <init>()}, and with it every API contract test.
+   */
+  @Autowired
   KeycloakRegistrationAdminClient(RegistrationProperties properties) {
+    this(properties, clientWithTimeouts());
+  }
+
+  /** Seam for tests, which supply a {@link RestClient} bound to a stub server. Not autowired. */
+  KeycloakRegistrationAdminClient(RegistrationProperties properties, RestClient http) {
     this.properties = properties;
+    this.http = http;
+  }
+
+  private static RestClient clientWithTimeouts() {
     SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
     requestFactory.setConnectTimeout(CONNECT_TIMEOUT);
     requestFactory.setReadTimeout(READ_TIMEOUT);
     // Timeouts are not optional here. This adapter is called from a public, unauthenticated route;
     // an unbounded read against a wedged Keycloak would hold a request thread per attempt and turn
     // a provider stall into a platform outage.
-    this.http = RestClient.builder().requestFactory(requestFactory).build();
+    return RestClient.builder().requestFactory(requestFactory).build();
   }
 
   /**
@@ -195,10 +214,13 @@ class KeycloakRegistrationAdminClient implements IdentityProviderPort {
 
   @Override
   public void sendVerificationEmail(String subject) {
+    RegistrationProperties.Keycloak keycloak = properties.getKeycloak();
     try {
       http.put()
-          .uri(realmBase() + "/users/{subject}/send-verify-email",
-              properties.getKeycloak().getRealm(), subject)
+          .uri(realmBase() + "/users/{subject}/send-verify-email"
+                  + "?client_id={verificationClientId}&redirect_uri={verificationRedirectUri}",
+              keycloak.getRealm(), subject, keycloak.getVerificationClientId(),
+              keycloak.getVerificationRedirectUri())
           .headers(headers -> headers.setBearerAuth(accessToken()))
           .retrieve()
           .toBodilessEntity();

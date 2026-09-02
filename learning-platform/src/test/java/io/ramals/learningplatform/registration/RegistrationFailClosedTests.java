@@ -24,6 +24,8 @@ class RegistrationFailClosedTests {
     properties.getKeycloak().setRealm("ramals");
     properties.getKeycloak().setClientId("ramals-registration-admin");
     properties.getKeycloak().setClientSecret("a-secret-value");
+    properties.getKeycloak().setVerificationClientId("ramals-web-ui");
+    properties.getKeycloak().setVerificationRedirectUri("http://localhost:8080/");
     properties.getConsent().setTermsVersion("terms-v1");
     properties.getConsent().setTermsRef("terms/v1");
     properties.getConsent().setPrivacyVersion("privacy-v1");
@@ -63,6 +65,26 @@ class RegistrationFailClosedTests {
     assertThatThrownBy(() -> validate(properties))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("client-secret");
+  }
+
+  @Test
+  @DisplayName("a missing verification redirect refuses to start")
+  void missingVerificationRedirectRefusesToStart() {
+    RegistrationProperties properties = valid();
+    properties.getKeycloak().setVerificationRedirectUri("  ");
+    assertThatThrownBy(() -> validate(properties))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("verification-redirect-uri");
+  }
+
+  @Test
+  @DisplayName("a non-HTTP verification redirect refuses to start")
+  void unsafeVerificationRedirectRefusesToStart() {
+    RegistrationProperties properties = valid();
+    properties.getKeycloak().setVerificationRedirectUri("javascript:alert(1)");
+    assertThatThrownBy(() -> validate(properties))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("absolute HTTP(S) URI");
   }
 
   @Test
