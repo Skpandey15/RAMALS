@@ -148,7 +148,9 @@ it('submits the profile and re-reads the server state rather than assuming the n
         onboardingState: 'JOURNEY_PENDING',
         mobileVerified: true,
       })) as never,
-    );
+    )
+    // The journey step loads the domain catalog once the server places the learner on it.
+    .mockReturnValueOnce(json([{ code: 'KAFKA', name: 'Apache Kafka' }]) as never);
 
   render(
     <OnboardingResume>
@@ -168,7 +170,7 @@ it('submits the profile and re-reads the server state rather than assuming the n
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
   // The server moved the learner to the journey step; the component renders what it was told.
-  await screen.findByText('Your profile is saved');
+  await screen.findByText('Your first learning goal');
   expect(screen.queryByText('dashboard')).toBeNull();
 
   const put = authenticatedFetch.mock.calls[1];
@@ -323,10 +325,89 @@ it('does not render the dashboard for an unknown nextStep', async () => {
   expect(screen.queryByText('dashboard')).toBeNull();
 });
 
-it('does not render the dashboard for JOURNEY_PENDING', async () => {
-  authenticatedFetch.mockReturnValue(
-    json({ onboardingState: 'JOURNEY_PENDING', nextStep: 'LEARNING_JOURNEY' }) as never,
+it('submits the journey and admits the learner once the server reports completion', async () => {
+  authenticatedFetch
+    .mockReturnValueOnce(
+      json(onboarding('LEARNING_JOURNEY', {
+        onboardingState: 'JOURNEY_PENDING',
+        mobileVerified: true,
+      })) as never,
+    )
+    .mockReturnValueOnce(json([{ code: 'KAFKA', name: 'Apache Kafka' }]) as never)
+    .mockReturnValueOnce(json({ id: 'j-1', primaryDomainCode: 'KAFKA' }) as never)
+    .mockReturnValueOnce(
+      json(onboarding('COMPLETE', {
+        onboardingState: 'ONBOARDED',
+        mobileVerified: true,
+      })) as never,
+    );
+
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
   );
+
+  fireEvent.change(await screen.findByLabelText('What are you aiming for?'), {
+    target: { value: 'ROLE_TRANSITION' },
+  });
+  fireEvent.change(screen.getByLabelText('Role you are working towards'), {
+    target: { value: 'Principal Engineer' },
+  });
+  // The catalog is served, not hard-coded: the option exists because the server returned it.
+  fireEvent.change(await screen.findByLabelText('What do you want to learn?'), {
+    target: { value: 'KAFKA' },
+  });
+  fireEvent.change(screen.getByLabelText('How far do you want to take it?'), {
+    target: { value: '0.700' },
+  });
+  fireEvent.change(screen.getByLabelText('Pace'), { target: { value: 'STEADY' } });
+  fireEvent.change(screen.getByLabelText('Hours per week'), { target: { value: '8' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
+
+  // Admitted only because the re-read reported ONBOARDED/COMPLETE, not because the POST returned 200.
+  await screen.findByText('dashboard');
+
+  const post = authenticatedFetch.mock.calls[2];
+  expect(String(post[1])).toContain('/api/v1/me/learning-journeys');
+  expect((post[2] as RequestInit).method).toBe('POST');
+  const body = JSON.parse(String((post[2] as RequestInit).body));
+  expect(body).not.toHaveProperty('onboardingState');
+  expect(body.primaryDomainCode).toBe('KAFKA');
+  // An unset optional date is absent rather than an empty string the server would reject.
+  expect(body.targetDate).toBeNull();
+});
+
+it('does not preselect a learning domain', async () => {
+  authenticatedFetch
+    .mockReturnValueOnce(
+      json(onboarding('LEARNING_JOURNEY', {
+        onboardingState: 'JOURNEY_PENDING',
+        mobileVerified: true,
+      })) as never,
+    )
+    .mockReturnValueOnce(json([{ code: 'KAFKA', name: 'Apache Kafka' }]) as never);
+
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+
+  // Doc 03: Kafka is never auto-selected. With a single-entry catalog that is only true if nothing
+  // preselects it, so the empty value must survive the catalog load.
+  const select = (await screen.findByLabelText('What do you want to learn?')) as HTMLSelectElement;
+  await waitFor(() => expect(screen.getByRole('option', { name: 'Apache Kafka' })).toBeTruthy());
+  expect(select.value).toBe('');
+  expect(screen.getByRole('button', { name: 'Finish' })).toBeDisabled();
+});
+
+it('does not render the dashboard for JOURNEY_PENDING', async () => {
+  authenticatedFetch
+    .mockReturnValueOnce(
+      json({ onboardingState: 'JOURNEY_PENDING', nextStep: 'LEARNING_JOURNEY' }) as never,
+    )
+    .mockReturnValueOnce(json([{ code: 'KAFKA', name: 'Apache Kafka' }]) as never);
   render(
     <OnboardingResume>
       <p>dashboard</p>
@@ -334,7 +415,7 @@ it('does not render the dashboard for JOURNEY_PENDING', async () => {
   );
   // JOURNEY_PENDING now renders its own step rather than the unrecognised-state message, but the
   // assertion that matters is unchanged: a completed profile is not a completed onboarding.
-  await screen.findByText('Your profile is saved');
+  await screen.findByText('Your first learning goal');
   expect(screen.queryByText('dashboard')).toBeNull();
 });
 

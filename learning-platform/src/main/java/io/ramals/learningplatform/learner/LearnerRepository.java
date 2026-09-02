@@ -6,6 +6,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -51,6 +52,29 @@ public class LearnerRepository {
     return jdbcTemplate.query(
         "SELECT subject FROM core.learner WHERE id = ? AND status = 'ACTIVE'",
         (result, row) -> result.getString("subject"), learnerId).stream().findFirst();
+  }
+
+  /**
+   * The active learning domains a learner may choose from, ordered by name.
+   *
+   * <p>Exists so the onboarding journey step can present a catalog rather than hard-code one. No
+   * domain may be auto-selected for a learner (Doc 03 section 8); serving the catalog and letting
+   * them pick is what makes that true, where a UI with a baked-in code would make it accidental --
+   * and would quietly teach this module the name of a domain it must not know.
+   *
+   * <p>Filtered to ACTIVE for the same reason {@link #findActiveDomainId(String)} is: a retired
+   * domain must not be offered as a target, or a learner would build a journey on something the
+   * platform has stopped teaching.
+   */
+  public List<LearningDomainSummary> findActiveDomains() {
+    return jdbcTemplate.query(
+        "SELECT code, name FROM core.learning_domain WHERE status = 'ACTIVE' ORDER BY name",
+        (result, row) -> new LearningDomainSummary(
+            result.getString("code"), result.getString("name")));
+  }
+
+  /** A catalog entry as the onboarding UI needs it: the code to submit and the name to show. */
+  public record LearningDomainSummary(String code, String name) {
   }
 
   public Optional<UUID> findActiveDomainId(String domainCode) {
