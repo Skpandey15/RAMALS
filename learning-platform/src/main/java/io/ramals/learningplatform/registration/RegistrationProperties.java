@@ -300,4 +300,76 @@ public class RegistrationProperties {
       this.abuseCounterRetentionDays = abuseCounterRetentionDays;
     }
   }
+
+  private final Resend resend = new Resend();
+
+  public Resend getResend() {
+    return resend;
+  }
+
+  /**
+   * Out-of-band delivery of verification-resend mail.
+   *
+   * <p>The send is deliberately not on the request path: inline, only a request for a genuinely
+   * unverified address paid for the provider call, which made response time an account-enumeration
+   * oracle that the uniform response body had just closed.
+   */
+  public static class Resend {
+
+    private boolean enabled = true;
+    /** Short: this is a learner waiting on an email, not a background reconciliation. */
+    private long intervalMs = 5_000;
+    private int batchSize = 20;
+    private int maxAttempts = 5;
+    private long initialBackoffMillis = 1_000;
+    private long maxBackoffMillis = 60_000;
+
+    public boolean isEnabled() {
+      return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+      this.enabled = enabled;
+    }
+
+    public long getIntervalMs() {
+      return intervalMs;
+    }
+
+    public void setIntervalMs(long intervalMs) {
+      this.intervalMs = intervalMs;
+    }
+
+    public int getBatchSize() {
+      return batchSize;
+    }
+
+    public void setBatchSize(int batchSize) {
+      this.batchSize = batchSize;
+    }
+
+    public int getMaxAttempts() {
+      return maxAttempts;
+    }
+
+    public void setMaxAttempts(int maxAttempts) {
+      this.maxAttempts = maxAttempts;
+    }
+
+    public long getInitialBackoffMillis() {
+      return initialBackoffMillis;
+    }
+
+    public void setInitialBackoffMillis(long initialBackoffMillis) {
+      this.initialBackoffMillis = initialBackoffMillis;
+    }
+
+    public long getMaxBackoffMillis() {
+      return maxBackoffMillis;
+    }
+
+    public void setMaxBackoffMillis(long maxBackoffMillis) {
+      this.maxBackoffMillis = maxBackoffMillis;
+    }
+  }
 }

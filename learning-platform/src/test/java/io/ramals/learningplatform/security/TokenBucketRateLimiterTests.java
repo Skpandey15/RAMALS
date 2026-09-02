@@ -2,6 +2,14 @@ package io.ramals.learningplatform.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class TokenBucketRateLimiterTests {
@@ -135,5 +143,90 @@ class TokenBucketRateLimiterTests {
     assertThat(limiter.trackedBuckets())
         .as("20,000 distinct keys must not leave 20,000 live buckets behind")
         .isLessThanOrEqualTo(64);
+  }
+
+  @Test
+  @DisplayName("the ceiling holds when hundreds of unseen keys arrive at once")
+  void ceilingHoldsUnderConcurrentFirstSeenKeys() throws Exception {
+    // The bound was previously a size check followed by computeIfAbsent -- two operations, so N
+    // threads could each read size < maxBuckets and each then insert. This is the test the
+    // sequential rotation case cannot be: it fails on the pre-fix implementation and passes on the
+    // serialised one, because only concurrency distinguishes them.
+    int maxBuckets = 64;
+    int threads = 64;
+    int keysPerThread = 32;
+    // Zero refill so nothing is ever reclaimable: the ceiling is the only thing that can bound the
+    // table, which is exactly what is under test.
+    TokenBucketRateLimiter limiter =
+        new TokenBucketRateLimiter(properties(4, 0.0, maxBuckets), () -> 0L);
+
+    ExecutorService pool = Executors.newFixedThreadPool(threads);
+    // A barrier, not a start flag: every thread is released in the same instant, which is what
+    // makes the interleaving dense enough to expose a check-then-act window.
+    CyclicBarrier startTogether = new CyclicBarrier(threads);
+    List<Future<?>> runs = new ArrayList<>();
+    try {
+      for (int thread = 0; thread < threads; thread++) {
+        int id = thread;
+        runs.add(pool.submit(() -> {
+          startTogether.await(20, TimeUnit.SECONDS);
+          for (int index = 0; index < keysPerThread; index++) {
+            limiter.tryAcquire("2001:db8:" + id + "::" + index);
+          }
+          return null;
+        }));
+      }
+      for (Future<?> run : runs) {
+        run.get(30, TimeUnit.SECONDS); // surfaces an assertion or timeout inside a worker
+      }
+    } finally {
+      pool.shutdownNow();
+    }
+
+    assertThat(limiter.trackedBuckets())
+        .as("%d threads x %d unseen keys must not push the table past its %d ceiling",
+            threads, keysPerThread, maxBuckets)
+        .isLessThanOrEqualTo(maxBuckets);
+  }
+
+  @Test
+  @DisplayName("an established key keeps its allowance while newcomers are shed concurrently")
+  void establishedKeyIsUnaffectedByConcurrentAdmissionPressure() throws Exception {
+    int maxBuckets = 8;
+    TokenBucketRateLimiter limiter =
+        new TokenBucketRateLimiter(properties(1_000, 0.0, maxBuckets), () -> 0L);
+
+    // Establish the key before the flood, so it owns a bucket the ceiling cannot evict (drained
+    // buckets are never full, and only full buckets are reclaimable).
+    assertThat(limiter.tryAcquire("established").allowed()).isTrue();
+
+    int threads = 32;
+    ExecutorService pool = Executors.newFixedThreadPool(threads);
+    CyclicBarrier startTogether = new CyclicBarrier(threads);
+    List<Future<?>> runs = new ArrayList<>();
+    try {
+      for (int thread = 0; thread < threads; thread++) {
+        int id = thread;
+        runs.add(pool.submit(() -> {
+          startTogether.await(20, TimeUnit.SECONDS);
+          for (int index = 0; index < 32; index++) {
+            limiter.tryAcquire("newcomer-" + id + "-" + index);
+          }
+          return null;
+        }));
+      }
+      for (Future<?> run : runs) {
+        run.get(30, TimeUnit.SECONDS);
+      }
+    } finally {
+      pool.shutdownNow();
+    }
+
+    assertThat(limiter.trackedBuckets()).isLessThanOrEqualTo(maxBuckets);
+    // The point of shedding rather than growing: a client already known keeps being served through
+    // the flood. If admission had evicted or replaced its bucket this would fail.
+    assertThat(limiter.tryAcquire("established").allowed())
+        .as("an established key must keep its service while unknown keys are being shed")
+        .isTrue();
   }
 }

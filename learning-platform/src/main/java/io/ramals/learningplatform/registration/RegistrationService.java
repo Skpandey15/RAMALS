@@ -4,7 +4,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
+import io.ramals.learningplatform.observability.UuidV7;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.security.MessageDigest;
 import java.util.Locale;
 import java.util.Map;
@@ -121,21 +123,35 @@ class RegistrationService {
   }
 
   /**
-   * Re-sends the provider's verification mail for an address that has not completed verification.
+   * Accepts a request to re-send verification mail for an address that has not completed it.
    *
    * <p>This route exists because the two behaviours around it combine into a dead end. Verification
    * mail is the only way to finish registering, and {@link #complete} deliberately sends none when
    * the identity already exists — so a learner whose mail was lost cannot recover by registering
-   * again, and previously had no route at all. That was closed by hand against the provider's admin
-   * API, which is not a thing a learner can do.
+   * again, and previously had no route at all.
    *
-   * <p>Every path returns the same value. Unknown address, already-verified address, address that
-   * exists and was mailed: all indistinguishable to the caller, because the response is the only
-   * signal a caller gets and any variation in it is an account-enumeration oracle. That is also why
-   * quota is charged <em>before</em> the provider is consulted — a rate-limit rejection that could
-   * only be reached for addresses that exist would reintroduce the oracle in the timing and the
-   * status code, having removed it from the body. The distinction is recorded in audit and metrics,
-   * where an operator can see it and an anonymous caller cannot.
+   * <h2>What the caller can learn, and why it is nothing</h2>
+   *
+   * <p>Every path returns the same value: unknown address, already-verified address, and a genuine
+   * unverified one are indistinguishable in the body and in the status code, because the response is
+   * the caller's only signal and any variation in it is an account-enumeration oracle.
+   *
+   * <p>Uniformity in the response is not sufficient on its own, because <em>time</em> is also a
+   * signal. An earlier revision called the provider's send-verify-email inline, so only the third
+   * case paid for a second admin round trip and repeated latency samples separated the populations.
+   * The send is therefore enqueued as durable work and performed by
+   * {@code VerificationResendWorker}: the request path now runs one provider lookup and one insert
+   * for every input, whatever the lookup returns. A row is written even when there is nothing to
+   * send, precisely so that the write is not itself the tell.
+   *
+   * <p>Quota is charged <em>before</em> the provider is consulted for the same reason — a
+   * rate-limit rejection reachable only for addresses that exist would move the oracle into the
+   * status code, having removed it from the body.
+   *
+   * <p>What remains is the lookup itself, which returns a slightly larger provider response for an
+   * address that exists. That difference is parsing work measured in microseconds against a network
+   * path measured in milliseconds, and the per-address ceiling below caps an attacker at three
+   * samples an hour for any one address. The residual is recorded in the MVP-2 debt register.
    */
   ResendVerificationResponse resendVerification(ResendVerificationRequest request) {
     if (!properties.isEnabled()) {
@@ -152,34 +168,19 @@ class RegistrationService {
     }
 
     // Empty covers both "no such identity" and "already verified"; the port refuses to say which.
-    identities.unverifiedSubjectForEmail(email).ifPresentOrElse(
-        subject -> {
-          identities.sendVerificationEmail(subject);
-          BusinessEventLogger.info(LOGGER, "registration.verification.resent",
-              "Verification mail re-sent for an unverified identity",
-              Map.of("emailFingerprint", emailFingerprint(email), "outcome", "SUCCESS"));
-          countResend("sent");
-        },
-        () -> {
-          // Not a warning: an unknown or already-verified address is an ordinary outcome here, and
-          // logging it louder than a real send would rebuild the oracle inside the log file.
-          BusinessEventLogger.info(LOGGER, "registration.verification.resend.noop",
-              "Resend requested for an address with no unverified identity; nothing was sent",
-              Map.of("emailFingerprint", emailFingerprint(email), "outcome", "SUCCESS"));
-          countResend("noop");
-        });
+    String subject = identities.unverifiedSubjectForEmail(email).orElse(null);
+    registrations.enqueueVerificationResend(UuidV7.generate(), subject, Instant.now());
+
+    // No address-derived value in the event. An earlier revision logged a truncated SHA-256 of the
+    // address as a correlation handle and called it non-reversible, which it is not: the input
+    // space of email addresses is small enough to enumerate offline, so anyone holding the logs
+    // could confirm whether a given person had used the route. Per-address correlation is already
+    // available to operators through identity.abuse_counter, so nothing is lost by omitting it.
+    BusinessEventLogger.info(LOGGER, "registration.verification.resend.accepted",
+        "Verification resend accepted and enqueued", Map.of("outcome", "SUCCESS"));
+    countResend("accepted");
 
     return new ResendVerificationResponse("EMAIL_VERIFICATION");
-  }
-
-  /**
-   * A stable, non-reversible handle for an address, so operators can correlate repeated resends.
-   *
-   * <p>The address itself is never logged. Reuses the same digest the registration fingerprint is
-   * built from, so the two can be joined without either carrying the plaintext.
-   */
-  private static String emailFingerprint(String email) {
-    return RegistrationRepository.sha256("resend:" + email).substring(0, 16);
   }
 
   private void countResend(String outcome) {

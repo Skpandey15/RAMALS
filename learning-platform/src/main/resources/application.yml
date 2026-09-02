@@ -129,6 +129,16 @@ ramals:
       provider: ${RAMALS_SMS_PROVIDER:fake}
       global-hourly-budget: ${RAMALS_SMS_GLOBAL_HOURLY_BUDGET:100}
       abuse-counter-retention-days: ${RAMALS_ABUSE_COUNTER_RETENTION_DAYS:7}
+    # Out-of-band delivery of verification-resend mail. The send is off the request path so that
+    # response time cannot distinguish an unverified account from an unknown one -- see
+    # RegistrationService#resendVerification.
+    resend:
+      enabled: ${RAMALS_RESEND_ENABLED:true}
+      interval-ms: ${RAMALS_RESEND_INTERVAL_MS:5000}
+      batch-size: ${RAMALS_RESEND_BATCH_SIZE:20}
+      max-attempts: ${RAMALS_RESEND_MAX_ATTEMPTS:5}
+      initial-backoff-millis: ${RAMALS_RESEND_INITIAL_BACKOFF_MS:1000}
+      max-backoff-millis: ${RAMALS_RESEND_MAX_BACKOFF_MS:60000}
     abuse-counter-purge:
       enabled: ${RAMALS_ABUSE_COUNTER_PURGE_ENABLED:true}
       interval-ms: ${RAMALS_ABUSE_COUNTER_PURGE_INTERVAL_MS:3600000}

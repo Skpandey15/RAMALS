@@ -8,6 +8,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.MDC;
 import org.springframework.dao.DuplicateKeyException;
@@ -309,6 +310,75 @@ class RegistrationRepository {
         RETURNING request_count
         """, Integer.class, sha256(dimension), OffsetDateTime.ofInstant(windowStart, ZoneOffset.UTC));
     return count != null && count <= limit;
+  }
+
+  /**
+   * Records one accepted verification-resend request.
+   *
+   * <p>Called for every accepted request, including those with nothing to send, so that the work
+   * done on the request path does not vary with whether the address resolved. {@code subject} is
+   * null in that case; no address is written here or anywhere else on this path.
+   */
+  void enqueueVerificationResend(UUID id, String subject, Instant now) {
+    jdbc.update("""
+        INSERT INTO identity.verification_resend_outbox(id, subject, status, next_attempt_at, created_at)
+        VALUES (?, ?, 'PENDING', ?, ?)
+        """, id, subject, OffsetDateTime.ofInstant(now, ZoneOffset.UTC),
+        OffsetDateTime.ofInstant(now, ZoneOffset.UTC));
+  }
+
+  /**
+   * Claims a batch of due resend work.
+   *
+   * <p>{@code FOR UPDATE SKIP LOCKED}, matching the outbox in V025: replicas take disjoint rows
+   * without coordinating, and a row a peer is already sending is skipped rather than sent twice.
+   * The rows stay claimed for the life of the caller's transaction.
+   */
+  List<VerificationResend> claimDueVerificationResends(Instant now, int batchSize) {
+    return jdbc.query("""
+        SELECT id, subject, attempt_count
+        FROM identity.verification_resend_outbox
+        WHERE status IN ('PENDING', 'RETRY') AND next_attempt_at <= ?
+        ORDER BY next_attempt_at, created_at
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """,
+        (rs, rowNum) -> new VerificationResend(
+            rs.getObject("id", UUID.class), rs.getString("subject"), rs.getInt("attempt_count")),
+        OffsetDateTime.ofInstant(now, ZoneOffset.UTC), batchSize);
+  }
+
+  /** Removes delivered or no-op work. Retention is deliberately nil: nothing reads a done row. */
+  void deleteVerificationResend(UUID id) {
+    jdbc.update("DELETE FROM identity.verification_resend_outbox WHERE id = ?", id);
+  }
+
+  /** Schedules another attempt after a recoverable provider failure. */
+  void rescheduleVerificationResend(UUID id, Instant nextAttemptAt, String errorCode) {
+    jdbc.update("""
+        UPDATE identity.verification_resend_outbox
+        SET status = 'RETRY', attempt_count = attempt_count + 1,
+            next_attempt_at = ?, last_error_code = ?
+        WHERE id = ?
+        """, OffsetDateTime.ofInstant(nextAttemptAt, ZoneOffset.UTC), errorCode, id);
+  }
+
+  /**
+   * Abandons work that has exhausted its attempts.
+   *
+   * <p>Kept rather than deleted so an operator can see that a learner's resend never landed. The
+   * row still carries no address, so what is retained is that a send failed, not who for.
+   */
+  void abandonVerificationResend(UUID id, String errorCode) {
+    jdbc.update("""
+        UPDATE identity.verification_resend_outbox
+        SET status = 'TERMINAL', attempt_count = attempt_count + 1, last_error_code = ?
+        WHERE id = ?
+        """, errorCode, id);
+  }
+
+  /** One row of resend work. Carries a provider subject or null; never an address. */
+  record VerificationResend(UUID id, String subject, int attemptCount) {
   }
 
   /**
