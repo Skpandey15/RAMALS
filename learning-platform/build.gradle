@@ -20,6 +20,10 @@ dependencies {
   implementation 'org.springframework.boot:spring-boot-starter-actuator'
   implementation 'org.springframework.boot:spring-boot-starter-flyway'
   implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+  // Carries the DEV-only SMS sink, which delivers verification codes to the same Mailpit inbox the
+  // Keycloak verification mail already lands in. Inert unless spring.mail.host is configured, which
+  // only the k3d DEV manifests do -- production configures no mail host and gets no mail sender.
+  implementation 'org.springframework.boot:spring-boot-starter-mail'
   implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'
   implementation 'org.springframework.boot:spring-boot-starter-security'
   implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
