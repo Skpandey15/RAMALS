@@ -1,5 +1,7 @@
 package io.ramals.learningplatform.registration;
 
+import java.util.Optional;
+
 /**
  * The identity-provider operations registration needs, and no others.
  *
@@ -22,6 +24,19 @@ public interface IdentityProviderPort {
 
   /** Asks the provider to send its own verification mail. RAMALS never sends it. */
   void sendVerificationEmail(String subject);
+
+  /**
+   * Resolves the subject of an <em>unverified</em> identity for this email, for a resend.
+   *
+   * <p>Returns empty both when no such identity exists and when it exists but is already verified.
+   * Collapsing those two cases here rather than in the caller is the point of the signature: a port
+   * that cannot report which of them occurred cannot be made into an account-enumeration oracle by
+   * a later caller that forgets to mask the difference. The resend route's whole security property
+   * rests on that indistinguishability, so it is enforced at the boundary that knows the answer.
+   *
+   * @param email the normalized (trimmed, lower-cased) address
+   */
+  Optional<String> unverifiedSubjectForEmail(String email);
 
   /**
    * @param subject the OIDC {@code sub} (ADR 0001)
