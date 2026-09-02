@@ -58,20 +58,18 @@ Assert-True ($deploymentBoundary.Contains('prepare-ghcr-images.ps1')) `
   "Jenkins deployment must prepare immutable GHCR application images."
 Assert-True ($deploymentBoundary -match 'bootstrap\.ps1[\s\S]*-SkipBuild') `
   "Jenkins must not rebuild application images after mirroring GHCR."
-Assert-True ($imagePreparation.Contains('deploy\desired-version.json')) `
-  "Jenkins must select application images from the approved desired-version manifest."
-Assert-True ($imagePreparation -notmatch '\$applicationReleaseCommit\s+-ne\s+\$Commit') `
-  "Deployment configuration and application release commits must remain independent."
-Assert-True ($imagePreparation -match '\$source\s*=\s*"\$\{sourceImage\}@\$\{sourceDigest\}"') `
-  "GHCR application images must be pulled by approved digest."
-Assert-True ($imagePreparation -notmatch 'sourceTag|:sha-\$Commit') `
-  "A mutable SHA tag must not be the GHCR deployment identity."
+Assert-True ($deploymentBoundary -match '\$applicationReleaseCommit\s*=\s*\$head') `
+  "Local/dev Jenkins must deploy the exact current main commit."
+Assert-True ($imagePreparation -match '\$sourceTag\s*=\s*"\$\{sourceImage\}:sha-\$applicationReleaseCommit"') `
+  "Jenkins must select the GHCR image produced for the exact main commit."
+Assert-True ($imagePreparation -match '\$pullReference\s+-notmatch.*sha256') `
+  "The selected commit image must resolve to an immutable digest."
 Assert-True ($imagePreparation.Contains('$applicationShortCommit = $applicationReleaseCommit.Substring(0, 7)')) `
-  "Local application tags must derive from the approved application release commit."
+  "Local application tags must derive from the current main application commit."
 Assert-True ($imagePreparation.Contains('$deploymentConfigShortCommit = $deploymentConfigCommit.Substring(0, 7)')) `
   "Local infrastructure tags must derive from the deployment configuration commit."
 Assert-True ($imagePreparation -match '\$revision\s+-ne\s+\$applicationReleaseCommit') `
-  "Every OCI revision must equal the approved application release commit."
+  "Every OCI revision must equal the current main application commit."
 Assert-True ($imagePreparation.Contains('$componentRevisions.Count -ne 1')) `
   "The three application components must resolve to one OCI revision."
 foreach ($applicationDockerfile in @(
@@ -80,7 +78,8 @@ foreach ($applicationDockerfile in @(
     "Jenkins must not build application image $applicationDockerfile."
 }
 foreach ($evidenceInvariant in @(
-    'deploymentConfigCommit', 'applicationReleaseCommit', 'sourceImage = $image.sourceImage',
+    'deploymentConfigCommit', 'applicationReleaseCommit', 'selectionPolicy',
+    'sourceImage = $image.sourceImage', 'sourceTag = $image.sourceTag',
     'sourceDigest = $image.digest', 'ociRevision = $image.revision',
     'localMirroredImage = $local')) {
   Assert-True ($imagePreparation.Contains($evidenceInvariant)) `

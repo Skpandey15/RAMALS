@@ -6,7 +6,7 @@ Mirrors immutable GHCR application images and builds local-only infrastructure i
 [CmdletBinding()]
 param(
   [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$Commit,
-  [string]$DesiredVersionPath,
+  [string]$RegistryOwner = "skpandey15",
   [string]$RegistryName = "ramals-registry",
   [int]$RegistryPort = 5000,
   [int]$WaitMinutes = 20,
@@ -24,9 +24,6 @@ if ($null -ne (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue)) {
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repositoryRoot
-if (-not $DesiredVersionPath) {
-  $DesiredVersionPath = Join-Path $repositoryRoot "deploy\desired-version.json"
-}
 
 function ConvertTo-PlainLogText {
   param([AllowNull()][object]$Value)
@@ -74,14 +71,7 @@ function Assert-DockerRuntimeReady {
   Write-Host "[preflight] Docker runtime ready: $($serverVersion[0])"
 }
 
-$desiredVersion = Get-Content $DesiredVersionPath -Raw | ConvertFrom-Json
-if ($desiredVersion.manifest_version -ne 1 -or $desiredVersion.environment -ne "dev") {
-  throw "Unsupported desired-version manifest: $DesiredVersionPath"
-}
-$applicationReleaseCommit = [string]$desiredVersion.release.commit
-if ($applicationReleaseCommit -notmatch '^[0-9a-f]{40}$') {
-  throw "desired-version release.commit must be a full lowercase Git commit SHA."
-}
+$applicationReleaseCommit = $Commit
 
 foreach ($tool in @("docker", "k3d")) {
   if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool is required on PATH." }
@@ -107,52 +97,61 @@ if (-not ($registries | Where-Object name -eq $registryHost)) {
 }
 
 $applicationImages = @(
-  @{ Component = "learning-platform"; Local = "ramals-learning-platform" },
-  @{ Component = "web-ui";            Local = "ramals-web-ui" },
-  @{ Component = "ramals-ai";          Local = "ramals-ai" }
+  @{ Component = "learning-platform"; Source = "ghcr.io/$RegistryOwner/ramals-learning-platform"; Local = "ramals-learning-platform" },
+  @{ Component = "web-ui";            Source = "ghcr.io/$RegistryOwner/ramals-web-ui";            Local = "ramals-web-ui" },
+  @{ Component = "ramals-ai";          Source = "ghcr.io/$RegistryOwner/ramals-ai";                 Local = "ramals-ai" }
 )
 $deadline = [DateTimeOffset]::UtcNow.AddMinutes($WaitMinutes)
 $verified = @()
 $resolved = @()
 
-Write-Host "[images] Approved digest-pinned GHCR application images"
+Write-Host "[images] GHCR application images for current main $applicationShortCommit"
 foreach ($image in $applicationImages) {
-  $approved = $desiredVersion.components.($image.Component)
-  $sourceImage = [string]$approved.image
-  $sourceDigest = [string]$approved.digest
+  $sourceImage = [string]$image.Source
   if ($sourceImage -notmatch '^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+$') {
     throw "Invalid GHCR image for component '$($image.Component)': $sourceImage"
   }
-  if ($sourceDigest -notmatch '^sha256:[0-9a-f]{64}$') {
-    throw "Invalid digest for component '$($image.Component)': $sourceDigest"
-  }
-  $source = "${sourceImage}@${sourceDigest}"
+  $sourceTag = "${sourceImage}:sha-$applicationReleaseCommit"
   while ($true) {
-    docker manifest inspect $source *> $null
+    docker manifest inspect $sourceTag *> $null
     if ($LASTEXITCODE -eq 0) { break }
     if ([DateTimeOffset]::UtcNow -ge $deadline) {
-      throw "GHCR image did not become available within $WaitMinutes minutes: $source"
+      throw "GHCR image did not become available within $WaitMinutes minutes: $sourceTag"
     }
-    Write-Host "[images] Waiting for GitHub Actions to publish $source"
+    Write-Host "[images] Waiting for GitHub Actions to publish $sourceTag"
     Start-Sleep -Seconds 15
   }
 
-  Write-Host "[images] Pulling $source"
-  Invoke-NativeCommand -Description "Pull $source" -Command {
-    docker pull --platform linux/amd64 $source
+  Write-Host "[images] Pulling $sourceTag"
+  Invoke-NativeCommand -Description "Pull $sourceTag" -Command {
+    docker pull --platform linux/amd64 $sourceTag
   } | Out-Null
 
-  $revisionLines = Invoke-NativeCommand -Description "Inspect OCI revision for $source" -Quiet -Command {
-    docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' $source
+  $revisionLines = Invoke-NativeCommand -Description "Inspect OCI revision for $sourceTag" -Quiet -Command {
+    docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' $sourceTag
   }
   $revision = ($revisionLines -join " ").Trim()
   if ($revision -ne $applicationReleaseCommit) {
-    throw "GHCR image revision '$revision' does not match approved application release commit '$applicationReleaseCommit': $source"
+    throw "GHCR image revision '$revision' does not match current main '$applicationReleaseCommit': $sourceTag"
   }
+  $repoDigestLines = Invoke-NativeCommand -Description "Resolve immutable digest for $sourceTag" -Quiet -Command {
+    docker inspect --format '{{json .RepoDigests}}' $sourceTag
+  }
+  $repoDigests = @(($repoDigestLines -join "") | ConvertFrom-Json)
+  $sourceRepoDigests = @($repoDigests | Where-Object { $_ -like "${sourceImage}@sha256:*" })
+  if ($sourceRepoDigests.Count -ne 1) {
+    throw "GHCR image did not resolve to one source-repository digest: $sourceTag"
+  }
+  $pullReference = $sourceRepoDigests[0]
+  if ($pullReference -notmatch '^ghcr\.io/[a-z0-9._/-]+@(?<digest>sha256:[0-9a-f]{64})$') {
+    throw "GHCR image did not resolve to an immutable digest: $sourceTag"
+  }
+  $sourceDigest = $Matches.digest
   $verified += [ordered]@{
     component = $image.Local
     sourceImage = $sourceImage
-    pullReference = $source
+    sourceTag = $sourceTag
+    pullReference = $pullReference
     digest = $sourceDigest
     revision = $revision
   }
@@ -160,10 +159,10 @@ foreach ($image in $applicationImages) {
 
 $componentRevisions = @($verified | ForEach-Object revision | Select-Object -Unique)
 if ($componentRevisions.Count -ne 1 -or $componentRevisions[0] -ne $applicationReleaseCommit) {
-  throw "Application component OCI revisions are inconsistent with approved release '$applicationReleaseCommit'."
+  throw "Application component OCI revisions are inconsistent with current main '$applicationReleaseCommit'."
 }
 
-Write-Host "[images] Mirroring verified application release $applicationShortCommit"
+Write-Host "[images] Mirroring verified current-main application release $applicationShortCommit"
 foreach ($image in $verified) {
   $local = "localhost:${RegistryPort}/$($image.component):$applicationShortCommit"
   Invoke-NativeCommand -Description "Tag $($image.pullReference) as $local" -Quiet -Command {
@@ -175,6 +174,7 @@ foreach ($image in $verified) {
   $resolved += [ordered]@{
     component = $image.component
     sourceImage = $image.sourceImage
+    sourceTag = $image.sourceTag
     sourceDigest = $image.digest
     ociRevision = $image.revision
     localMirroredImage = $local
@@ -203,7 +203,7 @@ if ($EvidencePath) {
   [ordered]@{
     deploymentConfigCommit = $deploymentConfigCommit
     applicationReleaseCommit = $applicationReleaseCommit
-    desiredVersion = (Resolve-Path $DesiredVersionPath).Path
+    selectionPolicy = "current-main-commit"
     localRegistry = "localhost:$RegistryPort"
     applicationImages = $resolved
     preparedAt = [DateTimeOffset]::UtcNow.ToString("O")
