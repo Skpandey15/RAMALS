@@ -6,6 +6,7 @@ resources:
   - configmap.yaml
   - postgres.yaml
   - mailpit.yaml
+  - sms-sink.yaml
   - keycloak.yaml
   - learning-platform.yaml
   - ramals-ai.yaml
@@ -26,6 +27,9 @@ images:
     newTag: 57b0b71
   - name: ramals/keycloak
     newName: k3d-ramals-registry:5000/ramals-keycloak
+    newTag: 57b0b71
+  - name: ramals/sms-sink
+    newName: k3d-ramals-registry:5000/ramals-sms-sink
     newTag: 57b0b71
   - name: ramals/learning-platform
     newName: k3d-ramals-registry:5000/ramals-learning-platform

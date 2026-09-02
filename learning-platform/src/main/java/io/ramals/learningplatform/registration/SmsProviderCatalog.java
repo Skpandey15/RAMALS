@@ -24,24 +24,10 @@ final class SmsProviderCatalog {
 
   /** The non-billable adapter used for DEV and CI. Never production-capable. */
   static final String FAKE = "fake";
-
-  /**
-   * The DEV sink: delivers the code to the local Mailpit inbox instead of a handset.
-   *
-   * <p>{@link #FAKE} discards the code deliberately, which is right for CI and wrong for a person
-   * trying to finish onboarding by hand — mobile verification simply cannot be completed in DEV.
-   * The alternative fixes people reach for are worse than the problem: logging the code makes the
-   * DEV log the easiest place in the system to harvest live codes, and a habit formed there is the
-   * one that gets copied into the real adapter. This routes the code to a mailbox that already
-   * exists, is already the place an operator looks, and is reachable only from inside the cluster.
-   *
-   * <p>Absent from {@link #PRODUCTION_CAPABLE}, so a production deployment naming it fails at
-   * startup on the same check that rejects {@link #FAKE}.
-   */
-  static final String MAILPIT = "mailpit";
+  static final String LOCAL_SINK = "local-sink";
 
   /** Every provider with a working adapter in this build. */
-  static final Set<String> SUPPORTED = Set.of(FAKE, MAILPIT);
+  static final Set<String> SUPPORTED = Set.of(FAKE, LOCAL_SINK);
 
   /** The subset that may serve production traffic. Empty until a real adapter is delivered. */
   static final Set<String> PRODUCTION_CAPABLE = Set.of();

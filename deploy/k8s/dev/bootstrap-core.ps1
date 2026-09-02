@@ -91,6 +91,7 @@ kubectl wait --for=condition=Ready node --all --timeout=180s | Out-Host
 $ramalsImages = @(
   @{ Repo = "ramals-postgres";          File = "infrastructure/docker/postgres-init/Dockerfile"; Kind = "infrastructure" },
   @{ Repo = "ramals-keycloak";          File = "infrastructure/docker/keycloak/Dockerfile"; Kind = "infrastructure" },
+  @{ Repo = "ramals-sms-sink";          File = "infrastructure/docker/sms-sink/Dockerfile"; Kind = "infrastructure" },
   @{ Repo = "ramals-ai";                File = "ramals-ai/Dockerfile"; Kind = "application" },
   @{ Repo = "ramals-web-ui";            File = "web-ui/Dockerfile"; Kind = "application" },
   @{ Repo = "ramals-learning-platform"; File = "learning-platform/Dockerfile"; Kind = "application" }
@@ -100,7 +101,7 @@ $ramalsImages = @(
 #
 # This ordering is the whole point: a -SkipBuild run against a commit whose images were never built
 # used to repoint healthy Deployments at tags that did not exist, turning a working environment into
-# five ImagePullBackOffs. Verification first means the worst case is an early exit with nothing
+# six ImagePullBackOffs. Verification first means the worst case is an early exit with nothing
 # mutated.
 function Assert-ImagesPresent {
   $missing = @()
@@ -401,7 +402,7 @@ Write-Host "== deploy ==" -ForegroundColor Cyan
 # upstream base images, which must not be rewritten.
 $rendered = (kubectl kustomize deploy/k8s/dev) -join "`n"
 $applicationRepos = 'ramals-learning-platform|ramals-web-ui|ramals-ai'
-$infrastructureRepos = 'ramals-postgres|ramals-keycloak'
+$infrastructureRepos = 'ramals-postgres|ramals-keycloak|ramals-sms-sink'
 $rendered = [regex]::Replace($rendered,
   "(?<repo>${registryHost}:${RegistryPort}/(?:$applicationRepos)):[A-Za-z0-9._-]+",
   "`${repo}:$applicationReleaseImageTag")
@@ -441,6 +442,7 @@ Write-Host "== waiting for workloads ==" -ForegroundColor Cyan
 foreach ($w in @(
   @{ Ref = "statefulset/postgres";        Timeout = "300s" },
   @{ Ref = "deployment/keycloak";         Timeout = "300s" },
+  @{ Ref = "deployment/sms-sink";         Timeout = "180s" },
   @{ Ref = "deployment/ramals-ai";        Timeout = "300s" },
   @{ Ref = "deployment/learning-platform"; Timeout = "420s" },
   @{ Ref = "deployment/web-ui";           Timeout = "300s" })) {

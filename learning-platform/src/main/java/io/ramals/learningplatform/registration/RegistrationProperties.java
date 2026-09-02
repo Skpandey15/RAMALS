@@ -263,11 +263,7 @@ public class RegistrationProperties {
   public static class Sms {
 
     private String provider = "fake";
-    /**
-     * From-address the DEV SMS sink posts under. Never used by a real gateway; the sink is the only
-     * reader, and the domain is deliberately one that cannot route outside the cluster.
-     */
-    private String sinkFrom = "sms-sink@ramals.local";
+    private String sinkUrl;
 
     /**
      * The deployment-wide hourly send ceiling.
@@ -289,12 +285,12 @@ public class RegistrationProperties {
       this.provider = provider;
     }
 
-    public String getSinkFrom() {
-      return sinkFrom;
+    public String getSinkUrl() {
+      return sinkUrl;
     }
 
-    public void setSinkFrom(String sinkFrom) {
-      this.sinkFrom = sinkFrom;
+    public void setSinkUrl(String sinkUrl) {
+      this.sinkUrl = sinkUrl;
     }
 
     public int getGlobalHourlyBudget() {

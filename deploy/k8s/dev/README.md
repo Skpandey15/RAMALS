@@ -21,6 +21,8 @@ Windows
              |- keycloak            OIDC issuer
              |- learning-platform   authoritative Spring core
              |- ramals-ai           non-authoritative AI plane
+             |- mailpit             development email inbox
+             |- sms-sink            development mobile OTP inbox
              `- web-ui              NGINX
 ```
 
@@ -117,6 +119,7 @@ Built from the checked-out commit and served by a dedicated k3d registry:
 |---|---|
 | `ramals-postgres` | `infrastructure/docker/postgres-init/Dockerfile` |
 | `ramals-keycloak` | `infrastructure/docker/keycloak/Dockerfile` |
+| `ramals-sms-sink` | `infrastructure/docker/sms-sink/Dockerfile` |
 | `ramals-ai` | `ramals-ai/Dockerfile` |
 | `ramals-web-ui` | `web-ui/Dockerfile` |
 | `ramals-learning-platform` | `learning-platform/Dockerfile` |
@@ -137,7 +140,8 @@ host at all.
 |---|---|
 | http://localhost:8080 | the RAMALS UI (its NGINX proxies `/api/` to the platform) |
 | http://keycloak.localhost:8080 | Keycloak |
-| http://mailpit.localhost:8080 | Mailpit — verification email **and** DEV verification codes |
+| http://mailpit.localhost:8080 | development email inbox |
+| http://sms.localhost:8080 | development mobile OTP inbox |
 
 `*.localhost` resolves to 127.0.0.1 in Chrome, Edge and Firefox without a hosts-file entry.
 
@@ -164,42 +168,6 @@ Three things therefore have to agree, and `bootstrap.ps1` sets all three:
 `NoResourceFoundException` and the UI renders "Not found" panels that look like missing data. The
 `Dockerfile` asserts the keycloak URL reached the bundle so that class of mistake fails the build
 rather than the browser.
-
-## Completing mobile verification in DEV
-
-The onboarding sequence is: verify email, sign in, then the mobile OTP page. Signing in matters —
-`/api/v1/me/mobile/send-otp` is authenticated, so a logged-out browser never reaches that step and
-the logs show onboarding checks with no send.
-
-Codes are delivered to **Mailpit**, not to a handset. The `fake` provider that DEV used to run
-implements the port faithfully and then discards the code, which is correct for CI and leaves a
-person unable to finish onboarding by hand: the page reports a successful send and no code exists
-anywhere. `RAMALS_SMS_PROVIDER: mailpit` in `configmap.yaml` routes it to the inbox instead.
-
-Find your code at http://mailpit.localhost:8080 — the recipient is your own number, so each handset
-has its own thread:
-
-```
-To: +919876543210@sms.ramals.invalid
-Subject: RAMALS verification code for +919876543210
-```
-
-Nothing else changes. The code is still never logged, never returned by the API and never persisted,
-because the alternatives — printing it to the DEV log or handing it back in the response — are the
-habits that get copied into the real gateway adapter.
-
-### Why this cannot escape DEV
-
-Three independent conditions, none of which production meets:
-
-- `mailpit` is absent from `SmsProviderCatalog.PRODUCTION_CAPABLE`, so `RegistrationConfiguration`
-  refuses to start a production context naming it — the same check that rejects `fake`.
-- `ConfiguredMobileVerificationSender` repeats that check on every send, covering an environment
-  marker flipped after startup.
-- The sink needs a `JavaMailSender`, which exists only when `spring.mail.host` is set. Only these
-  DEV manifests set it; production configures no mail host, so there is nothing to send through.
-
-The `application.yml` default remains `fake`. The opt-in lives in the DEV manifests alone.
 
 ## Contract B and AI providers
 

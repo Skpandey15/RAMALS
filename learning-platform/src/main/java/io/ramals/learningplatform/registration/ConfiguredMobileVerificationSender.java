@@ -1,11 +1,15 @@
 package io.ramals.learningplatform.registration;
 
 import io.ramals.learningplatform.observability.BusinessEventLogger;
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
 
 /**
  * The SMS sender selected by configuration.
@@ -18,11 +22,6 @@ import org.springframework.stereotype.Component;
  *
  * <p>No real gateway adapter ships in this change, so a production deployment must configure a
  * provider this class does not recognise and will fail closed at startup.
- *
- * <p>{@code mailpit} is the DEV sink ({@link MailpitSmsInbox}): the same discarding-versus-real
- * distinction, except the code is delivered to a local inbox so a person can actually finish
- * onboarding. It is validated by the identical production checks below, so selecting it changes
- * where a DEV code goes and nothing about what production will accept.
  */
 @Component
 class ConfiguredMobileVerificationSender implements MobileVerificationSender {
@@ -31,12 +30,17 @@ class ConfiguredMobileVerificationSender implements MobileVerificationSender {
       LoggerFactory.getLogger(ConfiguredMobileVerificationSender.class);
 
   private final RegistrationProperties properties;
-  private final MailpitSmsInbox devSmsInbox;
+  private final RestClient http = localSinkClient();
 
-  ConfiguredMobileVerificationSender(RegistrationProperties properties,
-      MailpitSmsInbox devSmsInbox) {
+  ConfiguredMobileVerificationSender(RegistrationProperties properties) {
     this.properties = properties;
-    this.devSmsInbox = devSmsInbox;
+  }
+
+  private static RestClient localSinkClient() {
+    SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+    factory.setConnectTimeout(Duration.ofSeconds(2));
+    factory.setReadTimeout(Duration.ofSeconds(3));
+    return RestClient.builder().requestFactory(factory).build();
   }
 
   @Override
@@ -50,16 +54,16 @@ class ConfiguredMobileVerificationSender implements MobileVerificationSender {
       throw new IllegalStateException(
           "Provider '" + provider + "' is not production-capable in this build.");
     }
-    // Dispatched after both guards, never before: a sink is still a delivery, and it must not be
-    // reachable on any path the discarding fake would not also have been reachable on.
-    if (SmsProviderCatalog.MAILPIT.equals(provider)) {
-      return devSmsInbox.deliver(mobileE164, otp);
+    if (SmsProviderCatalog.LOCAL_SINK.equals(provider)) {
+      http.post().uri(properties.getSms().getSinkUrl() + "/api/messages")
+          .contentType(MediaType.APPLICATION_JSON)
+          .body(Map.of("to", mobileE164, "code", otp))
+          .retrieve().toBodilessEntity();
     }
-
     // The code is deliberately absent from this event. A DEV log that printed it would be the
     // easiest place in the system to harvest live codes, and habits formed in DEV are the ones that
     // get copied into the production adapter. Tests substitute a capturing fake for this bean.
-    String reference = "fake-" + UUID.randomUUID();
+    String reference = provider + "-" + UUID.randomUUID();
     BusinessEventLogger.info(LOGGER, "mobile.otp.dispatched",
         "Verification code handed to the configured sender",
         Map.of("provider", provider, "providerMessageRef", reference, "outcome", "SUCCESS"));
