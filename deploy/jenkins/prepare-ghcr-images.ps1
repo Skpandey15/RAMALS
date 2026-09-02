@@ -184,7 +184,8 @@ foreach ($image in $verified) {
 Write-Host "[images] Building local infrastructure images"
 $infrastructureImages = @(
   @{ Repo = "ramals-postgres"; File = "infrastructure/docker/postgres-init/Dockerfile" },
-  @{ Repo = "ramals-keycloak"; File = "infrastructure/docker/keycloak/Dockerfile" }
+  @{ Repo = "ramals-keycloak"; File = "infrastructure/docker/keycloak/Dockerfile" },
+  @{ Repo = "ramals-sms-sink"; File = "infrastructure/docker/sms-sink/Dockerfile" }
 )
 foreach ($image in $infrastructureImages) {
   $local = "localhost:${RegistryPort}/$($image.Repo):$deploymentConfigShortCommit"
@@ -210,4 +211,4 @@ if ($EvidencePath) {
   } | ConvertTo-Json -Depth 6 | Out-File $EvidencePath -Encoding utf8
 }
 
-Write-Host "[images] Prepared three immutable GHCR application images and two local infrastructure images."
+Write-Host "[images] Prepared three immutable GHCR application images and three local infrastructure images."

@@ -263,6 +263,7 @@ public class RegistrationProperties {
   public static class Sms {
 
     private String provider = "fake";
+    private String sinkUrl;
 
     /**
      * The deployment-wide hourly send ceiling.
@@ -282,6 +283,14 @@ public class RegistrationProperties {
 
     public void setProvider(String provider) {
       this.provider = provider;
+    }
+
+    public String getSinkUrl() {
+      return sinkUrl;
+    }
+
+    public void setSinkUrl(String sinkUrl) {
+      this.sinkUrl = sinkUrl;
     }
 
     public int getGlobalHourlyBudget() {

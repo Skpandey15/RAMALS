@@ -21,6 +21,8 @@ Windows
              |- keycloak            OIDC issuer
              |- learning-platform   authoritative Spring core
              |- ramals-ai           non-authoritative AI plane
+             |- mailpit             development email inbox
+             |- sms-sink            development mobile OTP inbox
              `- web-ui              NGINX
 ```
 
@@ -117,6 +119,7 @@ Built from the checked-out commit and served by a dedicated k3d registry:
 |---|---|
 | `ramals-postgres` | `infrastructure/docker/postgres-init/Dockerfile` |
 | `ramals-keycloak` | `infrastructure/docker/keycloak/Dockerfile` |
+| `ramals-sms-sink` | `infrastructure/docker/sms-sink/Dockerfile` |
 | `ramals-ai` | `ramals-ai/Dockerfile` |
 | `ramals-web-ui` | `web-ui/Dockerfile` |
 | `ramals-learning-platform` | `learning-platform/Dockerfile` |
@@ -137,6 +140,8 @@ host at all.
 |---|---|
 | http://localhost:8080 | the RAMALS UI (its NGINX proxies `/api/` to the platform) |
 | http://keycloak.localhost:8080 | Keycloak |
+| http://mailpit.localhost:8080 | development email inbox |
+| http://sms.localhost:8080 | development mobile OTP inbox |
 
 `*.localhost` resolves to 127.0.0.1 in Chrome, Edge and Firefox without a hosts-file entry.
 

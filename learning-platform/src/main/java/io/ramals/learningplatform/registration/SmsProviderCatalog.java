@@ -24,9 +24,10 @@ final class SmsProviderCatalog {
 
   /** The non-billable adapter used for DEV and CI. Never production-capable. */
   static final String FAKE = "fake";
+  static final String LOCAL_SINK = "local-sink";
 
   /** Every provider with a working adapter in this build. */
-  static final Set<String> SUPPORTED = Set.of(FAKE);
+  static final Set<String> SUPPORTED = Set.of(FAKE, LOCAL_SINK);
 
   /** The subset that may serve production traffic. Empty until a real adapter is delivered. */
   static final Set<String> PRODUCTION_CAPABLE = Set.of();

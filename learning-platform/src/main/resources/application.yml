@@ -127,6 +127,7 @@ ramals:
       max-attempts: ${RAMALS_OTP_MAX_ATTEMPTS:5}
     sms:
       provider: ${RAMALS_SMS_PROVIDER:fake}
+      sink-url: ${RAMALS_SMS_SINK_URL:}
       global-hourly-budget: ${RAMALS_SMS_GLOBAL_HOURLY_BUDGET:100}
       abuse-counter-retention-days: ${RAMALS_ABUSE_COUNTER_RETENTION_DAYS:7}
     # Out-of-band delivery of verification-resend mail. The send is off the request path so that

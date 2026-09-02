@@ -102,6 +102,11 @@ class RegistrationConfiguration {
           + SmsProviderCatalog.SUPPORTED + ".");
     }
     if (!properties.production()) {
+      if (SmsProviderCatalog.LOCAL_SINK.equals(provider)) {
+        requirePresent(properties.getSms().getSinkUrl(), "ramals.registration.sms.sink-url");
+        validateAbsoluteHttpUri(properties.getSms().getSinkUrl(),
+            "ramals.registration.sms.sink-url");
+      }
       return;
     }
     if (SmsProviderCatalog.FAKE.equals(provider)) {

@@ -76,6 +76,25 @@ class RegistrationStartupConfigurationTests {
   }
 
   @Test
+  @DisplayName("a DEV deployment with a configured local SMS inbox starts")
+  void devWithLocalSmsInboxStarts() {
+    contextWith("ramals.registration.environment=dev",
+        "ramals.registration.sms.provider=local-sink",
+        "ramals.registration.sms.sink-url=http://sms-sink:8080")
+        .run(context -> assertThat(context).hasNotFailed());
+  }
+
+  @Test
+  @DisplayName("a local SMS inbox without its URL refuses to start")
+  void localSmsInboxWithoutUrlRefusesToStart() {
+    contextWith("ramals.registration.environment=dev",
+        "ramals.registration.sms.provider=local-sink",
+        "ramals.registration.sms.sink-url=")
+        .run(context -> assertThat(context).getFailure().rootCause()
+            .hasMessageContaining("sms.sink-url"));
+  }
+
+  @Test
   @DisplayName("production refuses to start on the fake provider")
   void productionRefusesTheFakeProvider() {
     contextWith("ramals.registration.environment=prod", "ramals.registration.sms.provider=fake")

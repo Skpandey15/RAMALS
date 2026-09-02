@@ -62,7 +62,7 @@ function Test-InPod {
 
 Write-Host "== workload readiness ==" -ForegroundColor Cyan
 foreach ($w in @("statefulset/postgres", "deployment/keycloak", "deployment/ramals-ai",
-                 "deployment/learning-platform", "deployment/web-ui")) {
+                 "deployment/learning-platform", "deployment/web-ui", "deployment/sms-sink")) {
   Check "$w rolled out" { kubectl rollout status $w -n $Namespace --timeout=10s 2>$null | Out-Null; $LASTEXITCODE -eq 0 }
 }
 
@@ -70,7 +70,7 @@ Write-Host ""
 Write-Host "== service discovery and connectivity ==" -ForegroundColor Cyan
 
 # Kubernetes DNS: the platform must resolve every peer by service name, not by address.
-foreach ($svc in @("postgres", "keycloak", "ramals-ai")) {
+foreach ($svc in @("postgres", "keycloak", "ramals-ai", "sms-sink")) {
   Check "platform resolves $svc via cluster DNS" {
     Test-InPod "app.kubernetes.io/name=learning-platform" @("sh", "-c", "getent hosts $svc")
   }
@@ -84,6 +84,9 @@ Check "platform -> ramals-ai:8000 reachable" {
 }
 Check "platform -> keycloak:8080 reachable" {
   Test-TcpFromPod "app.kubernetes.io/name=learning-platform" "keycloak" 8080
+}
+Check "platform -> sms-sink:8080 reachable" {
+  Test-TcpFromPod "app.kubernetes.io/name=learning-platform" "sms-sink" 8080
 }
 Check "platform readiness endpoint UP" {
   Test-InPod "app.kubernetes.io/name=learning-platform" @("sh", "-c", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness | grep -q UP")
@@ -100,6 +103,13 @@ Write-Host "== professional registration ==" -ForegroundColor Cyan
 Check "professional registration enabled in DEV" {
   (kubectl get configmap ramals-dev-config -n $Namespace `
     -o jsonpath='{.data.RAMALS_REGISTRATION_ENABLED}' 2>$null) -eq "true"
+}
+Check "development SMS inbox configured" {
+  $provider = kubectl get configmap ramals-dev-config -n $Namespace `
+    -o jsonpath='{.data.RAMALS_SMS_PROVIDER}' 2>$null
+  $sink = kubectl get configmap ramals-dev-config -n $Namespace `
+    -o jsonpath='{.data.RAMALS_SMS_SINK_URL}' 2>$null
+  return $provider -eq "local-sink" -and $sink -eq "http://sms-sink:8080"
 }
 Check "registration admin secret is stored" {
   $v = kubectl get secret ramals-dev-registration-admin -n $Namespace `

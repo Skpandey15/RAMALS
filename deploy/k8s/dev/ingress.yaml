@@ -1,8 +1,9 @@
-# Developer entry points. Three hosts, one port, no port-forwarding.
+# Developer entry points. Four hosts, one port, no port-forwarding.
 #
 #   http://localhost:8080             -> web-ui  (which proxies /api/ to the platform itself)
 #   http://keycloak.localhost:8080    -> keycloak
 #   http://mailpit.localhost:8080     -> mailpit inbox
+#   http://sms.localhost:8080         -> development SMS inbox
 #
 # `*.localhost` resolves to 127.0.0.1 in Chrome, Edge and Firefox without a hosts-file entry
 # (RFC 6761), which is what lets this work on a fresh machine.
@@ -64,3 +65,13 @@ spec:
                 name: mailpit
                 port:
                   number: 8025
+    - host: sms.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sms-sink
+                port:
+                  number: 8080
