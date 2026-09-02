@@ -497,6 +497,76 @@ class RegistrationPersistenceIntegrationTests {
     return challengeId;
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Per-learner isolation of the onboarding artefacts
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  @DisplayName("one learner's profile, journey and goal are invisible to another learner")
+  void onboardingArtefactsAreScopedToTheirOwnLearner() {
+    repository();
+    ProfessionalProfileRepository profiles = new ProfessionalProfileRepository(runtimeJdbc);
+    LearningJourneyRepository journeys = new LearningJourneyRepository(runtimeJdbc);
+
+    UUID owner = registeredLearner("scope-a", "scope-a@example.com", "+919000001001");
+    UUID other = registeredLearner("scope-b", "scope-b@example.com", "+919000001002");
+    UUID domainId = learners.findActiveDomainId("KAFKA").orElseThrow();
+
+    profiles.save(owner, new ProfessionalProfileRequest(
+        "Staff Engineer", "FIVE_TO_TEN_YEARS", "Distributed systems", "ADVANCED"));
+    journeys.save(owner, domainId, new LearningJourneyRequest(
+        "ROLE_TRANSITION", "Principal Engineer", "STEADY", 8, "KAFKA",
+        new java.math.BigDecimal("0.800"), null));
+    learners.upsertGoal(owner, domainId, new java.math.BigDecimal("0.800"), null);
+
+    // The queries filter on learner_id, so the second learner reads absence rather than someone
+    // else's answers. There is no endpoint that accepts a learner id, but the storage layer is where
+    // that guarantee has to be true -- a future caller that resolves the wrong id must find nothing,
+    // not another learner's professional history.
+    assertThat(profiles.find(other)).isEmpty();
+    assertThat(journeys.find(other)).isEmpty();
+    assertThat(learners.findGoal(other)).isEmpty();
+
+    assertThat(profiles.find(owner)).isPresent();
+    assertThat(journeys.find(owner)).isPresent();
+
+    // And the second learner writing their own does not disturb the first's.
+    profiles.save(other, new ProfessionalProfileRequest(
+        "Analyst", "ONE_TO_THREE_YEARS", "Reporting", null));
+    assertThat(profiles.find(owner).orElseThrow().currentRole()).isEqualTo("Staff Engineer");
+    assertThat(profiles.find(other).orElseThrow().currentRole()).isEqualTo("Analyst");
+  }
+
+  @Test
+  @DisplayName("the onboarding transitions move only the learner they name")
+  void transitionsMoveOnlyTheirOwnLearner() {
+    RegistrationRepository repository = repository();
+    ProfessionalProfileRepository profiles = new ProfessionalProfileRepository(runtimeJdbc);
+    LearningJourneyRepository journeys = new LearningJourneyRepository(runtimeJdbc);
+
+    UUID moving = registeredLearner("move-a", "move-a@example.com", "+919000002001");
+    UUID staying = registeredLearner("move-b", "move-b@example.com", "+919000002002");
+
+    // Both start at EMAIL_PENDING. The guarded UPDATEs must refuse them there and, once one learner
+    // is walked forward, must leave the other exactly where it found them.
+    assertThat(profiles.advanceToJourneyPending(moving)).isZero();
+    assertThat(journeys.advanceToOnboarded(moving)).isZero();
+
+    runtimeJdbc.update("UPDATE identity.professional_onboarding SET onboarding_state = "
+        + "'PROFILE_PENDING' WHERE learner_id = ?", moving);
+    assertThat(profiles.advanceToJourneyPending(moving)).isEqualTo(1);
+    assertThat(journeys.advanceToOnboarded(moving)).isEqualTo(1);
+
+    assertThat(repository.findOnboardingState(moving)).contains("ONBOARDED");
+    assertThat(repository.findOnboardingState(staying)).contains("EMAIL_PENDING");
+
+    // Repeating either transition is a no-op rather than an error, which is what makes a
+    // double-submitted form idempotent at the level that actually decides.
+    assertThat(profiles.advanceToJourneyPending(moving)).isZero();
+    assertThat(journeys.advanceToOnboarded(moving)).isZero();
+    assertThat(repository.findOnboardingState(moving)).contains("ONBOARDED");
+  }
+
   private static String currentDatabase(Statement statement) throws SQLException {
     try (ResultSet result = statement.executeQuery("SELECT current_database()")) {
       result.next();

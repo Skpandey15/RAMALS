@@ -445,6 +445,68 @@ it('keeps the learner on the journey step when the submission fails', async () =
   expect(body.weeklyHours).toBe(20);
 });
 
+it('resumes at the journey step on a fresh mount, holding no local position', async () => {
+  // mockImplementation, not mockReturnValue: a Response body is consumable once, and this test
+  // deliberately mounts twice.
+  authenticatedFetch.mockImplementation((_interaction: unknown, url: unknown) =>
+    (String(url).includes('/learning-domains')
+      ? json([{ code: 'KAFKA', name: 'Apache Kafka' }])
+      : json(onboarding('LEARNING_JOURNEY', {
+          onboardingState: 'JOURNEY_PENDING',
+          mobileVerified: true,
+        }))) as never,
+  );
+
+  const { unmount } = render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  await screen.findByText('Your first learning goal');
+  unmount();
+
+  // Signing out and back in is a remount here. A learner who left after the profile step returns to
+  // the journey step, not to the profile they already finished and not to the dashboard.
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  await screen.findByText('Your first learning goal');
+  expect(screen.queryByText('Your professional background')).toBeNull();
+  expect(screen.queryByText('dashboard')).toBeNull();
+  expect(localStorage.length).toBe(0);
+  expect(sessionStorage.length).toBe(0);
+});
+
+it('still admits an onboarded learner after a fresh mount', async () => {
+  authenticatedFetch.mockImplementation(
+    () =>
+      json(onboarding('COMPLETE', {
+        onboardingState: 'ONBOARDED',
+        mobileVerified: true,
+      })) as never,
+  );
+
+  const { unmount } = render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  await screen.findByText('dashboard');
+  unmount();
+
+  // Onboarding is completed once. A later sign-in re-reads the server and goes straight through,
+  // rather than asking a finished learner to repeat a step.
+  render(
+    <OnboardingResume>
+      <p>dashboard</p>
+    </OnboardingResume>,
+  );
+  await screen.findByText('dashboard');
+  expect(screen.queryByText('Your first learning goal')).toBeNull();
+});
+
 it('does not preselect a learning domain', async () => {
   authenticatedFetch
     .mockReturnValueOnce(
