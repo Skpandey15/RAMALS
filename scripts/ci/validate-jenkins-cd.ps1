@@ -17,6 +17,9 @@ function Assert-PowerShellParses([string]$Path) {
 
 $deployScript = Join-Path $repositoryRoot "deploy\jenkins\deploy-main.ps1"
 $cdStateScript = Join-Path $repositoryRoot "deploy\jenkins\cd-state.ps1"
+$branchDeployScript = Join-Path $repositoryRoot "deploy\jenkins\deploy-branch.ps1"
+$branchJobConfigPath = Join-Path $repositoryRoot "deploy\jenkins\job-config-branch.xml"
+$branchPipelinePath = Join-Path $repositoryRoot "Jenkinsfile.branch"
 $prepareImagesScript = Join-Path $repositoryRoot "deploy\jenkins\prepare-ghcr-images.ps1"
 $installScript = Join-Path $repositoryRoot "deploy\jenkins\install-local.ps1"
 $jobConfigPath = Join-Path $repositoryRoot "deploy\jenkins\job-config.xml"
@@ -77,6 +80,51 @@ Assert-True ($deploymentBoundary -match "known_good_commit'\]\s*=\s*\`$head[\s\S
   "Only a release that passed its smoke suite may become the known-good rollback target."
 Assert-True ($jenkinsfile.Contains('FORCE_HELD_RELEASE')) `
   "Overriding a held release must be an explicit, human decision in the job."
+# "What was running" and "the last thing that worked" are the same on a quiet environment and
+# different the moment RAMALS-branch has been used. Restoring the former would put a branch back and
+# leave the state file naming a main release that is not deployed.
+Assert-True ($deploymentBoundary -match '\$recordedKnownGood\.Count -gt 0[\s\S]*\$knownGoodImages = \$recordedKnownGood') `
+  "A rollback must prefer the last release that passed smoke over whatever is currently running."
+
+# --- the branch deployment path ------------------------------------------------------------------
+#
+# A second job now writes to the same environment. What keeps that from damaging the release path is
+# that a branch is never recorded as a rollback target -- so the last healthy main release stays the
+# thing the environment can be returned to, however many branches are tried in between. That is one
+# absent assignment in a file nobody reads on a good day, which is exactly the kind of property that
+# needs asserting rather than remembering.
+$branchBoundary = Get-Content $branchDeployScript -Raw
+$branchPipeline = Get-Content $branchPipelinePath -Raw
+Assert-PowerShellParses $branchDeployScript
+Assert-True (-not ($branchBoundary -match "known_good_commit'\]\s*=")) `
+  "A branch deployment must never become the known-good rollback target."
+Assert-True (-not ($branchBoundary -match "known_good_images'\]\s*=")) `
+  "A branch deployment must never overwrite the known-good rollback images."
+Assert-True ($branchBoundary.Contains("'BRANCH_DEPLOYED'")) `
+  "A branch deployment must record itself as BRANCH_DEPLOYED, never HEALTHY."
+Assert-True ($branchBoundary.Contains('Refusing deployment from unexpected origin')) `
+  "The branch path may relax which ref is deployed, never which repository it comes from."
+Assert-True ($branchBoundary.Contains('RestoreKnownGood')) `
+  "The branch path must offer a way back to the last known-good main release."
+Assert-True ($branchPipeline -match "scriptPath|refs/heads/main") `
+  "The branch pipeline must take its deployment scripts from main."
+# A branch supplying its own pipeline script would make the origin check, the approval, and the
+# no-known-good rule decorative: the branch would be reviewing itself.
+Assert-True (-not ($branchPipeline -match 'branches:\s*\[\[name:\s*params\.')) `
+  "The branch pipeline must not check out its own script from the branch being deployed."
+Assert-True ($branchPipeline.Contains("submitter: 'ramals-admin'")) `
+  "Replacing the dev environment must stay behind the same human gate as a release."
+[xml]$branchJobConfig = Get-Content $branchJobConfigPath -Raw
+Assert-True ($branchJobConfig.'flow-definition'.definition.scriptPath -eq 'Jenkinsfile.branch') `
+  "The branch job must load Jenkinsfile.branch."
+Assert-True ($null -eq $branchJobConfig.'flow-definition'.triggers.'hudson.triggers.SCMTrigger') `
+  "The branch job must not poll: a scratch deployment happens because somebody asked for it."
+$branchParameters = $branchJobConfig.'flow-definition'.properties.
+  'hudson.model.ParametersDefinitionProperty'.parameterDefinitions
+Assert-True ($branchParameters.'hudson.model.StringParameterDefinition'.name -eq 'BRANCH') `
+  "The branch job must take the branch as a build parameter."
+Assert-True ($branchParameters.'hudson.model.BooleanParameterDefinition'.name -eq 'RESTORE_KNOWN_GOOD') `
+  "The branch job must offer the restore switch as a build parameter."
 Assert-True ($deploymentBoundary -match 'bootstrap\.ps1[\s\S]*-SkipBuild') `
   "Jenkins must not rebuild application images after mirroring GHCR."
 Assert-True ($deploymentBoundary -match '\$applicationReleaseCommit\s*=\s*\$head') `

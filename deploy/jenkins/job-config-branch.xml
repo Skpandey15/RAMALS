@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job">
+  <actions/>
+  <description>Deploy an arbitrary RAMALS branch to the local k3d ramals-dev environment, or restore the last known-good main release. Replaces what is running. Started by hand; never by SCM polling.</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>-1</daysToKeep>
+        <numToKeep>20</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>10</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>BRANCH</name>
+          <description>Branch to deploy, e.g. feat/my-change. Images must already be published for its head commit: gh workflow run release.yml --ref &lt;branch&gt;. Ignored when RESTORE_KNOWN_GOOD is ticked.</description>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <name>RESTORE_KNOWN_GOOD</name>
+          <description>Ignore BRANCH and put ramals-dev back on the last main release that passed its smoke suite.</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps">
+    <scm class="hudson.plugins.git.GitSCM" plugin="git">
+      <configVersion>2</configVersion>
+      <userRemoteConfigs>
+        <hudson.plugins.git.UserRemoteConfig>
+          <url>https://github.com/Skpandey15/RAMALS.git</url>
+        </hudson.plugins.git.UserRemoteConfig>
+      </userRemoteConfigs>
+      <!-- The pipeline script is always taken from main, whatever branch is being deployed. A
+           branch that could supply its own Jenkinsfile.branch and have Jenkins execute it would
+           make the origin check, the approval and everything else in that script decorative. -->
+      <branches>
+        <hudson.plugins.git.BranchSpec><name>*/main</name></hudson.plugins.git.BranchSpec>
+      </branches>
+      <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+      <submoduleCfg class="empty-list"/>
+      <extensions/>
+    </scm>
+    <scriptPath>Jenkinsfile.branch</scriptPath>
+    <lightweight>true</lightweight>
+  </definition>
+  <!-- Deliberately no SCM trigger. A scratch deployment that replaces the dev environment happens
+       because somebody asked for it, never because a branch moved. -->
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

@@ -1,0 +1,138 @@
+// Branch deployment to the local k3d environment. A scratch path, separate from the release
+// pipeline on purpose.
+//
+// The Jenkinsfile beside this one deploys trusted main and refuses everything else; that refusal is
+// the property the release path rests on, so it is not parameterised. This is a second job with its
+// own script, its own trust statement, and no SCM trigger -- it runs when a person asks it to.
+//
+// It REPLACES what is running in ramals-dev. The Ingress claims fixed hosts and the web UI image
+// has the Keycloak issuer baked in, so a branch cannot be brought up beside the main deployment on
+// this cluster. RESTORE_KNOWN_GOOD is the way back, and it needs no branch, no rebuild and no
+// release run -- because the reason to want it is usually that the branch under test is broken.
+pipeline {
+  agent none
+
+  options {
+    // Shares one cluster and one Windows agent with RAMALS-main. Serialised within this job; the
+    // two jobs are kept apart by the lock below, which neither can take while the other holds it.
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+  }
+
+  parameters {
+    string(name: 'BRANCH', defaultValue: '',
+      description: 'Branch to deploy, e.g. feat/my-change. Images must already be published for ' +
+        'its head commit: gh workflow run release.yml --ref <branch>. Ignored when ' +
+        'RESTORE_KNOWN_GOOD is ticked.')
+    booleanParam(name: 'RESTORE_KNOWN_GOOD', defaultValue: false,
+      description: 'Ignore BRANCH and put ramals-dev back on the last main release that passed ' +
+        'its smoke suite.')
+  }
+
+  stages {
+    stage('Checkout deployment scripts') {
+      agent { label 'windows && ramals-dev' }
+      options { timeout(time: 20, unit: 'MINUTES') }
+      steps {
+        deleteDir()
+        // main, always. The branch being deployed supplies the application images; it does not
+        // supply the scripts that do the deploying. A branch that could rewrite deploy-branch.ps1
+        // and then have Jenkins run it would make the origin check and everything below it
+        // decorative.
+        checkout([$class: 'GitSCM',
+          branches: [[name: 'refs/heads/main']],
+          userRemoteConfigs: [[url: 'https://github.com/Skpandey15/RAMALS.git',
+            refspec: '+refs/heads/main:refs/remotes/origin/main']],
+          extensions: [[$class: 'CloneOption', noTags: true, honorRefspec: true]]])
+        script {
+          if (!params.RESTORE_KNOWN_GOOD && !params.BRANCH?.trim()) {
+            error('Set BRANCH, or tick RESTORE_KNOWN_GOOD.')
+          }
+          env.RAMALS_ACTION = params.RESTORE_KNOWN_GOOD ?
+            'restore ramals-dev to the last known-good main release' :
+            "deploy branch ${params.BRANCH.trim()}"
+          echo "Requested: ${env.RAMALS_ACTION}"
+        }
+      }
+    }
+
+    stage('Approve') {
+      // No agent: waiting on a person must not occupy the build machine.
+      options { timeout(time: 30, unit: 'MINUTES') }
+      steps {
+        script {
+          env.RAMALS_APPROVER = input(
+            message: "This REPLACES what is running in ramals-dev.\n\nAction: ${env.RAMALS_ACTION}",
+            ok: 'Proceed', submitter: 'ramals-admin', submitterParameter: 'approver')
+        }
+      }
+    }
+
+    stage('Deploy to local k3d DEV') {
+      agent { label 'windows && ramals-dev' }
+      options { timeout(time: 90, unit: 'MINUTES') }
+      steps {
+        // Two jobs now write to one cluster, which would normally need a shared lock. It does not
+        // here: the controller is created with setNumExecutors(1), so no two agent-bound stages can
+        // run at once, and both jobs take the agent only for their deploy stage. A lockable-resources
+        // dependency would buy nothing today.
+        //
+        // What single-executor does NOT prevent is a logical race: this job can be approved while a
+        // release is queued, and whichever deploys second wins. That is a person deploying two
+        // things at once, not corruption -- both runs complete, and summary.json says which is
+        // running. If the executor count is ever raised, this needs a real lock shared with the
+        // release pipeline before anything else.
+        checkout([$class: 'GitSCM',
+          branches: [[name: 'refs/heads/main']],
+          userRemoteConfigs: [[url: 'https://github.com/Skpandey15/RAMALS.git',
+            refspec: '+refs/heads/main:refs/remotes/origin/main']],
+          extensions: [[$class: 'CloneOption', noTags: true, honorRefspec: true]]])
+        script {
+          String arguments = params.RESTORE_KNOWN_GOOD ?
+            '-RestoreKnownGood' : "-Ref \"${params.BRANCH.trim()}\""
+          bat label: 'Deploy branch or restore main', script: """@echo off
+pwsh -NoProfile -NonInteractive -File .\\deploy\\jenkins\\deploy-branch.ps1 ${arguments} -ApprovedBy "%RAMALS_APPROVER%"
+"""
+        }
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'artifacts/jenkins/**', allowEmptyArchive: true,
+            fingerprint: true
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo """
+============= RAMALS BRANCH DEPLOYMENT FAILED ============
+Build      : ${env.BUILD_NUMBER}
+URL        : ${env.BUILD_URL}
+Action     : ${env.RAMALS_ACTION ?: '(failed before checkout)'}
+Approved by: ${env.RAMALS_APPROVER ?: '(failed before approval)'}
+
+ramals-dev may now be running the branch rather than main.
+That is deliberate -- a branch is deployed to be looked at,
+so it is not reverted automatically.
+
+Re-run this job with RESTORE_KNOWN_GOOD to put main back.
+See artifacts/jenkins/summary.json for knownGoodMainCommit.
+==========================================================
+"""
+    }
+    aborted {
+      echo """
+============ RAMALS BRANCH DEPLOYMENT ABORTED ============
+Build : ${env.BUILD_NUMBER}
+URL   : ${env.BUILD_URL}
+
+An abort part-way through leaves the namespace mixed.
+Verify with kubectl, then re-run with RESTORE_KNOWN_GOOD.
+==========================================================
+"""
+    }
+  }
+}

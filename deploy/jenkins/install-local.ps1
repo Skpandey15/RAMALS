@@ -277,6 +277,19 @@ if ($jobExists) {
 }
 if ($LASTEXITCODE -ne 0) { throw "Could not create or update the RAMALS-main Jenkins job." }
 
+# A second, parameterised job for deploying an arbitrary branch to the same local environment.
+# Separate rather than a parameter on RAMALS-main: that job refuses anything that is not trusted
+# main, and the refusal is the property the release path rests on. Giving it a "which ref" parameter
+# would delete that property for every build, including the ones nobody is watching.
+$branchJobConfig = Get-Content (Join-Path $PSScriptRoot "job-config-branch.xml") -Raw
+& $java -jar $cli -s $jenkinsUrl -auth $auth get-job RAMALS-branch *> $null
+if ($LASTEXITCODE -eq 0) {
+  $branchJobConfig | & $java -jar $cli -s $jenkinsUrl -auth $auth update-job RAMALS-branch
+} else {
+  $branchJobConfig | & $java -jar $cli -s $jenkinsUrl -auth $auth create-job RAMALS-branch
+}
+if ($LASTEXITCODE -ne 0) { throw "Could not create or update the RAMALS-branch Jenkins job." }
+
 Write-Host "Jenkins ready: $jenkinsUrl" -ForegroundColor Green
 Write-Host "Blue Ocean: $jenkinsUrl/blue/" -ForegroundColor Green
 Write-Host "User: ramals-admin"
