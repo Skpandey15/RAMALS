@@ -16,6 +16,7 @@ function Assert-PowerShellParses([string]$Path) {
 }
 
 $deployScript = Join-Path $repositoryRoot "deploy\jenkins\deploy-main.ps1"
+$cdStateScript = Join-Path $repositoryRoot "deploy\jenkins\cd-state.ps1"
 $prepareImagesScript = Join-Path $repositoryRoot "deploy\jenkins\prepare-ghcr-images.ps1"
 $installScript = Join-Path $repositoryRoot "deploy\jenkins\install-local.ps1"
 $jobConfigPath = Join-Path $repositoryRoot "deploy\jenkins\job-config.xml"
@@ -56,6 +57,26 @@ $imagePreparation = Get-Content $prepareImagesScript -Raw
 $releaseWorkflow = Get-Content $releaseWorkflowPath -Raw
 Assert-True ($deploymentBoundary.Contains('prepare-ghcr-images.ps1')) `
   "Jenkins deployment must prepare immutable GHCR application images."
+
+# The rollback path only runs when a deployment has already failed, so nothing exercises it during
+# a normal release and it can be removed or bypassed without anybody noticing until the day it is
+# needed. These assert the sequence stays wired: capture before applying, restore on failure, and
+# hold the version that failed so polling cannot redeploy it every two minutes.
+Assert-True ($deploymentBoundary.Contains('Get-RamalsWorkloadImages')) `
+  "The deployment must capture the running workloads before it changes them."
+Assert-True ($deploymentBoundary -match 'Get-RamalsWorkloadImages[\s\S]*Bootstrapping local k3d DEV') `
+  "Known-good workloads must be captured BEFORE the bootstrap, or there is nothing to roll back to."
+Assert-True ($deploymentBoundary.Contains('Restore-RamalsWorkloadImages')) `
+  "A failed deployment must roll back to the last known-good workloads."
+Assert-True ($deploymentBoundary.Contains('Add-RamalsHeldRelease')) `
+  "A rolled-back version must be held so SCM polling cannot redeploy it."
+Assert-True ($deploymentBoundary.Contains('Test-RamalsReleaseHeld')) `
+  "A held version must be refused before it is deployed again."
+Assert-True ($deploymentBoundary -match "known_good_commit'\]\s*=\s*\`$head[\s\S]*Running smoke suite" -or
+             $deploymentBoundary -match "Running smoke suite[\s\S]*known_good_commit'\]\s*=\s*\`$head") `
+  "Only a release that passed its smoke suite may become the known-good rollback target."
+Assert-True ($jenkinsfile.Contains('FORCE_HELD_RELEASE')) `
+  "Overriding a held release must be an explicit, human decision in the job."
 Assert-True ($deploymentBoundary -match 'bootstrap\.ps1[\s\S]*-SkipBuild') `
   "Jenkins must not rebuild application images after mirroring GHCR."
 Assert-True ($deploymentBoundary -match '\$applicationReleaseCommit\s*=\s*\$head') `
@@ -174,6 +195,11 @@ try {
   git -C $seed config user.name RAMALS-CI-Test
   New-Item -ItemType Directory -Path (Join-Path $seed "deploy\jenkins") -Force | Out-Null
   Copy-Item $deployScript (Join-Path $seed "deploy\jenkins\deploy-main.ps1")
+  # The deployment boundary reads its own rollback state before it validates anything, so the
+  # fixture has to carry that file too. Copying it here rather than making the dependency lazy
+  # keeps the held-release check on the validate path, which is where it has to be: a version that
+  # will be refused should be refused before somebody is asked to approve it.
+  Copy-Item $cdStateScript (Join-Path $seed "deploy\jenkins\cd-state.ps1")
   "baseline" | Set-Content (Join-Path $seed "README.md")
   git -C $seed add .
   git -C $seed commit -m baseline --quiet
@@ -184,6 +210,28 @@ try {
   & pwsh -NoProfile -NonInteractive -File (Join-Path $checkout "deploy\jenkins\deploy-main.ps1") `
     -ValidateOnly -ExpectedRepository $remote | Out-Null
   Assert-True ($LASTEXITCODE -eq 0) "Trusted current main validation should succeed."
+
+  # The anti-flapping guarantee, exercised rather than asserted from source. Jenkins polls main
+  # every two minutes, so a commit that failed its health gates and was rolled back must not be
+  # deployable again by the next poll -- and the refusal has to happen on the validate path, before
+  # a human is asked to approve something that cannot proceed.
+  $heldStateRoot = Join-Path $temporaryRoot "cd-state"
+  New-Item -ItemType Directory -Path $heldStateRoot -Force | Out-Null
+  $heldCommit = (git -C $checkout rev-parse HEAD).Trim()
+  @{
+    state = 'RELEASE_HELD'; current_commit = $heldCommit; known_good_commit = ''
+    known_good_images = @{}; held_versions = @($heldCommit); failure_count = 1
+    updated_at = [DateTimeOffset]::UtcNow.ToString('O')
+  } | ConvertTo-Json -Depth 6 |
+    Out-File (Join-Path $heldStateRoot "ramals-dev-ramals-dev.json") -Encoding utf8
+
+  & pwsh -NoProfile -NonInteractive -File (Join-Path $checkout "deploy\jenkins\deploy-main.ps1") `
+    -ValidateOnly -ExpectedRepository $remote -StateRoot $heldStateRoot 2>&1 | Out-Null
+  Assert-True ($LASTEXITCODE -ne 0) "A held release must be refused during validation."
+
+  & pwsh -NoProfile -NonInteractive -File (Join-Path $checkout "deploy\jenkins\deploy-main.ps1") `
+    -ValidateOnly -ExpectedRepository $remote -StateRoot $heldStateRoot -ForceHeldRelease | Out-Null
+  Assert-True ($LASTEXITCODE -eq 0) "An explicit override must be able to redeploy a held release."
 
   & pwsh -NoProfile -NonInteractive -File (Join-Path $checkout "deploy\jenkins\deploy-main.ps1") `
     -ValidateOnly -ExpectedRepository "https://example.invalid/wrong.git" *> $null

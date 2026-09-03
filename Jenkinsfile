@@ -11,6 +11,15 @@ pipeline {
     buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
   }
 
+  parameters {
+    // A version that failed its health gates and was rolled back is held, and polling will not
+    // redeploy it. Overriding is for the case where the environment was the fault rather than the
+    // commit -- a flaky cluster, an image registry that was briefly unreachable -- and is
+    // deliberately a decision somebody makes rather than a retry that happens by itself.
+    booleanParam(name: 'FORCE_HELD_RELEASE', defaultValue: false,
+      description: 'Redeploy a commit that was previously rolled back and is currently HELD.')
+  }
+
   triggers {
     // Local Jenkins is normally behind a home router, so polling is the dependable default.
     // A GitHub webhook may be added later without changing the deployment contract.
@@ -61,9 +70,15 @@ pipeline {
       agent { label 'windows && ramals-dev' }
       options { timeout(time: 20, unit: 'MINUTES') }
       steps {
-        bat label: 'Validate exact main commit', script: '''@echo off
-pwsh -NoProfile -NonInteractive -File .\\deploy\\jenkins\\deploy-main.ps1 -ValidateOnly
-'''
+        // The held-release check runs here as well as in the deploy stage, so a commit that will
+        // be refused is refused before anybody is asked to approve it. Asking a human to authorise
+        // a deployment that cannot happen teaches them the prompt does not mean anything.
+        script {
+          String force = params.FORCE_HELD_RELEASE ? ' -ForceHeldRelease' : ''
+          bat label: 'Validate exact main commit', script: """@echo off
+pwsh -NoProfile -NonInteractive -File .\\deploy\\jenkins\\deploy-main.ps1 -ValidateOnly${force}
+"""
+        }
       }
     }
 
@@ -107,9 +122,12 @@ pwsh -NoProfile -NonInteractive -File .\\deploy\\jenkins\\deploy-main.ps1 -Valid
           userRemoteConfigs: [[url: 'https://github.com/Skpandey15/RAMALS.git',
             refspec: '+refs/heads/main:refs/remotes/origin/main']],
           extensions: [[$class: 'CloneOption', noTags: true, honorRefspec: true]]])
-        bat label: 'Bootstrap and smoke-test RAMALS', script: '''@echo off
-pwsh -NoProfile -NonInteractive -File .\\deploy\\jenkins\\deploy-main.ps1 -ApprovedBy "%RAMALS_APPROVER%"
-'''
+        script {
+          String force = params.FORCE_HELD_RELEASE ? ' -ForceHeldRelease' : ''
+          bat label: 'Bootstrap and smoke-test RAMALS', script: """@echo off
+pwsh -NoProfile -NonInteractive -File .\\deploy\\jenkins\\deploy-main.ps1 -ApprovedBy "%RAMALS_APPROVER%"${force}
+"""
+        }
       }
       post {
         always {
@@ -138,6 +156,12 @@ Approved by: ${env.RAMALS_APPROVER ?: '(failed before approval)'}
 If this failed in deploy-main.ps1 with "HEAD ... is not current
 origin/main", main advanced while the build waited for approval.
 Nothing was deployed. Re-run and approve the newer commit.
+
+Otherwise the deployment rolled back to the last known-good
+version and this commit is now HELD: polling will not redeploy
+it. summary.json carries rolledBack and rolledBackTo. If the
+rollback reports incomplete, the cluster is mixed and needs a
+human before anything else is deployed.
 
 The cluster may be partially deployed. Check the archived
 artifacts/jenkins/summary.json for the failure reason, then

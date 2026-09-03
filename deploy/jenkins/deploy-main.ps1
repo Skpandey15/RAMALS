@@ -17,7 +17,14 @@ param(
   [string]$ApprovedBy,
   [string]$ExpectedRepository = "https://github.com/Skpandey15/RAMALS.git",
   [string]$Namespace = "ramals-dev",
-  [string]$ClusterName = "ramals-dev"
+  [string]$ClusterName = "ramals-dev",
+  # Redeploys a version that previously failed its health gates and was rolled back. Held versions
+  # are refused by default so a bad commit at the head of main is not redeployed every two minutes
+  # by SCM polling; overriding is a deliberate act by whoever believes the environment, not the
+  # commit, was the problem.
+  [switch]$ForceHeldRelease,
+  # Overridable so the state machine can be exercised against a scratch path in tests.
+  [string]$StateRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,6 +95,19 @@ if (git status --porcelain --untracked-files=no) {
 }
 
 Write-Host "Validated trusted main commit $head"
+
+. (Join-Path $PSScriptRoot "cd-state.ps1")
+$statePath = Get-RamalsCdStatePath -ClusterName $ClusterName -Namespace $Namespace -Root $StateRoot
+$cdState = Get-RamalsCdState -StatePath $statePath
+
+# Checked in the validate stage as well as the deploy stage, so a held release fails before anybody
+# is asked to approve it. Asking a human to authorise a deployment that is going to be refused
+# teaches them that the prompt does not mean anything.
+if ((Test-RamalsReleaseHeld -State $cdState -Commit $head) -and -not $ForceHeldRelease) {
+  throw ("Release $head is HELD: it previously failed its health gates and was rolled back. " +
+    "Fix the commit, or re-run with -ForceHeldRelease if the environment was the problem.")
+}
+
 if ($ValidateOnly) { return }
 
 $evidenceDirectory = Join-Path $repositoryRoot "artifacts\jenkins"
@@ -103,8 +123,23 @@ $approvedBy = if ([string]::IsNullOrWhiteSpace($ApprovedBy) -or $ApprovedBy -mat
 }
 Write-Host "[deploy] Approved by: $approvedBy"
 
+$knownGoodImages = @{}
+$rolledBack = $false
+
 try {
   Assert-DockerRuntimeReady
+
+  # Captured before anything is applied, because after the apply the cluster no longer knows what
+  # it was running. This is the whole difference between a failed deployment and an outage.
+  $knownGoodImages = Get-RamalsWorkloadImages -Namespace $Namespace
+  if ($knownGoodImages.Count -gt 0) {
+    Write-Host "[deploy] Known-good workloads captured: $($knownGoodImages.Count)"
+  } else {
+    Write-Host "[deploy] No running workloads to capture; this deployment has nothing to roll back to."
+  }
+  $cdState['state'] = 'DEPLOYING'
+  $cdState['current_commit'] = $head
+  Set-RamalsCdState -StatePath $statePath -State $cdState
 
   $ghcrEvidence = Join-Path $evidenceDirectory "ghcr-images.json"
   # Local/dev follows current main. Image preparation waits for GitHub Actions to publish this
@@ -144,8 +179,18 @@ try {
     ForEach-Object { "{0}={1}" -f $_.metadata.name, $_.spec.template.spec.containers[0].image } |
     Out-File (Join-Path $evidenceDirectory "images.txt") -Encoding utf8
 
+  # HEALTHY, and this version becomes the thing a future failure returns to. Recorded only after
+  # the smoke suite passed: a version that has not proved itself is not a rollback target.
+  $cdState['state'] = 'HEALTHY'
+  $cdState['current_commit'] = $head
+  $cdState['known_good_commit'] = $head
+  $cdState['known_good_images'] = Get-RamalsWorkloadImages -Namespace $Namespace
+  $cdState['failure_count'] = 0
+  Set-RamalsCdState -StatePath $statePath -State $cdState
+
   [ordered]@{
     outcome = "SUCCESS"
+    state = "HEALTHY"
     deploymentConfigCommit = $head
     applicationReleaseCommit = $applicationReleaseCommit
     approvedBy = $approvedBy
@@ -159,8 +204,49 @@ try {
   Write-Host "[deploy] RAMALS local DEV deployment completed successfully."
 } catch {
   $failureReason = ConvertTo-PlainLogText $_.Exception.Message
+
+  # FAILED -> ROLLBACK -> ROLLED_BACK -> RELEASE_HELD, the same sequence the pull-based controller
+  # runs. Attempted for any failure past the point where workloads may have changed: the failure
+  # that matters is not the smoke suite reporting a fault, it is the cluster being left on a
+  # version nobody verified.
+  $cdState['state'] = 'FAILED'
+  $cdState['failure_count'] = [int]$cdState['failure_count'] + 1
+  Set-RamalsCdState -StatePath $statePath -State $cdState
+
+  if ($knownGoodImages.Count -gt 0) {
+    Write-Host ""
+    Write-Host "[rollback] Deployment failed. Restoring last known-good workloads..."
+    $cdState['state'] = 'ROLLBACK'
+    Set-RamalsCdState -StatePath $statePath -State $cdState
+    try {
+      $rolledBack = Restore-RamalsWorkloadImages -Namespace $Namespace -Images $knownGoodImages
+    } catch {
+      # A rollback that throws must not replace the original failure reason: the first fault is
+      # what an operator needs, and the rollback outcome is reported separately below.
+      Write-Host "[rollback] Restore raised: $(ConvertTo-PlainLogText $_.Exception.Message)"
+      $rolledBack = $false
+    }
+    $cdState['state'] = if ($rolledBack) { 'ROLLED_BACK' } else { 'FAILED' }
+    Set-RamalsCdState -StatePath $statePath -State $cdState
+    if ($rolledBack) {
+      Write-Host "[rollback] Restored to known-good commit $($cdState['known_good_commit'])."
+    } else {
+      Write-Host "[rollback] INCOMPLETE. The cluster is in a mixed state and needs a human."
+    }
+  }
+
+  # Held whether or not the restore succeeded. The version failed its gates either way, and the
+  # thing that must not happen is the next poll deploying it again.
+  $cdState = Add-RamalsHeldRelease -State $cdState -Commit $head
+  $cdState['state'] = 'RELEASE_HELD'
+  Set-RamalsCdState -StatePath $statePath -State $cdState
+  Write-Host "[rollback] RELEASE_HELD: $head will not be redeployed automatically."
+
   [ordered]@{
     outcome = "FAILED"
+    state = "RELEASE_HELD"
+    rolledBack = $rolledBack
+    rolledBackTo = $cdState['known_good_commit']
     deploymentConfigCommit = $head
     applicationReleaseCommit = $applicationReleaseCommit
     approvedBy = $approvedBy

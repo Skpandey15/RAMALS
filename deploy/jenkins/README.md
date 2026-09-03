@@ -22,6 +22,38 @@ builds only the PostgreSQL and Keycloak development infrastructure images, and d
 - Runtime secrets remain in Kubernetes/Windows/Jenkins storage and are never archived.
 - Jenkins archives only pod, workload, image, smoke, and commit evidence.
 
+## Failure contract
+
+Deployment is not just "apply and hope". The push path runs the same state machine the pull-based
+`deploy/deploy-controller.sh` runs for the shared environment:
+
+```text
+APPROVED -> DEPLOYING -> HEALTHY
+                     \-> FAILED -> ROLLBACK -> ROLLED_BACK -> RELEASE_HELD
+```
+
+- The image reference every release-managed workload is running is captured **before** anything is
+  applied. A commit alone is not a rollback target: by the time a rollback is needed the workspace
+  already describes the bad version.
+- A release becomes the known-good rollback target **only after its smoke suite passes**. A version
+  that has not proved itself is never something to return to.
+- If the deployment or the smoke suite fails, the captured workloads are restored with
+  `kubectl set image` against the exact recorded references — not `rollout undo`, which walks back
+  one revision and is only correct if exactly one deployment happened since.
+- A partial restore is reported as a **failure**, never as a rollback. A cluster half on the old
+  version and half on the new one is precisely what this exists to avoid.
+- The failed commit is then **HELD** and is not deployed again automatically. Without this, a bad
+  commit at the head of `main` would be redeployed by the two-minute poll, fail, roll back, and
+  repeat indefinitely — taking the environment down and up on every cycle.
+- Overriding a hold is a deliberate act: re-run the job with `FORCE_HELD_RELEASE`, which is for the
+  case where the environment was at fault rather than the commit.
+
+State lives at `%LOCALAPPDATA%\RAMALS\cd-state\<cluster>-<namespace>.json`, deliberately outside the
+Jenkins workspace — `deleteDir()` empties that workspace on every build, so state kept there would
+be destroyed exactly when it is needed: on the run after the one that failed.
+
+`summary.json` carries `state`, `rolledBack` and `rolledBackTo` alongside the existing evidence.
+
 ## Local controller
 
 The local installation runs under the Windows user that owns Rancher Desktop and the kubeconfig.
