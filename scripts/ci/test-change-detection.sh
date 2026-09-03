@@ -35,6 +35,12 @@ run_case web-ui/src/Example.tsx false true false false
 run_case docs/architecture/example.md false false false true
 run_case deploy/jenkins/install-local.ps1 false false true false
 
+# The Jenkinsfile is what validate-jenkins-cd.ps1 asserts the invariants of, and it sits at the
+# repository root rather than under any of the directories beside it -- so a change to it used to
+# match nothing and skip the only job that guards it. Editing the pipeline was the single change
+# that could not trigger the pipeline's own gate.
+run_case Jenkinsfile false false true false
+
 # The release board is an executable document. Mvp1ReleaseBoardTests reads it and is what stops R1
 # being closed by editing a word in a table -- and that test lives in the backend module, so a board
 # change classified as docs-only skips Backend CI and the guard never runs on the one kind of change

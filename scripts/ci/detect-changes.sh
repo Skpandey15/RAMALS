@@ -37,7 +37,13 @@ for path in "${changed[@]}"; do
       python=true
       docs_only=false
       ;;
-    deploy/jenkins/*|infrastructure/*|.github/*|scripts/ci/*)
+    # Jenkinsfile is named explicitly because it lives at the repository root and matched none of
+    # the directory patterns beside it. validate-jenkins-cd.ps1 exists to assert this file's
+    # invariants -- the approval message, the ramals-admin submitter, both deploy-main.ps1
+    # invocations -- and it was the one change that could not trigger it. The same defect as the
+    # release board below, in the other direction: there a guarded file was classified as docs, here
+    # it was classified as nothing at all.
+    Jenkinsfile|deploy/jenkins/*|infrastructure/*|.github/*|scripts/ci/*)
       infrastructure=true
       docs_only=false
       ;;
