@@ -34,6 +34,14 @@ spring:
           audiences: ${RAMALS_OIDC_AUDIENCE:ramals-api}
 
 ramals:
+  # Diagnostic form assembly. Both values are targets rather than guarantees: a form always covers
+  # every skill and difficulty band its pool offers, growing past target-size when it has to, and
+  # the recency window only de-prioritizes items a learner has recently seen -- it never excludes
+  # one whose absence would break that coverage.
+  diagnostic:
+    form:
+      target-size: ${RAMALS_DIAGNOSTIC_FORM_TARGET_SIZE:10}
+      recency-window-days: ${RAMALS_DIAGNOSTIC_FORM_RECENCY_WINDOW_DAYS:90}
   ai:
     base-url: ${RAMALS_AI_BASE_URL:}
     workload-token-url: ${RAMALS_AI_WORKLOAD_TOKEN_URL:}

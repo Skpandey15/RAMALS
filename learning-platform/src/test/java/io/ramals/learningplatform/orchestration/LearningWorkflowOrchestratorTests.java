@@ -39,6 +39,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import io.ramals.learningplatform.evidence.EvidenceCoverage;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
@@ -618,14 +620,14 @@ class LearningWorkflowOrchestratorTests {
     return new Evidence(
         EVIDENCE_ID, LEARNER, SKILL, "EVALUATION", "ASSESSMENT_ATTEMPT", ATTEMPT, VERSION,
         "EVALUATION_GATE_V1", null, "lineage", new BigDecimal("0.6000"), new BigDecimal("0.6000"),
-        1, 0, "interaction-1", T0, T0);
+        1, 0, EvidenceCoverage.none(), "interaction-1", T0, T0);
   }
 
   private static MasterySnapshot snapshot(MasteryStatus status) {
     return new MasterySnapshot(
         SNAPSHOT_ID, LEARNER, SKILL, CURRICULUM, 1, new BigDecimal("0.6000"), status,
         new BigDecimal("0.8000"), new BigDecimal("0.7000"), new BigDecimal("0.7000"), 3, 5,
-        "MASTERY_V1", "CONFIDENCE_V1", "interaction-1", T0);
+        "MASTERY_V1", "CONFIDENCE_V1", "STATUS_V1", null, Set.of(), "interaction-1", T0);
   }
 
   /** Reports whether work ran inside the transaction boundary, so tests can assert the branch. */

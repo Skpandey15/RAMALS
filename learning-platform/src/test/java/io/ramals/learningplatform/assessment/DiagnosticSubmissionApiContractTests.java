@@ -106,7 +106,7 @@ class DiagnosticSubmissionApiContractTests {
         .thenReturn(Optional.of(new Learner(LEARNER_ONE, "user-1", "ACTIVE", NOW, NOW)));
     when(assessmentRepository.findAttemptForUpdate(ATTEMPT)).thenReturn(Optional.of(attempt("IN_PROGRESS")));
     when(assessmentRepository.findDiagnosticByVersionId(VERSION)).thenReturn(Optional.of(diagnostic()));
-    when(assessmentRepository.findItemScoringViews(VERSION)).thenReturn(List.of(view()));
+    when(assessmentRepository.findPresentedItemScoringViews(ATTEMPT, VERSION)).thenReturn(List.of(view()));
     when(assessmentRepository.completeAttempt(ATTEMPT)).thenReturn(true);
     when(assessmentRepository.findScoredResponses(ATTEMPT))
         .thenReturn(List.of(new ScoredResponse("KAFKA_BROKER", 4, true)));
@@ -166,7 +166,7 @@ class DiagnosticSubmissionApiContractTests {
         .thenReturn(Optional.of(new Learner(LEARNER_ONE, "user-1", "ACTIVE", NOW, NOW)));
     when(assessmentRepository.findAttemptForUpdate(ATTEMPT)).thenReturn(Optional.of(attempt("IN_PROGRESS")));
     when(assessmentRepository.findDiagnosticByVersionId(VERSION)).thenReturn(Optional.of(diagnostic()));
-    when(assessmentRepository.findItemScoringViews(VERSION)).thenReturn(List.of(view()));
+    when(assessmentRepository.findPresentedItemScoringViews(ATTEMPT, VERSION)).thenReturn(List.of(view()));
 
     mockMvc.perform(post(URL).with(learner("user-1"))
             .contentType(MediaType.APPLICATION_JSON).content(body(OTHER_ITEM, "B")))
@@ -182,7 +182,7 @@ class DiagnosticSubmissionApiContractTests {
         .thenReturn(Optional.of(new Learner(LEARNER_ONE, "user-1", "ACTIVE", NOW, NOW)));
     when(assessmentRepository.findAttemptForUpdate(ATTEMPT)).thenReturn(Optional.of(attempt("IN_PROGRESS")));
     when(assessmentRepository.findDiagnosticByVersionId(VERSION)).thenReturn(Optional.of(diagnostic()));
-    when(assessmentRepository.findItemScoringViews(VERSION)).thenReturn(List.of(view()));
+    when(assessmentRepository.findPresentedItemScoringViews(ATTEMPT, VERSION)).thenReturn(List.of(view()));
 
     mockMvc.perform(post(URL).with(learner("user-1"))
             .contentType(MediaType.APPLICATION_JSON).content(body(ITEM, "Z")))

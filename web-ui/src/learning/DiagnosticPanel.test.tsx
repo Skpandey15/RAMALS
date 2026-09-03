@@ -45,7 +45,14 @@ describe('DiagnosticPanel', () => {
     vi.clearAllMocks();
     vi.mocked(startDiagnostic).mockResolvedValue({ attemptId: 'attempt-1', status: 'IN_PROGRESS' } as never);
     vi.mocked(getAttempt).mockResolvedValue(ATTEMPT as never);
-    vi.mocked(submitDiagnostic).mockResolvedValue({ itemsAnswered: 2, scoringVersion: 'scoring-v1' } as never);
+    vi.mocked(submitDiagnostic).mockResolvedValue({
+      itemsAnswered: 2,
+      scoringVersion: 'scoring-v1',
+      skillScores: [
+        { skillCode: 'KAFKA_PARTITION', itemsAnswered: 1, itemsCorrect: 1 },
+        { skillCode: 'KAFKA_CONSUMER_GROUPS', itemsAnswered: 1, itemsCorrect: 0 },
+      ],
+    } as never);
   });
 
   it('starts an attempt and renders its items', async () => {
@@ -87,7 +94,14 @@ describe('DiagnosticPanel', () => {
         { itemId: 'item-2', selectedOptions: ['b'] },
       ]),
     );
-    expect(await screen.findByText(/Scored 2 item\(s\) with scoring-v1/)).toBeInTheDocument();
+    expect(await screen.findByText('You answered 1 of 2 correctly.')).toBeInTheDocument();
+    // The per-skill breakdown is the point of the result: a total alone cannot tell a learner
+    // which skill to work on next.
+    expect(screen.getByRole('row', { name: /KAFKA_PARTITION/ })).toHaveTextContent('1 / 1');
+    expect(screen.getByText(/Weakest so far: KAFKA_CONSUMER_GROUPS/)).toBeInTheDocument();
+    // And it must say what the score does not establish, or INSUFFICIENT_EVIDENCE on the mastery
+    // map below reads as a bug rather than as the design.
+    expect(screen.getByText(/starting point, not a verdict/)).toBeInTheDocument();
     // The dashboard reloads mastery off this callback; without it the new score never appears.
     expect(onCompleted).toHaveBeenCalledOnce();
   });

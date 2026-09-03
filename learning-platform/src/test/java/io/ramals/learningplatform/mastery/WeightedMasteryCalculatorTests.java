@@ -3,6 +3,7 @@ package io.ramals.learningplatform.mastery;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.ramals.learningplatform.evidence.Evidence;
+import io.ramals.learningplatform.evidence.EvidenceCoverage;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -17,7 +18,7 @@ class WeightedMasteryCalculatorTests {
     return new Evidence(
         null, null, null, type, "ASSESSMENT_ATTEMPT", null, null, "DIAGNOSTIC_SCORING_V1",
         null, "lineage", new BigDecimal(normalized), new BigDecimal(normalized), items, items,
-        "interaction", null, null);
+        EvidenceCoverage.none(), "interaction", null, null);
   }
 
   @Test

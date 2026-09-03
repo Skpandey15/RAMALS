@@ -3,12 +3,15 @@ package io.ramals.learningplatform.mastery;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
 import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.evidence.EvidenceCoverage;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.LearnerRepository;
@@ -23,6 +26,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -126,10 +130,10 @@ class MasteryEnginePersistenceIntegrationTests {
       masteryRepository = new MasteryRepository(runtimeJdbc);
       masteryService = new MasteryService(
           masteryRepository, evidence, new WeightedMasteryCalculator(),
-          new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
+          new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());
       AssessmentRepository assessments = new AssessmentRepository(runtimeJdbc, mapper);
       LearnerService learnerService = new LearnerService(learners);
-      diagnostics = new DiagnosticService(assessments, learnerService);
+      diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
@@ -202,7 +206,8 @@ class MasteryEnginePersistenceIntegrationTests {
         learnerId, BROKER_SKILL, CURRICULUM_VERSION, 1, new BigDecimal("0.5000"),
         MasteryStatus.NEEDS_PRACTICE, new BigDecimal("0.8000"), new BigDecimal("0.3300"),
         new BigDecimal("0.7500"), 1, 1, WeightedMasteryCalculator.ALGORITHM_VERSION,
-        EvidenceConfidenceCalculator.ALGORITHM_VERSION, INTERACTION_ID);
+        EvidenceConfidenceCalculatorV2.ALGORITHM_VERSION, MasteryStatusPolicyV2.POLICY_VERSION,
+        null, Set.of(), INTERACTION_ID);
     assertThatThrownBy(() -> transactionTemplate.execute(
         status -> masteryRepository.insertSnapshot(draft)))
         .isInstanceOf(DuplicateKeyException.class);
@@ -245,7 +250,8 @@ class MasteryEnginePersistenceIntegrationTests {
     UUID attemptId = diagnostics.createAttempt("m-repro", "kafka", "key-1").attempt().id();
     evidence.appendDiagnosticEvidence(
         learnerId, BROKER_SKILL, attemptId, ASSESSMENT_VERSION, DiagnosticScorer.SCORING_VERSION,
-        "REPRO:1", new BigDecimal("0.6000"), new BigDecimal("0.6000"), 5, 3, INTERACTION_ID);
+        "REPRO:1", new BigDecimal("0.6000"), new BigDecimal("0.6000"), 5, 3,
+        EvidenceCoverage.none(), INTERACTION_ID);
 
     MasterySnapshot first = recomputeInTx(learnerId, BROKER_SKILL);
     MasterySnapshot second = recomputeInTx(learnerId, BROKER_SKILL);
@@ -273,5 +279,13 @@ class MasteryEnginePersistenceIntegrationTests {
       }
       return result.getString(1);
     }
+  }
+
+  /**
+   * The production selector on its default settings, so these fixtures assemble forms exactly the
+   * way a deployment does rather than through a stand-in that could drift from it.
+   */
+  private static DiagnosticFormSelector formSelector() {
+    return new DiagnosticFormSelector(new DiagnosticFormProperties());
   }
 }

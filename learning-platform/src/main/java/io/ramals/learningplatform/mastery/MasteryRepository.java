@@ -1,13 +1,17 @@
 package io.ramals.learningplatform.mastery;
 
+import io.ramals.learningplatform.curriculum.MasteryDifficultyBand;
 import io.ramals.learningplatform.observability.UuidV7;
 import java.sql.Array;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -42,6 +46,35 @@ public class MasteryRepository {
     } catch (EmptyResultDataAccessException notConfigured) {
       return Optional.empty();
     }
+  }
+
+  /**
+   * The objectives a skill requires, by identity rather than by count.
+   *
+   * <p>The count alone cannot answer the question objective coverage asks. Five observations all
+   * against the same objective are not coverage of five objectives, and only the identifiers can
+   * tell those two ledgers apart.
+   */
+  public Set<UUID> findRequiredObjectiveIds(UUID skillId, UUID curriculumVersionId) {
+    return Set.copyOf(jdbcTemplate.query("""
+        SELECT lo.id
+        FROM core.learning_objective lo
+        JOIN core.skill_version sv ON sv.id = lo.skill_version_id
+        WHERE sv.skill_id = ? AND sv.curriculum_version_id = ? AND lo.required
+        """, (result, row) -> result.getObject("id", UUID.class), skillId, curriculumVersionId));
+  }
+
+  private static Set<MasteryDifficultyBand> coveredBands(java.sql.ResultSet result)
+      throws SQLException {
+    Array array = result.getArray("covered_difficulty_bands");
+    if (array == null) {
+      return Set.of();
+    }
+    Set<MasteryDifficultyBand> bands = new LinkedHashSet<>();
+    for (String value : (String[]) array.getArray()) {
+      bands.add(MasteryDifficultyBand.of(value));
+    }
+    return bands;
   }
 
   private static List<String> strings(Array array) throws SQLException {
@@ -84,17 +117,36 @@ public class MasteryRepository {
    */
   public MasterySnapshot insertSnapshot(MasterySnapshotDraft draft) {
     UUID id = UuidV7.generate();
-    jdbcTemplate.update("""
-        INSERT INTO ledger.mastery_snapshot
-          (id, learner_id, skill_id, curriculum_version_id, aggregate_version, mastery_score,
-           mastery_status, threshold, evidence_confidence, confidence_threshold, evidence_count,
-           items_considered, algorithm_version, confidence_algorithm_version, interaction_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, id, draft.learnerId(), draft.skillId(), draft.curriculumVersionId(),
-        draft.aggregateVersion(), draft.masteryScore(), draft.status().name(), draft.threshold(),
-        draft.evidenceConfidence(), draft.confidenceThreshold(), draft.evidenceCount(),
-        draft.itemsConsidered(), draft.algorithmVersion(), draft.confidenceAlgorithmVersion(),
-        draft.interactionId());
+    jdbcTemplate.update(connection -> {
+      PreparedStatement statement = connection.prepareStatement("""
+          INSERT INTO ledger.mastery_snapshot
+            (id, learner_id, skill_id, curriculum_version_id, aggregate_version, mastery_score,
+             mastery_status, threshold, evidence_confidence, confidence_threshold, evidence_count,
+             items_considered, algorithm_version, confidence_algorithm_version,
+             status_policy_version, objective_coverage, covered_difficulty_bands, interaction_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          """);
+      statement.setObject(1, id);
+      statement.setObject(2, draft.learnerId());
+      statement.setObject(3, draft.skillId());
+      statement.setObject(4, draft.curriculumVersionId());
+      statement.setInt(5, draft.aggregateVersion());
+      statement.setBigDecimal(6, draft.masteryScore());
+      statement.setString(7, draft.status().name());
+      statement.setBigDecimal(8, draft.threshold());
+      statement.setBigDecimal(9, draft.evidenceConfidence());
+      statement.setBigDecimal(10, draft.confidenceThreshold());
+      statement.setInt(11, draft.evidenceCount());
+      statement.setInt(12, draft.itemsConsidered());
+      statement.setString(13, draft.algorithmVersion());
+      statement.setString(14, draft.confidenceAlgorithmVersion());
+      statement.setString(15, draft.statusPolicyVersion());
+      statement.setBigDecimal(16, draft.objectiveCoverage());
+      statement.setArray(17, connection.createArrayOf("varchar",
+          draft.coveredDifficultyBands().stream().map(Enum::name).sorted().toArray()));
+      statement.setString(18, draft.interactionId());
+      return statement;
+    });
     return findById(id).orElseThrow(
         () -> new IllegalStateException("Mastery snapshot did not persist."));
   }
@@ -145,7 +197,8 @@ public class MasteryRepository {
   private static final String SNAPSHOT_SELECT = """
       SELECT id, learner_id, skill_id, curriculum_version_id, aggregate_version, mastery_score,
              mastery_status, threshold, evidence_confidence, confidence_threshold, evidence_count,
-             items_considered, algorithm_version, confidence_algorithm_version, interaction_id,
+             items_considered, algorithm_version, confidence_algorithm_version,
+             status_policy_version, objective_coverage, covered_difficulty_bands, interaction_id,
              calculated_at
       FROM ledger.mastery_snapshot
       """;
@@ -165,6 +218,9 @@ public class MasteryRepository {
       result.getInt("items_considered"),
       result.getString("algorithm_version"),
       result.getString("confidence_algorithm_version"),
+      result.getString("status_policy_version"),
+      result.getBigDecimal("objective_coverage"),
+      coveredBands(result),
       result.getString("interaction_id"),
       instant(result, "calculated_at"));
 

@@ -19,6 +19,7 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -116,7 +117,8 @@ class ProgressionPersistenceIntegrationTests {
     masteryRepository.insertSnapshot(new MasterySnapshotDraft(
         learnerId, skillId, CURRICULUM_VERSION, version, new BigDecimal(score), status,
         new BigDecimal("0.8000"), new BigDecimal("0.5000"), new BigDecimal("0.7500"), 5, 5,
-        "WEIGHTED_MASTERY_V1", "EVIDENCE_CONFIDENCE_V1", INTERACTION_ID));
+        "WEIGHTED_MASTERY_V1", "EVIDENCE_CONFIDENCE_V2", "MASTERY_STATUS_POLICY_V2",
+        null, Set.of(), INTERACTION_ID));
   }
 
   private ProgressionState stateOf(String subject, UUID skillId) {

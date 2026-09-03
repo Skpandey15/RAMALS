@@ -50,7 +50,8 @@ public class EvidenceService {
       recorded.add(repository.appendDiagnosticEvidence(
           learnerId, skillId, attemptId, assessmentVersionId, scoringVersion, lineageKey,
           observation.observedScore(), observation.normalizedScore(),
-          observation.itemsAnswered(), observation.itemsCorrect(), provenance));
+          observation.itemsAnswered(), observation.itemsCorrect(), observation.coverage(),
+          provenance));
     }
     BusinessEventLogger.info(LOGGER, "evidence.recorded", "Diagnostic evidence recorded",
         Map.of("entityType", "EVIDENCE", "entityId", attemptId,
@@ -94,7 +95,9 @@ public class EvidenceService {
         // One answer was scored, and "correct" is not a meaningful binary for a rubric: the whole
         // signal lives in the normalized score. Claiming a correct item here would inflate the
         // confidence calculator's item counts with a judgement the rubric never made.
-        normalizedScore, normalizedScore, 1, 0, provenance);
+        // A rubric evaluation measures no catalogued item, so it carries no objective or band
+        // coverage. Claiming coverage here would credit breadth that nothing in the ledger shows.
+        normalizedScore, normalizedScore, 1, 0, EvidenceCoverage.none(), provenance);
     BusinessEventLogger.info(LOGGER, "evidence.recorded", "Evaluation evidence recorded",
         Map.of("entityType", "EVIDENCE", "entityId", evidence.id(),
             "evaluationRequestId", evaluationRequestId, "outcome", "SUCCESS"));

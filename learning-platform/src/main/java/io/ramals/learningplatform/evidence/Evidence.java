@@ -20,6 +20,7 @@ public record Evidence(
     BigDecimal normalizedScore,
     int itemsAnswered,
     int itemsCorrect,
+    EvidenceCoverage coverage,
     String interactionId,
     Instant occurredAt,
     Instant recordedAt) {

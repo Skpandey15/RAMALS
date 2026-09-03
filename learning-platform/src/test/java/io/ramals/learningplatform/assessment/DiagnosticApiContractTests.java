@@ -1,9 +1,11 @@
 package io.ramals.learningplatform.assessment;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -19,6 +21,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -42,7 +45,9 @@ class DiagnosticApiContractTests {
   private static final UUID VERSION = UUID.fromString("01900000-0000-7000-8000-000000000402");
   private static final UUID ATTEMPT = UUID.fromString("01900000-0000-7000-8000-0000000004f1");
   private static final UUID ITEM = UUID.fromString("01900000-0000-7000-8000-000000000411");
+  private static final UUID SECOND_ITEM = UUID.fromString("01900000-0000-7000-8000-000000000412");
   private static final Instant NOW = Instant.parse("2026-08-15T00:00:00Z");
+  private static final String POLICY = DiagnosticFormSelector.SELECTION_POLICY_VERSION;
 
   @Autowired
   MockMvc mockMvc;
@@ -65,6 +70,12 @@ class DiagnosticApiContractTests {
 
   private static ResolvedDiagnostic diagnostic() {
     return new ResolvedDiagnostic(VERSION, "KAFKA", "KAFKA_DIAGNOSTIC", "v1", "PUBLISHED");
+  }
+
+  private static List<EligibleItem> pool() {
+    return List.of(
+        new EligibleItem(ITEM, "KAFKA_BROKER", "FOUNDATIONAL", null),
+        new EligibleItem(SECOND_ITEM, "KAFKA_TOPIC", "INTERMEDIATE", null));
   }
 
   private static AssessmentAttempt attempt(String key) {
@@ -99,7 +110,10 @@ class DiagnosticApiContractTests {
     when(assessmentRepository.findByIdempotency(eq(LEARNER_ONE), eq(VERSION), eq("key-1")))
         .thenReturn(Optional.empty(), Optional.of(attempt("key-1")));
     when(assessmentRepository.findActiveAttempt(LEARNER_ONE, VERSION)).thenReturn(Optional.empty());
-    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1")).thenReturn(attempt("key-1"));
+    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY))
+        .thenReturn(attempt("key-1"));
+    when(assessmentRepository.findEligibleItems(eq(VERSION), eq(LEARNER_ONE), any()))
+        .thenReturn(pool());
 
     mockMvc.perform(post("/api/v1/diagnostics/kafka/attempts")
             .header("Idempotency-Key", "key-1").with(learner("user-1")))
@@ -136,7 +150,7 @@ class DiagnosticApiContractTests {
     when(assessmentRepository.findByIdempotency(eq(LEARNER_ONE), eq(VERSION), eq("key-1")))
         .thenReturn(Optional.empty(), Optional.of(attempt("key-1")));
     when(assessmentRepository.findActiveAttempt(LEARNER_ONE, VERSION)).thenReturn(Optional.empty());
-    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1"))
+    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY))
         .thenThrow(new DuplicateKeyException("concurrent create"));
 
     mockMvc.perform(post("/api/v1/diagnostics/kafka/attempts")
@@ -161,7 +175,7 @@ class DiagnosticApiContractTests {
     when(learnerRepository.findBySubject("user-1")).thenReturn(Optional.of(learnerRow(LEARNER_ONE, "user-1")));
     when(assessmentRepository.findAttempt(ATTEMPT)).thenReturn(Optional.of(attempt("key-1")));
     when(assessmentRepository.findDiagnosticByVersionId(VERSION)).thenReturn(Optional.of(diagnostic()));
-    when(assessmentRepository.findItems(VERSION)).thenReturn(List.of(new DiagnosticItem(
+    when(assessmentRepository.findPresentedItems(ATTEMPT, VERSION)).thenReturn(List.of(new DiagnosticItem(
         ITEM, "KAFKA_DIAG_BROKER", "KAFKA_BROKER", "SINGLE_CHOICE", "Which responsibility?",
         List.of(new DiagnosticItemOption("A", "Wrong"), new DiagnosticItemOption("B", "Right")), 1)));
 
@@ -173,6 +187,34 @@ class DiagnosticApiContractTests {
         .andExpect(jsonPath("$.items[0].answerKey").doesNotExist())
         .andExpect(content().string(not(containsString("answer"))))
         .andExpect(content().string(not(containsString("correct"))));
+  }
+
+  @Test
+  void attemptCreationPersistsTheSelectedForm() throws Exception {
+    when(learnerRepository.provisionForSubject("user-1")).thenReturn(learnerRow(LEARNER_ONE, "user-1"));
+    when(assessmentRepository.findPublishedDiagnostic("KAFKA")).thenReturn(Optional.of(diagnostic()));
+    when(assessmentRepository.findByIdempotency(eq(LEARNER_ONE), eq(VERSION), eq("key-1")))
+        .thenReturn(Optional.empty());
+    when(assessmentRepository.findActiveAttempt(LEARNER_ONE, VERSION)).thenReturn(Optional.empty());
+    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY))
+        .thenReturn(attempt("key-1"));
+    when(assessmentRepository.findEligibleItems(eq(VERSION), eq(LEARNER_ONE), any()))
+        .thenReturn(pool());
+
+    mockMvc.perform(post("/api/v1/diagnostics/kafka/attempts")
+            .header("Idempotency-Key", "key-1").with(learner("user-1")))
+        .andExpect(status().isCreated());
+
+    // Both pool items are covering their own skill, so the whole pool is the form -- and every one
+    // of them is written down, at a position, before the response reaches the learner.
+    ArgumentCaptor<List<SelectedItem>> selected = ArgumentCaptor.captor();
+    verify(assessmentRepository).insertSelectedItems(eq(ATTEMPT), selected.capture());
+    assertThat(selected.getValue())
+        .extracting(SelectedItem::itemVersionId)
+        .containsExactlyInAnyOrder(ITEM, SECOND_ITEM);
+    assertThat(selected.getValue())
+        .extracting(SelectedItem::presentationOrder)
+        .containsExactlyInAnyOrder(1, 2);
   }
 
   @Test

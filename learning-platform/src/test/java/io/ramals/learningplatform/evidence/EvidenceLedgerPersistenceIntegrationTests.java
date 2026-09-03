@@ -3,6 +3,8 @@ package io.ramals.learningplatform.evidence;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
 import io.ramals.learningplatform.assessment.DiagnosticService;
@@ -12,10 +14,10 @@ import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
-import io.ramals.learningplatform.mastery.EvidenceConfidenceCalculator;
+import io.ramals.learningplatform.mastery.EvidenceConfidenceCalculatorV2;
 import io.ramals.learningplatform.mastery.MasteryRepository;
 import io.ramals.learningplatform.mastery.MasteryService;
-import io.ramals.learningplatform.mastery.MasteryStatusPolicy;
+import io.ramals.learningplatform.mastery.MasteryStatusPolicyV2;
 import io.ramals.learningplatform.mastery.WeightedMasteryCalculator;
 import io.ramals.learningplatform.recommendation.RecommendationPolicy;
 import io.ramals.learningplatform.recommendation.RecommendationRepository;
@@ -128,10 +130,10 @@ class EvidenceLedgerPersistenceIntegrationTests {
       evidence = new EvidenceRepository(runtimeJdbc);
       evidenceService = new EvidenceService(evidence);
       LearnerService learnerService = new LearnerService(learners);
-      diagnostics = new DiagnosticService(assessments, learnerService);
+      diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
       MasteryService masteryService = new MasteryService(
           new MasteryRepository(runtimeJdbc), evidence, new WeightedMasteryCalculator(),
-          new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
+          new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
@@ -152,7 +154,8 @@ class EvidenceLedgerPersistenceIntegrationTests {
   private Evidence appendBaseEvidence(UUID learnerId, UUID attemptId, String lineageKey) {
     return evidence.appendDiagnosticEvidence(
         learnerId, BROKER_SKILL, attemptId, VERSION, DiagnosticScorer.SCORING_VERSION, lineageKey,
-        new BigDecimal("1.0000"), new BigDecimal("1.0000"), 1, 1, INTERACTION_ID);
+        new BigDecimal("1.0000"), new BigDecimal("1.0000"), 1, 1,
+        EvidenceCoverage.none(), INTERACTION_ID);
   }
 
   @Test
@@ -282,5 +285,13 @@ class EvidenceLedgerPersistenceIntegrationTests {
       }
       return result.getString(1);
     }
+  }
+
+  /**
+   * The production selector on its default settings, so these fixtures assemble forms exactly the
+   * way a deployment does rather than through a stand-in that could drift from it.
+   */
+  private static DiagnosticFormSelector formSelector() {
+    return new DiagnosticFormSelector(new DiagnosticFormProperties());
   }
 }
