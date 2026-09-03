@@ -54,6 +54,56 @@ be destroyed exactly when it is needed: on the run after the one that failed.
 
 `summary.json` carries `state`, `rolledBack` and `rolledBackTo` alongside the existing evidence.
 
+## Deploying a branch — the `RAMALS-branch` job
+
+`RAMALS-main` deploys trusted `main` and refuses everything else. That refusal is the property the
+release path rests on, so it is not parameterised. Branch deployment is a **second job** with its
+own script (`Jenkinsfile.branch` → `deploy/jenkins/deploy-branch.ps1`), started by hand, never by
+polling.
+
+**It replaces what is running.** The Ingress claims fixed hosts (`localhost`, `keycloak.localhost`)
+and the web UI image has the Keycloak issuer baked in, so a branch cannot be brought up beside the
+main deployment on this cluster. One environment, one occupant.
+
+### Using it
+
+1. Publish images for the branch. `release.yml` publishes only from `main` and tags, so a branch
+   needs one dispatched — this needs repository write access, which is what makes it a maintainer's
+   decision rather than something untrusted PR code can cause:
+
+   ```
+   gh workflow run release.yml --ref my-branch
+   ```
+
+2. Run **RAMALS-branch** with `BRANCH = my-branch` and approve. The job fails immediately, with the
+   command above, if no image exists for that commit — rather than holding the only Windows agent
+   for a twenty-minute wait that was never going to succeed.
+
+3. When finished, run it again with `RESTORE_KNOWN_GOOD` ticked. `BRANCH` is ignored.
+
+### What keeps this from damaging the release path
+
+- **A branch is never a rollback target.** `known_good_commit` and `known_good_images` are written
+  only by `deploy-main.ps1`, and only after a release passes its smoke suite. The branch script
+  reads them and never writes them, so the last healthy main release stays what the environment can
+  be returned to — however many branches are tried in between. `validate-jenkins-cd.ps1` asserts
+  this, because it is an *absent* assignment and nothing else would notice it appearing.
+- **The pipeline script always comes from `main`**, whatever branch is being deployed. A branch that
+  supplied its own `Jenkinsfile.branch` would make the origin check, the approval and the rule above
+  decorative — it would be reviewing itself.
+- **The origin check is kept.** Which *ref* may be deployed is relaxed here; which *repository* it
+  comes from is not.
+- **A failed branch is left running, on purpose.** A branch is deployed in order to be looked at,
+  and a scratch environment that reverts the moment the thing under test misbehaves cannot be
+  looked at. The way back is one switch, and the build log names it.
+
+### Concurrency
+
+The controller runs with `setNumExecutors(1)`, so `RAMALS-main` and `RAMALS-branch` can never hold
+an agent at the same time and no lock is needed. What that does *not* prevent is a person approving
+a branch deployment while a release is queued — both complete, and whichever runs second is what is
+running. If the executor count is ever raised, both jobs need a shared lock before anything else.
+
 ## Local controller
 
 The local installation runs under the Windows user that owns Rancher Desktop and the kubeconfig.
