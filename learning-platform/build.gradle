@@ -28,6 +28,13 @@ dependencies {
   implementation 'net.ttddyy.observation:datasource-micrometer-spring-boot:2.2.1'
   implementation 'net.ttddyy.observation:datasource-micrometer-opentelemetry:2.2.1'
   implementation 'com.googlecode.libphonenumber:libphonenumber:9.0.15'
+  // Pinned ahead of the Spring Boot BOM: the managed 11.0.22 carries three CRITICAL Tomcat
+  // advisories -- CVE-2026-65182 (security-constraint bypass), CVE-2026-65905 (DIGEST replay) and
+  // CVE-2026-68525 (FORM authentication bypass) -- all fixed in 11.0.25. Every one is an
+  // authentication or authorization bypass in the container that terminates every request this
+  // service serves, so the release gate refuses the image until it moves. Drop the explicit
+  // version once the BOM catches up.
+  implementation 'org.apache.tomcat.embed:tomcat-embed-core:11.0.25'
   // Pinned ahead of the Spring Boot BOM: the managed 42.7.11 carries CVE-2026-54291 (HIGH,
   // scram-client), fixed in 42.7.12. Drop the explicit version once the BOM catches up.
   runtimeOnly 'org.postgresql:postgresql:42.7.12'

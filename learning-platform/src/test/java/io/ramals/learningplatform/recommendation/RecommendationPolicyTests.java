@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.mastery.MasteryStatus;
 import java.math.BigDecimal;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -16,8 +17,8 @@ class RecommendationPolicyTests {
     return new MasterySnapshot(
         UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1,
         new BigDecimal(masteryScore), status, new BigDecimal("0.8000"), new BigDecimal("0.5000"),
-        new BigDecimal("0.7500"), 1, 1, "WEIGHTED_MASTERY_V1", "EVIDENCE_CONFIDENCE_V1",
-        "interaction", null);
+        new BigDecimal("0.7500"), 1, 1, "WEIGHTED_MASTERY_V1", "EVIDENCE_CONFIDENCE_V2",
+        "MASTERY_STATUS_POLICY_V2", null, Set.of(), "interaction", null);
   }
 
   @Test

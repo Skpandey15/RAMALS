@@ -2,7 +2,12 @@ package io.ramals.learningplatform.release;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.ramals.learningplatform.assessment.DiagnosticForm;
+import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
+import io.ramals.learningplatform.assessment.EligibleItem;
+import io.ramals.learningplatform.assessment.SelectedItem;
 import io.ramals.learningplatform.assessment.ScoredResponse;
 import io.ramals.learningplatform.ai.contract.AiEvaluatedResponseType;
 import io.ramals.learningplatform.ai.contract.AssessmentEvaluationContext;
@@ -17,6 +22,7 @@ import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.De
 import io.ramals.learningplatform.assessmentevaluation.EvaluationRubricScorePolicy;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DimensionResult;
 import io.ramals.learningplatform.evidence.Evidence;
+import io.ramals.learningplatform.evidence.EvidenceCoverage;
 import io.ramals.learningplatform.grounding.GroundedContext;
 import io.ramals.learningplatform.grounding.GroundedContextItem;
 import io.ramals.learningplatform.grounding.GroundedContextItem.ContextAuthority;
@@ -36,7 +42,10 @@ import io.ramals.learningplatform.mastery.ConfidenceInputs;
 import io.ramals.learningplatform.mastery.EvidenceConfidenceCalculator;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.mastery.MasteryStatus;
+import io.ramals.learningplatform.curriculum.MasteryDifficultyBand;
+import io.ramals.learningplatform.mastery.EvidenceConfidenceCalculatorV2;
 import io.ramals.learningplatform.mastery.MasteryStatusPolicy;
+import io.ramals.learningplatform.mastery.MasteryStatusPolicyV2;
 import io.ramals.learningplatform.mastery.WeightedMasteryCalculator;
 import io.ramals.learningplatform.recommendation.RecommendationPolicy;
 import java.io.IOException;
@@ -46,12 +55,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -85,10 +96,15 @@ class EngineVersionFreezeTests {
   private static final Map<String, Supplier<String>> VECTORS = new LinkedHashMap<>() {{
     put(WeightedMasteryCalculator.ALGORITHM_VERSION, EngineVersionFreezeTests::weightedMastery);
     put(EvidenceConfidenceCalculator.ALGORITHM_VERSION, EngineVersionFreezeTests::evidenceConfidence);
+    put(EvidenceConfidenceCalculatorV2.ALGORITHM_VERSION,
+        EngineVersionFreezeTests::evidenceConfidenceV2);
+    put(MasteryStatusPolicyV2.POLICY_VERSION, EngineVersionFreezeTests::masteryStatusV2);
     put(MasteryStatusPolicy.POLICY_VERSION, EngineVersionFreezeTests::masteryStatus);
     put(ProgressionPolicy.POLICY_VERSION, EngineVersionFreezeTests::progression);
     put(RecommendationPolicy.POLICY_VERSION, EngineVersionFreezeTests::recommendation);
     put(DiagnosticScorer.SCORING_VERSION, EngineVersionFreezeTests::diagnosticScoring);
+    put(DiagnosticFormSelector.SELECTION_POLICY_VERSION,
+        EngineVersionFreezeTests::diagnosticSelection);
     put(LearningSessionPolicy.POLICY_VERSION, EngineVersionFreezeTests::sessionPolicy);
     put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
     put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
@@ -104,10 +120,19 @@ class EngineVersionFreezeTests {
   private static final Map<String, String> FROZEN = Map.ofEntries(
       Map.entry("WEIGHTED_MASTERY_V1", "454b1443c92c1f1cca254e5141abf0a1750b92b2b7a0e430d12cd2f0503c7879"),
       Map.entry("EVIDENCE_CONFIDENCE_V1", "b98317c7dc259b63cd5fd9a7022f7adaf8c34a7154a1485b8dd5b93fc95fac7e"),
+      // Minted with V046, when objective coverage became measurable. V1 above is untouched and
+      // still hashes to the value recorded at v0.1.0-rc2, which is what proves the repair added a
+      // policy rather than editing one.
+      Map.entry("EVIDENCE_CONFIDENCE_V2", "b8d6a9ce0cd3899e3f09773b80d2d892971496f8533678b3bedafa938f9ac8a0"),
+      Map.entry("MASTERY_STATUS_POLICY_V2", "3c24cf3961a952f41d8f5d78df4fb02b30a1da164f89cef8c863bab460bb7485"),
       Map.entry("MASTERY_STATUS_POLICY_V1", "5c57bb23ac7af54267a6b5c0f8ad629608523774088db75570a7bbdb83a84de7"),
       Map.entry("PROGRESSION_POLICY_V1", "08c765033f9a773c4603bc1760ede707cceaac1399937552a831beafbe1fb203"),
       Map.entry("RECOMMENDATION_POLICY_V1", "e048de44798cd9632934901b8354d5b50b036f8045cc66efcd6f229a24cdb212"),
       Map.entry("DIAGNOSTIC_SCORING_V1", "ee904dc57a615550d732e50bfd51fec72011db0e5b9a53a6f54c2d1d0ceda305"),
+      // Recorded when form selection was first frozen, at the same moment its policy identifier
+      // was minted. Nothing has been written under it yet, which is the only time an entry here
+      // may be added rather than a new version identifier minted.
+      Map.entry("DIAGNOSTIC_SELECTION_V1", "10a6138a21877206cfae74dce1717c81b644958fe3cd4e3ddc60e446ecf2a1a4"),
       Map.entry("SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647"),
       Map.entry("GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad"),
       Map.entry("PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a"),
@@ -245,6 +270,103 @@ class EngineVersionFreezeTests {
         new ScoredResponse("KAFKA_BROKER", 4, false),
         new ScoredResponse("KAFKA_TOPIC", 3, true),
         new ScoredResponse("KAFKA_TOPIC", 3, true)))).append('\n');
+    return out.toString();
+  }
+
+  /**
+   * Form selection over a fixed pool and fixed seeds. The selector takes its randomness as an
+   * argument precisely so this is possible: a seeded {@link Random} makes every draw reproducible,
+   * and a change to a coverage pass, a preference tiebreak, or the presentation shuffle moves the
+   * hash even though the output is nominally random.
+   */
+  private static String diagnosticSelection() {
+    DiagnosticFormProperties properties = new DiagnosticFormProperties();
+    properties.setTargetSize(6);
+    properties.setRecencyWindowDays(90);
+    DiagnosticFormSelector selector = new DiagnosticFormSelector(properties);
+    Instant now = Instant.parse("2026-08-15T00:00:00Z");
+    List<EligibleItem> pool = List.of(
+        eligibleItem(1, "KAFKA_BROKER", "FOUNDATIONAL", null),
+        eligibleItem(2, "KAFKA_BROKER", "FOUNDATIONAL", now.minus(2, ChronoUnit.DAYS)),
+        eligibleItem(3, "KAFKA_TOPIC", "FOUNDATIONAL", null),
+        eligibleItem(4, "KAFKA_TOPIC", "INTERMEDIATE", now.minus(30, ChronoUnit.DAYS)),
+        eligibleItem(5, "KAFKA_PARTITION", "INTERMEDIATE", null),
+        eligibleItem(6, "KAFKA_PARTITION", "ADVANCED", now.minus(10, ChronoUnit.DAYS)),
+        eligibleItem(7, "KAFKA_ACKS", "ADVANCED", null),
+        eligibleItem(8, "KAFKA_ACKS", "FOUNDATIONAL", null));
+
+    StringBuilder out = new StringBuilder();
+    out.append(selector.recencyHorizon(now)).append('\n');
+    for (int seed = 0; seed < 5; seed++) {
+      DiagnosticForm form = selector.select(pool, new Random(seed));
+      out.append(form.poolSize()).append('|')
+          .append(form.skillsCovered()).append('|')
+          .append(form.difficultiesCovered()).append('|')
+          .append(form.recentlyPresentedReused()).append('\n');
+      for (SelectedItem item : form.items()) {
+        out.append(item.presentationOrder()).append(':')
+            .append(item.itemVersionId()).append(':')
+            .append(item.reason()).append('\n');
+      }
+    }
+    return out.toString();
+  }
+
+  private static EligibleItem eligibleItem(
+      int index, String skillCode, String difficulty, Instant lastPresentedAt) {
+    return new EligibleItem(
+        UUID.fromString("01900000-0000-7000-8000-00000000041" + index),
+        skillCode, difficulty, lastPresentedAt);
+  }
+
+  /**
+   * V2 confidence over the same vectors V1 is frozen on, plus the case V1 could never reach: a
+   * genuine objective coverage above zero. The first three rows therefore hash the claim that the
+   * arithmetic is unchanged, and the last hashes the behaviour that is new.
+   */
+  private static String evidenceConfidenceV2() {
+    EvidenceConfidenceCalculatorV2 calculator = new EvidenceConfidenceCalculatorV2();
+    StringBuilder out = new StringBuilder();
+    out.append(calculator.compute(new ConfidenceInputs(0, 5, 0, 0, 0, List.of()))).append('\n');
+    out.append(calculator.compute(new ConfidenceInputs(
+        1, 5, 0, 1, 0, List.of(new BigDecimal("1.0000"))))).append('\n');
+    out.append(calculator.compute(new ConfidenceInputs(
+        5, 5, 0, 1, 30, List.of(new BigDecimal("1.0000"), new BigDecimal("0.5000"),
+            new BigDecimal("0.7500"), new BigDecimal("1.0000"), new BigDecimal("0.2500")))))
+        .append('\n');
+    out.append(calculator.compute(new ConfidenceInputs(
+        5, 5, 2, 2, 0, List.of(new BigDecimal("1.0000"), new BigDecimal("1.0000"),
+            new BigDecimal("1.0000"), new BigDecimal("1.0000"), new BigDecimal("1.0000")))))
+        .append('\n');
+    return out.toString();
+  }
+
+  /** V2 band gating across every combination of confident/not and covered/not. */
+  private static String masteryStatusV2() {
+    MasteryStatusPolicyV2 policy = new MasteryStatusPolicyV2();
+    BigDecimal threshold = new BigDecimal("0.7500");
+    Set<MasteryDifficultyBand> required =
+        Set.of(MasteryDifficultyBand.EASY, MasteryDifficultyBand.MEDIUM);
+    StringBuilder out = new StringBuilder();
+    for (MasteryStatus provisional : MasteryStatus.values()) {
+      for (String confidence : List.of("0.7400", "0.7500", "1.0000")) {
+        for (Set<MasteryDifficultyBand> covered : List.of(
+            Set.<MasteryDifficultyBand>of(),
+            Set.of(MasteryDifficultyBand.EASY),
+            Set.of(MasteryDifficultyBand.EASY, MasteryDifficultyBand.MEDIUM),
+            Set.of(MasteryDifficultyBand.EASY, MasteryDifficultyBand.MEDIUM,
+                MasteryDifficultyBand.HARD))) {
+          out.append(provisional).append('|').append(confidence).append('|')
+              .append(covered.stream().map(Enum::name).sorted().toList()).append("->")
+              .append(policy.refine(
+                  provisional, new BigDecimal(confidence), threshold, required, covered))
+              .append('\n');
+        }
+      }
+    }
+    // A skill that requires no band is satisfied by nothing having been covered.
+    out.append(policy.refine(MasteryStatus.MASTERED, new BigDecimal("1.0000"), threshold,
+        Set.of(), Set.of())).append('\n');
     return out.toString();
   }
 
@@ -451,7 +573,8 @@ class EngineVersionFreezeTests {
         UUID.fromString("01900000-0000-7000-8000-00000000000d"),
         DiagnosticScorer.SCORING_VERSION, null, "lineage",
         new BigDecimal(normalizedScore), new BigDecimal(normalizedScore),
-        itemsAnswered, itemsAnswered, "interaction", Instant.EPOCH, Instant.EPOCH);
+        itemsAnswered, itemsAnswered, EvidenceCoverage.none(), "interaction",
+        Instant.EPOCH, Instant.EPOCH);
   }
 
   private static MasterySnapshot snapshot(MasteryStatus status, String score) {
@@ -463,7 +586,8 @@ class EngineVersionFreezeTests {
         1, new BigDecimal(score), status, new BigDecimal("0.70"),
         new BigDecimal("0.80"), new BigDecimal("0.70"), 4, 12,
         WeightedMasteryCalculator.ALGORITHM_VERSION,
-        EvidenceConfidenceCalculator.ALGORITHM_VERSION,
+        EvidenceConfidenceCalculator.ALGORITHM_VERSION, MasteryStatusPolicy.POLICY_VERSION,
+        null, java.util.Set.of(),
         "interaction", Instant.EPOCH);
   }
 

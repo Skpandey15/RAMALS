@@ -8,6 +8,64 @@ import {
   type SubmissionResult,
 } from './api';
 
+/**
+ * The result of one diagnostic: how each skill scored, which ones came out weakest, and what the
+ * score does and does not yet establish.
+ *
+ * <p>The last part matters. A diagnostic sets a starting hypothesis; it does not confer mastery.
+ * A learner who answers everything correctly and then sees INSUFFICIENT_EVIDENCE on the mastery
+ * map below will read that as a bug unless this panel has already told them why one question per
+ * skill is not enough evidence to trust a score, however good the score is.
+ */
+function DiagnosticResult({ result }: { result: SubmissionResult }) {
+  const scores = result.skillScores ?? [];
+  const correct = scores.reduce((total, score) => total + score.itemsCorrect, 0);
+  const weakest = scores.filter((score) => score.itemsCorrect < score.itemsAnswered);
+
+  return (
+    <div className="result">
+      <h3>Diagnostic complete</h3>
+      <p>
+        You answered {correct} of {result.itemsAnswered} correctly.
+      </p>
+
+      {scores.length > 0 && (
+        <table className="mastery-table">
+          <caption className="visually-hidden">Diagnostic score per skill</caption>
+          <thead>
+            <tr>
+              <th scope="col">Skill</th>
+              <th scope="col">Correct</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scores.map((score) => (
+              <tr key={score.skillCode}>
+                <th scope="row">{score.skillCode}</th>
+                <td>
+                  {score.itemsCorrect} / {score.itemsAnswered}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {weakest.length > 0 && (
+        <p>
+          Weakest so far: {weakest.map((score) => score.skillCode).join(', ')}.
+        </p>
+      )}
+
+      <p>
+        This is a starting point, not a verdict. Your mastery map and recommended next steps below
+        have been updated — skills still marked INSUFFICIENT_EVIDENCE need more practice before
+        the score behind them can be trusted.
+      </p>
+    </div>
+  );
+}
+
 /** Drives the curated Kafka diagnostic: start an attempt, answer items, submit for scoring. */
 export function DiagnosticPanel({ onCompleted }: { onCompleted: () => void }) {
   const [attempt, setAttempt] = useState<AttemptDetail | null>(null);
@@ -101,12 +159,7 @@ export function DiagnosticPanel({ onCompleted }: { onCompleted: () => void }) {
         </form>
       )}
 
-      {result && (
-        <div className="result">
-          <h3>Diagnostic complete</h3>
-          <p>Scored {result.itemsAnswered} item(s) with {result.scoringVersion}.</p>
-        </div>
-      )}
+      {result && <DiagnosticResult result={result} />}
     </section>
   );
 }

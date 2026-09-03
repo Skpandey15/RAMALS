@@ -3,6 +3,8 @@ package io.ramals.learningplatform.validation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.AttemptCreation;
 import io.ramals.learningplatform.assessment.DiagnosticItem;
@@ -32,11 +34,11 @@ import io.ramals.learningplatform.learning.ProgressionService;
 import io.ramals.learningplatform.learning.ProgressionState;
 import io.ramals.learningplatform.learning.SessionTransitionRequest;
 import io.ramals.learningplatform.learning.SkillProgression;
-import io.ramals.learningplatform.mastery.EvidenceConfidenceCalculator;
+import io.ramals.learningplatform.mastery.EvidenceConfidenceCalculatorV2;
 import io.ramals.learningplatform.mastery.MasteryRepository;
 import io.ramals.learningplatform.mastery.MasterySnapshot;
 import io.ramals.learningplatform.mastery.MasteryService;
-import io.ramals.learningplatform.mastery.MasteryStatusPolicy;
+import io.ramals.learningplatform.mastery.MasteryStatusPolicyV2;
 import io.ramals.learningplatform.mastery.WeightedMasteryCalculator;
 import io.ramals.learningplatform.recommendation.DecisionRecord;
 import io.ramals.learningplatform.recommendation.LearningRecommendation;
@@ -168,10 +170,10 @@ class MvpZeroValidationTests {
         new CurriculumService(new CurriculumRepository(jdbc), new CurriculumGraphValidator());
 
     masteryService = new MasteryService(masteryRepository, evidence, new WeightedMasteryCalculator(),
-        new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
+        new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());
     RecommendationService recommendationService =
         new RecommendationService(new RecommendationPolicy(), recommendations, learnerService);
-    diagnostics = new DiagnosticService(assessments, learnerService);
+    diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
     submissions = new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorer(),
         new EvidenceService(evidence), masteryService, recommendationService, mapper);
     progression = new ProgressionService(curriculumService, learnerService,
@@ -410,5 +412,13 @@ class MvpZeroValidationTests {
       }
       return result.getString(1);
     }
+  }
+
+  /**
+   * The production selector on its default settings, so these fixtures assemble forms exactly the
+   * way a deployment does rather than through a stand-in that could drift from it.
+   */
+  private static DiagnosticFormSelector formSelector() {
+    return new DiagnosticFormSelector(new DiagnosticFormProperties());
   }
 }

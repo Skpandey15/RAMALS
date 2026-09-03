@@ -93,7 +93,7 @@ class DiagnosticPersistenceIntegrationTests {
       runtimeJdbc = new JdbcTemplate(dataSource);
       assessments = new AssessmentRepository(runtimeJdbc, JsonMapper.builder().build());
       learners = new LearnerRepository(runtimeJdbc);
-      diagnostics = new DiagnosticService(assessments, new LearnerService(learners));
+      diagnostics = new DiagnosticService(assessments, new LearnerService(learners), formSelector());
     }
   }
 
@@ -133,7 +133,8 @@ class DiagnosticPersistenceIntegrationTests {
 
     Learner learner = learners.findBySubject("pg-one-active").orElseThrow();
     UUID versionId = active.attempt().assessmentVersionId();
-    assertThatThrownBy(() -> assessments.insertAttempt(learner.id(), versionId, "key-3"))
+    assertThatThrownBy(() -> assessments.insertAttempt(
+            learner.id(), versionId, "key-3", DiagnosticFormSelector.SELECTION_POLICY_VERSION))
         .isInstanceOf(DuplicateKeyException.class);
 
     Integer active_ = runtimeJdbc.queryForObject("""
@@ -200,4 +201,11 @@ class DiagnosticPersistenceIntegrationTests {
     }
   }
 
+  /**
+   * The production selector on its default settings, so these fixtures assemble forms exactly the
+   * way a deployment does rather than through a stand-in that could drift from it.
+   */
+  private static DiagnosticFormSelector formSelector() {
+    return new DiagnosticFormSelector(new DiagnosticFormProperties());
+  }
 }

@@ -11,5 +11,6 @@ public record SkillEvidenceInput(
     BigDecimal observedScore,
     BigDecimal normalizedScore,
     int itemsAnswered,
-    int itemsCorrect) {
+    int itemsCorrect,
+    EvidenceCoverage coverage) {
 }

@@ -6,6 +6,7 @@ import io.ramals.learningplatform.admin.ContentVersionNotFoundException;
 import io.ramals.learningplatform.admin.InvalidContentTransitionException;
 import io.ramals.learningplatform.assessment.AttemptNotFoundException;
 import io.ramals.learningplatform.assessment.DiagnosticNotFoundException;
+import io.ramals.learningplatform.assessment.EmptyItemPoolException;
 import io.ramals.learningplatform.assessment.InvalidAttemptStateException;
 import io.ramals.learningplatform.assessment.InvalidIdempotencyKeyException;
 import io.ramals.learningplatform.assessment.InvalidSubmissionException;
@@ -159,7 +160,28 @@ public class ApiExceptionHandler {
         HttpStatus.UNPROCESSABLE_ENTITY,
         "Unknown assessment item",
         "UNKNOWN_ASSESSMENT_ITEM",
-        "A submitted response references an item outside this assessment.",
+        "A submitted response references an item this attempt did not present.",
+        request);
+  }
+
+  /**
+   * A published assessment version with nothing selectable in it. V017 makes that unreachable
+   * through publication, so this is a broken invariant rather than anything the learner did --
+   * hence a 500 with a code an operator can search for, not a 4xx blaming the request.
+   */
+  @ExceptionHandler(EmptyItemPoolException.class)
+  ResponseEntity<ApiProblem> handleEmptyItemPool(
+      EmptyItemPoolException exception, HttpServletRequest request) {
+    LOGGER.atError()
+        .setCause(exception)
+        .addKeyValue("errorCode", "DIAGNOSTIC_FORM_UNAVAILABLE")
+        .addKeyValue("operation", "assessment.form.selected")
+        .log("Diagnostic form could not be assembled");
+    return problem(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        "Diagnostic unavailable",
+        "DIAGNOSTIC_FORM_UNAVAILABLE",
+        "The diagnostic could not be assembled.",
         request);
   }
 

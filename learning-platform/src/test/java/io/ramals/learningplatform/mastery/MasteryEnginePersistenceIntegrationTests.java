@@ -3,12 +3,17 @@ package io.ramals.learningplatform.mastery;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
 import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.curriculum.MasteryDifficultyBand;
+import io.ramals.learningplatform.evidence.Evidence;
+import io.ramals.learningplatform.evidence.EvidenceCoverage;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.LearnerRepository;
@@ -23,6 +28,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -59,6 +65,9 @@ class MasteryEnginePersistenceIntegrationTests {
   private static final UUID BROKER_SKILL = UUID.fromString("01900000-0000-7000-8000-000000000101");
   private static final UUID TOPIC_SKILL = UUID.fromString("01900000-0000-7000-8000-000000000102");
   private static final UUID ITEM_BROKER = UUID.fromString("01900000-0000-7000-8000-000000000411");
+  // BROKER_RESPONSIBILITY: the objective V046 tags ITEM_BROKER against.
+  private static final UUID BROKER_OBJECTIVE =
+      UUID.fromString("01900000-0000-7000-8000-000000000301");
   private static final String INTERACTION_ID = "01920000-0000-7000-8000-0000000000e1";
 
   private static String databaseUrl;
@@ -126,10 +135,10 @@ class MasteryEnginePersistenceIntegrationTests {
       masteryRepository = new MasteryRepository(runtimeJdbc);
       masteryService = new MasteryService(
           masteryRepository, evidence, new WeightedMasteryCalculator(),
-          new EvidenceConfidenceCalculator(), new MasteryStatusPolicy());
+          new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());
       AssessmentRepository assessments = new AssessmentRepository(runtimeJdbc, mapper);
       LearnerService learnerService = new LearnerService(learners);
-      diagnostics = new DiagnosticService(assessments, learnerService);
+      diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
@@ -202,7 +211,8 @@ class MasteryEnginePersistenceIntegrationTests {
         learnerId, BROKER_SKILL, CURRICULUM_VERSION, 1, new BigDecimal("0.5000"),
         MasteryStatus.NEEDS_PRACTICE, new BigDecimal("0.8000"), new BigDecimal("0.3300"),
         new BigDecimal("0.7500"), 1, 1, WeightedMasteryCalculator.ALGORITHM_VERSION,
-        EvidenceConfidenceCalculator.ALGORITHM_VERSION, INTERACTION_ID);
+        EvidenceConfidenceCalculatorV2.ALGORITHM_VERSION, MasteryStatusPolicyV2.POLICY_VERSION,
+        null, Set.of(), INTERACTION_ID);
     assertThatThrownBy(() -> transactionTemplate.execute(
         status -> masteryRepository.insertSnapshot(draft)))
         .isInstanceOf(DuplicateKeyException.class);
@@ -231,11 +241,48 @@ class MasteryEnginePersistenceIntegrationTests {
     // one diagnostic item is below the required evidence volume, so the skill stays insufficient
     assertThat(broker.status()).isEqualTo(MasteryStatus.INSUFFICIENT_EVIDENCE);
     assertThat(broker.interactionId()).isEqualTo(INTERACTION_ID);
-    // sparse diagnostic: 0.40*0.20 + 0.35*0 + 0.15*1 + 0.10*1 = 0.3300, below the confidence threshold
-    assertThat(broker.evidenceConfidence()).isEqualByComparingTo("0.3300");
+    // Sparse diagnostic under V2: 0.40*0.20 + 0.35*1.00 + 0.15*1 + 0.10*1 = 0.6800, still below
+    // the confidence threshold. Under V1 the same submission produced 0.3300, because objective
+    // coverage was passed as a literal 0 and could never be anything else. The 0.35 that appears
+    // here is the whole V046 chain working end to end on live data: the answered item resolves
+    // through core.assessment_item_objective to BROKER_RESPONSIBILITY, that identifier is written
+    // onto the evidence row, and the mastery service intersects it with the objectives this skill
+    // requires. Nothing in this assertion can pass unless every one of those steps did.
+    assertThat(broker.evidenceConfidence()).isEqualByComparingTo("0.6800");
     assertThat(broker.confidenceThreshold()).isEqualByComparingTo("0.7500");
+    assertThat(broker.objectiveCoverage()).isEqualByComparingTo("1.0000");
+    // FOUNDATIONAL maps to EASY, and the band arrives as a band rather than as an item difficulty.
+    assertThat(broker.coveredDifficultyBands()).containsExactly(MasteryDifficultyBand.EASY);
     assertThat(broker.confidenceAlgorithmVersion())
-        .isEqualTo(EvidenceConfidenceCalculator.ALGORITHM_VERSION);
+        .isEqualTo(EvidenceConfidenceCalculatorV2.ALGORITHM_VERSION);
+    assertThat(broker.statusPolicyVersion()).isEqualTo(MasteryStatusPolicyV2.POLICY_VERSION);
+  }
+
+  @Test
+  void evidenceCarriesTheObjectivesAndBandsTheAttemptActuallyMeasured() {
+    wire();
+    UUID attemptId = diagnostics.createAttempt("m-coverage", "kafka", "key-1").attempt().id();
+    UUID learnerId = learners.findBySubject("m-coverage").orElseThrow().id();
+
+    MDC.put("interactionId", INTERACTION_ID);
+    try {
+      DiagnosticSubmissionRequest request = new DiagnosticSubmissionRequest(List.of(
+          new ItemResponse(ITEM_BROKER.toString(), List.of("B"))));
+      transactionTemplate.execute(status ->
+          submissions.submit("m-coverage", "kafka", attemptId.toString(), request));
+    } finally {
+      MDC.remove("interactionId");
+    }
+
+    // Read straight off the ledger row rather than through the engine, so this asserts what was
+    // persisted and not what a calculator happened to derive.
+    Evidence recorded = evidence.findByLearnerAndSkill(learnerId, BROKER_SKILL).stream()
+        .filter(row -> "DIAGNOSTIC".equals(row.evidenceType()))
+        .findFirst()
+        .orElseThrow();
+    assertThat(recorded.coverage().objectiveIds()).containsExactly(BROKER_OBJECTIVE);
+    assertThat(recorded.coverage().difficultyBands())
+        .containsExactly(MasteryDifficultyBand.EASY);
   }
 
   @Test
@@ -245,7 +292,8 @@ class MasteryEnginePersistenceIntegrationTests {
     UUID attemptId = diagnostics.createAttempt("m-repro", "kafka", "key-1").attempt().id();
     evidence.appendDiagnosticEvidence(
         learnerId, BROKER_SKILL, attemptId, ASSESSMENT_VERSION, DiagnosticScorer.SCORING_VERSION,
-        "REPRO:1", new BigDecimal("0.6000"), new BigDecimal("0.6000"), 5, 3, INTERACTION_ID);
+        "REPRO:1", new BigDecimal("0.6000"), new BigDecimal("0.6000"), 5, 3,
+        EvidenceCoverage.none(), INTERACTION_ID);
 
     MasterySnapshot first = recomputeInTx(learnerId, BROKER_SKILL);
     MasterySnapshot second = recomputeInTx(learnerId, BROKER_SKILL);
@@ -273,5 +321,13 @@ class MasteryEnginePersistenceIntegrationTests {
       }
       return result.getString(1);
     }
+  }
+
+  /**
+   * The production selector on its default settings, so these fixtures assemble forms exactly the
+   * way a deployment does rather than through a stand-in that could drift from it.
+   */
+  private static DiagnosticFormSelector formSelector() {
+    return new DiagnosticFormSelector(new DiagnosticFormProperties());
   }
 }

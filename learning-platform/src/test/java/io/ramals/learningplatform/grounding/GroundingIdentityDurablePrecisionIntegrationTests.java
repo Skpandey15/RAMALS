@@ -6,6 +6,7 @@ import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
 import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.evidence.Evidence;
+import io.ramals.learningplatform.evidence.EvidenceCoverage;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.execution.AiExecutionRepository;
 import io.ramals.learningplatform.execution.DiagnosticCommissionContext;
@@ -312,7 +313,8 @@ class GroundingIdentityDurablePrecisionIntegrationTests {
         """, attempt, learnerId, ASSESSMENT, lineage);
     return new EvidenceRepository(jdbc).appendDiagnosticEvidence(
         learnerId, SKILL, attempt, ASSESSMENT, "diagnostic-v1", lineage,
-        new BigDecimal("0.8000"), new BigDecimal("0.8000"), 5, 4, lineage);
+        new BigDecimal("0.8000"), new BigDecimal("0.8000"), 5, 4,
+        EvidenceCoverage.none(), lineage);
   }
 
   private static void appendMastery(JdbcTemplate jdbc, UUID learnerId) {
@@ -321,7 +323,8 @@ class GroundingIdentityDurablePrecisionIntegrationTests {
     mastery.insertSnapshot(new MasterySnapshotDraft(
         learnerId, SKILL, CURRICULUM, 1, new BigDecimal("0.8000"), MasteryStatus.MASTERED,
         new BigDecimal("0.8000"), new BigDecimal("0.9000"), new BigDecimal("0.7500"),
-        5, 5, "mastery-v1", "confidence-v1", "precision-integration"));
+        5, 5, "mastery-v1", "confidence-v1", "status-v1", null, Set.of(),
+        "precision-integration"));
   }
 
   private static JdbcTemplate runtimeJdbc() {

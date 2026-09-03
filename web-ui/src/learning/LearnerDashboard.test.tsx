@@ -102,7 +102,8 @@ describe('LearnerDashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: /submit diagnostic/i }));
 
     expect(await screen.findByText(/diagnostic complete/i)).toBeInTheDocument();
-    const masteryTable = await screen.findByRole('table');
+    // Named explicitly: the completed diagnostic renders its own per-skill table above this one.
+    const masteryTable = await screen.findByRole('table', { name: /mastery score/i });
     expect(within(masteryTable).getByRole('rowheader', { name: 'KAFKA_BROKER' })).toBeInTheDocument();
     expect(within(masteryTable).getByText('INSUFFICIENT_EVIDENCE')).toBeInTheDocument();
     expect(await screen.findByText(/collect more evidence/i)).toBeInTheDocument();
@@ -115,7 +116,7 @@ describe('LearnerDashboard', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: /your kafka learning/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 2, name: /kafka diagnostic/i })).toBeInTheDocument();
-    expect(await screen.findByRole('table')).toHaveAccessibleName(/mastery score/i);
+    expect(await screen.findByRole('table', { name: /mastery score/i })).toBeInTheDocument();
   });
 
   it('surfaces a support code on failure without exposing tokens', async () => {

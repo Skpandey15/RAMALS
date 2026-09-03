@@ -31,6 +31,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
@@ -1374,8 +1375,8 @@ class LearningWorkflowConcurrencyIntegrationTests {
             new MasterySnapshotDraft(
                 learnerId, SKILL, CURRICULUM, next, new BigDecimal("0.6000"),
                 MasteryStatus.NEEDS_PRACTICE, new BigDecimal("0.8000"), new BigDecimal("0.7000"),
-                new BigDecimal("0.7000"), 3, 5, "WEIGHTED_MASTERY_V1", "EVIDENCE_CONFIDENCE_V1",
-                "interaction-lineage"));
+                new BigDecimal("0.7000"), 3, 5, "WEIGHTED_MASTERY_V1", "EVIDENCE_CONFIDENCE_V2",
+                "MASTERY_STATUS_POLICY_V2", null, Set.of(), "interaction-lineage"));
     mastery.advanceAggregateVersion(learnerId, SKILL, CURRICULUM, next);
     return snapshot;
   }

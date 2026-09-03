@@ -3,6 +3,7 @@ package io.ramals.learningplatform.assessment;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.evidence.Evidence;
+import io.ramals.learningplatform.evidence.EvidenceCoverage;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.evidence.SkillEvidenceInput;
 import io.ramals.learningplatform.learner.Learner;
@@ -86,8 +87,13 @@ public class DiagnosticSubmissionService {
   }
 
   private SubmissionResult score(AssessmentAttempt attempt, DiagnosticSubmissionRequest request) {
+    // Scoped to the attempt's selected form, not to the assessment version. With per-attempt
+    // selection the pool is wider than what this learner was asked, so a response naming an
+    // unselected item must be rejected rather than scored into evidence for a question that was
+    // never on their paper.
     Map<UUID, AssessmentItemScoringView> views =
-        repository.findItemScoringViews(attempt.assessmentVersionId()).stream()
+        repository.findPresentedItemScoringViews(attempt.id(), attempt.assessmentVersionId())
+            .stream()
             .collect(Collectors.toMap(AssessmentItemScoringView::itemVersionId, Function.identity()));
 
     Set<UUID> answered = new HashSet<>();
@@ -123,10 +129,15 @@ public class DiagnosticSubmissionService {
 
   private List<Evidence> recordEvidence(
       AssessmentAttempt attempt, SubmissionResult result, String interactionId) {
+    // What each skill was measured on, read back from the responses this transaction just wrote.
+    // Coverage travels with the evidence rather than being re-derived at mastery time, so a later
+    // change to content cannot retroactively alter what an observation is deemed to have covered.
+    Map<String, EvidenceCoverage> coverage = repository.findAttemptCoverage(attempt.id());
     List<SkillEvidenceInput> observations = result.skillScores().stream()
         .map(score -> new SkillEvidenceInput(
             score.skillCode(), score.observedScore(), score.normalizedScore(),
-            score.itemsAnswered(), score.itemsCorrect()))
+            score.itemsAnswered(), score.itemsCorrect(),
+            coverage.getOrDefault(score.skillCode(), EvidenceCoverage.none())))
         .toList();
     return evidenceService.recordDiagnosticEvidence(
         attempt.learnerId(), attempt.id(), attempt.assessmentVersionId(),
