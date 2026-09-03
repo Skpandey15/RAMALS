@@ -147,3 +147,8 @@ if ($script:failures -gt 0) {
   exit 1
 }
 Write-Host "All Jenkins CD rollback state checks passed."
+# Explicit, because the fakes above deliberately set $LASTEXITCODE to 1 to simulate a kubectl
+# failure, and a script that ends without exiting inherits it. Without this the suite printed that
+# every check passed and then failed the build -- which is the same defect in the other direction:
+# an exit status that does not mean what the output says.
+exit 0
