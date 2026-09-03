@@ -152,15 +152,32 @@ Write-Host "[branch] $branch resolves to $commit"
 $shortCommit = $commit.Substring(0, 7)
 $ghcrEvidence = Join-Path $evidenceDirectory "ghcr-images.json"
 
+# Whether this run has reached the point where the namespace can have changed. Everything before
+# bootstrap -- resolving the branch, probing images, mirroring into the local registry -- leaves the
+# previous deployment running, so a failure there must not record that a branch is deployed. The
+# state file is read by the release path to decide what a rollback returns to; a lie here becomes a
+# wrong rollback later.
+$clusterTouched = $false
+
 try {
   # Checked before anything is touched, and cheaply. prepare-ghcr-images.ps1 would otherwise poll
-  # for twenty minutes holding the only Windows agent, and the usual reason the image is missing is
+  # for twenty minutes holding the only Windows agent, and the usual reason an image is missing is
   # simply that nobody published one for this branch -- which is a sentence, not a wait.
-  $probe = "ghcr.io/skpandey15/ramals-learning-platform:sha-$commit"
-  & docker manifest inspect $probe *> $null
-  if ($LASTEXITCODE -ne 0) {
-    throw ("No published image for $branch ($shortCommit). Release only publishes from main and " +
-      "tags, so a branch needs one dispatched first:`n" +
+  #
+  # All three application repositories, not just the backend. A release publishes them together, so
+  # in practice they are all present or all absent -- but "in practice" is what makes a fast check
+  # that only covers one of them worse than none: it reports ready and then waits out the full
+  # twenty minutes on the image it never looked at.
+  $missingImages = @()
+  foreach ($repository in @('ramals-learning-platform', 'ramals-web-ui', 'ramals-ai')) {
+    $probe = "ghcr.io/skpandey15/${repository}:sha-$commit"
+    & docker manifest inspect $probe *> $null
+    if ($LASTEXITCODE -ne 0) { $missingImages += $probe }
+  }
+  if ($missingImages.Count -gt 0) {
+    throw ("No published image for $branch ($shortCommit): " +
+      ($missingImages -join ', ') + "`n" +
+      "Release only publishes from main and tags, so a branch needs one dispatched first:`n" +
       "    gh workflow run release.yml --ref $branch`n" +
       "Wait for it to finish, then re-run this job.")
   }
@@ -172,6 +189,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Preparing images for $branch failed." }
 
   Write-Host "[branch] Deploying $branch to $Namespace (this replaces what is running)..."
+  $clusterTouched = $true
   & pwsh -NoLogo -NoProfile -NonInteractive -File `
     (Join-Path $repositoryRoot "deploy\k8s\dev\bootstrap.ps1") `
     -Namespace $Namespace -ClusterName $ClusterName `
@@ -226,15 +244,24 @@ try {
   Write-Host "[branch] Return with RESTORE_KNOWN_GOOD -> main $($cdState['known_good_commit'])."
 } catch {
   $failureReason = ConvertTo-PlainLogText $_.Exception.Message
-  $cdState['state'] = 'BRANCH_DEPLOYED'
-  $cdState['current_commit'] = $commit
-  Set-RamalsCdState -StatePath $statePath -State $cdState
+
+  # Only claim the branch is deployed if the deployment actually started. A branch whose images
+  # were never published, or never mirrored, has changed nothing: the previous deployment is still
+  # running, and saying otherwise would send a later rollback to the wrong place.
+  if ($clusterTouched) {
+    $cdState['state'] = 'BRANCH_DEPLOYED'
+    $cdState['current_commit'] = $commit
+    Set-RamalsCdState -StatePath $statePath -State $cdState
+  } else {
+    Write-Host "[branch] Failed before the cluster was touched; $Namespace is unchanged."
+  }
 
   [ordered]@{
     outcome = "FAILED"
     mode = "BRANCH"
     branch = $branch
     branchCommit = $commit
+    clusterChanged = $clusterTouched
     knownGoodMainCommit = [string]$cdState['known_good_commit']
     approvedBy = $approvedBy
     buildNumber = $env:BUILD_NUMBER

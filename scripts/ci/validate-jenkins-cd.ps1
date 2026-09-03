@@ -80,6 +80,11 @@ Assert-True ($deploymentBoundary -match "known_good_commit'\]\s*=\s*\`$head[\s\S
   "Only a release that passed its smoke suite may become the known-good rollback target."
 Assert-True ($jenkinsfile.Contains('FORCE_HELD_RELEASE')) `
   "Overriding a held release must be an explicit, human decision in the job."
+# "What was running" and "the last thing that worked" are the same on a quiet environment and
+# different the moment RAMALS-branch has been used. Restoring the former would put a branch back and
+# leave the state file naming a main release that is not deployed.
+Assert-True ($deploymentBoundary -match '\$recordedKnownGood\.Count -gt 0[\s\S]*\$knownGoodImages = \$recordedKnownGood') `
+  "A rollback must prefer the last release that passed smoke over whatever is currently running."
 
 # --- the branch deployment path ------------------------------------------------------------------
 #

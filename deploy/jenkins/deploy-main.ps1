@@ -131,11 +131,35 @@ try {
 
   # Captured before anything is applied, because after the apply the cluster no longer knows what
   # it was running. This is the whole difference between a failed deployment and an outage.
-  $knownGoodImages = Get-RamalsWorkloadImages -Namespace $Namespace
-  if ($knownGoodImages.Count -gt 0) {
-    Write-Host "[deploy] Known-good workloads captured: $($knownGoodImages.Count)"
+  $liveImages = Get-RamalsWorkloadImages -Namespace $Namespace
+
+  # The rollback target is the last release that PASSED its smoke suite, not merely whatever
+  # happens to be running now. Those are the same thing on a quiet environment and different the
+  # moment RAMALS-branch has been used: a branch occupies ramals-dev without ever becoming a
+  # known-good release, so restoring "what was running" would put the branch back and leave the
+  # state file claiming a main release that is not deployed.
+  $recordedKnownGood = @{}
+  foreach ($workload in ([hashtable]$cdState['known_good_images']).Keys) {
+    $recordedKnownGood[$workload] = [string]$cdState['known_good_images'][$workload]
+  }
+
+  if ($recordedKnownGood.Count -gt 0) {
+    $knownGoodImages = $recordedKnownGood
+    Write-Host ("[deploy] Rollback target: recorded known-good release " +
+      "$($cdState['known_good_commit']) ($($knownGoodImages.Count) workloads)")
+    if ($cdState['state'] -eq 'BRANCH_DEPLOYED') {
+      Write-Host ("[deploy] Note: a branch is currently deployed. A rollback will return to the " +
+        "known-good main release, not to the branch.")
+    }
   } else {
-    Write-Host "[deploy] No running workloads to capture; this deployment has nothing to roll back to."
+    # No release has ever passed here, so the only candidate is what is running. Best effort, and
+    # said out loud rather than implied.
+    $knownGoodImages = $liveImages
+    Write-Host ("[deploy] No recorded known-good release; falling back to the running workloads " +
+      "($($knownGoodImages.Count)).")
+  }
+  if ($knownGoodImages.Count -eq 0) {
+    Write-Host "[deploy] Nothing to roll back to: this deployment cannot be undone automatically."
   }
   $cdState['state'] = 'DEPLOYING'
   $cdState['current_commit'] = $head
