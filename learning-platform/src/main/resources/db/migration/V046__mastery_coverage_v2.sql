@@ -101,15 +101,18 @@ FOR EACH ROW EXECUTE FUNCTION core.validate_assessment_item_objective();
 -- untouched. Evidence that predates this migration therefore carries NULL, which the V2 engine
 -- reads as "covered nothing" -- see the column comments. Nothing is backfilled, because the facts
 -- needed to backfill honestly (which objective an untagged item assessed) do not exist.
+--
+-- The vocabulary check is a column constraint of the ADD COLUMN, not a separate ADD CONSTRAINT.
+-- A rollback restores the previous image and never the schema, so a constraint bolted onto an
+-- existing table can refuse a write that image still makes. This one cannot: it arrives with the
+-- column, and an image that has never heard of the column writes NULL there, which the check
+-- admits. Attaching it to the column makes that argument structural instead of a claim in a comment.
 ALTER TABLE ledger.evidence
   ADD COLUMN covered_objective_ids UUID[],
-  ADD COLUMN covered_difficulty_bands VARCHAR(16)[];
-
-ALTER TABLE ledger.evidence
-  ADD CONSTRAINT ck_evidence_covered_bands_known CHECK (
-    covered_difficulty_bands IS NULL
-    OR covered_difficulty_bands <@ ARRAY['EASY', 'MEDIUM', 'HARD']::VARCHAR(16)[]
-  );
+  ADD COLUMN covered_difficulty_bands VARCHAR(16)[]
+    CONSTRAINT ck_evidence_covered_bands_known
+    CHECK (covered_difficulty_bands IS NULL
+      OR covered_difficulty_bands <@ ARRAY['EASY', 'MEDIUM', 'HARD']::VARCHAR(16)[]);
 
 COMMENT ON COLUMN ledger.evidence.covered_objective_ids IS
   'Learning objectives this observation measured. NULL for evidence recorded before V046, which '
@@ -128,21 +131,17 @@ COMMENT ON COLUMN ledger.evidence.covered_difficulty_bands IS
 -- coverage was the reason, and it could not distinguish a snapshot computed with objective coverage
 -- forced to zero from one computed with objective coverage measured. Both are recorded now, and the
 -- status policy that made the decision is named.
+-- Column constraints again, for the reason given above the evidence columns: each check binds only
+-- the column it is attached to, and that column did not exist for the image a rollback restores.
 ALTER TABLE ledger.mastery_snapshot
   ADD COLUMN status_policy_version VARCHAR(32),
-  ADD COLUMN objective_coverage NUMERIC(5, 4),
-  ADD COLUMN covered_difficulty_bands VARCHAR(16)[];
-
-ALTER TABLE ledger.mastery_snapshot
-  ADD CONSTRAINT ck_mastery_snapshot_objective_coverage CHECK (
-    objective_coverage IS NULL OR (objective_coverage >= 0 AND objective_coverage <= 1)
-  );
-
-ALTER TABLE ledger.mastery_snapshot
-  ADD CONSTRAINT ck_mastery_snapshot_covered_bands_known CHECK (
-    covered_difficulty_bands IS NULL
-    OR covered_difficulty_bands <@ ARRAY['EASY', 'MEDIUM', 'HARD']::VARCHAR(16)[]
-  );
+  ADD COLUMN objective_coverage NUMERIC(5, 4)
+    CONSTRAINT ck_mastery_snapshot_objective_coverage
+    CHECK (objective_coverage IS NULL OR (objective_coverage >= 0 AND objective_coverage <= 1)),
+  ADD COLUMN covered_difficulty_bands VARCHAR(16)[]
+    CONSTRAINT ck_mastery_snapshot_covered_bands_known
+    CHECK (covered_difficulty_bands IS NULL
+      OR covered_difficulty_bands <@ ARRAY['EASY', 'MEDIUM', 'HARD']::VARCHAR(16)[]);
 
 COMMENT ON COLUMN ledger.mastery_snapshot.status_policy_version IS
   'The status policy that decided this status. NULL for snapshots written before V046, all of '

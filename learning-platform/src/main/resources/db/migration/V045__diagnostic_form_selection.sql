@@ -40,13 +40,18 @@ COMMENT ON TABLE core.assessment_attempt_item IS
 -- Names the algorithm that assembled the form, the way assessment scoring records its own version.
 -- Nullable because attempts created before this migration were served the whole pool and were not
 -- assembled by any policy; a value invented for them would be a false provenance claim.
+--
+-- The check is written as a column constraint of the ADD COLUMN rather than as a separate
+-- ADD CONSTRAINT, because that is what makes it safe to roll an image back against. A rollback
+-- restores the previous image and never the schema, so a constraint added to an existing table can
+-- refuse a write that image still makes. This one cannot: it arrives with the column, and the
+-- previous image has never heard of that column, so it writes NULL there -- which the check admits.
+-- Attached to the column, that argument is structural rather than something a reader has to take on
+-- trust from a comment.
 ALTER TABLE core.assessment_attempt
-  ADD COLUMN selection_policy VARCHAR(48);
-
-ALTER TABLE core.assessment_attempt
-  ADD CONSTRAINT ck_assessment_attempt_selection_policy CHECK (
-    selection_policy IS NULL OR length(btrim(selection_policy)) > 0
-  );
+  ADD COLUMN selection_policy VARCHAR(48)
+    CONSTRAINT ck_assessment_attempt_selection_policy
+    CHECK (selection_policy IS NULL OR length(btrim(selection_policy)) > 0);
 
 COMMENT ON COLUMN core.assessment_attempt.selection_policy IS
   'Version of the form-selection policy that assembled this attempt. NULL for attempts that '
