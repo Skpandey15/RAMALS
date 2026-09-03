@@ -58,6 +58,28 @@ DECLARATION = re.compile(r"--\s*expand-contract\s*:\s*(?P<reason>\S.*)$", re.IGN
 # a version is a claim somebody can check against the migration history.
 DECLARATION_NAMES_A_VERSION = re.compile(r"\bV\d{3}\b")
 
+# The second declaration, and deliberately a much narrower one than expand-contract.
+#
+# Replacing a CHECK with a strictly more permissive one is safe to roll an image back against: the
+# previous image writes only values the old predicate already allowed, and those still satisfy the
+# new one. The checker cannot prove that in general -- it would need constraint satisfiability, which
+# the module docstring explains is a rule nobody could predict the behaviour of -- so it is a
+# sentence somebody writes and a reviewer has to disagree with.
+#
+# What keeps it from becoming a bypass is everything it does NOT clear. It applies only to an
+# ``ADD CONSTRAINT <name> CHECK``; only when this same migration also drops a constraint of that
+# same name; only when the declaration names that constraint; and only when it carries a reason.
+# A UNIQUE, FOREIGN KEY, PRIMARY KEY, EXCLUDE or NOT NULL is not a CHECK and is untouched by it, and
+# every other rule -- DROP COLUMN, DROP TABLE, type narrowing, REVOKE -- never consults it at all.
+RELAXES_CONSTRAINT = re.compile(
+    r"--\s*relaxes-constraint\s*:\s*(?P<name>\w+)\s*,\s*(?P<reason>\S.*)$", re.IGNORECASE
+)
+
+# Only a named CHECK qualifies. "ADD CONSTRAINT uq_x UNIQUE" does not match, which is what stops the
+# declaration from being usable to weaken uniqueness.
+ADDED_CHECK_CONSTRAINT = re.compile(r"\bADD\s+CONSTRAINT\s+(\w+)\s+CHECK\b", re.IGNORECASE)
+DROPPED_CONSTRAINT = re.compile(r"\bDROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?(\w+)", re.IGNORECASE)
+
 CREATE_TABLE = re.compile(
     r"\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w.]+)", re.IGNORECASE
 )
@@ -402,6 +424,52 @@ def declarations_by_line(text: str) -> dict[int, str]:
     return found
 
 
+def relaxations_by_line(text: str) -> dict[int, tuple[str, str]]:
+    """Every ``-- relaxes-constraint:`` declaration, by the line it appears on."""
+    found: dict[int, tuple[str, str]] = {}
+    for number, line in enumerate(text.split("\n"), start=1):
+        match = RELAXES_CONSTRAINT.search(line)
+        if match:
+            found[number] = (match.group("name").lower(), match.group("reason").strip())
+    return found
+
+
+def dropped_constraints(statements: list[Statement]) -> set[str]:
+    """Constraint names this migration drops, lowercased."""
+    dropped: set[str] = set()
+    for statement in statements:
+        for match in DROPPED_CONSTRAINT.finditer(statement.text):
+            dropped.add(match.group(1).lower())
+    return dropped
+
+
+def relaxes_a_replaced_check(
+    action: str,
+    start_line: int,
+    relaxations: dict[int, tuple[str, str]],
+    dropped: set[str],
+) -> bool:
+    """Whether a declared, same-named CHECK replacement licences this ADD CONSTRAINT.
+
+    Every clause below is load-bearing:
+
+    * the statement must add a **CHECK** -- a UNIQUE or FOREIGN KEY of the same name is refused;
+    * the declaration must sit on the statement or the line above it, never file-scoped;
+    * the declaration must name the **same** constraint, so it cannot licence a neighbouring add;
+    * that constraint must be **dropped in this same migration**, so this is a replacement rather
+      than a new constraint arriving under cover of a sentence.
+    """
+    added = ADDED_CHECK_CONSTRAINT.search(action)
+    if not added:
+        return False
+    name = added.group(1).lower()
+    for candidate in (start_line, start_line - 1):
+        declared = relaxations.get(candidate)
+        if declared and declared[0] == name:
+            return name in dropped
+    return False
+
+
 def declared_for(line_number: int, declarations: dict[int, str]) -> str | None:
     """A declaration on the statement's own line, or on the line above it.
 
@@ -512,10 +580,12 @@ def check_file(
     known_checks = known_checks or {}
     checks_here = membership_checks(text)
     declarations = declarations_by_line(text)
+    relaxations = relaxations_by_line(text)
     statements = segment(neutralise(text))
 
     created = created_here(statements)
     added_columns = columns_added_here(statements)
+    dropped = dropped_constraints(statements)
 
     findings: list[Finding] = []
     errors: list[str] = []
@@ -533,6 +603,10 @@ def check_file(
                     action, checks_here, known_checks
                 ):
                     continue
+                if rule.name == "add-check-or-unique" and relaxes_a_replaced_check(
+                    action, statement.start_line, relaxations, dropped
+                ):
+                    continue
 
                 declaration = declared_for(statement.start_line, declarations)
                 if declaration is None:
@@ -545,6 +619,25 @@ def check_file(
                         f"name the migration whose expand made this safe (e.g. 'CONTRACT of V018'), "
                         f"got: {declaration!r}"
                     )
+    for line_number, (name, _reason) in relaxations.items():
+        if name not in dropped:
+            errors.append(
+                f"{path.name}:{line_number}: the relaxes-constraint declaration names "
+                f"'{name}', which this migration does not drop. It licences a CHECK "
+                f"*replacement*, not a new constraint."
+            )
+        elif not any(
+            ADDED_CHECK_CONSTRAINT.search(action)
+            and ADDED_CHECK_CONSTRAINT.search(action).group(1).lower() == name
+            for statement in statements
+            for action in actions_of(statement)
+        ):
+            errors.append(
+                f"{path.name}:{line_number}: the relaxes-constraint declaration names "
+                f"'{name}', which this migration drops without adding back as a CHECK. "
+                f"A dropped constraint that never returns is not a relaxation."
+            )
+
     return findings, errors
 
 
