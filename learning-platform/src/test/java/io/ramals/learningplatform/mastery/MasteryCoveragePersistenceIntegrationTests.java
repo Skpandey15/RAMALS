@@ -6,7 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
-import io.ramals.learningplatform.assessment.DiagnosticScorer;
+import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
 import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
@@ -112,7 +112,8 @@ class MasteryCoveragePersistenceIntegrationTests {
     Integer tagged = runtimeJdbc.queryForObject(
         "SELECT count(*) FROM core.assessment_item_objective", Integer.class);
 
-    assertThat(tagged).isEqualTo(5);
+    // 5 from V046 (the v1 diagnostic) plus 35 from V049 (the v2 bank, DRAFT but already tagged).
+    assertThat(tagged).isEqualTo(40);
     assertThat(mismatched).isZero();
     assertThat(runtimeJdbc.queryForList(
         "SELECT objective_id FROM core.assessment_item_objective WHERE item_version_id = ?",
@@ -288,7 +289,7 @@ class MasteryCoveragePersistenceIntegrationTests {
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
-          assessments, learnerService, new DiagnosticScorer(),
+          assessments, learnerService, new DiagnosticScorerV2(),
           new EvidenceService(evidence), masteryService, recommendationService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }

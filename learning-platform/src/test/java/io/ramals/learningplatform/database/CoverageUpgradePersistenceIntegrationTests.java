@@ -18,8 +18,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 /**
- * The upgrade a real deployment performs: V045 and V046 applied to a database that is already at
- * V044 and already holds data.
+ * The upgrade a real deployment performs: V045 through V049 applied to a database that is already
+ * at V044 and already holds data.
  *
  * <p>An empty-database install proves the migrations parse. It cannot prove the thing that actually
  * breaks upgrades -- a new constraint that existing rows violate, or a new column that existing
@@ -79,14 +79,15 @@ class CoverageUpgradePersistenceIntegrationTests {
   }
 
   @Test
-  void onlyTheTwoNewMigrationsAreAppliedAndTheSchemaValidates() {
-    // Exactly V045 and V046. A different number means a migration was renumbered, skipped, or
+  void onlyTheFiveNewMigrationsAreAppliedAndTheSchemaValidates() {
+    // Exactly V045 through V049. A different number means a migration was renumbered, skipped, or
     // re-applied, all of which are upgrade hazards a "did it succeed" assertion would miss.
-    assertThat(migrationsApplied).isEqualTo(2);
+    assertThat(migrationsApplied).isEqualTo(5);
     assertThat(flyway().load().validateWithResult().validationSuccessful).isTrue();
     // Read as the migration role: the runtime role is denied this table on purpose, so that the
     // application can never rewrite its own migration history.
-    assertThat(appliedVersionsAfterTheUpgrade()).containsExactly("045", "046");
+    assertThat(appliedVersionsAfterTheUpgrade())
+        .containsExactly("045", "046", "047", "048", "049");
   }
 
   @Test
@@ -141,9 +142,15 @@ class CoverageUpgradePersistenceIntegrationTests {
   void theUpgradeInstallsTheNewObjectsTheV2PolicyDependsOn() {
     assertThat(tableExists("core", "assessment_attempt_item")).isTrue();
     assertThat(tableExists("core", "assessment_item_objective")).isTrue();
-    // The seeded tagging arrives with the upgrade, on a database that already held the items.
+    assertThat(tableExists("core", "assessment_item_lineage")).isTrue();
+    // The seeded tagging arrives with the upgrade, on a database that already held the v1 items:
+    // 5 for v1 (V046) plus 35 for the v2 bank this same upgrade authors (V049).
     assertThat(runtimeJdbc.queryForObject(
-        "SELECT count(*) FROM core.assessment_item_objective", Integer.class)).isEqualTo(5);
+        "SELECT count(*) FROM core.assessment_item_objective", Integer.class)).isEqualTo(40);
+    // Every item in the database -- the five pre-existing v1 items this upgrade backfills, plus
+    // the 35 v2 items it authors -- has a logical identity by the time the upgrade finishes.
+    assertThat(runtimeJdbc.queryForObject(
+        "SELECT count(*) FROM core.assessment_item_lineage", Integer.class)).isEqualTo(40);
     assertThat(triggerNames()).contains(
         "trg_assessment_attempt_item_guard",
         "trg_assessment_item_objective_skill_match",

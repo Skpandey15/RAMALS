@@ -2,6 +2,7 @@ package io.ramals.learningplatform.assessment;
 
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
+import io.ramals.learningplatform.curriculum.AssessmentItemType;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceCoverage;
 import io.ramals.learningplatform.evidence.EvidenceService;
@@ -39,7 +40,7 @@ public class DiagnosticSubmissionService {
 
   private final AssessmentRepository repository;
   private final LearnerService learnerService;
-  private final DiagnosticScorer scorer;
+  private final DiagnosticScorerV2 scorer;
   private final EvidenceService evidenceService;
   private final MasteryService masteryService;
   private final RecommendationService recommendationService;
@@ -48,7 +49,7 @@ public class DiagnosticSubmissionService {
   public DiagnosticSubmissionService(
       AssessmentRepository repository,
       LearnerService learnerService,
-      DiagnosticScorer scorer,
+      DiagnosticScorerV2 scorer,
       EvidenceService evidenceService,
       MasteryService masteryService,
       RecommendationService recommendationService,
@@ -107,7 +108,7 @@ public class DiagnosticSubmissionService {
         throw new UnknownAssessmentItemException(response.itemId());
       }
       validateSelection(view, response.selectedOptions());
-      boolean correct = scorer.isCorrect(response.selectedOptions(), view.correctOptions());
+      boolean correct = scorer.isCorrect(view, response.selectedOptions());
       repository.insertResponse(attempt.id(), itemId, writeResponse(response.selectedOptions()), correct);
     }
 
@@ -141,7 +142,7 @@ public class DiagnosticSubmissionService {
         .toList();
     return evidenceService.recordDiagnosticEvidence(
         attempt.learnerId(), attempt.id(), attempt.assessmentVersionId(),
-        DiagnosticScorer.SCORING_VERSION, observations, interactionId);
+        DiagnosticScorerV2.SCORING_VERSION, observations, interactionId);
   }
 
   private void recomputeMastery(
@@ -163,14 +164,25 @@ public class DiagnosticSubmissionService {
   }
 
   private void validateSelection(AssessmentItemScoringView view, List<String> selectedOptions) {
-    if (!"SINGLE_CHOICE".equals(view.itemType()) || selectedOptions.size() != 1) {
+    AssessmentItemType type = AssessmentItemType.of(view.itemType());
+    // Defence in depth. findPresentedItemScoringViews already filters to scoreable types, so a
+    // SHORT_ANSWER or USE_CASE view should never reach this method -- if one somehow did, this is
+    // where "fail closed" is meant to bite rather than let the scorer be asked to judge it.
+    if (!type.scoreable()) {
       throw new InvalidSubmissionException(
-          "Item " + view.itemVersionId() + " requires exactly one selected option.");
+          "Item " + view.itemVersionId() + " is type " + type + " and has no deterministic scorer.");
     }
-    if (!view.optionIds().contains(selectedOptions.getFirst())) {
+    if (selectedOptions.size() != 1) {
+      throw new InvalidSubmissionException(
+          "Item " + view.itemVersionId() + " requires exactly one submitted answer.");
+    }
+    if (type == AssessmentItemType.SINGLE_CHOICE
+        && !view.optionIds().contains(selectedOptions.getFirst())) {
       throw new InvalidSubmissionException(
           "Selected option is not valid for item " + view.itemVersionId() + ".");
     }
+    // FILL_BLANK carries no option set to validate against; normalization and matching against the
+    // accepted list happen in the scorer, which is also where an unmatched answer is decided wrong.
   }
 
   private SubmissionResult buildResult(AssessmentAttempt attempt) {

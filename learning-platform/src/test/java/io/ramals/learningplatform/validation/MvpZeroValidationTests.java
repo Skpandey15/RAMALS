@@ -8,7 +8,7 @@ import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.AttemptCreation;
 import io.ramals.learningplatform.assessment.DiagnosticItem;
-import io.ramals.learningplatform.assessment.DiagnosticScorer;
+import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
 import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
@@ -174,7 +174,7 @@ class MvpZeroValidationTests {
     RecommendationService recommendationService =
         new RecommendationService(new RecommendationPolicy(), recommendations, learnerService);
     diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
-    submissions = new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorer(),
+    submissions = new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorerV2(),
         new EvidenceService(evidence), masteryService, recommendationService, mapper);
     progression = new ProgressionService(curriculumService, learnerService,
         new ProgressionRepository(jdbc), new ProgressionPolicy());

@@ -156,6 +156,12 @@ class ContentTrustPersistenceIntegrationTests {
                '{"correct":["A"]}'::jsonb, 'FOUNDATIONAL', ?
           FROM core.skill s WHERE s.stable_code = 'KAFKA_TOPIC'
         """, id, assessmentVersionId, itemCode, displayOrder);
+    // V048: every item needs a logical identity before its version may publish. A generator
+    // minting a genuinely new item mints a new one, the same choice V049 makes for every item in
+    // the v2 bank -- there is no earlier version of this fixture's items for it to be a revision of.
+    migrationJdbc.update(
+        "INSERT INTO core.assessment_item_lineage (item_version_id, logical_item_id) VALUES (?, ?)",
+        id, UUID.randomUUID());
     return id;
   }
 

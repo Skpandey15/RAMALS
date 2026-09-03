@@ -20,8 +20,8 @@ class DiagnosticScorerTests {
   void guessingAwareNormalizationCorrectsChancePerformance() {
     // One skill, two 4-option items, one correct: observed 0.5, guess 0.25 -> (0.5-0.25)/0.75.
     List<SkillScore> scores = scorer.aggregate(List.of(
-        new ScoredResponse("KAFKA_BROKER", 4, true),
-        new ScoredResponse("KAFKA_BROKER", 4, false)));
+        new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, true),
+        new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, false)));
 
     assertThat(scores).hasSize(1);
     SkillScore broker = scores.getFirst();
@@ -33,18 +33,18 @@ class DiagnosticScorerTests {
 
   @Test
   void fullyCorrectNormalizesToOneAndChanceFloorsAtZero() {
-    List<SkillScore> perfect = scorer.aggregate(List.of(new ScoredResponse("S", 4, true)));
+    List<SkillScore> perfect = scorer.aggregate(List.of(new ScoredResponse("S", "SINGLE_CHOICE", 4, true)));
     assertThat(perfect.getFirst().normalizedScore()).isEqualByComparingTo("1.0000");
 
-    List<SkillScore> wrong = scorer.aggregate(List.of(new ScoredResponse("S", 4, false)));
+    List<SkillScore> wrong = scorer.aggregate(List.of(new ScoredResponse("S", "SINGLE_CHOICE", 4, false)));
     assertThat(wrong.getFirst().normalizedScore()).isEqualByComparingTo("0.0000");
   }
 
   @Test
   void scoresAreGroupedPerSkillAndOrderedDeterministically() {
     List<SkillScore> scores = scorer.aggregate(List.of(
-        new ScoredResponse("KAFKA_TOPIC", 4, true),
-        new ScoredResponse("KAFKA_BROKER", 4, true)));
+        new ScoredResponse("KAFKA_TOPIC", "SINGLE_CHOICE", 4, true),
+        new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, true)));
 
     assertThat(scores).extracting(SkillScore::skillCode)
         .containsExactly("KAFKA_BROKER", "KAFKA_TOPIC");

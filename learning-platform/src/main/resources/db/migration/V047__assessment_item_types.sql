@@ -60,12 +60,12 @@ ALTER TABLE core.assessment_item_version ADD CONSTRAINT ck_assessment_item_optio
 -- SHORT_ANSWER and USE_CASE carry a rubric. A rubric is not a scoring key: nothing in this release
 -- reads it, and M2-ADR-022 governs what may ever be done with it.
 ALTER TABLE core.assessment_item_version DROP CONSTRAINT ck_assessment_item_answer_key;
+-- COALESCE, not a bare jsonb_typeof, in the CHECK below. On a missing key
+-- `answer_key_jsonb -> 'accepted'` is NULL, jsonb_typeof(NULL) is NULL, and a CHECK that evaluates
+-- to NULL is satisfied -- so the obvious spelling of this constraint admits exactly the malformed
+-- rows it was written to refuse. Verified against PostgreSQL rather than reasoned about: the first
+-- version of this accepted a FILL_BLANK carrying `correct` and a USE_CASE carrying no rubric at all.
 -- relaxes-constraint: ck_assessment_item_answer_key, SINGLE_CHOICE keeps V005's requirement unchanged and the added shape rules bind only item types the previous image cannot write, so every row it can write still satisfies this
--- COALESCE, not a bare jsonb_typeof. On a missing key `answer_key_jsonb -> 'accepted'` is NULL,
--- jsonb_typeof(NULL) is NULL, and a CHECK that evaluates to NULL is satisfied -- so the obvious
--- spelling of this constraint admits exactly the malformed rows it was written to refuse. Verified
--- against PostgreSQL rather than reasoned about: the first version of this accepted a FILL_BLANK
--- carrying `correct` and a USE_CASE carrying no rubric at all.
 ALTER TABLE core.assessment_item_version ADD CONSTRAINT ck_assessment_item_answer_key CHECK (
   jsonb_typeof(answer_key_jsonb) = 'object'
   AND (

@@ -126,7 +126,7 @@ class DiagnosticSubmissionPersistenceIntegrationTests {
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
-          assessments, learnerService, new DiagnosticScorer(), evidenceService, masteryService,
+          assessments, learnerService, new DiagnosticScorerV2(), evidenceService, masteryService,
           recommendationService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }

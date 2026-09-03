@@ -159,7 +159,7 @@ class DiagnosticEvidenceBaselineTests {
       List<String> skills, java.util.function.Predicate<String> answeredCorrectly) {
     List<ScoredResponse> responses = skills.stream()
         .map(skill ->
-            new ScoredResponse(skill, OPTIONS_PER_ITEM, answeredCorrectly.test(skill)))
+            new ScoredResponse(skill, "SINGLE_CHOICE", OPTIONS_PER_ITEM, answeredCorrectly.test(skill)))
         .toList();
     return scorer.aggregate(responses);
   }

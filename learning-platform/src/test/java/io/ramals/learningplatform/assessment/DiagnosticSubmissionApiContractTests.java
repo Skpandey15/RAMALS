@@ -80,7 +80,7 @@ class DiagnosticSubmissionApiContractTests {
 
   private static AssessmentItemScoringView view() {
     return new AssessmentItemScoringView(
-        ITEM, "KAFKA_BROKER", "SINGLE_CHOICE", List.of("A", "B", "C", "D"), List.of("B"));
+        ITEM, "KAFKA_BROKER", "SINGLE_CHOICE", List.of("A", "B", "C", "D"), List.of("B"), List.of());
   }
 
   private static String body(UUID itemId, String option) {
@@ -109,13 +109,13 @@ class DiagnosticSubmissionApiContractTests {
     when(assessmentRepository.findPresentedItemScoringViews(ATTEMPT, VERSION)).thenReturn(List.of(view()));
     when(assessmentRepository.completeAttempt(ATTEMPT)).thenReturn(true);
     when(assessmentRepository.findScoredResponses(ATTEMPT))
-        .thenReturn(List.of(new ScoredResponse("KAFKA_BROKER", 4, true)));
+        .thenReturn(List.of(new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, true)));
 
     mockMvc.perform(post(URL).with(learner("user-1"))
             .contentType(MediaType.APPLICATION_JSON).content(body(ITEM, "B")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.status").value("COMPLETED"))
-        .andExpect(jsonPath("$.scoringVersion").value("DIAGNOSTIC_SCORING_V1"))
+        .andExpect(jsonPath("$.scoringVersion").value("DIAGNOSTIC_SCORING_V2"))
         .andExpect(jsonPath("$.itemsAnswered").value(1))
         .andExpect(jsonPath("$.skillScores[0].skillCode").value("KAFKA_BROKER"))
         .andExpect(jsonPath("$.skillScores[0].itemsCorrect").value(1));
@@ -133,7 +133,7 @@ class DiagnosticSubmissionApiContractTests {
     when(assessmentRepository.findAttemptForUpdate(ATTEMPT)).thenReturn(Optional.of(attempt("COMPLETED")));
     when(assessmentRepository.findDiagnosticByVersionId(VERSION)).thenReturn(Optional.of(diagnostic()));
     when(assessmentRepository.findScoredResponses(ATTEMPT))
-        .thenReturn(List.of(new ScoredResponse("KAFKA_BROKER", 4, true)));
+        .thenReturn(List.of(new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, true)));
 
     mockMvc.perform(post(URL).with(learner("user-1"))
             .contentType(MediaType.APPLICATION_JSON).content(body(ITEM, "B")))
