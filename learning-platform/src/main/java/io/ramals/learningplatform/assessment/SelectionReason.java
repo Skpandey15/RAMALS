@@ -47,5 +47,12 @@ public enum SelectionReason {
   /** The skill already clears every threshold at ADVANCED; taken anyway, at the lowest
    * priority, so a mastered skill is not dropped from selection entirely. Distinct from a
    * future spaced-repetition RETENTION_CHECK, which does not exist yet and is not this. */
-  MASTERY_CONFIRMATION
+  MASTERY_CONFIRMATION,
+
+  /** DIAGNOSTIC_SELECTION_V3 only -- see PrerequisiteAwareDiagnosticSelector. The skill's own
+   * evidence would otherwise justify a band above FOUNDATIONAL, but at least one of its
+   * curriculum prerequisites has not reached MASTERED, so the band was capped at FOUNDATIONAL and
+   * this skill's priority demoted (M2-ADR-023 §1: evidence, never a gate -- the skill is still
+   * selected, just not trusted at an escalated band it may not have earned). */
+  PREREQUISITE_NOT_SECURED
 }

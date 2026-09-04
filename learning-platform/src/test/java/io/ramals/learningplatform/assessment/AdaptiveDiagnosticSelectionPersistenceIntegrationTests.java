@@ -3,6 +3,9 @@ package io.ramals.learningplatform.assessment;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
+import io.ramals.learningplatform.curriculum.CurriculumRepository;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.curriculum.MasteryDifficultyBand;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
@@ -321,7 +324,8 @@ class AdaptiveDiagnosticSelectionPersistenceIntegrationTests {
       LearnerService learnerService = new LearnerService(learners);
       diagnostics = new DiagnosticService(assessments, learnerService,
           new DiagnosticFormSelector(new DiagnosticFormProperties()),
-          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository);
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
+          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
     }
   }
 

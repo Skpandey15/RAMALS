@@ -8,6 +8,9 @@ import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
+import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
+import io.ramals.learningplatform.curriculum.CurriculumRepository;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
 import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
@@ -288,7 +291,8 @@ class MasteryCoveragePersistenceIntegrationTests {
           new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());
       diagnostics = new DiagnosticService(assessments, learnerService,
           new DiagnosticFormSelector(new DiagnosticFormProperties()),
-          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository);
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
+          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(

@@ -15,6 +15,13 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class CurriculumRepository {
 
+  private static final org.springframework.jdbc.core.RowMapper<VersionRow> VERSION_ROW_MAPPER =
+      (result, row) -> new VersionRow(
+          result.getObject("id", UUID.class),
+          result.getString("code"),
+          result.getString("version_code"),
+          result.getString("status"));
+
   private final JdbcTemplate jdbcTemplate;
 
   public CurriculumRepository(JdbcTemplate jdbcTemplate) {
@@ -27,16 +34,30 @@ public class CurriculumRepository {
         FROM core.curriculum_version cv
         JOIN core.learning_domain d ON d.id = cv.domain_id
         WHERE d.code = ? AND cv.version_code = ? AND cv.status IN ('PUBLISHED', 'RETIRED')
-        """, (result, row) -> new VersionRow(
-            result.getObject("id", UUID.class),
-            result.getString("code"),
-            result.getString("version_code"),
-            result.getString("status")), domainCode, versionCode);
-    if (versions.isEmpty()) {
-      return Optional.empty();
-    }
+        """, VERSION_ROW_MAPPER, domainCode, versionCode);
+    return versions.stream().findFirst().map(this::buildGraph);
+  }
 
-    VersionRow version = versions.getFirst();
+  /**
+   * Resolves a graph by the curriculum version's own identity rather than by
+   * {@code (domainCode, versionCode)}. For a caller that already holds a
+   * {@code curriculum_version_id} FK -- {@code assessment_version.curriculum_version_id}, say --
+   * and would otherwise have no way to ask for its graph: the assessment version's own
+   * {@code version_code} ("v1", "v2"...) is a different, unrelated versioning scheme from the
+   * curriculum's, and passing one where the other belongs resolves the wrong thing or nothing at
+   * all.
+   */
+  public Optional<CurriculumGraph> findReadableGraph(UUID curriculumVersionId) {
+    List<VersionRow> versions = jdbcTemplate.query("""
+        SELECT cv.id, d.code, cv.version_code, cv.status
+        FROM core.curriculum_version cv
+        JOIN core.learning_domain d ON d.id = cv.domain_id
+        WHERE cv.id = ? AND cv.status IN ('PUBLISHED', 'RETIRED')
+        """, VERSION_ROW_MAPPER, curriculumVersionId);
+    return versions.stream().findFirst().map(this::buildGraph);
+  }
+
+  private CurriculumGraph buildGraph(VersionRow version) {
     List<MutableSkill> skills = jdbcTemplate.query("""
         SELECT sv.skill_id, s.stable_code, sv.title, sv.description, sv.difficulty,
                sv.target_proficiency, sv.estimated_learning_minutes, sv.mastery_threshold,
@@ -87,9 +108,9 @@ public class CurriculumRepository {
         """, (RowCallbackHandler) result -> byId.get(result.getObject("skill_id", UUID.class))
             .prerequisites.add(result.getString("stable_code")), version.id());
 
-    return Optional.of(new CurriculumGraph(
+    return new CurriculumGraph(
         version.id(), version.domainCode(), version.versionCode(), version.status(),
-        skills.stream().map(MutableSkill::toNode).toList()));
+        skills.stream().map(MutableSkill::toNode).toList());
   }
 
   public Optional<PublishedSkillContext> findPublishedSkillContext(String skillCode) {

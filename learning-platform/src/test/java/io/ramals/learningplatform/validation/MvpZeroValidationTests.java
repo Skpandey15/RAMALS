@@ -176,7 +176,8 @@ class MvpZeroValidationTests {
     RecommendationService recommendationService =
         new RecommendationService(new RecommendationPolicy(), recommendations, learnerService);
     diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
-        new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository);
+        new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
+        curriculumService);
     submissions = new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorerV2(),
         new EvidenceService(evidence), masteryService, recommendationService, mapper);
     progression = new ProgressionService(curriculumService, learnerService,
