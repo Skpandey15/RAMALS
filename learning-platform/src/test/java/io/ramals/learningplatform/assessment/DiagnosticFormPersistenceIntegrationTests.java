@@ -356,7 +356,7 @@ class DiagnosticFormPersistenceIntegrationTests {
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
-          assessments, learnerService, new DiagnosticScorer(),
+          assessments, learnerService, new DiagnosticScorerV2(),
           new EvidenceService(evidenceRepository), masteryService, recommendationService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }

@@ -7,6 +7,7 @@ import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
+import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
 import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
@@ -137,7 +138,7 @@ class EvidenceLedgerPersistenceIntegrationTests {
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
-          assessments, learnerService, new DiagnosticScorer(), evidenceService, masteryService,
+          assessments, learnerService, new DiagnosticScorerV2(), evidenceService, masteryService,
           recommendationService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
@@ -183,7 +184,9 @@ class EvidenceLedgerPersistenceIntegrationTests {
     assertThat(recorded.evidenceType()).isEqualTo("DIAGNOSTIC");
     assertThat(recorded.normalizedScore()).isEqualByComparingTo("1.0000");
     assertThat(recorded.interactionId()).isEqualTo(INTERACTION_ID);
-    assertThat(recorded.scoringVersion()).isEqualTo(DiagnosticScorer.SCORING_VERSION);
+    // Recorded by the live submission path, which is wired to DiagnosticScorerV2 -- V1's constant
+    // below is a separate, deliberately synthetic fixture used only by appendBaseEvidence.
+    assertThat(recorded.scoringVersion()).isEqualTo(DiagnosticScorerV2.SCORING_VERSION);
     assertThat(recorded.sourceAttemptId()).isEqualTo(attemptId);
 
     Long total = runtimeJdbc.queryForObject(

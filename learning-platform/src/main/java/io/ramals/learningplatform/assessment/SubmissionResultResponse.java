@@ -31,7 +31,7 @@ public record SubmissionResultResponse(
     return new SubmissionResultResponse(
         result.attempt().id().toString(),
         result.attempt().status(),
-        DiagnosticScorer.SCORING_VERSION,
+        DiagnosticScorerV2.SCORING_VERSION,
         result.itemsAnswered(),
         views);
   }

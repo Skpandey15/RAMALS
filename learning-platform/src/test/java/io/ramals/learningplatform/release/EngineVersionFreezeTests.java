@@ -2,10 +2,12 @@ package io.ramals.learningplatform.release;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.ramals.learningplatform.assessment.AssessmentItemScoringView;
 import io.ramals.learningplatform.assessment.DiagnosticForm;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
+import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
 import io.ramals.learningplatform.assessment.EligibleItem;
 import io.ramals.learningplatform.assessment.SelectedItem;
 import io.ramals.learningplatform.assessment.ScoredResponse;
@@ -103,6 +105,7 @@ class EngineVersionFreezeTests {
     put(ProgressionPolicy.POLICY_VERSION, EngineVersionFreezeTests::progression);
     put(RecommendationPolicy.POLICY_VERSION, EngineVersionFreezeTests::recommendation);
     put(DiagnosticScorer.SCORING_VERSION, EngineVersionFreezeTests::diagnosticScoring);
+    put(DiagnosticScorerV2.SCORING_VERSION, EngineVersionFreezeTests::diagnosticScoringV2);
     put(DiagnosticFormSelector.SELECTION_POLICY_VERSION,
         EngineVersionFreezeTests::diagnosticSelection);
     put(LearningSessionPolicy.POLICY_VERSION, EngineVersionFreezeTests::sessionPolicy);
@@ -129,6 +132,10 @@ class EngineVersionFreezeTests {
       Map.entry("PROGRESSION_POLICY_V1", "08c765033f9a773c4603bc1760ede707cceaac1399937552a831beafbe1fb203"),
       Map.entry("RECOMMENDATION_POLICY_V1", "e048de44798cd9632934901b8354d5b50b036f8045cc66efcd6f229a24cdb212"),
       Map.entry("DIAGNOSTIC_SCORING_V1", "ee904dc57a615550d732e50bfd51fec72011db0e5b9a53a6f54c2d1d0ceda305"),
+      // Minted with V047, when FILL_BLANK became a scoreable type. V1 above is untouched and still
+      // hashes to its recorded value -- the SINGLE_CHOICE arithmetic did not change, only a scorer
+      // that can additionally judge a type V1 was never asked to.
+      Map.entry("DIAGNOSTIC_SCORING_V2", "8a722f4a6093016646081bfcd4b581e509e2e0dabdc16c4aec2ae6728106f87c"),
       // Recorded when form selection was first frozen, at the same moment its policy identifier
       // was minted. Nothing has been written under it yet, which is the only time an entry here
       // may be added rather than a new version identifier minted.
@@ -266,10 +273,44 @@ class EngineVersionFreezeTests {
 
     out.append(scorer.aggregate(List.of())).append('\n');
     out.append(scorer.aggregate(List.of(
-        new ScoredResponse("KAFKA_BROKER", 4, true),
-        new ScoredResponse("KAFKA_BROKER", 4, false),
-        new ScoredResponse("KAFKA_TOPIC", 3, true),
-        new ScoredResponse("KAFKA_TOPIC", 3, true)))).append('\n');
+        new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, true),
+        new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, false),
+        new ScoredResponse("KAFKA_TOPIC", "SINGLE_CHOICE", 3, true),
+        new ScoredResponse("KAFKA_TOPIC", "SINGLE_CHOICE", 3, true)))).append('\n');
+    return out.toString();
+  }
+
+  /**
+   * DiagnosticScorerV2 over the same SINGLE_CHOICE vectors V1 is frozen on, plus the behaviour V1
+   * could never exercise: FILL_BLANK normalization and its zero guess-probability policy. The
+   * first block proves the SINGLE_CHOICE arithmetic is unchanged; the second is what is new.
+   */
+  private static String diagnosticScoringV2() {
+    DiagnosticScorerV2 scorer = new DiagnosticScorerV2();
+    StringBuilder out = new StringBuilder();
+
+    AssessmentItemScoringView mcq = new AssessmentItemScoringView(
+        UUID.fromString("01900000-0000-7000-8000-00000000ff01"), "KAFKA_BROKER", "SINGLE_CHOICE",
+        List.of("A", "B"), List.of("A"), List.of());
+    out.append(scorer.isCorrect(mcq, List.of("A"))).append('\n');
+    out.append(scorer.isCorrect(mcq, List.of("B"))).append('\n');
+
+    AssessmentItemScoringView fillBlank = new AssessmentItemScoringView(
+        UUID.fromString("01900000-0000-7000-8000-00000000ff02"), "KAFKA_TOPIC", "FILL_BLANK",
+        List.of(), List.of(), List.of("partition", "the partition"));
+    // Exact match, trimmed, case-insensitive, internal whitespace collapsed -- and, deliberately,
+    // a near-miss that normalization must not paper over.
+    out.append(scorer.isCorrect(fillBlank, List.of("partition"))).append('\n');
+    out.append(scorer.isCorrect(fillBlank, List.of("  Partition  "))).append('\n');
+    out.append(scorer.isCorrect(fillBlank, List.of("the   partition"))).append('\n');
+    out.append(scorer.isCorrect(fillBlank, List.of("partitoin"))).append('\n');
+    out.append(scorer.isCorrect(fillBlank, List.of("segment"))).append('\n');
+
+    out.append(scorer.aggregate(List.of(
+        new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, true),
+        new ScoredResponse("KAFKA_BROKER", "SINGLE_CHOICE", 4, false),
+        new ScoredResponse("KAFKA_TOPIC", "FILL_BLANK", 0, true),
+        new ScoredResponse("KAFKA_TOPIC", "FILL_BLANK", 0, false)))).append('\n');
     return out.toString();
   }
 

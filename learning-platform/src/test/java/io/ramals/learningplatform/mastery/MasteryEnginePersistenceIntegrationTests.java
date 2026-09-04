@@ -7,6 +7,7 @@ import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
+import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
 import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
@@ -142,7 +143,7 @@ class MasteryEnginePersistenceIntegrationTests {
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
-          assessments, learnerService, new DiagnosticScorer(),
+          assessments, learnerService, new DiagnosticScorerV2(),
           new EvidenceService(evidence), masteryService, recommendationService, mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }

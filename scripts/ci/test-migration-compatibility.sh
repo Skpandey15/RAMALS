@@ -359,6 +359,87 @@ check "a widened CHECK on a different column is refused" "1" "${status}"
 status="$(run_on_pair "${base_kind}" "ALTER TABLE ledger.thing ADD CONSTRAINT ck_thing_other CHECK (kind IN ('A', 'B'));")"
 check "a brand-new membership CHECK is still refused" "1" "${status}"
 
+# -- declared relaxation of a replaced CHECK --------------------------------------------------------
+#
+# Widening a membership CHECK is proved by comparing value sets. A CHECK that becomes conditional on
+# another column cannot be proved that way -- it needs constraint satisfiability, which this checker
+# deliberately does not attempt -- so it is declared instead, and the declaration is narrow enough
+# that the cases below stay refused.
+#
+# The V047 shape: options were required for every item; they are required only for the type that has
+# options. The previous image writes only SINGLE_CHOICE rows with two or more options, and every one
+# of those still satisfies the new predicate.
+
+base_options="CREATE TABLE core.item (
+  id UUID PRIMARY KEY,
+  item_type VARCHAR(16) NOT NULL,
+  options_jsonb JSONB NOT NULL,
+  CONSTRAINT ck_item_options CHECK (jsonb_array_length(options_jsonb) >= 2)
+);"
+
+# The declaration sits on the statement it licences, not above the pair. Anchoring is what stops one
+# sentence at the top of a file from covering statements added later by somebody who never read it,
+# and it applies here exactly as it does to expand-contract.
+relaxed_ok="ALTER TABLE core.item DROP CONSTRAINT ck_item_options;
+-- relaxes-constraint: ck_item_options, SINGLE_CHOICE rows still require two options; the predicate only widens to admit types that have none
+ALTER TABLE core.item ADD CONSTRAINT ck_item_options CHECK (
+  (item_type = 'SINGLE_CHOICE' AND jsonb_array_length(options_jsonb) >= 2)
+  OR (item_type <> 'SINGLE_CHOICE' AND jsonb_array_length(options_jsonb) = 0)
+);"
+
+status="$(run_on_pair "${base_options}" "${relaxed_ok}")"
+check "a declared CHECK relaxation is allowed" "0" "${status}"
+
+# 2. The same replacement without the declaration. Nothing about the SQL changed; what is missing is
+#    the sentence somebody has to stand behind.
+status="$(run_on_pair "${base_options}" "ALTER TABLE core.item DROP CONSTRAINT ck_item_options;
+ALTER TABLE core.item ADD CONSTRAINT ck_item_options CHECK (
+  (item_type = 'SINGLE_CHOICE' AND jsonb_array_length(options_jsonb) >= 2)
+  OR (item_type <> 'SINGLE_CHOICE' AND jsonb_array_length(options_jsonb) = 0)
+);")"
+check "the same relaxation without a declaration is refused" "1" "${status}"
+
+# 3. A declaration naming a different constraint must not licence the one beside it.
+status="$(run_on_pair "${base_options}" "ALTER TABLE core.item DROP CONSTRAINT ck_item_options;
+-- relaxes-constraint: ck_item_other, unrelated
+ALTER TABLE core.item ADD CONSTRAINT ck_item_options CHECK (options_jsonb IS NOT NULL);")"
+check "a declaration naming the wrong constraint is refused" "1" "${status}"
+
+# 4. A dropped CHECK that never comes back is not a relaxation, and a declaration that licences
+#    nothing is one nobody will notice has stopped applying.
+status="$(run_on_pair "${base_options}" "-- relaxes-constraint: ck_item_options, dropped for good
+ALTER TABLE core.item DROP CONSTRAINT ck_item_options;")"
+check "a dropped CHECK with no replacement is refused" "1" "${status}"
+
+# 5. The declaration is for CHECKs. Uniqueness is not a CHECK, and replacing a UNIQUE under cover of
+#    one must stay refused -- this is the weakening that actually loses data integrity.
+status="$(run_on_pair "CREATE TABLE core.item (id UUID PRIMARY KEY, code VARCHAR(16),
+  CONSTRAINT uq_item_code UNIQUE (code));" \
+  "ALTER TABLE core.item DROP CONSTRAINT uq_item_code;
+-- relaxes-constraint: uq_item_code, we only want it looser
+ALTER TABLE core.item ADD CONSTRAINT uq_item_code UNIQUE (code, item_type);")"
+check "a UNIQUE replacement cannot use the declaration" "1" "${status}"
+
+# The same for a foreign key.
+status="$(run_on_pair "CREATE TABLE core.item (id UUID PRIMARY KEY, bar_id UUID,
+  CONSTRAINT fk_item_bar FOREIGN KEY (bar_id) REFERENCES core.bar(id));" \
+  "ALTER TABLE core.item DROP CONSTRAINT fk_item_bar;
+-- relaxes-constraint: fk_item_bar, pointing somewhere else now
+ALTER TABLE core.item ADD CONSTRAINT fk_item_bar FOREIGN KEY (bar_id) REFERENCES core.baz(id);")"
+check "a FOREIGN KEY replacement cannot use the declaration" "1" "${status}"
+
+# 6. The declaration clears one finding on one statement. Everything else in the file is judged as
+#    it always was.
+status="$(run_on_pair "${base_options}" "${relaxed_ok}
+ALTER TABLE core.item DROP COLUMN options_jsonb;")"
+check "an unrelated destructive change is still refused alongside a relaxation" "1" "${status}"
+
+status="$(run_on_pair "${base_options}" "ALTER TABLE core.item DROP CONSTRAINT ck_item_options;
+-- relaxes-constraint: ck_item_options, licences the CHECK and nothing else
+ALTER TABLE core.item ADD CONSTRAINT ck_item_options CHECK (options_jsonb IS NOT NULL);
+ALTER TABLE core.other ALTER COLUMN value TYPE VARCHAR(8);")"
+check "a relaxation does not licence a type narrowing elsewhere" "1" "${status}"
+
 # -- the checker must not pass by finding nothing ---------------------------------------------------
 
 rm -rf "${WORK}/empty"

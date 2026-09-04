@@ -105,7 +105,7 @@ public class AssessmentRepository {
         -- creates evidence -- an unverified item reaching only this query would produce evidence
         -- for something no learner was ever shown.
         WHERE iv.assessment_version_id = ? AND iv.trust_state = 'VERIFIED_CONTENT'
-        """, scoringViewMapper(), assessmentVersionId);
+        """ + SCOREABLE_TYPE_FILTER, scoringViewMapper(), assessmentVersionId);
   }
 
   public void insertResponse(
@@ -160,7 +160,7 @@ public class AssessmentRepository {
   /** Reads persisted responses for scoring. Deliberately does not read the answer key. */
   public List<ScoredResponse> findScoredResponses(UUID attemptId) {
     return jdbcTemplate.query("""
-        SELECT s.stable_code AS skill_code,
+        SELECT s.stable_code AS skill_code, iv.item_type,
                jsonb_array_length(iv.options_jsonb) AS option_count,
                r.is_correct
         FROM core.assessment_response r
@@ -170,8 +170,33 @@ public class AssessmentRepository {
         ORDER BY s.stable_code, r.item_version_id
         """, (result, row) -> new ScoredResponse(
             result.getString("skill_code"),
+            result.getString("item_type"),
             result.getInt("option_count"),
             result.getBoolean("is_correct")), attemptId);
+  }
+
+  /**
+   * Every logical question this learner has ever been presented, across every attempt and every
+   * assessment version, resolved through {@code core.assessment_item_lineage}.
+   *
+   * <p>This is the complete-history read the no-repeat guarantee depends on: it does not stop at
+   * the most recent attempt, and it resolves through logical identity rather than
+   * {@code item_version_id} so that an editorial revision of a question this learner already saw
+   * is still recognised as seen, however its version row changed underneath it.
+   *
+   * <p>A version with no lineage row -- possible only for content that predates V048 -- is silently
+   * excluded from this result rather than failing the query. That is the same direction V048's own
+   * migration comment argues for: nothing here fabricates a logical identity for a row that was
+   * never given one, and a learner's history is undercounted rather than the query refusing to run.
+   */
+  public Set<UUID> findLearnerExposedLogicalItemIds(UUID learnerId) {
+    return Set.copyOf(jdbcTemplate.query("""
+        SELECT DISTINCT lin.logical_item_id
+        FROM core.assessment_attempt_item ai
+        JOIN core.assessment_attempt a ON a.id = ai.attempt_id
+        JOIN core.assessment_item_lineage lin ON lin.item_version_id = ai.item_version_id
+        WHERE a.learner_id = ?
+        """, (result, row) -> result.getObject("logical_item_id", UUID.class), learnerId));
   }
 
   /** Transitions an in-progress attempt to COMPLETED. Returns true if this call finalized it. */
@@ -229,6 +254,8 @@ public class AssessmentRepository {
         -- M1-ADR-006: the same filter the presentation and scoring paths apply. An unverified item
         -- must not even be a candidate, or it would reach a learner through selection.
         WHERE iv.assessment_version_id = ? AND iv.trust_state = 'VERIFIED_CONTENT'
+        """ + SCOREABLE_TYPE_FILTER + """
+
         ORDER BY iv.display_order, iv.item_code
         """, ELIGIBLE_ITEM_MAPPER,
         learnerId, OffsetDateTime.ofInstant(recencySince, ZoneOffset.UTC), assessmentVersionId);
@@ -255,6 +282,10 @@ public class AssessmentRepository {
    * them readable and submittable rather than retroactively empty. An empty result can only mean
    * that: V005 makes the items of a published version immutable, so a selected item cannot lose
    * its trust state and disappear from underneath a form that already contains it.
+   *
+   * <p>Filtered to scoreable types even though selection already excludes the rest: an attempt
+   * assembled before V047 introduced other types has no such exclusion to have relied on, so this
+   * is the one presentation path where the filter is not purely defensive.
    */
   public List<DiagnosticItem> findPresentedItems(UUID attemptId, UUID assessmentVersionId) {
     List<DiagnosticItem> selected = jdbcTemplate.query("""
@@ -264,6 +295,8 @@ public class AssessmentRepository {
         JOIN core.assessment_item_version iv ON iv.id = ai.item_version_id
         JOIN core.skill s ON s.id = iv.skill_id
         WHERE ai.attempt_id = ? AND iv.trust_state = 'VERIFIED_CONTENT'
+        """ + SCOREABLE_TYPE_FILTER + """
+
         ORDER BY ai.presentation_order
         """, itemMapper(), attemptId);
     return selected.isEmpty() ? findItems(assessmentVersionId) : selected;
@@ -287,7 +320,7 @@ public class AssessmentRepository {
         -- M1-ADR-006, as in findItemScoringViews: this is the path that decides correctness and
         -- therefore creates evidence, so unverified content is filtered here too.
         WHERE ai.attempt_id = ? AND iv.trust_state = 'VERIFIED_CONTENT'
-        """, scoringViewMapper(), attemptId);
+        """ + SCOREABLE_TYPE_FILTER, scoringViewMapper(), attemptId);
     return selected.isEmpty() ? findItemScoringViews(assessmentVersionId) : selected;
   }
 
@@ -300,6 +333,7 @@ public class AssessmentRepository {
         JOIN core.skill s ON s.id = iv.skill_id
         -- M1-ADR-006: unverified or rejected content is never shown to a learner.
         WHERE iv.assessment_version_id = ? AND iv.trust_state = 'VERIFIED_CONTENT'
+        """ + SCOREABLE_TYPE_FILTER + """
         ORDER BY iv.display_order, iv.item_code
         """, itemMapper(), assessmentVersionId);
   }
@@ -329,14 +363,26 @@ public class AssessmentRepository {
           .toList();
       AnswerKey answerKey = objectMapper.readValue(result.getString("answer_key"), AnswerKey.class);
       List<String> correct = answerKey.correct() == null ? List.of() : answerKey.correct();
+      List<String> accepted = answerKey.accepted() == null ? List.of() : answerKey.accepted();
       return new AssessmentItemScoringView(
           result.getObject("id", UUID.class),
           result.getString("skill_code"),
           result.getString("item_type"),
           optionIds,
-          correct);
+          correct,
+          accepted);
     };
   }
+
+  /**
+   * The item types {@link io.ramals.learningplatform.curriculum.AssessmentItemType} marks
+   * deterministically scoreable. Spliced into every query that selects an item into a learner
+   * form or a scoring decision, so SHORT_ANSWER and USE_CASE content -- authorable under V047 but
+   * ungated for a learner until M2-ADR-022's evaluation boundary exists -- cannot reach either path
+   * through any of the four queries that feed them, present or future.
+   */
+  private static final String SCOREABLE_TYPE_FILTER =
+      "AND iv.item_type IN ('SINGLE_CHOICE', 'FILL_BLANK')\n";
 
   private static final String ATTEMPT_SELECT = """
       SELECT id, learner_id, assessment_version_id, status, idempotency_key, created_at, updated_at

@@ -1015,6 +1015,12 @@ class GroundingPersistenceIntegrationTests {
         SKILL,
         itemCode,
         displayOrder);
+    // V048: every item needs a logical identity before its version may publish. A fresh, distinct
+    // identity per call -- this fixture creates new questions, never a revision of one it already
+    // created, so there is nothing for any of them to share an identity with.
+    jdbc.update(
+        "INSERT INTO core.assessment_item_lineage (item_version_id, logical_item_id) VALUES (?, ?)",
+        itemId, UUID.randomUUID());
   }
 
   private static AttemptResponseFixture completedAttemptWithResponse(
