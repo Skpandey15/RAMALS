@@ -11,8 +11,9 @@ import org.junit.jupiter.api.Test;
 /**
  * {@link ProbeRelationshipResolver} and {@link HypothesisEvidenceOutcome}: the pure decisions behind
  * H4b's foundation, exercised with no database. Every {@link ProbeRelationshipType} is resolved
- * identically once a {@link ProbeTargetObjective} exists -- these tests confirm that uniformity as
- * much as any single type's behaviour.
+ * identically once a single {@link ProbeTargetObjective} exists -- these tests confirm that
+ * uniformity as much as any single type's behaviour -- and more than one candidate target is
+ * reported as ambiguous rather than arbitrated, per M2-ADR-024's amendment.
  */
 class ProbeRelationshipResolverTests {
 
@@ -29,11 +30,12 @@ class ProbeRelationshipResolverTests {
   void noTargetObjectiveResolvesToNoRelationshipDefinedAndRaisesNoHypothesis() {
     ProbeResolution resolution = ProbeRelationshipResolver.resolve(
         TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
-        null, List.of(), Set.of());
+        List.of(), List.of(), Set.of());
 
     assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.NO_RELATIONSHIP_DEFINED);
     assertThat(resolution.hypothesis()).isNull();
     assertThat(resolution.candidates()).isEmpty();
+    assertThat(resolution.ambiguousTargetObjectiveIds()).isEmpty();
   }
 
   @Test
@@ -42,7 +44,7 @@ class ProbeRelationshipResolverTests {
 
     ProbeResolution resolution = ProbeRelationshipResolver.resolve(
         TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
-        target, List.of(), Set.of());
+        List.of(target), List.of(), Set.of());
 
     assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.RELATIONSHIP_DEFINED_BUT_NO_ITEMS);
     assertThat(resolution.hypothesis()).isNotNull();
@@ -52,9 +54,74 @@ class ProbeRelationshipResolverTests {
   }
 
   // -----------------------------------------------------------------------------------------
-  // 2-5. Every relationship type is resolved through the identical mechanism once a target
-  // exists -- the type only changes what is recorded on the DiagnosticHypothesis, never how
-  // candidates are decided.
+  // Ambiguity: more than one candidate target is reported, never silently arbitrated. Covers the
+  // three real sources of ambiguity the repository can now surface -- multiple authored
+  // relationships, multiple prerequisite candidates -- plus the resolver's own general shape
+  // regardless of how many candidates arrived or why.
+  // -----------------------------------------------------------------------------------------
+
+  @Test
+  void twoPublishedRootCauseProbeRelationshipsFromTheSameSourceAreAmbiguous() {
+    // The schema's own uniqueness constraint is (source, target, type), not (source, type) -- two
+    // PUBLISHED ROOT_CAUSE_PROBE rows from the same source objective, to two different targets, is
+    // a shape the schema explicitly permits and the repository now returns both of.
+    UUID firstTarget = UUID.randomUUID();
+    UUID secondTarget = UUID.randomUUID();
+    List<ProbeTargetObjective> candidates = List.of(
+        new ProbeTargetObjective(firstTarget, UUID.randomUUID()),
+        new ProbeTargetObjective(secondTarget, UUID.randomUUID()));
+
+    ProbeResolution resolution = ProbeRelationshipResolver.resolve(
+        TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        candidates, List.of(candidate()), Set.of());
+
+    assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.AMBIGUOUS_TARGET_OBJECTIVE);
+    assertThat(resolution.hypothesis()).isNull();
+    assertThat(resolution.candidates()).isEmpty();
+    assertThat(resolution.ambiguousTargetObjectiveIds()).containsExactly(firstTarget, secondTarget);
+  }
+
+  @Test
+  void multiplePrerequisiteCandidatesAreAmbiguousNotSilentlyPickedByDisplayOrder() {
+    // A trigger skill with two curriculum prerequisites (or one prerequisite with two required
+    // objectives) surfaces the same way -- PREREQUISITE_VALIDATION gets no special treatment.
+    UUID firstPrerequisiteObjective = UUID.randomUUID();
+    UUID secondPrerequisiteObjective = UUID.randomUUID();
+    List<ProbeTargetObjective> candidates = List.of(
+        new ProbeTargetObjective(firstPrerequisiteObjective, null),
+        new ProbeTargetObjective(secondPrerequisiteObjective, null));
+
+    ProbeResolution resolution = ProbeRelationshipResolver.resolve(
+        TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.PREREQUISITE_VALIDATION,
+        candidates, List.of(candidate()), Set.of());
+
+    assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.AMBIGUOUS_TARGET_OBJECTIVE);
+    assertThat(resolution.ambiguousTargetObjectiveIds())
+        .containsExactly(firstPrerequisiteObjective, secondPrerequisiteObjective);
+  }
+
+  @Test
+  void ambiguityIsDecidedBeforeItemsOrExposureAreEverConsulted() {
+    // Even a target with real, unseen candidates does not rescue an ambiguous resolution -- the
+    // ambiguity is about which objective the hypothesis is even about, which items/exposure cannot
+    // resolve.
+    List<ProbeTargetObjective> candidates = List.of(
+        new ProbeTargetObjective(UUID.randomUUID(), null),
+        new ProbeTargetObjective(UUID.randomUUID(), null));
+    ProbeCandidateItem plentyOfUnseenItems = candidate();
+
+    ProbeResolution resolution = ProbeRelationshipResolver.resolve(
+        TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.CONTRADICTION_CHECK,
+        candidates, List.of(plentyOfUnseenItems), Set.of());
+
+    assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.AMBIGUOUS_TARGET_OBJECTIVE);
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // 2-5. Every relationship type is resolved through the identical mechanism once a single
+  // target exists -- the type only changes what is recorded on the DiagnosticHypothesis, never
+  // how candidates are decided. Ordinary single-target resolution is unchanged by the ambiguity
+  // handling above.
   // -----------------------------------------------------------------------------------------
 
   @Test
@@ -82,15 +149,17 @@ class ProbeRelationshipResolverTests {
     ProbeCandidateItem item = candidate();
 
     ProbeResolution resolution = ProbeRelationshipResolver.resolve(
-        TRIGGER_ITEM, TRIGGER_OBJECTIVE, type, target, List.of(item), Set.of());
+        TRIGGER_ITEM, TRIGGER_OBJECTIVE, type, List.of(target), List.of(item), Set.of());
 
     assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.CANDIDATES_AVAILABLE);
     assertThat(resolution.hypothesis().relationshipType()).isEqualTo(type);
     assertThat(resolution.candidates()).containsExactly(item);
+    assertThat(resolution.ambiguousTargetObjectiveIds()).isEmpty();
   }
 
   // -----------------------------------------------------------------------------------------
-  // 7-8. Multiple candidates, deterministic ordering
+  // 7-8. Multiple candidate items (within one, unambiguous target objective), deterministic
+  // ordering
   // -----------------------------------------------------------------------------------------
 
   @Test
@@ -102,7 +171,7 @@ class ProbeRelationshipResolverTests {
 
     ProbeResolution resolution = ProbeRelationshipResolver.resolve(
         TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.SAME_OBJECTIVE_CONFIRMATION,
-        target, List.of(first, second, third), Set.of());
+        List.of(target), List.of(first, second, third), Set.of());
 
     // The resolver does not sort or shuffle; the repository's own display_order/item_code
     // ordering is preserved verbatim, so a change to iteration order here would be a real
@@ -122,7 +191,7 @@ class ProbeRelationshipResolverTests {
 
     ProbeResolution resolution = ProbeRelationshipResolver.resolve(
         TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
-        target, List.of(exposed, unseen), Set.of(exposed.logicalItemId()));
+        List.of(target), List.of(exposed, unseen), Set.of(exposed.logicalItemId()));
 
     assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.CANDIDATES_AVAILABLE);
     assertThat(resolution.candidates()).containsExactly(unseen);
@@ -140,7 +209,7 @@ class ProbeRelationshipResolverTests {
 
     ProbeResolution resolution = ProbeRelationshipResolver.resolve(
         TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.SAME_OBJECTIVE_CONFIRMATION,
-        target, List.of(revisedVersion), Set.of(sharedLogicalId));
+        List.of(target), List.of(revisedVersion), Set.of(sharedLogicalId));
 
     assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.ALL_CANDIDATES_ALREADY_EXPOSED);
     assertThat(resolution.candidates()).isEmpty();
@@ -156,7 +225,7 @@ class ProbeRelationshipResolverTests {
 
     ProbeResolution resolution = ProbeRelationshipResolver.resolve(
         TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
-        target, List.of(onlyItem), Set.of(onlyItem.logicalItemId()));
+        List.of(target), List.of(onlyItem), Set.of(onlyItem.logicalItemId()));
 
     assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.ALL_CANDIDATES_ALREADY_EXPOSED);
     assertThat(resolution.hypothesis()).isNotNull();
@@ -208,10 +277,10 @@ class ProbeRelationshipResolverTests {
 
     ProbeResolution prerequisiteValidation = ProbeRelationshipResolver.resolve(
         TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.PREREQUISITE_VALIDATION,
-        target, List.of(item), Set.of());
+        List.of(target), List.of(item), Set.of());
     ProbeResolution rootCauseProbe = ProbeRelationshipResolver.resolve(
         TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
-        target, List.of(item), Set.of());
+        List.of(target), List.of(item), Set.of());
 
     assertThat(prerequisiteValidation.outcome()).isEqualTo(rootCauseProbe.outcome());
     assertThat(prerequisiteValidation.candidates()).isEqualTo(rootCauseProbe.candidates());

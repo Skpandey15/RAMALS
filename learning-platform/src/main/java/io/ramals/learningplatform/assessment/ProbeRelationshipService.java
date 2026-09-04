@@ -35,41 +35,59 @@ public class ProbeRelationshipService {
   /**
    * Resolves a probe for one trigger item's miss under one relationship type, for one learner.
    *
-   * @throws TriggerItemHasNoObjectiveException if the trigger item carries no
+   * @throws TriggerItemHasNoObjectiveException if the trigger item does not exist, or carries no
    *     {@code assessment_item_objective} tag at all -- a data-quality state
    *     {@code core.assessment_item_objective}'s own tagging discipline should make unreachable for
    *     any item that ever reaches a learner, but this fails closed rather than silently resolving
    *     against a null objective.
+   * @throws TriggerItemHasAmbiguousObjectiveException if the trigger item is tagged to more than one
+   *     objective -- a shape no seeded content produces, but {@link DiagnosticHypothesis} has a
+   *     single {@code triggerObjectiveId} field, so there is no non-arbitrary one to resolve from.
+   *     More than one *target* objective is not this -- see
+   *     {@link ProbeResolutionOutcome#AMBIGUOUS_TARGET_OBJECTIVE} on the returned
+   *     {@link ProbeResolution} instead, which is a normal, non-exceptional result.
    */
   @Transactional(readOnly = true)
   public ProbeResolution resolve(
       UUID triggerItemVersionId, ProbeRelationshipType relationshipType, UUID learnerId) {
     UUID assessmentVersionId = repository.assessmentVersionIdForItem(triggerItemVersionId)
         .orElseThrow(() -> new TriggerItemHasNoObjectiveException(triggerItemVersionId));
-    UUID triggerObjectiveId = repository.objectiveIdForItem(triggerItemVersionId)
-        .orElseThrow(() -> new TriggerItemHasNoObjectiveException(triggerItemVersionId));
+    UUID triggerObjectiveId = resolveTriggerObjective(triggerItemVersionId);
 
-    ProbeTargetObjective target = resolveTarget(triggerObjectiveId, relationshipType);
-    if (target == null) {
+    List<ProbeTargetObjective> targets = resolveTargets(triggerObjectiveId, relationshipType);
+    if (targets.size() != 1) {
+      // Empty (NO_RELATIONSHIP_DEFINED) or ambiguous (AMBIGUOUS_TARGET_OBJECTIVE) -- neither needs
+      // an items/exposure lookup, since there is no single target objective to look them up for.
       return ProbeRelationshipResolver.resolve(
-          triggerItemVersionId, triggerObjectiveId, relationshipType, null, List.of(), Set.of());
+          triggerItemVersionId, triggerObjectiveId, relationshipType, targets, List.of(), Set.of());
     }
 
-    List<ProbeCandidateItem> allItemsForTarget = repository.itemsForObjective(
-        assessmentVersionId, target.objectiveId(), triggerItemVersionId);
+    List<ProbeCandidateItem> allItemsForTheOnlyTarget = repository.itemsForObjective(
+        assessmentVersionId, targets.get(0).objectiveId(), triggerItemVersionId);
     Set<UUID> exposed = assessmentRepository.findLearnerExposedLogicalItemIds(learnerId);
 
     return ProbeRelationshipResolver.resolve(
-        triggerItemVersionId, triggerObjectiveId, relationshipType, target, allItemsForTarget, exposed);
+        triggerItemVersionId, triggerObjectiveId, relationshipType, targets, allItemsForTheOnlyTarget,
+        exposed);
   }
 
-  private ProbeTargetObjective resolveTarget(UUID triggerObjectiveId, ProbeRelationshipType type) {
+  private UUID resolveTriggerObjective(UUID triggerItemVersionId) {
+    List<UUID> objectiveIds = repository.objectiveIdsForItem(triggerItemVersionId);
+    if (objectiveIds.isEmpty()) {
+      throw new TriggerItemHasNoObjectiveException(triggerItemVersionId);
+    }
+    if (objectiveIds.size() > 1) {
+      throw new TriggerItemHasAmbiguousObjectiveException(triggerItemVersionId, objectiveIds);
+    }
+    return objectiveIds.get(0);
+  }
+
+  private List<ProbeTargetObjective> resolveTargets(UUID triggerObjectiveId, ProbeRelationshipType type) {
     return switch (type) {
-      case SAME_OBJECTIVE_CONFIRMATION -> repository.sameObjectiveTarget(triggerObjectiveId);
-      case PREREQUISITE_VALIDATION ->
-          repository.prerequisiteValidationTarget(triggerObjectiveId).orElse(null);
+      case SAME_OBJECTIVE_CONFIRMATION -> repository.sameObjectiveTargets(triggerObjectiveId);
+      case PREREQUISITE_VALIDATION -> repository.prerequisiteValidationTargets(triggerObjectiveId);
       case ROOT_CAUSE_PROBE, CONTRADICTION_CHECK ->
-          repository.authoredRelationshipTarget(triggerObjectiveId, type).orElse(null);
+          repository.authoredRelationshipTargets(triggerObjectiveId, type);
     };
   }
 

@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.assessment;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
@@ -49,15 +50,35 @@ class ProbeRelationshipServicePersistenceIntegrationTests {
       UUID.fromString("01900000-0000-7000-8000-000000000d12");
   private static final UUID BROKER_STORAGE_MODEL =
       UUID.fromString("01900000-0000-7000-8000-000000000d01");
+  private static final UUID BROKER_CONTROLLER_ROLE =
+      UUID.fromString("01900000-0000-7000-8000-000000000d02");
+  private static final UUID BROKER_CLUSTER_OPERATIONS =
+      UUID.fromString("01900000-0000-7000-8000-000000000d03");
+  // ISR_DURABILITY (KAFKA_ISR's own carried-forward objective) and REPLICATION_FACTOR
+  // (KAFKA_REPLICATION's) -- the real, single-required-objective prerequisite edge used for the
+  // unambiguous PREREQUISITE_VALIDATION happy path, since every one of the five skills with real
+  // assessment content has three required objectives, not one.
+  private static final UUID ISR_DURABILITY = UUID.fromString("01900000-0000-7000-8000-000000000c14");
+  private static final UUID REPLICATION_FACTOR = UUID.fromString("01900000-0000-7000-8000-000000000c13");
 
   // Real item ids (all VERIFIED_CONTENT, from V049), tagged as above.
   private static final UUID ACKS_MCQ_F = UUID.fromString("01900000-0000-7000-8000-000000000622"); // d10
+  private static final UUID ACKS_MCQ_I1 = UUID.fromString("01900000-0000-7000-8000-000000000623"); // d10
   private static final UUID ACKS_MCQ_I2 = UUID.fromString("01900000-0000-7000-8000-000000000624"); // d11
   private static final UUID ACKS_MCQ_A1 = UUID.fromString("01900000-0000-7000-8000-000000000625"); // d11
   private static final UUID ACKS_MCQ_A2 = UUID.fromString("01900000-0000-7000-8000-000000000626"); // d12, only item
   private static final UUID TOPIC_MCQ_I2 = UUID.fromString("01900000-0000-7000-8000-000000000610"); // TOPIC/d05
   private static final UUID BROKER_MCQ_F = UUID.fromString("01900000-0000-7000-8000-000000000601"); // d01
-  private static final UUID BROKER_FILL_F = UUID.fromString("01900000-0000-7000-8000-000000000606"); // d01
+
+  // Test-only fixture ids -- not part of V054's real seed. Documented at each insertion site below.
+  private static final UUID ISR_TEST_ITEM =
+      UUID.fromString("01900000-0000-7000-8000-000000000f01");
+  private static final UUID AMBIGUOUS_ROOT_CAUSE_RELATIONSHIP_1 =
+      UUID.fromString("01900000-0000-7000-8000-000000000f02");
+  private static final UUID AMBIGUOUS_ROOT_CAUSE_RELATIONSHIP_2 =
+      UUID.fromString("01900000-0000-7000-8000-000000000f03");
+  private static final UUID GROUP_PARTITION_ASSIGNMENT =
+      UUID.fromString("01900000-0000-7000-8000-000000000d13");
 
   private static String databaseUrl;
   private ProbeRelationshipRepository repository;
@@ -107,6 +128,88 @@ class ProbeRelationshipServicePersistenceIntegrationTests {
         .cleanDisabled(true)
         .load()
         .migrate();
+
+    // Test-only fixtures, not part of V054's real seed -- added once here, after migration, purely
+    // to exercise ambiguity paths the real seed data does not otherwise reach. Each is documented at
+    // its own test method; none alters or removes anything V054 itself inserted.
+    try (Connection connection = DriverManager.getConnection(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD);
+        Statement statement = connection.createStatement()) {
+      // A trigger item for KAFKA_ISR, which (like every one of the ten skills with no real
+      // assessment content) has no real item of its own. Needed for the unambiguous
+      // PREREQUISITE_VALIDATION happy path: KAFKA_ISR's only curriculum prerequisite,
+      // KAFKA_REPLICATION, is one of the ten unsplit skills with exactly one required objective --
+      // unlike any of the five skills with real content, which all have three.
+      statement.execute("""
+          INSERT INTO core.assessment_item_version
+            (id, assessment_version_id, skill_id, item_code, item_type, stem, options_jsonb,
+             answer_key_jsonb, difficulty, display_order, trust_state, verified_by, verified_at)
+          VALUES ('01900000-0000-7000-8000-000000000f01', '01900000-0000-7000-8000-000000000403',
+                  '01900000-0000-7000-8000-000000000114', 'H4B_TEST_ISR_ITEM', 'SINGLE_CHOICE',
+                  'Test-only probe stem.',
+                  '[{"id":"A","text":"a"},{"id":"B","text":"b"}]'::jsonb, '{"correct":["A"]}'::jsonb,
+                  'FOUNDATIONAL', 99, 'VERIFIED_CONTENT', 'h4b-test-fixture', CURRENT_TIMESTAMP)
+          """);
+      statement.execute("""
+          INSERT INTO core.assessment_item_lineage (item_version_id, logical_item_id)
+          VALUES ('01900000-0000-7000-8000-000000000f01', gen_random_uuid())
+          """);
+      statement.execute("""
+          INSERT INTO core.assessment_item_objective (item_version_id, objective_id)
+          VALUES ('01900000-0000-7000-8000-000000000f01', '01900000-0000-7000-8000-000000000c14')
+          """);
+
+      // A second test-only item, tagged to REPLICATION_FACTOR (c13, KAFKA_REPLICATION's own
+      // carried-forward objective) -- like every one of the ten unsplit objectives, it has zero real
+      // items in V049's bank, so without this the "unambiguous" prerequisite test could only reach
+      // RELATIONSHIP_DEFINED_BUT_NO_ITEMS, not prove CANDIDATES_AVAILABLE stays reachable for
+      // PREREQUISITE_VALIDATION once a target is unambiguous.
+      statement.execute("""
+          INSERT INTO core.assessment_item_version
+            (id, assessment_version_id, skill_id, item_code, item_type, stem, options_jsonb,
+             answer_key_jsonb, difficulty, display_order, trust_state, verified_by, verified_at)
+          VALUES ('01900000-0000-7000-8000-000000000f04', '01900000-0000-7000-8000-000000000403',
+                  '01900000-0000-7000-8000-000000000113', 'H4B_TEST_REPLICATION_ITEM', 'SINGLE_CHOICE',
+                  'Test-only probe stem.',
+                  '[{"id":"A","text":"a"},{"id":"B","text":"b"}]'::jsonb, '{"correct":["A"]}'::jsonb,
+                  'FOUNDATIONAL', 98, 'VERIFIED_CONTENT', 'h4b-test-fixture', CURRENT_TIMESTAMP)
+          """);
+      statement.execute("""
+          INSERT INTO core.assessment_item_lineage (item_version_id, logical_item_id)
+          VALUES ('01900000-0000-7000-8000-000000000f04', gen_random_uuid())
+          """);
+      statement.execute("""
+          INSERT INTO core.assessment_item_objective (item_version_id, objective_id)
+          VALUES ('01900000-0000-7000-8000-000000000f04', '01900000-0000-7000-8000-000000000c13')
+          """);
+
+      // A second objective tag on a real item that is never used as a trigger anywhere else in this
+      // class -- BROKER_MCQ_F is only ever an expected *candidate* elsewhere, so tagging it to a
+      // second objective here cannot change any other test's outcome. This is the trigger-item
+      // ambiguity case: an item tagged to more than one objective has no single objective a
+      // hypothesis can be raised from.
+      statement.execute("""
+          INSERT INTO core.assessment_item_objective (item_version_id, objective_id)
+          VALUES ('01900000-0000-7000-8000-000000000601', '01900000-0000-7000-8000-000000000d02')
+          """);
+
+      // A second published ROOT_CAUSE_PROBE relationship from ACKS_SEMANTICS (d10) -- otherwise
+      // unused as a relationship *source* anywhere in V054's real seed or elsewhere in this class --
+      // so that two published rows genuinely exist from the same source objective, the shape the
+      // schema's own uniqueness constraint (source, target, type) explicitly permits.
+      statement.execute("""
+          INSERT INTO core.diagnostic_probe_relationship
+            (id, source_objective_id, target_objective_id, relationship_type, status, rationale, published_at)
+          VALUES
+            ('01900000-0000-7000-8000-000000000f02',
+             '01900000-0000-7000-8000-000000000d10', '01900000-0000-7000-8000-000000000d12',
+             'ROOT_CAUSE_PROBE', 'PUBLISHED', 'Test-only: exercises AMBIGUOUS_TARGET_OBJECTIVE.',
+             CURRENT_TIMESTAMP),
+            ('01900000-0000-7000-8000-000000000f03',
+             '01900000-0000-7000-8000-000000000d10', '01900000-0000-7000-8000-000000000d13',
+             'ROOT_CAUSE_PROBE', 'PUBLISHED', 'Test-only: exercises AMBIGUOUS_TARGET_OBJECTIVE.',
+             CURRENT_TIMESTAMP)
+          """);
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -169,24 +272,50 @@ class ProbeRelationshipServicePersistenceIntegrationTests {
   }
 
   // -------------------------------------------------------------------------------------------
-  // PREREQUISITE_VALIDATION: the real KAFKA_TOPIC -> KAFKA_BROKER curriculum edge, never stored
-  // as a diagnostic_probe_relationship row -- read straight from core.skill_prerequisite.
+  // PREREQUISITE_VALIDATION reads from the real curriculum graph (core.skill_prerequisite /
+  // core.learning_objective), never a diagnostic_probe_relationship row -- proven by two real
+  // shapes: an unambiguous single-required-objective prerequisite, and a genuinely ambiguous one.
   // -------------------------------------------------------------------------------------------
 
   @Test
-  void prerequisiteValidationResolvesFromTheRealCurriculumGraphNotANewRow() {
+  void prerequisiteValidationResolvesFromTheRealCurriculumGraphNotANewRowWhenUnambiguous() {
     wire();
-    Learner learner = learners.provisionForSubject("h4b-prerequisite-validation");
+    Learner learner = learners.provisionForSubject("h4b-prerequisite-validation-unambiguous");
 
+    // KAFKA_ISR's only prerequisite, KAFKA_REPLICATION, is one of the ten unsplit skills -- exactly
+    // one required objective, REPLICATION_FACTOR. ISR_TEST_ITEM is the test-only trigger, and the
+    // REPLICATION_FACTOR candidate is a test-only item, both inserted in migrate() precisely because
+    // neither KAFKA_ISR nor KAFKA_REPLICATION has any real content in V049's bank.
     ProbeResolution resolution =
-        service.resolve(TOPIC_MCQ_I2, ProbeRelationshipType.PREREQUISITE_VALIDATION, learner.id());
+        service.resolve(ISR_TEST_ITEM, ProbeRelationshipType.PREREQUISITE_VALIDATION, learner.id());
 
     assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.CANDIDATES_AVAILABLE);
-    assertThat(resolution.hypothesis().targetObjectiveId()).isEqualTo(BROKER_STORAGE_MODEL);
+    assertThat(resolution.hypothesis().targetObjectiveId()).isEqualTo(REPLICATION_FACTOR);
     // Read from skill_prerequisite/learning_objective, not diagnostic_probe_relationship.
     assertThat(resolution.hypothesis().authorizingRelationshipId()).isNull();
     assertThat(resolution.candidates()).extracting(ProbeCandidateItem::itemVersionId)
-        .containsExactly(BROKER_MCQ_F, BROKER_FILL_F);
+        .containsExactly(UUID.fromString("01900000-0000-7000-8000-000000000f04"));
+  }
+
+  @Test
+  void prerequisiteValidationWithMultipleRealRequiredObjectivesIsAmbiguousNotSilentlyPickedByDisplayOrder() {
+    wire();
+    Learner learner = learners.provisionForSubject("h4b-prerequisite-validation-ambiguous");
+
+    // KAFKA_TOPIC's only prerequisite is KAFKA_BROKER -- one of the five skills with real content,
+    // and so (H3) split into three required objectives: BROKER_STORAGE_MODEL, BROKER_CONTROLLER_ROLE,
+    // BROKER_CLUSTER_OPERATIONS. All three are genuine candidates; none is diagnostically more
+    // "correct" than another to pick by id or display_order.
+    ProbeResolution resolution =
+        service.resolve(TOPIC_MCQ_I2, ProbeRelationshipType.PREREQUISITE_VALIDATION, learner.id());
+
+    assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.AMBIGUOUS_TARGET_OBJECTIVE);
+    assertThat(resolution.hypothesis()).isNull();
+    assertThat(resolution.candidates()).isEmpty();
+    // display_order 1, 2, 3 respectively, per V052's own literal INSERT -- a single prerequisite
+    // skill, so ordering is by objective display_order alone.
+    assertThat(resolution.ambiguousTargetObjectiveIds()).containsExactly(
+        BROKER_STORAGE_MODEL, BROKER_CONTROLLER_ROLE, BROKER_CLUSTER_OPERATIONS);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -205,6 +334,44 @@ class ProbeRelationshipServicePersistenceIntegrationTests {
     assertThat(resolution.hypothesis().targetObjectiveId()).isEqualTo(ACKS_SEMANTICS);
     assertThat(resolution.candidates()).extracting(ProbeCandidateItem::itemVersionId)
         .doesNotContain(ACKS_MCQ_F);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Ambiguity: two published ROOT_CAUSE_PROBE relationships from the same source objective, and a
+  // trigger item tagged to more than one objective. Both reject arbitrary selection.
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void twoPublishedRootCauseProbeRelationshipsFromTheSameSourceAreReportedAsAmbiguous() {
+    wire();
+    Learner learner = learners.provisionForSubject("h4b-ambiguous-root-cause");
+
+    // ACKS_SEMANTICS (d10) has two PUBLISHED ROOT_CAUSE_PROBE rows in this fixture (see migrate()):
+    // to PRODUCER_IDEMPOTENCE (d12) and to GROUP_PARTITION_ASSIGNMENT (d13). ACKS_MCQ_I1 is tagged
+    // to d10 and used as a trigger nowhere else in this class.
+    ProbeResolution resolution =
+        service.resolve(ACKS_MCQ_I1, ProbeRelationshipType.ROOT_CAUSE_PROBE, learner.id());
+
+    assertThat(resolution.outcome()).isEqualTo(ProbeResolutionOutcome.AMBIGUOUS_TARGET_OBJECTIVE);
+    assertThat(resolution.hypothesis()).isNull();
+    assertThat(resolution.candidates()).isEmpty();
+    assertThat(resolution.ambiguousTargetObjectiveIds())
+        .containsExactly(PRODUCER_IDEMPOTENCE, GROUP_PARTITION_ASSIGNMENT);
+  }
+
+  @Test
+  void aTriggerItemTaggedToMoreThanOneObjectiveFailsClosedRatherThanPickingOne() {
+    wire();
+    Learner learner = learners.provisionForSubject("h4b-ambiguous-trigger-objective");
+
+    // BROKER_MCQ_F is tagged to both BROKER_STORAGE_MODEL (its real, V049 tag) and
+    // BROKER_CONTROLLER_ROLE (the test-only second tag added in migrate()) -- DiagnosticHypothesis
+    // has a single triggerObjectiveId field, so there is no non-arbitrary one to resolve from.
+    assertThatThrownBy(() ->
+        service.resolve(BROKER_MCQ_F, ProbeRelationshipType.SAME_OBJECTIVE_CONFIRMATION, learner.id()))
+        .isInstanceOf(TriggerItemHasAmbiguousObjectiveException.class)
+        .satisfies(exception -> assertThat(((TriggerItemHasAmbiguousObjectiveException) exception)
+            .objectiveIds()).containsExactly(BROKER_STORAGE_MODEL, BROKER_CONTROLLER_ROLE));
   }
 
   // -------------------------------------------------------------------------------------------

@@ -4,7 +4,9 @@
 - **Decides:** the storage, package placement, and terminology constraints binding the H4b
   ("hypothesis-driven related-probe selection") foundation — which of the four probe-relationship
   semantics get new storage, where the code lives, how a hypothesis stays distinct from a confirmed
-  diagnosis, and why this PR mints no `DIAGNOSTIC_SELECTION_V5`.
+  diagnosis, why this PR mints no `DIAGNOSTIC_SELECTION_V5`, and (§5, added on review of PR #251)
+  that more than one candidate target objective is surfaced as an explicit outcome rather than
+  resolved by an arbitrary tie-break.
 - **Relates to, and extends, M2-ADR-023** (`docs/adr/M2-ADR-023-diagnostic-reasoning-is-evidence-not-a-gate.md`):
   that ADR's §2 already requires any future diagnostic/causal confidence construct (H5) to be
   versioned, deterministic, and never AI-decided; this ADR extends the same discipline one layer
@@ -129,6 +131,56 @@ next attempt — most likely reusing `assessment_attempt_item.selection_reason` 
 possibly not — is exactly the kind of runtime-wiring decision this ADR defers to a follow-up PR,
 reviewed once this foundation has been reviewed on its own.
 
+### 5. More than one candidate target objective is surfaced, never arbitrated
+
+*(Added on review of PR #251 — the foundation as first opened this ADR still silently took `LIMIT 1`
+in three places; this section closes that gap before merge.)*
+
+The repository queries behind `ROOT_CAUSE_PROBE`/`CONTRADICTION_CHECK`, `PREREQUISITE_VALIDATION`,
+and even resolving a trigger item's own objective can each legitimately return more than one row:
+
+- The `core.diagnostic_probe_relationship` uniqueness constraint is
+  `(source_objective_id, target_objective_id, relationship_type)`, not `(source_objective_id,
+  relationship_type)` — the schema explicitly permits two published rows of the same type from the
+  same source, to two different targets.
+- A trigger skill may have more than one curriculum prerequisite, and a single prerequisite may have
+  more than one required objective (H3's own finer-objective split makes this the common case, not
+  the exception: every one of the five skills with real assessment content now has three required
+  objectives, not one).
+- A trigger item could in principle be tagged to more than one objective in
+  `core.assessment_item_objective`, though no content this platform has ever authored does this.
+
+Picking one of several candidates by a fixed tie-break — lowest `id`, first `display_order` — would
+not be a deterministic *reading* of a diagnostic fact, the way every other decision this foundation
+makes is. It would be an **uncredited diagnostic policy decision**: a claim that one candidate matters
+more than another, made by whichever ordering a SQL query happens to return, never reviewed,
+authored, or attributable to anyone. That is precisely the kind of silent authority this whole
+roadmap (M1-ADR-010, M2-ADR-010, M2-ADR-023) has consistently refused to grant anywhere else.
+
+So none of the repository's target-resolution queries `LIMIT 1` any more; each returns every
+candidate it finds. `ProbeRelationshipResolver` decides, from the count alone, before ever consulting
+items or exposure:
+
+- **Zero candidates** → `NO_RELATIONSHIP_DEFINED` (unchanged from the original decision).
+- **Exactly one candidate** → normal resolution, exactly as before (§1–§4 unaffected).
+- **More than one candidate** → `ProbeResolutionOutcome.AMBIGUOUS_TARGET_OBJECTIVE`. No
+  `DiagnosticHypothesis` is raised — there is no single target objective to name one about — but
+  every candidate that made the choice ambiguous is carried on `ProbeResolution
+  .ambiguousTargetObjectiveIds()`, so the ambiguity itself is auditable rather than swallowed.
+
+A trigger item tagged to more than one objective is handled one step earlier, as
+`TriggerItemHasAmbiguousObjectiveException`, since `DiagnosticHypothesis` has a single
+`triggerObjectiveId` field and there is no candidate-list result type to report an ambiguous
+*trigger* through the way there is for an ambiguous *target*.
+
+**Ranking, combining, or otherwise choosing among several candidates remains explicitly out of scope
+for this foundation.** Considering multiple target objectives together to produce one ranked or
+combined probe is a real future capability — plausibly relevant to H4b's eventual runtime-selection
+follow-up, or even to H5's confidence construct, which could legitimately want to weigh several
+plausible root causes at once — but it is a genuine design question (how are candidates ranked? by
+what evidence? deterministically how?) that this foundation does not answer and must not answer by
+accident via query ordering.
+
 ## Alternatives rejected
 
 - **One relationship table for all four semantics.** Simpler on the surface, and wrong: it would
@@ -145,6 +197,14 @@ reviewed once this foundation has been reviewed on its own.
   Rejected per the user's own explicit split: the relationship/hypothesis model deserves review as
   its own artifact before anything commits to a specific runtime selection shape around it — the same
   reasoning H4a's cross-attempt-vs-same-attempt fork went through before code was written.
+- **Pick one candidate by a fixed tie-break (lowest `id`, first `display_order`) when more than one
+  target objective exists**, since the repository already had to establish *some* order to page
+  through results. Rejected (§5): a tie-break is a diagnostic-policy decision, not a deterministic
+  reading of a fact, and this foundation has no authority to make it silently.
+- **Implement ranked or combined multi-target probe selection now**, since the ambiguity case is
+  real and a smarter answer than "report and stop" is imaginable. Rejected as premature: this is a
+  genuine design question with its own trade-offs, explicitly deferred rather than decided by
+  accident inside a bug fix.
 
 ## Consequences
 
@@ -159,6 +219,11 @@ reviewed once this foundation has been reviewed on its own.
   represented — never re-collapsed to `is_correct` at any layer this ADR governs.
 - A follow-up PR proposing `DIAGNOSTIC_SELECTION_V5` must review this foundation's actual shape
   first; this ADR does not pre-authorize it.
+- No repository method resolving a target objective may `LIMIT 1` or otherwise truncate its result to
+  one row when more than one genuinely exists; a future PR reintroducing that is a defect against §5,
+  not a valid simplification.
+- `AMBIGUOUS_TARGET_OBJECTIVE` must stay a first-class, auditable outcome — carrying every candidate
+  that caused it — never a silently-dropped or logged-only condition.
 
 ## Revisit triggers
 
@@ -171,6 +236,10 @@ reviewed once this foundation has been reviewed on its own.
   `skill_prerequisite`'s own semantics — a decision for whoever proposes it, not decided here.
 - When `DIAGNOSTIC_SELECTION_V5` is actually scoped, its own design should supersede or extend §4
   rather than treat runtime wiring as already decided by this ADR.
+- If a real, deterministic ranking rule for multiple candidate target objectives is ever proposed
+  (e.g. driven by H5's confidence construct once it exists), that supersedes §5's "surface, don't
+  arbitrate" default — but needs its own decision, reviewed on its own terms, the same way §5 itself
+  was.
 
 ## Note on the ADR register
 

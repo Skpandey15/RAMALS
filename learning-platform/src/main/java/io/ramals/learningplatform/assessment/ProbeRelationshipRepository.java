@@ -15,9 +15,11 @@ import org.springframework.stereotype.Repository;
  * tables while {@code ROOT_CAUSE_PROBE}/{@code CONTRADICTION_CHECK} read the one new table this
  * foundation adds.
  *
- * <p>Every method here picks at most one deterministic target objective per call --
- * {@link ProbeTargetObjective}'s own javadoc records why fanning out across several is out of scope
- * for this foundation.
+ * <p><b>Every target-objective query returns every candidate it finds, never just the first.</b>
+ * None of them {@code LIMIT 1} -- picking one candidate over another when more than one exists is a
+ * diagnostic-policy decision this foundation has no authority to make silently (M2-ADR-024's
+ * amendment), so the full list is handed to {@link ProbeRelationshipResolver}, which reports
+ * {@link ProbeResolutionOutcome#AMBIGUOUS_TARGET_OBJECTIVE} rather than choosing.
  */
 @Repository
 public class ProbeRelationshipRepository {
@@ -39,34 +41,36 @@ public class ProbeRelationshipRepository {
         .stream().findFirst();
   }
 
-  /** The trigger item's own objective. An item tagged to more than one objective is not exercised
-   * by any content this platform has ever authored; the first by {@code objective_id} is taken
-   * deterministically rather than the query failing on a shape nothing produces today. */
-  public Optional<UUID> objectiveIdForItem(UUID itemVersionId) {
+  /** Every objective the trigger item is tagged to, deterministically ordered by
+   * {@code objective_id}. No content this platform has ever authored tags one item to more than one
+   * objective, but this returns every one found rather than assuming that -- an item tagged to more
+   * than one objective has no single trigger objective to resolve a hypothesis from at all, and
+   * {@link ProbeRelationshipService} fails closed on that shape; see
+   * {@link TriggerItemHasAmbiguousObjectiveException}. */
+  public List<UUID> objectiveIdsForItem(UUID itemVersionId) {
     return jdbcTemplate.query("""
         SELECT objective_id FROM core.assessment_item_objective
-        WHERE item_version_id = ? ORDER BY objective_id LIMIT 1
-        """, (result, row) -> result.getObject("objective_id", UUID.class), itemVersionId)
-        .stream().findFirst();
+        WHERE item_version_id = ? ORDER BY objective_id
+        """, (result, row) -> result.getObject("objective_id", UUID.class), itemVersionId);
   }
 
-  /** {@code SAME_OBJECTIVE_CONFIRMATION}'s target is always the trigger's own objective -- trivially
-   * "defined" once the trigger has one at all; whether anything else is tagged to it is an items
-   * question, not a relationship-existence question. */
-  public ProbeTargetObjective sameObjectiveTarget(UUID triggerObjectiveId) {
-    return new ProbeTargetObjective(triggerObjectiveId, null);
+  /** {@code SAME_OBJECTIVE_CONFIRMATION}'s only possible target is the trigger's own objective --
+   * trivially "defined" once the trigger has exactly one (already established by the caller before
+   * this is invoked); whether anything else is tagged to it is an items question, not a
+   * relationship-existence question, so this always returns exactly one candidate. */
+  public List<ProbeTargetObjective> sameObjectiveTargets(UUID triggerObjectiveId) {
+    return List.of(new ProbeTargetObjective(triggerObjectiveId, null));
   }
 
   /**
-   * {@code PREREQUISITE_VALIDATION}'s target: the trigger skill's first curriculum prerequisite
-   * (ordered by that prerequisite's own {@code skill_version.display_order}, the same tie-break the
-   * curriculum's own presentation order already uses), then that prerequisite's first required
-   * objective ({@code display_order}). Empty if the trigger's skill has no prerequisite in this
-   * curriculum version, or none of its objectives are required -- neither of which the curriculum
-   * graph validator lets a published version reach, but this stays defensive rather than assuming
-   * it.
+   * {@code PREREQUISITE_VALIDATION}'s candidates: every required objective of every one of the
+   * trigger skill's curriculum prerequisites, deterministically ordered (prerequisite
+   * {@code skill_version.display_order}, then that prerequisite's own objective
+   * {@code display_order}) but not truncated to one -- a skill with more than one prerequisite, or a
+   * prerequisite with more than one required objective, both surface as more than one row here, and
+   * {@link ProbeRelationshipResolver} reports the ambiguity rather than this query picking one.
    */
-  public Optional<ProbeTargetObjective> prerequisiteValidationTarget(UUID triggerObjectiveId) {
+  public List<ProbeTargetObjective> prerequisiteValidationTargets(UUID triggerObjectiveId) {
     return jdbcTemplate.query("""
         SELECT po.id AS prerequisite_objective_id
         FROM core.learning_objective trigger_lo
@@ -81,25 +85,26 @@ public class ProbeRelationshipRepository {
           ON po.skill_version_id = prerequisite_sv.id AND po.required
         WHERE trigger_lo.id = ?
         ORDER BY prerequisite_sv.display_order, po.display_order
-        LIMIT 1
         """, (result, row) -> new ProbeTargetObjective(
             result.getObject("prerequisite_objective_id", UUID.class), null),
-        triggerObjectiveId).stream().findFirst();
+        triggerObjectiveId);
   }
 
-  /** {@code ROOT_CAUSE_PROBE}/{@code CONTRADICTION_CHECK}'s target: the first {@code PUBLISHED}
+  /** {@code ROOT_CAUSE_PROBE}/{@code CONTRADICTION_CHECK}'s candidates: every {@code PUBLISHED}
    * {@code core.diagnostic_probe_relationship} row of the given type from the trigger objective,
-   * ordered by {@code id} for a fixed, repeatable choice among several. */
-  public Optional<ProbeTargetObjective> authoredRelationshipTarget(
+   * ordered by {@code id} -- not truncated to one. The schema's own uniqueness constraint is on
+   * {@code (source_objective_id, target_objective_id, relationship_type)}, not
+   * {@code (source_objective_id, relationship_type)}, so more than one published row from the same
+   * source is a shape the schema explicitly permits, and this returns all of them. */
+  public List<ProbeTargetObjective> authoredRelationshipTargets(
       UUID triggerObjectiveId, ProbeRelationshipType relationshipType) {
     return jdbcTemplate.query("""
         SELECT id, target_objective_id FROM core.diagnostic_probe_relationship
         WHERE source_objective_id = ? AND relationship_type = ? AND status = 'PUBLISHED'
         ORDER BY id
-        LIMIT 1
         """, (result, row) -> new ProbeTargetObjective(
             result.getObject("target_objective_id", UUID.class), result.getObject("id", UUID.class)),
-        triggerObjectiveId, relationshipType.name()).stream().findFirst();
+        triggerObjectiveId, relationshipType.name());
   }
 
   /** Every verified, scoreable item tagged to {@code objectiveId} within {@code assessmentVersionId},
