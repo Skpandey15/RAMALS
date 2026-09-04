@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.assessment.AdaptiveDiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
+import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
+import io.ramals.learningplatform.curriculum.CurriculumRepository;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
@@ -135,7 +138,8 @@ class EvidenceLedgerPersistenceIntegrationTests {
       LearnerService learnerService = new LearnerService(learners);
       diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()),
-          new MasteryRepository(runtimeJdbc));
+          new MasteryRepository(runtimeJdbc),
+          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
       MasteryService masteryService = new MasteryService(
           new MasteryRepository(runtimeJdbc), evidence, new WeightedMasteryCalculator(),
           new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());

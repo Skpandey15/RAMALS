@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
+import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
+import io.ramals.learningplatform.curriculum.CurriculumRepository;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.evidence.EvidenceService;
 import io.ramals.learningplatform.learner.LearnerRepository;
@@ -351,7 +354,8 @@ class DiagnosticFormPersistenceIntegrationTests {
       masteryRepository = new MasteryRepository(runtimeJdbc);
       diagnostics = new DiagnosticService(assessments, learnerService,
           new DiagnosticFormSelector(new DiagnosticFormProperties()),
-          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository);
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
+          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
       EvidenceRepository evidenceRepository = new EvidenceRepository(runtimeJdbc);
       MasteryService masteryService = new MasteryService(
           masteryRepository, evidenceRepository, new WeightedMasteryCalculator(),
