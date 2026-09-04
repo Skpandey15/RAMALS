@@ -7,8 +7,9 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
 /**
- * V053 widens the selection-reason vocabulary for DIAGNOSTIC_SELECTION_V4, as a pure superset of
- * V051's ten values, and declares no version onto V4.
+ * V053 widens the selection-reason vocabulary for DIAGNOSTIC_SELECTION_V4 ("H4a": cross-attempt
+ * regression confirmation), as a pure superset of V051's ten values, and declares no version onto
+ * V4.
  */
 class HypothesisConfirmationSelectionMigrationContractTests {
 

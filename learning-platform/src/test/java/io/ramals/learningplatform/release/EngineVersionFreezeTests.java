@@ -517,14 +517,19 @@ class EngineVersionFreezeTests {
   }
 
   /**
-   * DIAGNOSTIC_SELECTION_V4 over the same pool, base signals and prerequisite/status setup
-   * {@link #prerequisiteAwareDiagnosticSelection} hashes, plus a regressed-skill set that exercises
-   * both shapes V4 must handle: KAFKA_PRODUCER_ACKS (V3 leaves it unchanged -- its prerequisite
-   * BROKER is MASTERED) and KAFKA_CONSUMER_GROUPS (V3 already capped it to
-   * FOUNDATIONAL/PREREQUISITE_NOT_SECURED -- its prerequisite PARTITION is not secured). Both are
-   * reprioritised to HYPOTHESIS_CONFIRMATION while keeping exactly the band V2/V3 already settled
-   * on for them. A change to the regression rule, or to anything V2/V3 already do, moves this hash
-   * independently of {@link #prerequisiteAwareDiagnosticSelection}'s.
+   * DIAGNOSTIC_SELECTION_V4 ("H4a": cross-attempt regression confirmation) over the same pool, base
+   * signals and prerequisite/status setup {@link #prerequisiteAwareDiagnosticSelection} hashes, plus
+   * a regressed-skill set that exercises both shapes V4 must handle: KAFKA_PRODUCER_ACKS (V3 leaves
+   * it unchanged -- its prerequisite BROKER is MASTERED) and KAFKA_CONSUMER_GROUPS (V3 already
+   * capped it to FOUNDATIONAL/PREREQUISITE_NOT_SECURED -- its prerequisite PARTITION is not
+   * secured). Both are reprioritised to HYPOTHESIS_CONFIRMATION while keeping exactly the band V2/V3
+   * already settled on for them. The regressed-skill set here is supplied directly rather than
+   * derived through {@link HypothesisConfirmationDiagnosticSelector#isRegression}, so this hash is
+   * independent of that rule's own frozen mastery-rank contract -- {@code
+   * everyRankedStatusPairMatchesTheFrozenRegressionContract} in
+   * {@code HypothesisConfirmationDiagnosticSelectorTests} is what pins that down. A change to
+   * {@link HypothesisConfirmationDiagnosticSelector#adjustForRegressions}, or to anything V2/V3
+   * already do, moves this hash independently of {@link #prerequisiteAwareDiagnosticSelection}'s.
    */
   private static String hypothesisConfirmationDiagnosticSelection() {
     AdaptiveDiagnosticFormProperties properties = new AdaptiveDiagnosticFormProperties();

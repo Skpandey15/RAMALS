@@ -6,18 +6,25 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * DIAGNOSTIC_SELECTION_V4: composes with V3 (which already composes with V2) the same way V3
- * composed with V2 -- one more adjustment step applied to the signal map before it reaches
- * {@link AdaptiveDiagnosticSelector#select}, everything upstream of it left completely unmodified.
+ * DIAGNOSTIC_SELECTION_V4 ("H4a": cross-attempt regression confirmation). Composes with V3 (which
+ * already composes with V2) the same way V3 composed with V2 -- one more adjustment step applied
+ * to the signal map before it reaches {@link AdaptiveDiagnosticSelector#select}, everything
+ * upstream of it left completely unmodified.
  *
- * <p><b>What "hypothesis confirmation" means here, precisely.</b> Not a live follow-up question
- * within the same attempt -- {@code DiagnosticSubmissionService} takes a whole packet's worth of
- * responses at once and completes the attempt, and there is no turn-based "ask one more because
- * that answer was a surprise" path today. What this class does instead: when a learner's own
- * mastery history shows their most recent snapshot for a skill is a *worse* status than the one
- * before it -- an unexpected regression -- that skill is prioritised for confirmation in their
- * NEXT diagnostic attempt. The follow-up is deferred to the next session, not immediate; that is
- * the accepted cost of reusing the existing one-shot-per-attempt model rather than redesigning it.
+ * <p><b>Scope: this is H4a, not the full roadmap "hypothesis confirmation" idea.</b> The roadmap's
+ * larger notion -- an unexpected answer causing a deterministic, related/root-cause probe to be
+ * selected -- is H4b, and is deliberately not implemented here. What this class actually does is
+ * narrower and fully specified: when a learner's own mastery history shows their most recent
+ * snapshot for a skill is a *worse* status than the one before it, by V4's own frozen rank (see
+ * {@link #MASTERY_RANK}), that same skill is reprioritised for confirmation in their NEXT
+ * diagnostic attempt. There is no probe of a *different*, causally related skill here -- H4b, if
+ * built, is a separate, later capability with its own version identifier.
+ *
+ * <p><b>Not a live follow-up question within the same attempt.</b> {@code
+ * DiagnosticSubmissionService} takes a whole packet's worth of responses at once and completes the
+ * attempt, and there is no turn-based "ask one more because that answer was a surprise" path today.
+ * The follow-up is deferred to the next session, not immediate; that is the accepted cost of reusing
+ * the existing one-shot-per-attempt model rather than redesigning it.
  *
  * <p><b>Never changes the band, only the reason and the priority.</b> {@link #adjustForRegressions}
  * takes signals that have already passed through V2's own computation and, where V3 applies,
@@ -40,22 +47,47 @@ public final class HypothesisConfirmationDiagnosticSelector {
    * urgent as a skill that has never been tested at all. */
   private static final int PRIORITY_HYPOTHESIS_CONFIRMATION = 0;
 
+  /**
+   * V4's own frozen mastery-rank mapping -- deliberately independent of
+   * {@link MasteryStatus#ordinal()}. Enum declaration order is a Java implementation detail, free
+   * to change (a status inserted, reordered, or renamed for reasons that have nothing to do with
+   * V4) without that silently redefining what "worse" means to this selector. This map is the one
+   * place V4 pins that meaning down, and changing it is changing V4's domain semantics -- subject
+   * to the same freeze discipline as everything else this class does (mint a V-next rather than
+   * edit it in place once a real assessment version is running under V4).
+   *
+   * <p>{@link MasteryStatus#INSUFFICIENT_EVIDENCE} is deliberately absent: it is not a rank on this
+   * scale, it is "no evidence yet". {@link #isRegression} handles it as an explicit special case
+   * rather than giving it a rank that would make some other transition compare against it.
+   */
+  private static final Map<MasteryStatus, Integer> MASTERY_RANK = Map.of(
+      MasteryStatus.NEEDS_RETEACH, 0,
+      MasteryStatus.NEEDS_PRACTICE, 1,
+      MasteryStatus.DEVELOPING, 2,
+      MasteryStatus.MASTERED, 3);
+
   private HypothesisConfirmationDiagnosticSelector() {
   }
 
   /**
-   * A learner's two most recent snapshots for one skill, compared: {@code previous} is a real,
-   * evidenced status (not {@link MasteryStatus#INSUFFICIENT_EVIDENCE}) and {@code latest} is
-   * strictly worse than it by the enum's own declared order (INSUFFICIENT_EVIDENCE, NEEDS_RETEACH,
-   * NEEDS_PRACTICE, DEVELOPING, MASTERED -- ascending). {@code previous} being
-   * INSUFFICIENT_EVIDENCE is excluded deliberately: going from "unknown" to "known and weak" is
-   * evidence arriving for the first time, not a regression from anything.
+   * A learner's two most recent snapshots for one skill, compared by V4's own frozen
+   * {@link #MASTERY_RANK}: {@code previous} is a real, evidenced status (not
+   * {@link MasteryStatus#INSUFFICIENT_EVIDENCE}) and {@code latest} ranks strictly below it.
+   * {@code previous} being INSUFFICIENT_EVIDENCE is excluded deliberately: going from "unknown" to
+   * "known and weak" is evidence arriving for the first time, not a regression from anything. A
+   * status absent from {@link #MASTERY_RANK} (only INSUFFICIENT_EVIDENCE today) on either side is
+   * treated the same way: not comparable, so never a regression.
    */
   public static boolean isRegression(MasteryStatus previous, MasteryStatus latest) {
     if (previous == null || latest == null || previous == MasteryStatus.INSUFFICIENT_EVIDENCE) {
       return false;
     }
-    return previous.ordinal() > latest.ordinal();
+    Integer previousRank = MASTERY_RANK.get(previous);
+    Integer latestRank = MASTERY_RANK.get(latest);
+    if (previousRank == null || latestRank == null) {
+      return false;
+    }
+    return previousRank > latestRank;
   }
 
   /**

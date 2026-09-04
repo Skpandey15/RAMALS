@@ -11,7 +11,8 @@ import org.junit.jupiter.api.Test;
 /**
  * {@link HypothesisConfirmationDiagnosticSelector}: the regression rule in isolation, and the
  * signal-map adjustment it drives. Every adjustment case asserts the class's own stated boundary --
- * reprioritise, never re-band.
+ * reprioritise, never re-band. This is H4a (cross-attempt regression confirmation) only -- H4b
+ * (hypothesis-driven related/root-cause probe selection) is future work with no code here yet.
  */
 class HypothesisConfirmationDiagnosticSelectorTests {
 
@@ -40,9 +41,18 @@ class HypothesisConfirmationDiagnosticSelectorTests {
   @Test
   void insufficientEvidenceThenAnyRealStatusIsEvidenceArrivingNotARegression() {
     // Going from "unknown" to "known and weak" is the first evidence for this skill, not a
-    // regression from anything -- excluded deliberately, not merely because ordinal(0) is lowest.
+    // regression from anything -- excluded deliberately, not because it happens to rank lowest.
     assertThat(HypothesisConfirmationDiagnosticSelector
         .isRegression(MasteryStatus.INSUFFICIENT_EVIDENCE, MasteryStatus.NEEDS_RETEACH)).isFalse();
+  }
+
+  @Test
+  void insufficientEvidenceAsTheLatestStatusIsNeverARegressionEither() {
+    // Mastery only accumulates evidence forward, so a real snapshot regressing all the way back to
+    // "no evidence yet" should not happen in practice. Defended anyway: a status absent from V4's
+    // rank map is simply not comparable on either side, never a false positive.
+    assertThat(HypothesisConfirmationDiagnosticSelector
+        .isRegression(MasteryStatus.MASTERED, MasteryStatus.INSUFFICIENT_EVIDENCE)).isFalse();
   }
 
   @Test
@@ -51,6 +61,45 @@ class HypothesisConfirmationDiagnosticSelectorTests {
         .isFalse();
     assertThat(HypothesisConfirmationDiagnosticSelector.isRegression(MasteryStatus.MASTERED, null))
         .isFalse();
+  }
+
+  /**
+   * Every ordered pair among the four statuses V4's frozen rank actually orders (NEEDS_RETEACH <
+   * NEEDS_PRACTICE < DEVELOPING < MASTERED), spelled out explicitly as a truth table rather than
+   * derived from the same rank map the class under test uses -- so this is a check against the
+   * documented contract, not a restatement of the implementation. If a future edit to
+   * {@code MASTERY_RANK} silently changed what V4 considers a regression, this is what would catch
+   * it: the enum's own {@code ordinal()} happens to agree with this table today, but nothing here
+   * relies on that, and reordering the enum's declaration must not move a single one of these 16
+   * results.
+   */
+  @Test
+  void everyRankedStatusPairMatchesTheFrozenRegressionContract() {
+    assertRegression(MasteryStatus.NEEDS_RETEACH, MasteryStatus.NEEDS_RETEACH, false);
+    assertRegression(MasteryStatus.NEEDS_RETEACH, MasteryStatus.NEEDS_PRACTICE, false);
+    assertRegression(MasteryStatus.NEEDS_RETEACH, MasteryStatus.DEVELOPING, false);
+    assertRegression(MasteryStatus.NEEDS_RETEACH, MasteryStatus.MASTERED, false);
+
+    assertRegression(MasteryStatus.NEEDS_PRACTICE, MasteryStatus.NEEDS_RETEACH, true);
+    assertRegression(MasteryStatus.NEEDS_PRACTICE, MasteryStatus.NEEDS_PRACTICE, false);
+    assertRegression(MasteryStatus.NEEDS_PRACTICE, MasteryStatus.DEVELOPING, false);
+    assertRegression(MasteryStatus.NEEDS_PRACTICE, MasteryStatus.MASTERED, false);
+
+    assertRegression(MasteryStatus.DEVELOPING, MasteryStatus.NEEDS_RETEACH, true);
+    assertRegression(MasteryStatus.DEVELOPING, MasteryStatus.NEEDS_PRACTICE, true);
+    assertRegression(MasteryStatus.DEVELOPING, MasteryStatus.DEVELOPING, false);
+    assertRegression(MasteryStatus.DEVELOPING, MasteryStatus.MASTERED, false);
+
+    assertRegression(MasteryStatus.MASTERED, MasteryStatus.NEEDS_RETEACH, true);
+    assertRegression(MasteryStatus.MASTERED, MasteryStatus.NEEDS_PRACTICE, true);
+    assertRegression(MasteryStatus.MASTERED, MasteryStatus.DEVELOPING, true);
+    assertRegression(MasteryStatus.MASTERED, MasteryStatus.MASTERED, false);
+  }
+
+  private static void assertRegression(MasteryStatus previous, MasteryStatus latest, boolean expected) {
+    assertThat(HypothesisConfirmationDiagnosticSelector.isRegression(previous, latest))
+        .as("%s -> %s", previous, latest)
+        .isEqualTo(expected);
   }
 
   // -----------------------------------------------------------------------------------------

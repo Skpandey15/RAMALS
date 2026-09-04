@@ -199,11 +199,12 @@ public class DiagnosticService {
   }
 
   /**
-   * DIAGNOSTIC_SELECTION_V4: V3's prerequisite cap applied first (the band a regressed skill is
+   * DIAGNOSTIC_SELECTION_V4 ("H4a": cross-attempt regression confirmation, not H4b's
+   * hypothesis-driven related-probe selection -- see {@link HypothesisConfirmationDiagnosticSelector}
+   * for the scope boundary). V3's prerequisite cap applied first (the band a regressed skill is
    * tested at still has to be earned), then {@link HypothesisConfirmationDiagnosticSelector}'s own
    * step -- reprioritising, never re-banding -- for any skill whose two most recent mastery
-   * snapshots show a status regression. See {@link HypothesisConfirmationDiagnosticSelector} for
-   * why this is a cross-attempt signal rather than a same-attempt follow-up.
+   * snapshots show a status regression, by V4's own frozen mastery-rank contract.
    */
   private void selectHypothesisConfirmingForm(
       AssessmentAttempt attempt, UUID learnerId, ResolvedDiagnostic diagnostic) {

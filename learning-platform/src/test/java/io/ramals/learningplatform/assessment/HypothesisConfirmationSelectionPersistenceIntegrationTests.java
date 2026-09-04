@@ -30,12 +30,13 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * DIAGNOSTIC_SELECTION_V4 against real PostgreSQL, through {@link DiagnosticService#createAttempt}
- * end to end -- proving the cross-attempt part actually works: a learner's own persisted
- * {@code ledger.mastery_snapshot} history, not a synthetic in-memory set, is what
- * {@code detectRegressedSkills} walks. A small throwaway, test-only assessment version, same
- * pattern as {@link PrerequisiteAwareSelectionPersistenceIntegrationTests}, so nothing here touches
- * or publishes the real Kafka v1/v2 content.
+ * DIAGNOSTIC_SELECTION_V4 ("H4a": cross-attempt regression confirmation -- H4b's hypothesis-driven
+ * related-probe selection is future work, no code under test here) against real PostgreSQL, through
+ * {@link DiagnosticService#createAttempt} end to end -- proving the cross-attempt part actually
+ * works: a learner's own persisted {@code ledger.mastery_snapshot} history, not a synthetic
+ * in-memory set, is what {@code detectRegressedSkills} walks. A small throwaway, test-only
+ * assessment version, same pattern as {@link PrerequisiteAwareSelectionPersistenceIntegrationTests},
+ * so nothing here touches or publishes the real Kafka v1/v2 content.
  */
 @EnabledIfEnvironmentVariable(named = "RAMALS_TEST_POSTGRES_URL", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "RAMALS_TEST_POSTGRES_ALLOW_RESET", matches = "(?i)true")
