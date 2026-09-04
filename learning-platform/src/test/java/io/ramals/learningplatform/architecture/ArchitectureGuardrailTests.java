@@ -74,6 +74,19 @@ class ArchitectureGuardrailTests {
       .because("M2-T12 decisions authorize a later workflow but cannot write evidence or mastery");
 
   @ArchTest
+  static final ArchRule probeRelationshipResolutionCannotMutateLearnerState = noClasses()
+      .that().haveSimpleName("ProbeRelationshipResolver")
+      .or().haveSimpleName("ProbeRelationshipRepository")
+      .or().haveSimpleName("ProbeRelationshipService")
+      .should().dependOnClassesThat().haveFullyQualifiedName(BASE + ".mastery.MasteryRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".mastery.MasteryService")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".evidence.EvidenceRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".evidence.EvidenceService")
+      .because("H4b's foundation (M2-ADR-024) is read-only by construction -- a hypothesis or "
+          + "probe resolution must never be able to write mastery or evidence state, the same "
+          + "discipline M2-ADR-023 already holds GapDiagnosisService to");
+
+  @ArchTest
   static final ArchRule agentAdaptersCannotDriveTheControlledWorkflow = noClasses()
       .that().resideInAnyPackage(BASE + ".ai..", BASE + ".assessmentevaluation..",
           BASE + ".diagnosticassessment..")
