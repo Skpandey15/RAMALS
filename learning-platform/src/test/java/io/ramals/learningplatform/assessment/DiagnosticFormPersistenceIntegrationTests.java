@@ -65,6 +65,7 @@ class DiagnosticFormPersistenceIntegrationTests {
   private LearnerRepository learners;
   private DiagnosticService diagnostics;
   private DiagnosticSubmissionService submissions;
+  private MasteryRepository masteryRepository;
   private TransactionTemplate transactionTemplate;
   private JdbcTemplate runtimeJdbc;
 
@@ -347,11 +348,13 @@ class DiagnosticFormPersistenceIntegrationTests {
       assessments = new AssessmentRepository(runtimeJdbc, mapper);
       learners = new LearnerRepository(runtimeJdbc);
       LearnerService learnerService = new LearnerService(learners);
+      masteryRepository = new MasteryRepository(runtimeJdbc);
       diagnostics = new DiagnosticService(assessments, learnerService,
-          new DiagnosticFormSelector(new DiagnosticFormProperties()));
+          new DiagnosticFormSelector(new DiagnosticFormProperties()),
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository);
       EvidenceRepository evidenceRepository = new EvidenceRepository(runtimeJdbc);
       MasteryService masteryService = new MasteryService(
-          new MasteryRepository(runtimeJdbc), evidenceRepository, new WeightedMasteryCalculator(),
+          masteryRepository, evidenceRepository, new WeightedMasteryCalculator(),
           new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);

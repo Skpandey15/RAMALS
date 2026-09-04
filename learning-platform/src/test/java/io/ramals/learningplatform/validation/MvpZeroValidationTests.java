@@ -3,6 +3,8 @@ package io.ramals.learningplatform.validation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
@@ -173,7 +175,8 @@ class MvpZeroValidationTests {
         new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());
     RecommendationService recommendationService =
         new RecommendationService(new RecommendationPolicy(), recommendations, learnerService);
-    diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
+    diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
+        new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository);
     submissions = new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorerV2(),
         new EvidenceService(evidence), masteryService, recommendationService, mapper);
     progression = new ProgressionService(curriculumService, learnerService,

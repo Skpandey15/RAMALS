@@ -110,7 +110,7 @@ class DiagnosticApiContractTests {
     when(assessmentRepository.findByIdempotency(eq(LEARNER_ONE), eq(VERSION), eq("key-1")))
         .thenReturn(Optional.empty(), Optional.of(attempt("key-1")));
     when(assessmentRepository.findActiveAttempt(LEARNER_ONE, VERSION)).thenReturn(Optional.empty());
-    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY))
+    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY, null))
         .thenReturn(attempt("key-1"));
     when(assessmentRepository.findEligibleItems(eq(VERSION), eq(LEARNER_ONE), any()))
         .thenReturn(pool());
@@ -150,7 +150,7 @@ class DiagnosticApiContractTests {
     when(assessmentRepository.findByIdempotency(eq(LEARNER_ONE), eq(VERSION), eq("key-1")))
         .thenReturn(Optional.empty(), Optional.of(attempt("key-1")));
     when(assessmentRepository.findActiveAttempt(LEARNER_ONE, VERSION)).thenReturn(Optional.empty());
-    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY))
+    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY, null))
         .thenThrow(new DuplicateKeyException("concurrent create"));
 
     mockMvc.perform(post("/api/v1/diagnostics/kafka/attempts")
@@ -196,7 +196,7 @@ class DiagnosticApiContractTests {
     when(assessmentRepository.findByIdempotency(eq(LEARNER_ONE), eq(VERSION), eq("key-1")))
         .thenReturn(Optional.empty());
     when(assessmentRepository.findActiveAttempt(LEARNER_ONE, VERSION)).thenReturn(Optional.empty());
-    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY))
+    when(assessmentRepository.insertAttempt(LEARNER_ONE, VERSION, "key-1", POLICY, null))
         .thenReturn(attempt("key-1"));
     when(assessmentRepository.findEligibleItems(eq(VERSION), eq(LEARNER_ONE), any()))
         .thenReturn(pool());
