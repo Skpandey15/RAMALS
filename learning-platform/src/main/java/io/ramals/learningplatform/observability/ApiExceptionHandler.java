@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import io.ramals.learningplatform.admin.ContentPublicationException;
 import io.ramals.learningplatform.admin.ContentVersionNotFoundException;
 import io.ramals.learningplatform.admin.InvalidContentTransitionException;
+import io.ramals.learningplatform.assessment.AssessmentBankExhaustedException;
 import io.ramals.learningplatform.assessment.AttemptNotFoundException;
 import io.ramals.learningplatform.assessment.DiagnosticNotFoundException;
 import io.ramals.learningplatform.assessment.EmptyItemPoolException;
@@ -182,6 +183,27 @@ public class ApiExceptionHandler {
         "Diagnostic unavailable",
         "DIAGNOSTIC_FORM_UNAVAILABLE",
         "The diagnostic could not be assembled.",
+        request);
+  }
+
+  /**
+   * The no-repeat guarantee working as intended, not a broken invariant: this learner has already
+   * been shown every unseen scoreable item across every skill in scope. A 409 rather than a 5xx,
+   * because nothing is broken and a future attempt (once more content exists, or a future retention
+   * policy explicitly permits reassessment) may succeed where this one could not.
+   */
+  @ExceptionHandler(AssessmentBankExhaustedException.class)
+  ResponseEntity<ApiProblem> handleAssessmentBankExhausted(
+      AssessmentBankExhaustedException exception, HttpServletRequest request) {
+    LOGGER.atWarn()
+        .addKeyValue("errorCode", "ASSESSMENT_BANK_EXHAUSTED")
+        .addKeyValue("exhaustedSkillCodes", exception.exhaustedSkillCodes())
+        .log("Adaptive diagnostic bank exhausted for this learner");
+    return problem(
+        HttpStatus.CONFLICT,
+        "Assessment bank exhausted",
+        "ASSESSMENT_BANK_EXHAUSTED",
+        "No new questions are available for this learner in this diagnostic right now.",
         request);
   }
 

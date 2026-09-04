@@ -2,11 +2,17 @@ package io.ramals.learningplatform.assessment;
 
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.mastery.MasteryRepository;
+import io.ramals.learningplatform.mastery.MasterySnapshot;
+import io.ramals.learningplatform.mastery.SkillMasteryConfig;
 import io.ramals.learningplatform.observability.BusinessEventLogger;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
@@ -31,14 +37,20 @@ public class DiagnosticService {
   private final AssessmentRepository repository;
   private final LearnerService learnerService;
   private final DiagnosticFormSelector selector;
+  private final AdaptiveDiagnosticSelector adaptiveSelector;
+  private final MasteryRepository masteryRepository;
 
   public DiagnosticService(
       AssessmentRepository repository,
       LearnerService learnerService,
-      DiagnosticFormSelector selector) {
+      DiagnosticFormSelector selector,
+      AdaptiveDiagnosticSelector adaptiveSelector,
+      MasteryRepository masteryRepository) {
     this.repository = repository;
     this.learnerService = learnerService;
     this.selector = selector;
+    this.adaptiveSelector = adaptiveSelector;
+    this.masteryRepository = masteryRepository;
   }
 
   @Transactional
@@ -59,9 +71,14 @@ public class DiagnosticService {
       return new AttemptCreation(active.get(), diagnostic, false);
     }
     try {
-      AssessmentAttempt created = repository.insertAttempt(
-          learner.id(), versionId, key, DiagnosticFormSelector.SELECTION_POLICY_VERSION);
-      selectForm(created, learner.id(), versionId);
+      String selectionPolicy = repository.findSelectionPolicyVersion(versionId)
+          .orElse(DiagnosticFormSelector.SELECTION_POLICY_VERSION);
+      String packetPolicy = AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
+          ? AdaptiveDiagnosticSelector.PACKET_POLICY
+          : null;
+      AssessmentAttempt created =
+          repository.insertAttempt(learner.id(), versionId, key, selectionPolicy, packetPolicy);
+      selectForm(created, learner.id(), versionId, selectionPolicy);
       BusinessEventLogger.info(LOGGER, "assessment.started", "Diagnostic assessment started",
           Map.of("entityType", "ASSESSMENT_ATTEMPT", "entityId", created.id(),
               "learnerId", learner.id(), "outcome", "SUCCESS"));
@@ -90,15 +107,26 @@ public class DiagnosticService {
   }
 
   /**
-   * Assembles this attempt's form and records it.
+   * Assembles this attempt's form and records it, through whichever selector the version declares.
    *
    * <p>Runs inside the creating transaction, so an attempt never becomes visible without the
    * questions it is an attempt at. It runs only on the branch that actually inserted an attempt:
    * every other branch of {@link #createAttempt} returns an attempt that already exists, and
    * re-selecting for it would either duplicate the form or -- worse, if the second draw differed --
-   * change the questions under a learner who is midway through answering them.
+   * change the questions under a learner who is midway through answering them. That guarantee is
+   * what makes an idempotent retry safe under either selector: the draw happens at most once per
+   * attempt, so replaying an Idempotency-Key never re-exposes a question.
    */
-  private void selectForm(AssessmentAttempt attempt, UUID learnerId, UUID assessmentVersionId) {
+  private void selectForm(
+      AssessmentAttempt attempt, UUID learnerId, UUID assessmentVersionId, String selectionPolicy) {
+    if (AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
+      selectAdaptiveForm(attempt, learnerId, assessmentVersionId);
+    } else {
+      selectLegacyForm(attempt, learnerId, assessmentVersionId);
+    }
+  }
+
+  private void selectLegacyForm(AssessmentAttempt attempt, UUID learnerId, UUID assessmentVersionId) {
     Instant recencySince = selector.recencyHorizon(Instant.now());
     List<EligibleItem> pool =
         repository.findEligibleItems(assessmentVersionId, learnerId, recencySince);
@@ -113,6 +141,89 @@ public class DiagnosticService {
             "difficultiesCovered", form.difficultiesCovered(),
             "recentlyPresentedReused", form.recentlyPresentedReused(),
             "outcome", "SUCCESS"));
+  }
+
+  /**
+   * Assembles the adaptive packet: the full verified pool minus every logical question this
+   * learner has ever been shown, ranked per skill by that skill's latest mastery signal.
+   *
+   * <p>A version with no verified content at all is {@link EmptyItemPoolException} -- V017/V048
+   * make that unreachable through publication, so it is a broken invariant. A learner who has
+   * exhausted every skill's unseen stock is different: an expected outcome of the no-repeat
+   * guarantee working, reported as {@link AssessmentBankExhaustedException} rather than silently
+   * recycling a question. Anything in between -- some skills still have unseen stock, others do not
+   * -- is a valid, smaller-than-quota packet, logged with which skills came up short rather than
+   * refused.
+   */
+  private void selectAdaptiveForm(AssessmentAttempt attempt, UUID learnerId, UUID assessmentVersionId) {
+    List<AdaptiveEligibleItem> fullPool = repository.findAdaptiveEligibleItems(assessmentVersionId);
+    if (fullPool.isEmpty()) {
+      throw new EmptyItemPoolException(
+          "No verified scoreable items are available to assemble an adaptive form.");
+    }
+
+    Set<UUID> exposed = repository.findLearnerExposedLogicalItemIds(learnerId);
+    List<AdaptiveEligibleItem> unseenPool = fullPool.stream()
+        .filter(item -> !exposed.contains(item.logicalItemId()))
+        .toList();
+
+    Map<String, UUID> skillIdByCode = new LinkedHashMap<>();
+    for (AdaptiveEligibleItem item : fullPool) {
+      skillIdByCode.putIfAbsent(item.skillCode(), item.skillId());
+    }
+
+    UUID curriculumVersionId = repository.findCurriculumVersionId(assessmentVersionId)
+        .orElseThrow(() -> new IllegalStateException(
+            "assessment version has no curriculum version: " + assessmentVersionId));
+
+    Map<String, SkillMasterySignal> signals = new LinkedHashMap<>();
+    boolean anySkillHasEvidence = false;
+    for (Map.Entry<String, UUID> entry : skillIdByCode.entrySet()) {
+      Optional<MasterySnapshot> snapshot =
+          masteryRepository.findLatestSnapshot(learnerId, entry.getValue(), curriculumVersionId);
+      Optional<SkillMasteryConfig> config =
+          masteryRepository.findSkillConfig(entry.getValue(), curriculumVersionId);
+      SkillMasterySignal signal = (snapshot.isPresent() && config.isPresent())
+          ? SkillMasterySignal.from(snapshot.get(), config.get())
+          : SkillMasterySignal.noEvidence();
+      if (snapshot.isPresent()) {
+        anySkillHasEvidence = true;
+      }
+      signals.put(entry.getKey(), signal);
+    }
+    String phase = anySkillHasEvidence ? "ADAPTIVE_LEARNING" : "DIAGNOSTIC_BASELINE";
+
+    AdaptivePacket packet = adaptiveSelector.select(unseenPool, signals, ThreadLocalRandom.current());
+
+    if (packet.items().isEmpty()) {
+      throw new AssessmentBankExhaustedException(skillIdByCode.keySet());
+    }
+
+    repository.insertSelectedItems(attempt.id(), packet.items());
+
+    Set<String> exhaustedSkills = new LinkedHashSet<>();
+    for (String skillCode : skillIdByCode.keySet()) {
+      if (unseenPool.stream().noneMatch(item -> item.skillCode().equals(skillCode))) {
+        exhaustedSkills.add(skillCode);
+      }
+    }
+    boolean underfilled = !packet.skillsWithNoUnseenStock().isEmpty();
+    String outcome = underfilled ? "PARTIAL" : "SUCCESS";
+
+    BusinessEventLogger.info(LOGGER, "assessment.form.selected", "Adaptive diagnostic form selected",
+        Map.ofEntries(
+            Map.entry("entityType", "ASSESSMENT_ATTEMPT"), Map.entry("entityId", attempt.id()),
+            Map.entry("learnerId", learnerId),
+            Map.entry("selectionPolicy", AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION),
+            Map.entry("packetPolicy", AdaptiveDiagnosticSelector.PACKET_POLICY),
+            Map.entry("phase", phase),
+            Map.entry("poolSize", packet.poolSize()), Map.entry("itemCount", packet.items().size()),
+            Map.entry("singleChoiceCount", packet.singleChoiceCount()),
+            Map.entry("fillBlankCount", packet.fillBlankCount()),
+            Map.entry("skillsCovered", packet.skillsCovered()),
+            Map.entry("skillsWithNoUnseenStock", packet.skillsWithNoUnseenStock()),
+            Map.entry("bankExhaustedSkills", exhaustedSkills),
+            Map.entry("outcome", outcome)));
   }
 
   private UUID parseAttemptId(String rawAttemptId) {

@@ -16,5 +16,36 @@ public enum SelectionReason {
   DIFFICULTY_COVERAGE,
 
   /** Taken to reach the configured form size once coverage was already satisfied. */
-  FILL
+  FILL,
+
+  // -----------------------------------------------------------------------------------------
+  // DIAGNOSTIC_SELECTION_V2 only. V045's three reasons above describe coverage of a form;
+  // these describe what the learner's own mastery evidence said about a skill at the moment of
+  // selection. V1 never emits these -- see AdaptiveDiagnosticSelector.
+  // -----------------------------------------------------------------------------------------
+
+  /** The learner has no mastery snapshot yet for this skill: the diagnostic baseline case. */
+  UNSEEN_ITEM,
+
+  /** Taken at the skill's already-evidenced band because evidence confidence has not yet met
+   * its threshold -- more evidence is needed before this skill's status can be trusted. */
+  LOW_CONFIDENCE,
+
+  /** Taken at the skill's already-evidenced band because confidence is adequate but the mastery
+   * score is below threshold: a remediation-flavoured pick, held rather than escalated. */
+  WEAK_SKILL,
+
+  /** Taken because the skill's required objectives are not yet fully covered by evidence, even
+   * though confidence and mastery score both clear their thresholds. */
+  OBJECTIVE_COVERAGE_GAP,
+
+  /** Taken one band above the skill's already-evidenced band because confidence, mastery score,
+   * and objective coverage all cleared their thresholds at that band -- evidence-driven
+   * escalation, never more than one band at a time. */
+  DIFFICULTY_PROGRESSION,
+
+  /** The skill already clears every threshold at ADVANCED; taken anyway, at the lowest
+   * priority, so a mastered skill is not dropped from selection entirely. Distinct from a
+   * future spaced-repetition RETENTION_CHECK, which does not exist yet and is not this. */
+  MASTERY_CONFIRMATION
 }

@@ -2,6 +2,10 @@ package io.ramals.learningplatform.release;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
+import io.ramals.learningplatform.assessment.AdaptiveEligibleItem;
+import io.ramals.learningplatform.assessment.AdaptivePacket;
 import io.ramals.learningplatform.assessment.AssessmentItemScoringView;
 import io.ramals.learningplatform.assessment.DiagnosticForm;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
@@ -10,7 +14,10 @@ import io.ramals.learningplatform.assessment.DiagnosticScorer;
 import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
 import io.ramals.learningplatform.assessment.EligibleItem;
 import io.ramals.learningplatform.assessment.SelectedItem;
+import io.ramals.learningplatform.assessment.SelectionReason;
 import io.ramals.learningplatform.assessment.ScoredResponse;
+import io.ramals.learningplatform.assessment.SkillMasterySignal;
+import io.ramals.learningplatform.curriculum.AssessmentDifficulty;
 import io.ramals.learningplatform.ai.contract.AiEvaluatedResponseType;
 import io.ramals.learningplatform.ai.contract.AssessmentEvaluationContext;
 import io.ramals.learningplatform.ai.contract.AssessmentEvaluationRequest;
@@ -108,6 +115,8 @@ class EngineVersionFreezeTests {
     put(DiagnosticScorerV2.SCORING_VERSION, EngineVersionFreezeTests::diagnosticScoringV2);
     put(DiagnosticFormSelector.SELECTION_POLICY_VERSION,
         EngineVersionFreezeTests::diagnosticSelection);
+    put(AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION,
+        EngineVersionFreezeTests::adaptiveDiagnosticSelection);
     put(LearningSessionPolicy.POLICY_VERSION, EngineVersionFreezeTests::sessionPolicy);
     put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
     put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
@@ -140,6 +149,10 @@ class EngineVersionFreezeTests {
       // was minted. Nothing has been written under it yet, which is the only time an entry here
       // may be added rather than a new version identifier minted.
       Map.entry("DIAGNOSTIC_SELECTION_V1", "10a6138a21877206cfae74dce1717c81b644958fe3cd4e3ddc60e446ecf2a1a4"),
+      // Minted with V050/PR-B, when the adaptive selector was first frozen. V1 above is untouched
+      // and still hashes to its recorded value -- the coverage-pass arithmetic did not change, only
+      // a different selector that reads mastery evidence instead.
+      Map.entry("DIAGNOSTIC_SELECTION_V2", "5b7643a604b639e4d4f8176f39133a3ae713f2ce40b43d28f6274fefc8de7e23"),
       Map.entry("SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647"),
       Map.entry("GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad"),
       Map.entry("PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a"),
@@ -358,6 +371,74 @@ class EngineVersionFreezeTests {
     return new EligibleItem(
         UUID.fromString("01900000-0000-7000-8000-00000000041" + index),
         skillCode, difficulty, lastPresentedAt);
+  }
+
+  /**
+   * Adaptive selection over a fixed pool and fixed per-skill signals, one of every
+   * {@link SelectionReason} the adaptive selector can emit -- unseen, low-confidence, weak,
+   * objective-gap, progression, and mastery-confirmation -- so a change to priority ordering, band
+   * fallback, or the type-quota round-robin moves the hash.
+   */
+  private static String adaptiveDiagnosticSelection() {
+    AdaptiveDiagnosticFormProperties properties = new AdaptiveDiagnosticFormProperties();
+    properties.setSingleChoiceTarget(5);
+    properties.setFillBlankTarget(2);
+    AdaptiveDiagnosticSelector selector = new AdaptiveDiagnosticSelector(properties);
+
+    List<AdaptiveEligibleItem> pool = List.of(
+        adaptiveItem(1, "KAFKA_BROKER", "SINGLE_CHOICE", "FOUNDATIONAL"),
+        adaptiveItem(2, "KAFKA_BROKER", "SINGLE_CHOICE", "INTERMEDIATE"),
+        adaptiveItem(3, "KAFKA_TOPIC", "SINGLE_CHOICE", "INTERMEDIATE"),
+        adaptiveItem(4, "KAFKA_TOPIC", "FILL_BLANK", "FOUNDATIONAL"),
+        adaptiveItem(5, "KAFKA_PARTITION", "SINGLE_CHOICE", "FOUNDATIONAL"),
+        adaptiveItem(6, "KAFKA_PARTITION", "SINGLE_CHOICE", "INTERMEDIATE"),
+        adaptiveItem(7, "KAFKA_PRODUCER_ACKS", "SINGLE_CHOICE", "FOUNDATIONAL"),
+        adaptiveItem(8, "KAFKA_PRODUCER_ACKS", "SINGLE_CHOICE", "INTERMEDIATE"),
+        adaptiveItem(9, "KAFKA_CONSUMER_GROUPS", "SINGLE_CHOICE", "FOUNDATIONAL"),
+        adaptiveItem(10, "KAFKA_CONSUMER_GROUPS", "FILL_BLANK", "INTERMEDIATE"),
+        adaptiveItem(11, "KAFKA_REPLICATION", "SINGLE_CHOICE", "ADVANCED"),
+        adaptiveItem(12, "KAFKA_REPLICATION", "SINGLE_CHOICE", "INTERMEDIATE"));
+
+    Map<String, SkillMasterySignal> signals = new LinkedHashMap<>();
+    signals.put("KAFKA_BROKER", SkillMasterySignal.noEvidence());
+    signals.put("KAFKA_TOPIC", new SkillMasterySignal(
+        AssessmentDifficulty.INTERMEDIATE, SelectionReason.LOW_CONFIDENCE, 1));
+    signals.put("KAFKA_PARTITION", new SkillMasterySignal(
+        AssessmentDifficulty.FOUNDATIONAL, SelectionReason.WEAK_SKILL, 2));
+    signals.put("KAFKA_PRODUCER_ACKS", new SkillMasterySignal(
+        AssessmentDifficulty.FOUNDATIONAL, SelectionReason.OBJECTIVE_COVERAGE_GAP, 3));
+    signals.put("KAFKA_CONSUMER_GROUPS", new SkillMasterySignal(
+        AssessmentDifficulty.INTERMEDIATE, SelectionReason.DIFFICULTY_PROGRESSION, 4));
+    signals.put("KAFKA_REPLICATION", new SkillMasterySignal(
+        AssessmentDifficulty.ADVANCED, SelectionReason.MASTERY_CONFIRMATION, 5));
+
+    StringBuilder out = new StringBuilder();
+    for (int seed = 0; seed < 5; seed++) {
+      AdaptivePacket packet = selector.select(pool, signals, new Random(seed));
+      out.append(packet.poolSize()).append('|')
+          .append(packet.skillsCovered()).append('|')
+          .append(packet.singleChoiceCount()).append('|')
+          .append(packet.fillBlankCount()).append('|')
+          .append(packet.skillsWithNoUnseenStock()).append('\n');
+      for (SelectedItem item : packet.items()) {
+        out.append(item.presentationOrder()).append(':')
+            .append(item.itemVersionId()).append(':')
+            .append(item.reason()).append('\n');
+      }
+    }
+    return out.toString();
+  }
+
+  private static AdaptiveEligibleItem adaptiveItem(
+      int index, String skillCode, String itemType, String difficulty) {
+    UUID itemVersionId = UUID.fromString(String.format(
+        "01900000-0000-7000-8000-0000000006%02d", index));
+    UUID logicalItemId = UUID.fromString(String.format(
+        "01900000-0000-7000-8000-0000000007%02d", index));
+    UUID skillId = UUID.fromString(String.format(
+        "01900000-0000-7000-8000-0000000001%02d", index));
+    return new AdaptiveEligibleItem(itemVersionId, logicalItemId, skillId, skillCode, itemType,
+        difficulty);
   }
 
   /**
