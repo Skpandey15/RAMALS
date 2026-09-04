@@ -56,6 +56,18 @@ public class AssessmentRepository {
         .stream().findFirst();
   }
 
+  /**
+   * Which form-selection policy governs this version. Empty (not merely a null string) both when
+   * the version does not exist and when it declares none -- either way the caller falls back to
+   * {@link DiagnosticFormSelector#SELECTION_POLICY_VERSION}, V050's documented meaning of NULL.
+   */
+  public Optional<String> findSelectionPolicyVersion(UUID assessmentVersionId) {
+    return jdbcTemplate.query(
+        "SELECT selection_policy_version FROM core.assessment_version WHERE id = ?",
+        (result, row) -> Optional.ofNullable(result.getString("selection_policy_version")),
+        assessmentVersionId).stream().findFirst().orElse(Optional.empty());
+  }
+
   public Optional<ResolvedDiagnostic> findDiagnosticByVersionId(UUID assessmentVersionId) {
     return jdbcTemplate.query("""
         SELECT av.id, d.code AS domain_code, a.stable_code AS assessment_code,
@@ -214,6 +226,18 @@ public class AssessmentRepository {
    */
   public AssessmentAttempt insertAttempt(
       UUID learnerId, UUID assessmentVersionId, String idempotencyKey, String selectionPolicy) {
+    return insertAttempt(learnerId, assessmentVersionId, idempotencyKey, selectionPolicy, null);
+  }
+
+  /**
+   * @param packetPolicy which packet-composition policy decided this attempt's item types and
+   *     count -- {@link AdaptiveDiagnosticSelector#PACKET_POLICY} under V2 selection, or
+   *     {@code null} for the legacy V1 path, which V047's column comment documents as "predates
+   *     typed packets" rather than a packet policy of its own.
+   */
+  public AssessmentAttempt insertAttempt(
+      UUID learnerId, UUID assessmentVersionId, String idempotencyKey, String selectionPolicy,
+      String packetPolicy) {
     UUID id = UuidV7.generate();
     // Master Plan §8: the attempt row records the logical interaction that created it, so an
     // attempt can be correlated back to a support ticket in SQL rather than only through logs.
@@ -221,10 +245,10 @@ public class AssessmentRepository {
     jdbcTemplate.update("""
         INSERT INTO core.assessment_attempt
           (id, learner_id, assessment_version_id, status, idempotency_key, interaction_id,
-           selection_policy)
-        VALUES (?, ?, ?, 'IN_PROGRESS', ?, ?, ?)
+           selection_policy, packet_policy)
+        VALUES (?, ?, ?, 'IN_PROGRESS', ?, ?, ?, ?)
         """, id, learnerId, assessmentVersionId, idempotencyKey,
-        interactionId.isBlank() ? null : interactionId, selectionPolicy);
+        interactionId.isBlank() ? null : interactionId, selectionPolicy, packetPolicy);
     return findAttempt(id).orElseThrow(
         () -> new IllegalStateException("Attempt insert did not persist a row."));
   }
@@ -259,6 +283,35 @@ public class AssessmentRepository {
         ORDER BY iv.display_order, iv.item_code
         """, ELIGIBLE_ITEM_MAPPER,
         learnerId, OffsetDateTime.ofInstant(recencySince, ZoneOffset.UTC), assessmentVersionId);
+  }
+
+  /**
+   * The pool {@link AdaptiveDiagnosticSelector} may draw an adaptive packet from: every verified,
+   * scoreable item of the pinned version, with its logical question identity.
+   *
+   * <p>Carries no recency and applies no per-learner exclusion -- unlike {@link #findEligibleItems},
+   * which resolves recency for one learner in the same statement. The V2 no-repeat rule is a hard
+   * exclusion rather than a preference, so the caller filters this pool against
+   * {@link #findLearnerExposedLogicalItemIds} itself, once, rather than this query resolving it per
+   * candidate for a single learner the way V1's recency join does.
+   *
+   * <p>Inner-joined to {@code assessment_item_lineage} rather than left-joined: an item with no
+   * logical identity cannot be reasoned about for no-repeat at all, and V048's publication guard
+   * already refuses to let such an item reach a published version, so excluding it here costs
+   * nothing a publishable version would ever have relied on.
+   */
+  public List<AdaptiveEligibleItem> findAdaptiveEligibleItems(UUID assessmentVersionId) {
+    return jdbcTemplate.query("""
+        SELECT iv.id, lin.logical_item_id, iv.skill_id, s.stable_code AS skill_code,
+               iv.item_type, iv.difficulty
+        FROM core.assessment_item_version iv
+        JOIN core.skill s ON s.id = iv.skill_id
+        JOIN core.assessment_item_lineage lin ON lin.item_version_id = iv.id
+        -- M1-ADR-006, as elsewhere: only verified, scoreable content is ever a candidate.
+        WHERE iv.assessment_version_id = ? AND iv.trust_state = 'VERIFIED_CONTENT'
+        """ + SCOREABLE_TYPE_FILTER + """
+        ORDER BY iv.display_order, iv.item_code
+        """, ADAPTIVE_ELIGIBLE_ITEM_MAPPER, assessmentVersionId);
   }
 
   /** Records the assembled form. Written once, inside the attempt-creation transaction. */
@@ -395,6 +448,15 @@ public class AssessmentRepository {
           result.getString("skill_code"),
           result.getString("difficulty"),
           instant(result, "last_presented_at"));
+
+  private static final RowMapper<AdaptiveEligibleItem> ADAPTIVE_ELIGIBLE_ITEM_MAPPER = (result, row) ->
+      new AdaptiveEligibleItem(
+          result.getObject("id", UUID.class),
+          result.getObject("logical_item_id", UUID.class),
+          result.getObject("skill_id", UUID.class),
+          result.getString("skill_code"),
+          result.getString("item_type"),
+          result.getString("difficulty"));
 
   private static final RowMapper<ResolvedDiagnostic> DIAGNOSTIC_MAPPER = (result, row) ->
       new ResolvedDiagnostic(

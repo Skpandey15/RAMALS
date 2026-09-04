@@ -79,15 +79,15 @@ class CoverageUpgradePersistenceIntegrationTests {
   }
 
   @Test
-  void onlyTheFiveNewMigrationsAreAppliedAndTheSchemaValidates() {
-    // Exactly V045 through V049. A different number means a migration was renumbered, skipped, or
+  void onlyTheSixNewMigrationsAreAppliedAndTheSchemaValidates() {
+    // Exactly V045 through V050. A different number means a migration was renumbered, skipped, or
     // re-applied, all of which are upgrade hazards a "did it succeed" assertion would miss.
-    assertThat(migrationsApplied).isEqualTo(5);
+    assertThat(migrationsApplied).isEqualTo(6);
     assertThat(flyway().load().validateWithResult().validationSuccessful).isTrue();
     // Read as the migration role: the runtime role is denied this table on purpose, so that the
     // application can never rewrite its own migration history.
     assertThat(appliedVersionsAfterTheUpgrade())
-        .containsExactly("045", "046", "047", "048", "049");
+        .containsExactly("045", "046", "047", "048", "049", "050");
   }
 
   @Test
@@ -155,6 +155,16 @@ class CoverageUpgradePersistenceIntegrationTests {
         "trg_assessment_attempt_item_guard",
         "trg_assessment_item_objective_skill_match",
         "trg_assessment_response_guard");
+    // V050: the Kafka v2 version declares the adaptive selector; v1 still declares none (NULL,
+    // meaning V1's legacy selector, unchanged) even after the upgrade.
+    assertThat(runtimeJdbc.queryForObject(
+        "SELECT selection_policy_version FROM core.assessment_version WHERE id = ?", String.class,
+        UUID.fromString("01900000-0000-7000-8000-000000000403")))
+        .isEqualTo("DIAGNOSTIC_SELECTION_V2");
+    assertThat(runtimeJdbc.queryForObject(
+        "SELECT selection_policy_version FROM core.assessment_version WHERE id = ?", String.class,
+        UUID.fromString("01900000-0000-7000-8000-000000000402")))
+        .isNull();
   }
 
   /** The migrations this upgrade applied, in order, read with the role that owns the history. */

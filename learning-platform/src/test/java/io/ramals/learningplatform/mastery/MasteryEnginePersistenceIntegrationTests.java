@@ -3,6 +3,8 @@ package io.ramals.learningplatform.mastery;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
@@ -139,7 +141,8 @@ class MasteryEnginePersistenceIntegrationTests {
           new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());
       AssessmentRepository assessments = new AssessmentRepository(runtimeJdbc, mapper);
       LearnerService learnerService = new LearnerService(learners);
-      diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
+      diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository);
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(

@@ -117,7 +117,9 @@ class DiagnosticSubmissionPersistenceIntegrationTests {
       assessments = new AssessmentRepository(runtimeJdbc, mapper);
       learners = new LearnerRepository(runtimeJdbc);
       LearnerService learnerService = new LearnerService(learners);
-      diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
+      diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()),
+          new MasteryRepository(runtimeJdbc));
       EvidenceRepository evidenceRepository = new EvidenceRepository(runtimeJdbc);
       EvidenceService evidenceService = new EvidenceService(evidenceRepository);
       MasteryService masteryService = new MasteryService(
