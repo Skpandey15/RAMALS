@@ -54,5 +54,18 @@ public enum SelectionReason {
    * curriculum prerequisites has not reached MASTERED, so the band was capped at FOUNDATIONAL and
    * this skill's priority demoted (M2-ADR-023 §1: evidence, never a gate -- the skill is still
    * selected, just not trusted at an escalated band it may not have earned). */
-  PREREQUISITE_NOT_SECURED
+  PREREQUISITE_NOT_SECURED,
+
+  /** DIAGNOSTIC_SELECTION_V4 only -- see HypothesisConfirmationDiagnosticSelector. "H4a": cross
+   * -attempt regression confirmation of the SAME skill, not H4b's (future, unbuilt) hypothesis
+   * -driven probe of a different, causally related skill. This skill's two most recent mastery
+   * snapshots show a status regression by V4's own frozen mastery-rank contract (the previous one
+   * ranked better than the latest), a cross-attempt signal that something unexpected happened -- a
+   * fluke miss, or a real, newly-surfaced gap. Cross-attempt because the current one-shot
+   * batch-submit model has no way to ask a follow-up within the same attempt; this is that
+   * follow-up, deferred to the learner's next diagnostic session rather than never asked at all.
+   * Confirming or refuting it is given priority over routine coverage; the band tested is whatever
+   * the skill's own signal (held, possibly further capped by an unsecured prerequisite) already
+   * decided -- this reason changes priority and its own label, never the band. */
+  HYPOTHESIS_CONFIRMATION
 }
