@@ -79,10 +79,12 @@ public class DiagnosticService {
     try {
       String selectionPolicy = repository.findSelectionPolicyVersion(versionId)
           .orElse(DiagnosticFormSelector.SELECTION_POLICY_VERSION);
-      // V3 composes with V2's round-robin unchanged (see PrerequisiteAwareDiagnosticSelector), so
-      // the packet it produces has the same shape V2's does -- one packet-policy label for both.
+      // V3 and V4 both compose with V2's round-robin unchanged (see
+      // PrerequisiteAwareDiagnosticSelector, HypothesisConfirmationDiagnosticSelector), so the
+      // packet either produces has the same shape V2's does -- one packet-policy label for all three.
       boolean isAdaptivePacket = AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
-          || PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy);
+          || PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
+          || HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy);
       String packetPolicy = isAdaptivePacket ? AdaptiveDiagnosticSelector.PACKET_POLICY : null;
       AssessmentAttempt created =
           repository.insertAttempt(learner.id(), versionId, key, selectionPolicy, packetPolicy);
@@ -127,7 +129,9 @@ public class DiagnosticService {
    */
   private void selectForm(
       AssessmentAttempt attempt, UUID learnerId, ResolvedDiagnostic diagnostic, String selectionPolicy) {
-    if (PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
+    if (HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
+      selectHypothesisConfirmingForm(attempt, learnerId, diagnostic);
+    } else if (PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
       selectPrerequisiteAwareForm(attempt, learnerId, diagnostic);
     } else if (AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
       selectAdaptiveForm(attempt, learnerId, diagnostic.assessmentVersionId());
@@ -183,23 +187,77 @@ public class DiagnosticService {
   private void selectPrerequisiteAwareForm(
       AssessmentAttempt attempt, UUID learnerId, ResolvedDiagnostic diagnostic) {
     AdaptiveSelectionInputs inputs = resolveAdaptiveInputs(learnerId, diagnostic.assessmentVersionId());
-
-    // Resolved by curriculum_version_id, not (domainCode, versionCode): the assessment version's
-    // own version_code ("v1", "v2"...) is a different, unrelated versioning scheme from the
-    // curriculum's, and diagnostic.versionCode() here is the former.
-    CurriculumGraph graph = curriculumService.graph(inputs.curriculumVersionId());
-    Map<String, List<String>> prerequisitesBySkillCode = new LinkedHashMap<>();
-    for (CurriculumGraph.SkillNode node : graph.skills()) {
-      prerequisitesBySkillCode.put(node.stableCode(), node.prerequisiteSkillCodes());
-    }
-
     Map<String, SkillMasterySignal> adjustedSignals = PrerequisiteAwareDiagnosticSelector
-        .adjustForPrerequisites(inputs.signals(), prerequisitesBySkillCode, inputs.statusBySkillCode());
+        .adjustForPrerequisites(
+            inputs.signals(), prerequisitesBySkillCode(inputs.curriculumVersionId()),
+            inputs.statusBySkillCode());
 
     AdaptivePacket packet =
         adaptiveSelector.select(inputs.unseenPool(), adjustedSignals, ThreadLocalRandom.current());
     finishAdaptiveSelection(
         attempt, learnerId, inputs, packet, PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION);
+  }
+
+  /**
+   * DIAGNOSTIC_SELECTION_V4: V3's prerequisite cap applied first (the band a regressed skill is
+   * tested at still has to be earned), then {@link HypothesisConfirmationDiagnosticSelector}'s own
+   * step -- reprioritising, never re-banding -- for any skill whose two most recent mastery
+   * snapshots show a status regression. See {@link HypothesisConfirmationDiagnosticSelector} for
+   * why this is a cross-attempt signal rather than a same-attempt follow-up.
+   */
+  private void selectHypothesisConfirmingForm(
+      AssessmentAttempt attempt, UUID learnerId, ResolvedDiagnostic diagnostic) {
+    AdaptiveSelectionInputs inputs = resolveAdaptiveInputs(learnerId, diagnostic.assessmentVersionId());
+    Map<String, SkillMasterySignal> afterPrerequisiteCap = PrerequisiteAwareDiagnosticSelector
+        .adjustForPrerequisites(
+            inputs.signals(), prerequisitesBySkillCode(inputs.curriculumVersionId()),
+            inputs.statusBySkillCode());
+
+    Set<String> regressedSkillCodes = detectRegressedSkills(
+        learnerId, inputs.skillIdByCode(), inputs.curriculumVersionId());
+    Map<String, SkillMasterySignal> finalSignals = HypothesisConfirmationDiagnosticSelector
+        .adjustForRegressions(afterPrerequisiteCap, regressedSkillCodes);
+
+    AdaptivePacket packet =
+        adaptiveSelector.select(inputs.unseenPool(), finalSignals, ThreadLocalRandom.current());
+    finishAdaptiveSelection(attempt, learnerId, inputs, packet,
+        HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION);
+  }
+
+  /** Shared by V3 and V4: every in-scope skill's direct prerequisite codes, read from the
+   * curriculum graph by curriculum_version_id -- not by (domainCode, versionCode), since the
+   * assessment version's own version_code ("v1", "v2"...) is a different, unrelated versioning
+   * scheme from the curriculum's. */
+  private Map<String, List<String>> prerequisitesBySkillCode(UUID curriculumVersionId) {
+    CurriculumGraph graph = curriculumService.graph(curriculumVersionId);
+    Map<String, List<String>> prerequisitesBySkillCode = new LinkedHashMap<>();
+    for (CurriculumGraph.SkillNode node : graph.skills()) {
+      prerequisitesBySkillCode.put(node.stableCode(), node.prerequisiteSkillCodes());
+    }
+    return prerequisitesBySkillCode;
+  }
+
+  /**
+   * Which in-scope skills show an unexpected regression: at least two recorded mastery snapshots,
+   * and the most recent is a worse status than the one before it. A skill with fewer than two
+   * snapshots has nothing to compare and is never regressed by definition.
+   */
+  private Set<String> detectRegressedSkills(
+      UUID learnerId, Map<String, UUID> skillIdByCode, UUID curriculumVersionId) {
+    Set<String> regressed = new LinkedHashSet<>();
+    for (Map.Entry<String, UUID> entry : skillIdByCode.entrySet()) {
+      List<MasterySnapshot> snapshots =
+          masteryRepository.findSnapshots(learnerId, entry.getValue(), curriculumVersionId);
+      if (snapshots.size() < 2) {
+        continue;
+      }
+      MasteryStatus previous = snapshots.get(snapshots.size() - 2).status();
+      MasteryStatus latest = snapshots.get(snapshots.size() - 1).status();
+      if (HypothesisConfirmationDiagnosticSelector.isRegression(previous, latest)) {
+        regressed.add(entry.getKey());
+      }
+    }
+    return regressed;
   }
 
   /**
