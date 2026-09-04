@@ -104,7 +104,33 @@ class PrerequisiteAwareDiagnosticSelectorTests {
     Map<String, SkillMasterySignal> adjusted =
         PrerequisiteAwareDiagnosticSelector.adjustForPrerequisites(base, prerequisites, statuses);
 
+    // Explicit, not merely implied by the absence of a NullPointerException on the line below:
+    // one unsecured prerequisite among several caps the signal, it does not remove the skill.
+    assertThat(adjusted).containsKey("C");
     assertThat(adjusted.get("C").reason()).isEqualTo(SelectionReason.PREREQUISITE_NOT_SECURED);
+  }
+
+  @Test
+  void aWeakNotOnlyUnknownPrerequisiteAlsoCapsAnAdvancedSignal() {
+    // The ADVANCED-band, weak-prerequisite combination specifically: the unsecured-prerequisite
+    // unit test above uses INTERMEDIATE, and the unknown-prerequisite one uses ADVANCED, so this
+    // closes the remaining weak x ADVANCED pairing explicitly rather than leaving it to inference
+    // from the fact the adjustment logic does not itself branch on which non-FOUNDATIONAL band it
+    // is.
+    SkillMasterySignal confirmation = new SkillMasterySignal(
+        AssessmentDifficulty.ADVANCED, SelectionReason.MASTERY_CONFIRMATION, 5);
+    Map<String, SkillMasterySignal> base = Map.of("B", confirmation);
+    Map<String, List<String>> prerequisites = Map.of("B", List.of("A"));
+    Map<String, MasteryStatus> statuses = Map.of("A", MasteryStatus.NEEDS_RETEACH); // weak, not just unknown
+
+    Map<String, SkillMasterySignal> adjusted =
+        PrerequisiteAwareDiagnosticSelector.adjustForPrerequisites(base, prerequisites, statuses);
+
+    assertThat(adjusted).containsKey("B");
+    SkillMasterySignal result = adjusted.get("B");
+    assertThat(result.targetDifficulty()).isEqualTo(AssessmentDifficulty.FOUNDATIONAL);
+    assertThat(result.reason()).isEqualTo(SelectionReason.PREREQUISITE_NOT_SECURED);
+    assertThat(result.priority()).isEqualTo(5);
   }
 
   @Test

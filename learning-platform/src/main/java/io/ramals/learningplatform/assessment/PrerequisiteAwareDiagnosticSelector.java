@@ -32,6 +32,20 @@ import java.util.Map;
  * (an unseen skill, or one already being held back for its own reasons -- low confidence, a weak
  * score, incomplete objective coverage) is left untouched: there is nothing to cap, and relabelling
  * it would manufacture a claim about prerequisites that was never the actual reason for the hold.
+ *
+ * <p><b>{@code core.skill_prerequisite} is domain knowledge, not policy.</b> The graph states which
+ * skills depend on which; it carries no opinion about what a selector should do with an unsecured
+ * dependency. Capping to FOUNDATIONAL and demoting to {@link #DEMOTED_PRIORITY} is this class's own
+ * policy decision, not a property of the graph -- a future V4 reading the identical edges to decide
+ * something else entirely (a different cap, a different threshold, no cap at all for a skill marked
+ * independently learnable) would need no change to the graph or its data, only a new selector.
+ *
+ * <p><b>The cap band and {@link #DEMOTED_PRIORITY} are frozen, the same way V1's and V2's own
+ * mechanics are.</b> {@code EngineVersionFreezeTests} hashes this class's real output, composed with
+ * V2's {@code select}, over fixed vectors; capping to a different band or demoting to a different
+ * tier would move the {@code DIAGNOSTIC_SELECTION_V3} hash. Per the class's own stated rule, that
+ * failure must be resolved by minting a new version identifier, never by updating the recorded hash
+ * to match.
  */
 public final class PrerequisiteAwareDiagnosticSelector {
 
