@@ -3,6 +3,8 @@ package io.ramals.learningplatform.evidence;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
@@ -131,7 +133,9 @@ class EvidenceLedgerPersistenceIntegrationTests {
       evidence = new EvidenceRepository(runtimeJdbc);
       evidenceService = new EvidenceService(evidence);
       LearnerService learnerService = new LearnerService(learners);
-      diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
+      diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()),
+          new MasteryRepository(runtimeJdbc));
       MasteryService masteryService = new MasteryService(
           new MasteryRepository(runtimeJdbc), evidence, new WeightedMasteryCalculator(),
           new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());

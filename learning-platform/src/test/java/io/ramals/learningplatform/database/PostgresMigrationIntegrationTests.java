@@ -82,10 +82,11 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 49 with V049 (the Kafka v2 assessment bank). Asserting the count rather than merely that the
-    // upgrade succeeds is what makes an accidentally unapplied migration visible -- it caught V029
-    // the first time it ran, V042 the first time this suite saw a real PostgreSQL, and V043 in CI.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(49);
+    // 50 with V050 (the adaptive selection policy declaration and reason-vocabulary widening).
+    // Asserting the count rather than merely that the upgrade succeeds is what makes an
+    // accidentally unapplied migration visible -- it caught V029 the first time it ran, V042 the
+    // first time this suite saw a real PostgreSQL, and V043 in CI.
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(50);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 

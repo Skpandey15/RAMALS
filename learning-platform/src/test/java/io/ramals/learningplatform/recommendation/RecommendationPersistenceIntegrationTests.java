@@ -3,6 +3,8 @@ package io.ramals.learningplatform.recommendation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticFormProperties;
+import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
@@ -142,7 +144,9 @@ class RecommendationPersistenceIntegrationTests {
       recommendations = new RecommendationRepository(runtimeJdbc);
       recommendationService = new RecommendationService(policy, recommendations, learnerService);
       AssessmentRepository assessments = new AssessmentRepository(runtimeJdbc, mapper);
-      diagnostics = new DiagnosticService(assessments, learnerService, formSelector());
+      diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()),
+          new MasteryRepository(runtimeJdbc));
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorerV2(), new EvidenceService(evidence),
           masteryService, recommendationService, mapper);

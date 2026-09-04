@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
+import io.ramals.learningplatform.mastery.MasteryRepository;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -93,7 +94,9 @@ class DiagnosticPersistenceIntegrationTests {
       runtimeJdbc = new JdbcTemplate(dataSource);
       assessments = new AssessmentRepository(runtimeJdbc, JsonMapper.builder().build());
       learners = new LearnerRepository(runtimeJdbc);
-      diagnostics = new DiagnosticService(assessments, new LearnerService(learners), formSelector());
+      diagnostics = new DiagnosticService(assessments, new LearnerService(learners), formSelector(),
+          new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()),
+          new MasteryRepository(runtimeJdbc));
     }
   }
 
