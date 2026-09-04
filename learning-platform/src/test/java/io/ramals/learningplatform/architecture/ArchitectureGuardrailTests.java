@@ -25,7 +25,8 @@ class ArchitectureGuardrailTests {
     BASE + ".curriculum..", BASE + ".assessment..", BASE + ".evidence..",
     BASE + ".mastery..", BASE + ".recommendation..", BASE + ".learner..",
     BASE + ".learning..", BASE + ".security..", BASE + ".observability..",
-    BASE + ".ai..", BASE + ".assessmentevaluation..", BASE + ".orchestration.."
+    BASE + ".ai..", BASE + ".assessmentevaluation..", BASE + ".orchestration..",
+    BASE + ".diagnosis.."
   };
 
   private static final String[] DOMAIN_PACKAGES = {
@@ -114,7 +115,8 @@ class ArchitectureGuardrailTests {
 
   @ArchTest
   static final ArchRule majorModulesAreAcyclic = slices()
-      .matching(BASE + ".(curriculum|assessment|evidence|mastery|recommendation|learner|learning|ai)..")
+      .matching(BASE
+          + ".(curriculum|assessment|evidence|mastery|recommendation|learner|learning|ai|diagnosis)..")
       .should().beFreeOfCycles()
       .because("major business modules must remain independently evolvable");
 
@@ -130,6 +132,7 @@ class ArchitectureGuardrailTests {
    * recommendation -> mastery, learner, observability
    * learning -> curriculum, learner, mastery, observability
    * ai -> contracts, curriculum facts, learner value objects, observability; never writers/JDBC
+   * diagnosis -> curriculum, mastery, learner; read-only, no writer dependency (M2-ADR-023)
    * delivery -> application services/ports; never repositories/JDBC
    * </pre>
    */
@@ -142,5 +145,6 @@ class ArchitectureGuardrailTests {
       "recommendation -> mastery, learner, observability",
       "learning -> curriculum, learner, mastery, observability",
       "ai -> contracts, curriculum facts, learner values, observability",
+      "diagnosis -> curriculum, mastery, learner (read-only; M2-ADR-023)",
       "delivery -> application services/ports");
 }
