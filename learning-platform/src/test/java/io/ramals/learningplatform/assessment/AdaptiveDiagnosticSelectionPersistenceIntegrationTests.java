@@ -56,7 +56,10 @@ class AdaptiveDiagnosticSelectionPersistenceIntegrationTests {
 
   private static final UUID KAFKA_V1 = UUID.fromString("01900000-0000-7000-8000-000000000402");
   private static final UUID KAFKA_V2 = UUID.fromString("01900000-0000-7000-8000-000000000403");
-  private static final UUID CURRICULUM = UUID.fromString("01900000-0000-7000-8000-000000000002");
+  // V052 (H3) re-points the Kafka v2 assessment bank at the new, finer-objective curriculum
+  // version -- this fixture's mastery snapshots must be recorded under the same curriculum_version_id
+  // DiagnosticService actually resolves for v2, or they are silently invisible to it.
+  private static final UUID CURRICULUM = UUID.fromString("01900000-0000-7000-8000-000000000004");
   private static final UUID BROKER_SKILL = UUID.fromString("01900000-0000-7000-8000-000000000101");
 
   /** The five skills V049 authored content for. */
