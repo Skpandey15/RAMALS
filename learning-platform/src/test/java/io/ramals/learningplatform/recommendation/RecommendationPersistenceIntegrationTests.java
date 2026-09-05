@@ -17,6 +17,9 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.ProbeProvenanceRepository;
+import io.ramals.learningplatform.assessment.ProbeRelationshipRepository;
+import io.ramals.learningplatform.assessment.ProbeRelationshipService;
 import io.ramals.learningplatform.evidence.EvidenceCoverage;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
 import io.ramals.learningplatform.evidence.EvidenceService;
@@ -150,7 +153,9 @@ class RecommendationPersistenceIntegrationTests {
       diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()),
           new MasteryRepository(runtimeJdbc),
-          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
+          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()),
+          new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+          new ProbeProvenanceRepository(runtimeJdbc));
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorerV2(), new EvidenceService(evidence),
           masteryService, recommendationService, mapper);

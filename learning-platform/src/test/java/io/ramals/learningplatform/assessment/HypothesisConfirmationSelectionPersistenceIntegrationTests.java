@@ -263,7 +263,9 @@ class HypothesisConfirmationSelectionPersistenceIntegrationTests {
       diagnostics = new DiagnosticService(assessments, learnerService,
           new DiagnosticFormSelector(new DiagnosticFormProperties()),
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
-          curriculumService);
+          curriculumService,
+          new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+          new ProbeProvenanceRepository(runtimeJdbc));
     }
   }
 

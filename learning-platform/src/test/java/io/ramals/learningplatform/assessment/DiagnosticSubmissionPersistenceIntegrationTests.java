@@ -123,7 +123,9 @@ class DiagnosticSubmissionPersistenceIntegrationTests {
       diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()),
           new MasteryRepository(runtimeJdbc),
-          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
+          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()),
+          new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+          new ProbeProvenanceRepository(runtimeJdbc));
       EvidenceRepository evidenceRepository = new EvidenceRepository(runtimeJdbc);
       EvidenceService evidenceService = new EvidenceService(evidenceRepository);
       MasteryService masteryService = new MasteryService(

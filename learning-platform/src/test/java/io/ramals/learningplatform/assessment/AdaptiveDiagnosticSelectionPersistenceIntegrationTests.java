@@ -328,7 +328,9 @@ class AdaptiveDiagnosticSelectionPersistenceIntegrationTests {
       diagnostics = new DiagnosticService(assessments, learnerService,
           new DiagnosticFormSelector(new DiagnosticFormProperties()),
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
-          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
+          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()),
+          new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+          new ProbeProvenanceRepository(runtimeJdbc));
     }
   }
 

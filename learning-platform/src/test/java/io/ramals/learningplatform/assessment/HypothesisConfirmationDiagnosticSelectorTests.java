@@ -11,8 +11,10 @@ import org.junit.jupiter.api.Test;
 /**
  * {@link HypothesisConfirmationDiagnosticSelector}: the regression rule in isolation, and the
  * signal-map adjustment it drives. Every adjustment case asserts the class's own stated boundary --
- * reprioritise, never re-band. This is H4a (cross-attempt regression confirmation) only -- H4b
- * (hypothesis-driven related/root-cause probe selection) is future work with no code here yet.
+ * reprioritise, never re-band. This is H4a (cross-attempt regression confirmation) only -- H4b's
+ * hypothesis-driven related/root-cause probe selection is
+ * {@link HypothesisDrivenProbeDiagnosticSelector} (DIAGNOSTIC_SELECTION_V5), a separate class, tested
+ * separately.
  */
 class HypothesisConfirmationDiagnosticSelectorTests {
 

@@ -12,9 +12,12 @@ import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
 import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
+import io.ramals.learningplatform.assessment.DiagnosticHypothesis;
 import io.ramals.learningplatform.assessment.EligibleItem;
 import io.ramals.learningplatform.assessment.HypothesisConfirmationDiagnosticSelector;
+import io.ramals.learningplatform.assessment.HypothesisDrivenProbeDiagnosticSelector;
 import io.ramals.learningplatform.assessment.PrerequisiteAwareDiagnosticSelector;
+import io.ramals.learningplatform.assessment.ProbeRelationshipType;
 import io.ramals.learningplatform.assessment.SelectedItem;
 import io.ramals.learningplatform.assessment.SelectionReason;
 import io.ramals.learningplatform.assessment.ScoredResponse;
@@ -123,6 +126,8 @@ class EngineVersionFreezeTests {
         EngineVersionFreezeTests::prerequisiteAwareDiagnosticSelection);
     put(HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION,
         EngineVersionFreezeTests::hypothesisConfirmationDiagnosticSelection);
+    put(HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION,
+        EngineVersionFreezeTests::hypothesisDrivenProbeDiagnosticSelection);
     put(LearningSessionPolicy.POLICY_VERSION, EngineVersionFreezeTests::sessionPolicy);
     put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
     put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
@@ -167,6 +172,11 @@ class EngineVersionFreezeTests {
       // is untouched -- V4 composes with V3's (and, through it, V2's) adjustment chain unmodified,
       // only reprioritising signals for skills whose most recent mastery snapshot regressed.
       Map.entry("DIAGNOSTIC_SELECTION_V4", "4832b4980a8a0ce80b399e709bee776b5ed7a7829550243eb098b2f5765a0263"),
+      // Minted with V055/H4b runtime (M2-ADR-025), when the hypothesis-driven-probe selector was
+      // first frozen. V4 above is untouched -- V5 composes with V4's (and, through it, V3's and
+      // V2's) adjustment chain unmodified, restricting the pool for one skill rather than changing
+      // select() itself.
+      Map.entry("DIAGNOSTIC_SELECTION_V5", "1c7e506ececfc55f9813ae8f9c0d48e5bdb2ac24776eedca48b73584ba41affd"),
       Map.entry("SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647"),
       Map.entry("GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad"),
       Map.entry("PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a"),
@@ -583,6 +593,102 @@ class EngineVersionFreezeTests {
     StringBuilder out = new StringBuilder();
     for (int seed = 0; seed < 5; seed++) {
       AdaptivePacket packet = selector.select(pool, finalSignals, new Random(seed));
+      out.append(packet.poolSize()).append('|')
+          .append(packet.skillsCovered()).append('|')
+          .append(packet.singleChoiceCount()).append('|')
+          .append(packet.fillBlankCount()).append('|')
+          .append(packet.skillsWithNoUnseenStock()).append('\n');
+      for (SelectedItem item : packet.items()) {
+        out.append(item.presentationOrder()).append(':')
+            .append(item.itemVersionId()).append(':')
+            .append(item.reason()).append('\n');
+      }
+    }
+    return out.toString();
+  }
+
+  /**
+   * DIAGNOSTIC_SELECTION_V5 (M2-ADR-025) over the same pool, base signals, prerequisite/status
+   * setup, and regressed-skill set {@link #hypothesisConfirmationDiagnosticSelection} hashes, plus a
+   * hypothesis-driven probe selection targeting KAFKA_CONSUMER_GROUPS's own FOUNDATIONAL item
+   * (index 9) -- deliberately the *same* skill V4 already reprioritised in that vector, so this hash
+   * exercises both frozen guarantees at once: V5's reason overrides V4's on a shared skill (M2-ADR-025
+   * §5 -- composition order, not special-case logic), and the pool restriction removes
+   * KAFKA_CONSUMER_GROUPS's other item (index 10, INTERMEDIATE) entirely, so V2's own round-robin
+   * cannot serve it even across multiple quota-filling rounds (§6's quota-of-one, enforced
+   * structurally). The chosen item's own band (FOUNDATIONAL) is at, not above, the band V3 already
+   * capped this skill to -- proving V5 does not need to special-case V3's cap to respect it. A
+   * change to {@link HypothesisDrivenProbeDiagnosticSelector#adjustForHypothesisProbe}, or to
+   * anything V2/V3/V4 already do, moves this hash independently of
+   * {@link #hypothesisConfirmationDiagnosticSelection}'s.
+   */
+  private static String hypothesisDrivenProbeDiagnosticSelection() {
+    AdaptiveDiagnosticFormProperties properties = new AdaptiveDiagnosticFormProperties();
+    properties.setSingleChoiceTarget(5);
+    properties.setFillBlankTarget(2);
+    AdaptiveDiagnosticSelector selector = new AdaptiveDiagnosticSelector(properties);
+
+    List<AdaptiveEligibleItem> pool = List.of(
+        adaptiveItem(1, "KAFKA_BROKER", "SINGLE_CHOICE", "FOUNDATIONAL"),
+        adaptiveItem(2, "KAFKA_BROKER", "SINGLE_CHOICE", "INTERMEDIATE"),
+        adaptiveItem(3, "KAFKA_TOPIC", "SINGLE_CHOICE", "INTERMEDIATE"),
+        adaptiveItem(4, "KAFKA_TOPIC", "FILL_BLANK", "FOUNDATIONAL"),
+        adaptiveItem(5, "KAFKA_PARTITION", "SINGLE_CHOICE", "FOUNDATIONAL"),
+        adaptiveItem(6, "KAFKA_PARTITION", "SINGLE_CHOICE", "INTERMEDIATE"),
+        adaptiveItem(7, "KAFKA_PRODUCER_ACKS", "SINGLE_CHOICE", "FOUNDATIONAL"),
+        adaptiveItem(8, "KAFKA_PRODUCER_ACKS", "SINGLE_CHOICE", "INTERMEDIATE"),
+        adaptiveItem(9, "KAFKA_CONSUMER_GROUPS", "SINGLE_CHOICE", "FOUNDATIONAL"),
+        adaptiveItem(10, "KAFKA_CONSUMER_GROUPS", "FILL_BLANK", "INTERMEDIATE"),
+        adaptiveItem(11, "KAFKA_REPLICATION", "SINGLE_CHOICE", "ADVANCED"),
+        adaptiveItem(12, "KAFKA_REPLICATION", "SINGLE_CHOICE", "INTERMEDIATE"));
+
+    Map<String, SkillMasterySignal> baseSignals = new LinkedHashMap<>();
+    baseSignals.put("KAFKA_BROKER", SkillMasterySignal.noEvidence());
+    baseSignals.put("KAFKA_TOPIC", new SkillMasterySignal(
+        AssessmentDifficulty.INTERMEDIATE, SelectionReason.LOW_CONFIDENCE, 1));
+    baseSignals.put("KAFKA_PARTITION", new SkillMasterySignal(
+        AssessmentDifficulty.FOUNDATIONAL, SelectionReason.WEAK_SKILL, 2));
+    baseSignals.put("KAFKA_PRODUCER_ACKS", new SkillMasterySignal(
+        AssessmentDifficulty.FOUNDATIONAL, SelectionReason.OBJECTIVE_COVERAGE_GAP, 3));
+    baseSignals.put("KAFKA_CONSUMER_GROUPS", new SkillMasterySignal(
+        AssessmentDifficulty.INTERMEDIATE, SelectionReason.DIFFICULTY_PROGRESSION, 4));
+    baseSignals.put("KAFKA_REPLICATION", new SkillMasterySignal(
+        AssessmentDifficulty.ADVANCED, SelectionReason.MASTERY_CONFIRMATION, 5));
+
+    Map<String, List<String>> prerequisites = Map.of(
+        "KAFKA_TOPIC", List.of("KAFKA_BROKER"),
+        "KAFKA_PRODUCER_ACKS", List.of("KAFKA_BROKER"),
+        "KAFKA_CONSUMER_GROUPS", List.of("KAFKA_PARTITION"),
+        "KAFKA_REPLICATION", List.of("KAFKA_PARTITION"));
+    Map<String, MasteryStatus> statuses = Map.of(
+        "KAFKA_BROKER", MasteryStatus.MASTERED,
+        "KAFKA_PARTITION", MasteryStatus.NEEDS_PRACTICE);
+
+    Map<String, SkillMasterySignal> afterPrerequisiteCap = PrerequisiteAwareDiagnosticSelector
+        .adjustForPrerequisites(baseSignals, prerequisites, statuses);
+
+    Set<String> regressedSkillCodes = Set.of("KAFKA_PRODUCER_ACKS", "KAFKA_CONSUMER_GROUPS");
+    Map<String, SkillMasterySignal> afterRegression = HypothesisConfirmationDiagnosticSelector
+        .adjustForRegressions(afterPrerequisiteCap, regressedSkillCodes);
+
+    DiagnosticHypothesis hypothesis = new DiagnosticHypothesis(
+        adaptiveItem(1, "KAFKA_BROKER", "SINGLE_CHOICE", "FOUNDATIONAL").itemVersionId(),
+        UUID.fromString("01900000-0000-7000-8000-000000000d01"),
+        ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        UUID.fromString("01900000-0000-7000-8000-000000000d13"),
+        UUID.fromString("01900000-0000-7000-8000-000000000e01"));
+    HypothesisDrivenProbeDiagnosticSelector.Selection selection =
+        new HypothesisDrivenProbeDiagnosticSelector.Selection(
+            hypothesis, UUID.fromString("01900000-0000-7000-8000-0000000000a1"),
+            "KAFKA_CONSUMER_GROUPS", adaptiveItem(9, "KAFKA_CONSUMER_GROUPS", "SINGLE_CHOICE",
+                "FOUNDATIONAL").itemVersionId());
+
+    HypothesisDrivenProbeDiagnosticSelector.Adjusted adjusted = HypothesisDrivenProbeDiagnosticSelector
+        .adjustForHypothesisProbe(afterRegression, pool, selection);
+
+    StringBuilder out = new StringBuilder();
+    for (int seed = 0; seed < 5; seed++) {
+      AdaptivePacket packet = selector.select(adjusted.pool(), adjusted.signals(), new Random(seed));
       out.append(packet.poolSize()).append('|')
           .append(packet.skillsCovered()).append('|')
           .append(packet.singleChoiceCount()).append('|')

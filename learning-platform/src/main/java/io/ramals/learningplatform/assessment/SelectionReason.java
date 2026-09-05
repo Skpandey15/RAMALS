@@ -57,15 +57,29 @@ public enum SelectionReason {
   PREREQUISITE_NOT_SECURED,
 
   /** DIAGNOSTIC_SELECTION_V4 only -- see HypothesisConfirmationDiagnosticSelector. "H4a": cross
-   * -attempt regression confirmation of the SAME skill, not H4b's (future, unbuilt) hypothesis
-   * -driven probe of a different, causally related skill. This skill's two most recent mastery
-   * snapshots show a status regression by V4's own frozen mastery-rank contract (the previous one
-   * ranked better than the latest), a cross-attempt signal that something unexpected happened -- a
-   * fluke miss, or a real, newly-surfaced gap. Cross-attempt because the current one-shot
-   * batch-submit model has no way to ask a follow-up within the same attempt; this is that
+   * -attempt regression confirmation of the SAME skill, not H4b/V5's hypothesis-driven probe of a
+   * different, causally related skill (see {@link #HYPOTHESIS_DRIVEN_PROBE}). This skill's two most
+   * recent mastery snapshots show a status regression by V4's own frozen mastery-rank contract (the
+   * previous one ranked better than the latest), a cross-attempt signal that something unexpected
+   * happened -- a fluke miss, or a real, newly-surfaced gap. Cross-attempt because the current
+   * one-shot batch-submit model has no way to ask a follow-up within the same attempt; this is that
    * follow-up, deferred to the learner's next diagnostic session rather than never asked at all.
    * Confirming or refuting it is given priority over routine coverage; the band tested is whatever
    * the skill's own signal (held, possibly further capped by an unsecured prerequisite) already
    * decided -- this reason changes priority and its own label, never the band. */
-  HYPOTHESIS_CONFIRMATION
+  HYPOTHESIS_CONFIRMATION,
+
+  /** DIAGNOSTIC_SELECTION_V5 only -- see HypothesisDrivenProbeDiagnosticSelector and M2-ADR-025. An
+   * incorrect response in the learner's immediately preceding completed attempt deterministically
+   * raised a {@code DiagnosticHypothesis} (via H4b's ProbeRelationshipService, M2-ADR-024) that this
+   * item's objective was worth probing -- one of SAME_OBJECTIVE_CONFIRMATION, PREREQUISITE_VALIDATION,
+   * ROOT_CAUSE_PROBE, or CONTRADICTION_CHECK. Distinct from {@link #HYPOTHESIS_CONFIRMATION}: that
+   * re-tests the same skill against its own history; this tests a different, related objective a
+   * resolved relationship pointed at. The actual relationship type, source attempt/item/objective,
+   * target objective, and (where applicable) authorizing {@code diagnostic_probe_relationship} row
+   * are not encoded in this label -- see {@code core.diagnostic_probe_provenance} for the full,
+   * structured, auditable record; this reason only says *that* the pick was H4b-driven. Changes
+   * priority only, never the band -- the same discipline every prior selection reason in this
+   * enum holds. */
+  HYPOTHESIS_DRIVEN_PROBE
 }
