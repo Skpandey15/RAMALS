@@ -63,16 +63,21 @@ COMMENT ON TABLE core.diagnostic_node IS
 CREATE INDEX idx_diagnostic_node_objective ON core.diagnostic_node (objective_id) WHERE objective_id IS NOT NULL;
 CREATE INDEX idx_diagnostic_node_parent ON core.diagnostic_node (parent_node_id) WHERE parent_node_id IS NOT NULL;
 
--- Immutable once published, and the one consistency fact no FK or CHECK above can express: a
--- SUB_CONCEPT's parent must itself be a CONCEPT (never another SUB_CONCEPT), which requires looking
--- up the parent row -- the same reasoning that already forced a trigger lookup in V055 for a fact no
--- plain CHECK on one row's own columns could prove.
+-- Immutable once published, and two consistency facts no FK or CHECK above can express, since both
+-- require looking up the parent row -- the same reasoning that already forced a trigger lookup in
+-- V055 for a fact no plain CHECK on one row's own columns could prove:
+--   1. a SUB_CONCEPT's parent must itself be a CONCEPT (never another SUB_CONCEPT);
+--   2. a SUB_CONCEPT may only become PUBLISHED once its parent CONCEPT already is. A DRAFT
+--      SUB_CONCEPT may freely have a DRAFT parent -- authoring the two together, in either order,
+--      is normal -- but a published row is an authoritative diagnostic assertion, and it must never
+--      depend on a parent that is still mutable. Without this, a later edit to a DRAFT CONCEPT could
+--      silently invalidate the meaning of an already-published SUB_CONCEPT beneath it.
 CREATE FUNCTION core.protect_diagnostic_node()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  parent_type VARCHAR(16);
+  parent_row core.diagnostic_node%ROWTYPE;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD.status = 'PUBLISHED' THEN
@@ -85,13 +90,18 @@ BEGIN
   END IF;
 
   IF NEW.parent_node_id IS NOT NULL THEN
-    SELECT node_type INTO parent_type FROM core.diagnostic_node WHERE id = NEW.parent_node_id;
+    SELECT * INTO parent_row FROM core.diagnostic_node WHERE id = NEW.parent_node_id;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'parent_node_id % does not exist', NEW.parent_node_id USING ERRCODE = '23503';
     END IF;
-    IF parent_type <> 'CONCEPT' THEN
+    IF parent_row.node_type <> 'CONCEPT' THEN
       RAISE EXCEPTION 'a SUB_CONCEPT''s parent must be a CONCEPT (node % is %)',
-        NEW.parent_node_id, parent_type USING ERRCODE = '23514';
+        NEW.parent_node_id, parent_row.node_type USING ERRCODE = '23514';
+    END IF;
+    IF NEW.status = 'PUBLISHED' AND parent_row.status <> 'PUBLISHED' THEN
+      RAISE EXCEPTION
+        'a SUB_CONCEPT cannot be published while its parent CONCEPT % is not yet PUBLISHED',
+        NEW.parent_node_id USING ERRCODE = '23514';
     END IF;
   END IF;
 
@@ -144,10 +154,29 @@ CREATE INDEX idx_misconception_target_objective
 CREATE INDEX idx_misconception_target_node
   ON core.misconception (target_diagnostic_node_id) WHERE target_diagnostic_node_id IS NOT NULL;
 
+-- Immutable once published, and two consistency facts no FK or CHECK above can express: a
+-- misconception may only become PUBLISHED once whatever it targets is itself already settled --
+-- never a mutable DRAFT diagnostic_node, and never an objective still sitting in an editable DRAFT
+-- curriculum_version. A DRAFT misconception may freely target a DRAFT node or a DRAFT curriculum's
+-- objective -- authoring the two together is normal -- but a published misconception is an
+-- authoritative diagnostic assertion, and it must never depend on target semantics that could still
+-- change out from under it.
+--
+-- For a node target, this reads core.diagnostic_node.status directly. For an objective target,
+-- core.learning_objective itself carries no per-row lifecycle -- its "published" state is entirely
+-- inherited from its owning core.curriculum_version (V003: a curriculum_version's objectives all
+-- become immutable together the moment that version leaves DRAFT, the same
+-- core.assert_curriculum_editable/core.protect_versioned_curriculum_row already govern elsewhere).
+-- This reuses that same canonical column through the same skill_version join those functions
+-- already use -- not a new LearningObjective lifecycle rule, and no change to curriculum governance
+-- itself.
 CREATE FUNCTION core.protect_misconception()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  target_node_status VARCHAR(16);
+  target_objective_curriculum_status VARCHAR(16);
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD.status = 'PUBLISHED' THEN
@@ -158,6 +187,30 @@ BEGIN
   IF TG_OP = 'UPDATE' AND OLD.status = 'PUBLISHED' THEN
     RAISE EXCEPTION 'published misconception % is immutable', OLD.id USING ERRCODE = '55000';
   END IF;
+
+  IF NEW.status = 'PUBLISHED' AND NEW.target_diagnostic_node_id IS NOT NULL THEN
+    SELECT status INTO target_node_status
+      FROM core.diagnostic_node WHERE id = NEW.target_diagnostic_node_id;
+    IF target_node_status IS DISTINCT FROM 'PUBLISHED' THEN
+      RAISE EXCEPTION
+        'misconception cannot be published while its target diagnostic node % is not yet PUBLISHED',
+        NEW.target_diagnostic_node_id USING ERRCODE = '23514';
+    END IF;
+  END IF;
+
+  IF NEW.status = 'PUBLISHED' AND NEW.target_objective_id IS NOT NULL THEN
+    SELECT cv.status INTO target_objective_curriculum_status
+      FROM core.learning_objective lo
+      JOIN core.skill_version sv ON sv.id = lo.skill_version_id
+      JOIN core.curriculum_version cv ON cv.id = sv.curriculum_version_id
+     WHERE lo.id = NEW.target_objective_id;
+    IF target_objective_curriculum_status = 'DRAFT' THEN
+      RAISE EXCEPTION
+        'misconception cannot be published while its target objective %''s curriculum version is still DRAFT',
+        NEW.target_objective_id USING ERRCODE = '23514';
+    END IF;
+  END IF;
+
   IF NEW.status = 'PUBLISHED' THEN
     NEW.published_at := COALESCE(NEW.published_at, CURRENT_TIMESTAMP);
   END IF;

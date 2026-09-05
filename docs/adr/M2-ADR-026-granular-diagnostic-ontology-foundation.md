@@ -88,6 +88,12 @@ the items actually test, not invented ahead of content" discipline V052 already 
 objective split itself. A schema that supports depth it has no populated rows for yet is expected
 and correct, not a defect.
 
+**A published granular diagnostic artifact may not depend on a mutable DRAFT granular diagnostic
+artifact.** A DRAFT Sub-concept may freely have a DRAFT parent Concept — authoring the two together,
+in either order, is normal — but a Sub-concept may only become `PUBLISHED` once its parent Concept
+already is. Without this, a later edit to a still-DRAFT Concept could silently invalidate the
+meaning of an already-published Sub-concept beneath it.
+
 ### 4. Misconception: a separate first-class entity, DB-enforceable exclusive-arc target, DRAFT/PUBLISHED
 
 A misconception targets **exactly one** of `LearningObjective`, `Concept`, or `Sub-concept` —
@@ -97,6 +103,15 @@ depends on an out-of-band type flag. A misconception's own lifecycle is `DRAFT �
 immutable once published — the same authoring discipline `core.diagnostic_probe_relationship`
 (V054) already established for hand-authored diagnostic content: freely editable
 pre-publication, permanent once live.
+
+The same dependency principle applies to what a misconception targets: a misconception may only
+become `PUBLISHED` once its target is itself settled — a `PUBLISHED` Concept or Sub-concept when it
+targets a node, or an objective whose owning curriculum version has itself already left `DRAFT` when
+it targets a `LearningObjective` directly (reusing that table's own existing, pre-`M2-ADR-026`
+curriculum-version status, not a new `LearningObjective` lifecycle rule). Together with §5, this
+forms one continuous publication chain — `PUBLISHED Concept → PUBLISHED Sub-concept (if used) →
+PUBLISHED Misconception → PUBLISHED wrong-option mapping` — in which no link may ever depend on a
+still-mutable one beneath it.
 
 ### 5. Wrong-option mapping: SINGLE_CHOICE only, its own gated lifecycle
 
@@ -201,6 +216,9 @@ revisited to accommodate this ontology.
   a future PR that does so is a defect against §2, not an enhancement.
 - No more than two levels below `LearningObjective` (`Concept`, then `Sub-concept`) may ever be
   represented; a future PR adding a third level is a defect against §3.
+- A published granular diagnostic artifact must never depend on a mutable DRAFT one (§3/§4): a
+  future PR that lets a Sub-concept, Misconception, or wrong-option mapping publish while what it
+  depends on is still DRAFT is a defect against this ADR, not a simplification.
 - A misconception's exclusive-arc target and its `DRAFT`/`PUBLISHED` lifecycle (§4), and the
   wrong-option mapping's gated lifecycle (§5), must be enforced at the database boundary, not
   trusted from application code alone — the same discipline `core.diagnostic_probe_relationship`/

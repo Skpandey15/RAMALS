@@ -32,10 +32,37 @@ class GranularDiagnosticOntologyMigrationContractTests {
       throws IOException {
     assertThat(migration())
         .contains("CREATE FUNCTION core.protect_diagnostic_node")
-        .contains("SELECT node_type INTO parent_type FROM core.diagnostic_node WHERE id = NEW.parent_node_id")
+        .contains("SELECT * INTO parent_row FROM core.diagnostic_node WHERE id = NEW.parent_node_id")
         .contains("a SUB_CONCEPT''s parent must be a CONCEPT")
         .contains("CREATE TRIGGER trg_diagnostic_node_guard")
         .contains("BEFORE INSERT OR UPDATE OR DELETE ON core.diagnostic_node");
+  }
+
+  @Test
+  void aSubConceptCannotPublishWhileItsParentConceptIsStillDraft() throws IOException {
+    assertThat(migration())
+        .contains("NEW.status = 'PUBLISHED' AND parent_row.status <> 'PUBLISHED'")
+        .contains("a SUB_CONCEPT cannot be published while its parent CONCEPT % is not yet PUBLISHED");
+  }
+
+  @Test
+  void aMisconceptionCannotPublishWhileItsTargetNodeIsStillDraft() throws IOException {
+    assertThat(migration())
+        .contains("SELECT status INTO target_node_status")
+        .contains("FROM core.diagnostic_node WHERE id = NEW.target_diagnostic_node_id")
+        .contains("misconception cannot be published while its target diagnostic node % is not yet PUBLISHED");
+  }
+
+  @Test
+  void aMisconceptionCannotPublishWhileItsTargetObjectivesCurriculumIsStillDraft()
+      throws IOException {
+    // Not a new LearningObjective lifecycle rule -- reuses the same canonical
+    // learning_objective -> skill_version -> curriculum_version join
+    // core.protect_versioned_curriculum_row already resolves elsewhere.
+    assertThat(migration())
+        .contains("JOIN core.skill_version sv ON sv.id = lo.skill_version_id")
+        .contains("JOIN core.curriculum_version cv ON cv.id = sv.curriculum_version_id")
+        .contains("misconception cannot be published while its target objective %''s curriculum version is still DRAFT");
   }
 
   @Test

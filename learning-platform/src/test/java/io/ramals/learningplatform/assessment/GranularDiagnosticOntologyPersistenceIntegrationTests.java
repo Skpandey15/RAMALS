@@ -37,6 +37,7 @@ class GranularDiagnosticOntologyPersistenceIntegrationTests {
   private static final String RUNTIME_PASSWORD = "m0-t05-runtime-test";
 
   private static final UUID ASSESSMENT_V2 = UUID.fromString("01900000-0000-7000-8000-000000000403");
+  private static final UUID KAFKA_DOMAIN = UUID.fromString("01900000-0000-7000-8000-000000000001");
 
   // Real, already-published (by this migration) vertical slice.
   private static final UUID ACKS_DURABILITY_TRADEOFFS = UUID.fromString("01900000-0000-7000-8000-000000000d11");
@@ -228,6 +229,128 @@ class GranularDiagnosticOntologyPersistenceIntegrationTests {
   }
 
   // -------------------------------------------------------------------------------------------
+  // DB invariants: a published diagnostic node may never depend on a mutable DRAFT one. A DRAFT
+  // SUB_CONCEPT may freely have a DRAFT parent CONCEPT (authoring the two together is normal), but
+  // publishing must be blocked until the parent is itself PUBLISHED.
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void publishingASubConceptWhileItsParentConceptIsStillDraftIsRejected() {
+    wire();
+    UUID draftConceptId = UUID.randomUUID();
+    UUID draftSubConceptId = UUID.randomUUID();
+    nodes.insertConcept(draftConceptId, ACKS_DURABILITY_TRADEOFFS, "draft concept", "not yet published", 2);
+    nodes.insertSubConcept(draftSubConceptId, draftConceptId, "draft sub-concept", "not yet published", 1);
+
+    assertThatThrownBy(() -> nodes.publish(draftSubConceptId))
+        .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void directlyInsertingAPublishedSubConceptWithADraftParentIsRejected() {
+    wire();
+    UUID draftConceptId = UUID.randomUUID();
+    nodes.insertConcept(draftConceptId, ACKS_DURABILITY_TRADEOFFS, "draft concept", "not yet published", 3);
+
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.diagnostic_node
+          (id, objective_id, parent_node_id, node_type, name, description, display_order, status, published_at)
+        VALUES (?, NULL, ?, 'SUB_CONCEPT', 'x', 'y', 1, 'PUBLISHED', CURRENT_TIMESTAMP)
+        """, UuidV7.generate(), draftConceptId))
+        .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void publishingASubConceptSucceedsOnceItsParentConceptIsPublished() {
+    wire();
+    UUID conceptId = UUID.randomUUID();
+    UUID subConceptId = UUID.randomUUID();
+    nodes.insertConcept(conceptId, ACKS_DURABILITY_TRADEOFFS, "concept", "will be published", 4);
+    nodes.insertSubConcept(subConceptId, conceptId, "sub-concept", "will be published", 1);
+
+    nodes.publish(conceptId);
+    nodes.publish(subConceptId); // must not throw, now that the parent is PUBLISHED
+
+    assertThat(nodeStatus(subConceptId)).isEqualTo("PUBLISHED");
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // DB invariants: a published misconception may never depend on a mutable DRAFT target -- neither
+  // a DRAFT diagnostic_node, nor an objective still sitting in an editable DRAFT curriculum_version
+  // (reusing that table's own existing status column, not a new LearningObjective lifecycle rule).
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void publishingAMisconceptionWhileItsTargetNodeIsStillDraftIsRejected() {
+    wire();
+    UUID draftConceptId = UUID.randomUUID();
+    nodes.insertConcept(draftConceptId, ACKS_DURABILITY_TRADEOFFS, "draft target concept", "not yet published", 5);
+    UUID misconceptionId = UUID.randomUUID();
+    misconceptions.insertTargetingNode(misconceptionId, "draft-target misconception", "not yet valid", draftConceptId);
+
+    assertThatThrownBy(() -> misconceptions.publish(misconceptionId))
+        .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void directlyInsertingAPublishedMisconceptionWithADraftTargetNodeIsRejected() {
+    wire();
+    UUID draftConceptId = UUID.randomUUID();
+    nodes.insertConcept(draftConceptId, ACKS_DURABILITY_TRADEOFFS, "draft target concept", "not yet published", 6);
+
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.misconception
+          (id, name, description, target_objective_id, target_diagnostic_node_id, status, published_at)
+        VALUES (?, 'x', 'y', NULL, ?, 'PUBLISHED', CURRENT_TIMESTAMP)
+        """, UuidV7.generate(), draftConceptId))
+        .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void publishingAMisconceptionSucceedsOnceItsTargetNodeIsPublished() {
+    wire();
+    UUID conceptId = UUID.randomUUID();
+    nodes.insertConcept(conceptId, ACKS_DURABILITY_TRADEOFFS, "target concept", "will be published", 7);
+    nodes.publish(conceptId);
+    UUID misconceptionId = UUID.randomUUID();
+    misconceptions.insertTargetingNode(misconceptionId, "now-valid misconception", "target is published", conceptId);
+
+    misconceptions.publish(misconceptionId); // must not throw
+
+    Misconception published = misconceptions.findById(misconceptionId).orElseThrow();
+    assertThat(published.targetDiagnosticNodeId()).isEqualTo(conceptId);
+  }
+
+  @Test
+  void aMisconceptionTargetingAnObjectiveInAStillDraftCurriculumCannotBePublished() {
+    wire();
+    UUID draftCurriculumVersionId = draftCurriculumWithOneObjective();
+    UUID draftObjectiveId = onlyObjectiveOf(draftCurriculumVersionId);
+    UUID misconceptionId = UUID.randomUUID();
+    misconceptions.insertTargetingObjective(
+        misconceptionId, "draft-curriculum-targeted misconception", "not yet valid", draftObjectiveId);
+
+    assertThatThrownBy(() -> misconceptions.publish(misconceptionId))
+        .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void aMisconceptionTargetingAnObjectiveInAnAlreadyPublishedCurriculumCanBePublished() {
+    wire();
+    // ACKS_DURABILITY_TRADEOFFS (d11) belongs to the real KAFKA v2 curriculum_version, already
+    // PUBLISHED since V052 -- targeting it directly (no node) must be allowed to publish.
+    UUID misconceptionId = UUID.randomUUID();
+    misconceptions.insertTargetingObjective(
+        misconceptionId, "objective-targeted misconception", "objective's curriculum is published",
+        ACKS_DURABILITY_TRADEOFFS);
+
+    misconceptions.publish(misconceptionId); // must not throw
+
+    Misconception published = misconceptions.findById(misconceptionId).orElseThrow();
+    assertThat(published.targetObjectiveId()).isEqualTo(ACKS_DURABILITY_TRADEOFFS);
+  }
+
+  // -------------------------------------------------------------------------------------------
   // DB invariants: misconception's exclusive-arc target.
   // -------------------------------------------------------------------------------------------
 
@@ -340,6 +463,55 @@ class GranularDiagnosticOntologyPersistenceIntegrationTests {
     runtimeJdbc.update(
         "UPDATE core.assessment_attempt SET status = 'COMPLETED' WHERE id = ?", attemptId);
     return attemptId;
+  }
+
+  private String nodeStatus(UUID nodeId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT status FROM core.diagnostic_node WHERE id = ?", String.class, nodeId);
+  }
+
+  /** A fresh curriculum_version, skill, skill_version, and its one learning_objective -- left in
+   * the default DRAFT status (never published), so a misconception targeting its objective cannot
+   * yet be published either. Reuses the real KAFKA domain (any domain_id would do; skill/curriculum
+   * identity is what needs to be fresh per call). */
+  private UUID draftCurriculumWithOneObjective() {
+    UUID curriculumVersionId = UUID.randomUUID();
+    String suffix = curriculumVersionId.toString().substring(0, 8);
+    runtimeJdbc.update("""
+        INSERT INTO core.curriculum_version (id, domain_id, version_code)
+        VALUES (?, ?, ?)
+        """, curriculumVersionId, KAFKA_DOMAIN, "draft-test-" + suffix);
+
+    UUID skillId = UUID.randomUUID();
+    runtimeJdbc.update("""
+        INSERT INTO core.skill (id, domain_id, stable_code)
+        VALUES (?, ?, ?)
+        """, skillId, KAFKA_DOMAIN, "DRAFT_TEST_SKILL_" + suffix.toUpperCase());
+
+    UUID skillVersionId = UUID.randomUUID();
+    runtimeJdbc.update("""
+        INSERT INTO core.skill_version
+          (id, skill_id, curriculum_version_id, title, description, difficulty,
+           estimated_learning_minutes, display_order)
+        VALUES (?, ?, ?, 'Draft test skill', 'A skill in a still-DRAFT curriculum version.',
+                'FOUNDATIONAL', 10, 1)
+        """, skillVersionId, skillId, curriculumVersionId);
+
+    UUID objectiveId = UUID.randomUUID();
+    runtimeJdbc.update("""
+        INSERT INTO core.learning_objective (id, skill_version_id, objective_code, description, display_order)
+        VALUES (?, ?, 'DRAFT_TEST_OBJECTIVE', 'An objective in a still-DRAFT curriculum version.', 1)
+        """, objectiveId, skillVersionId);
+
+    return curriculumVersionId;
+  }
+
+  private UUID onlyObjectiveOf(UUID curriculumVersionId) {
+    return runtimeJdbc.queryForObject("""
+        SELECT lo.id FROM core.learning_objective lo
+        JOIN core.skill_version sv ON sv.id = lo.skill_version_id
+        WHERE sv.curriculum_version_id = ?
+        """, UUID.class, curriculumVersionId);
   }
 
   private void wire() {
