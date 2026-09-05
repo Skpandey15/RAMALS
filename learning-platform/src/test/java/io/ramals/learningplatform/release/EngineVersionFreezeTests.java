@@ -7,6 +7,9 @@ import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
 import io.ramals.learningplatform.assessment.AdaptiveEligibleItem;
 import io.ramals.learningplatform.assessment.AdaptivePacket;
 import io.ramals.learningplatform.assessment.AssessmentItemScoringView;
+import io.ramals.learningplatform.assessment.DiagnosticConfidenceBand;
+import io.ramals.learningplatform.assessment.DiagnosticConfidenceCalculatorV1;
+import io.ramals.learningplatform.assessment.DiagnosticConfidenceInputs;
 import io.ramals.learningplatform.assessment.DiagnosticForm;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
@@ -128,6 +131,8 @@ class EngineVersionFreezeTests {
         EngineVersionFreezeTests::hypothesisConfirmationDiagnosticSelection);
     put(HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION,
         EngineVersionFreezeTests::hypothesisDrivenProbeDiagnosticSelection);
+    put(DiagnosticConfidenceCalculatorV1.POLICY_VERSION,
+        EngineVersionFreezeTests::diagnosticConfidence);
     put(LearningSessionPolicy.POLICY_VERSION, EngineVersionFreezeTests::sessionPolicy);
     put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
     put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
@@ -177,6 +182,9 @@ class EngineVersionFreezeTests {
       // V2's) adjustment chain unmodified, restricting the pool for one skill rather than changing
       // select() itself.
       Map.entry("DIAGNOSTIC_SELECTION_V5", "1c7e506ececfc55f9813ae8f9c0d48e5bdb2ac24776eedca48b73584ba41affd"),
+      // Minted with V056/H5 (M2-ADR-023 §2), when the diagnostic-confidence calculator was first
+      // frozen.
+      Map.entry("DIAGNOSTIC_CONFIDENCE_V1", "806bd48b24e66c3b080138069cc43dfb4e3a6758910bbfc2ad27706d642bb029"),
       Map.entry("SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647"),
       Map.entry("GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad"),
       Map.entry("PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a"),
@@ -699,6 +707,33 @@ class EngineVersionFreezeTests {
             .append(item.itemVersionId()).append(':')
             .append(item.reason()).append('\n');
       }
+    }
+    return out.toString();
+  }
+
+  /**
+   * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-023 §2) over every approved boundary vector: the four
+   * uncontested-support thresholds, the exact 3:1 dominance boundary (3S/1C vs. 4S/1C), the
+   * identical-net-margin-different-band proof (4S/1C vs. 100S/97C), balanced and
+   * contradiction-dominant evidence, and INCONCLUSIVE's non-participation. A change to any
+   * threshold, to the dominance/margin arithmetic, or to which band a case resolves to moves this
+   * hash.
+   */
+  private static String diagnosticConfidence() {
+    DiagnosticConfidenceCalculatorV1 calculator = new DiagnosticConfidenceCalculatorV1();
+    StringBuilder out = new StringBuilder();
+    int[][] cases = {
+        {0, 0}, {1, 0}, {2, 0}, {3, 0}, {10, 0},
+        {2, 1}, {3, 1}, {4, 1}, {10, 1}, {100, 1},
+        {3, 2}, {3, 3}, {4, 3}, {10, 5}, {100, 97},
+        {1, 3}, {0, 3},
+    };
+    for (int[] sc : cases) {
+      out.append(calculator.compute(new DiagnosticConfidenceInputs(sc[0], sc[1], 0))).append('\n');
+    }
+    // INCONCLUSIVE never participates -- same directional counts, growing inconclusive count.
+    for (int inconclusive : List.of(0, 1, 50)) {
+      out.append(calculator.compute(new DiagnosticConfidenceInputs(4, 1, inconclusive))).append('\n');
     }
     return out.toString();
   }

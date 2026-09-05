@@ -366,7 +366,10 @@ class DiagnosticFormPersistenceIntegrationTests {
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorerV2(),
-          new EvidenceService(evidenceRepository), masteryService, recommendationService, mapper);
+          new EvidenceService(evidenceRepository), masteryService, recommendationService,
+          new DiagnosticConfidenceService(new ProbeProvenanceRepository(runtimeJdbc),
+              new DiagnosticConfidenceRepository(runtimeJdbc), new DiagnosticConfidenceCalculatorV1()),
+          mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
   }
