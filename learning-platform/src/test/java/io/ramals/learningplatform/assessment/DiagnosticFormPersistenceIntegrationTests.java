@@ -369,6 +369,8 @@ class DiagnosticFormPersistenceIntegrationTests {
           new EvidenceService(evidenceRepository), masteryService, recommendationService,
           new DiagnosticConfidenceService(new ProbeProvenanceRepository(runtimeJdbc),
               new DiagnosticConfidenceRepository(runtimeJdbc), new DiagnosticConfidenceCalculatorV1()),
+          new MisconceptionEvidenceCaptureService(new MisconceptionOptionMappingRepository(runtimeJdbc),
+              new MisconceptionEvidenceObservationRepository(runtimeJdbc)),
           mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
