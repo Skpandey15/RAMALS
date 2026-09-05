@@ -18,16 +18,25 @@
 --
 -- Append-only, immutable once written, mirroring core.diagnostic_confidence_observation's own model.
 -- A historical snapshot is bound permanently to the evidence set it was computed from; it is never
--- revisited when a later submission adds more evidence for the same misconception. Deliberately NO
--- trigger re-derives a row's persisted counts from a live re-aggregation of
--- core.misconception_evidence_observation -- such a check would only ever validate a row against
--- whatever evidence existed at ITS OWN insert time (never retroactively), so it would protect
--- nothing a correct write-time read did not already guarantee, while inviting the false impression
--- that persisted counts are always "current." Correctness at write time is the application's
--- responsibility (MisconceptionConfidenceService reads the complete evidence set once and derives
--- counts, calculator input, band, and provenance ids all from that same read); the database's role
--- here is to keep the row honest about itself (band consistent with its own counts, identity
--- consistent with its own attempt) and permanently immutable thereafter.
+-- revisited when a later submission adds more evidence for the same misconception.
+--
+-- The database enforces this two ways, and it is important to keep them distinct. There is
+-- deliberately NO trigger comparing a row's persisted counts against a LIVE, unscoped re-aggregation
+-- of "every core.misconception_evidence_observation row that currently exists for this learner and
+-- misconception" -- such a check would only ever prove the row was correct at ITS OWN insert time
+-- (never retroactively re-validate it later), so it would protect nothing a correct write-time read
+-- did not already guarantee, while inviting the false impression that persisted counts are always
+-- "current" for whatever exists in the table right now.
+--
+-- What IS enforced, by the deferred constraint trigger below, is strictly narrower and permanent: a
+-- row's persisted supporting_count/contradictory_count/inconclusive_count must exactly equal the
+-- aggregated outcomes of the evidence rows THIS SAME ROW explicitly cites in
+-- core.misconception_confidence_observation_evidence -- its own declared, permanent provenance set,
+-- never anything outside it. That is a self-consistency check on the row's own two halves (its
+-- counts and its own citations), not a claim about global state, so it never re-opens an older
+-- snapshot when a later submission's unrelated new evidence and new provenance rows arrive: those
+-- belong to a different confidence_observation_id entirely, and this row's own already-committed
+-- provenance set is never touched by them.
 CREATE TABLE core.misconception_confidence_observation (
   id UUID PRIMARY KEY,
   attempt_id UUID NOT NULL REFERENCES core.assessment_attempt(id) ON DELETE RESTRICT,
@@ -90,9 +99,10 @@ CREATE INDEX idx_misconception_confidence_observation_learner
 -- Immutable once written, and validates the one consistency fact no FK or CHECK above can express:
 -- learner_id must be the learner who actually owns attempt_id's own submission (a lookup through
 -- core.assessment_attempt, since this table's own attempt_id is the snapshot-event anchor, not a
--- duplicated learner fact). Never re-derives supporting_count/contradictory_count/inconclusive_count
--- from a live query -- see the migration header for why that would be pointless at best and
--- misleading at worst for a table whose entire purpose is permanent historical correctness.
+-- duplicated learner fact). This is a plain BEFORE trigger, fired immediately -- the count-vs-own-
+-- provenance check is a separate, DEFERRED constraint trigger below, because it needs every
+-- provenance row this same transaction is about to write to already exist before it can check
+-- anything.
 CREATE FUNCTION core.protect_misconception_confidence_observation()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -123,6 +133,66 @@ $$;
 CREATE TRIGGER trg_misconception_confidence_observation_guard
 BEFORE INSERT OR UPDATE OR DELETE ON core.misconception_confidence_observation
 FOR EACH ROW EXECUTE FUNCTION core.protect_misconception_confidence_observation();
+
+-- Deferred to transaction commit, not checked immediately: at the moment this row is inserted, the
+-- application has not yet written its own provenance rows into
+-- core.misconception_confidence_observation_evidence (they are written in the same transaction,
+-- immediately afterward), so an immediate check here would always see an empty provenance set and
+-- reject every legitimate insert. DEFERRABLE INITIALLY DEFERRED moves the check to COMMIT, by which
+-- point every provenance row this transaction wrote is visible.
+--
+-- What it proves: this row's own persisted supporting_count/contradictory_count/inconclusive_count
+-- exactly equal the aggregated outcomes of the evidence rows THIS ROW cites in
+-- core.misconception_confidence_observation_evidence -- nothing else. A writer that persisted
+-- supporting_count = 4 while citing zero, or an incomplete, or a wrong-category set of provenance
+-- rows is rejected at commit, closing exactly the gap ck_..._band_matches_counts cannot: that CHECK
+-- only proves band is consistent with whatever counts happen to be persisted, never that those
+-- counts are themselves consistent with the row's own cited evidence.
+--
+-- Scoped strictly to NEW.id's own provenance rows -- never a query over "all evidence for this
+-- learner and misconception" -- so a later submission's new evidence and new provenance rows (a
+-- different confidence_observation_id) can never cause this check to re-fire against an
+-- already-committed historical row; PostgreSQL only ever evaluates a constraint trigger for the
+-- specific row(s) written in ITS OWN transaction.
+CREATE FUNCTION core.check_misconception_confidence_observation_counts()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  actual_supporting INTEGER;
+  actual_contradictory INTEGER;
+  actual_inconclusive INTEGER;
+BEGIN
+  SELECT
+    count(*) FILTER (WHERE o.outcome = 'SUPPORTING'),
+    count(*) FILTER (WHERE o.outcome = 'CONTRADICTORY'),
+    count(*) FILTER (WHERE o.outcome = 'INCONCLUSIVE')
+  INTO actual_supporting, actual_contradictory, actual_inconclusive
+  FROM core.misconception_confidence_observation_evidence e
+  JOIN core.misconception_evidence_observation o ON o.id = e.evidence_observation_id
+  WHERE e.confidence_observation_id = NEW.id;
+
+  IF actual_supporting IS DISTINCT FROM NEW.supporting_count
+      OR actual_contradictory IS DISTINCT FROM NEW.contradictory_count
+      OR actual_inconclusive IS DISTINCT FROM NEW.inconclusive_count THEN
+    RAISE EXCEPTION
+      'misconception_confidence_observation % persisted counts '
+      '(supporting=%, contradictory=%, inconclusive=%) do not match the aggregated outcomes of its '
+      'own cited provenance in core.misconception_confidence_observation_evidence '
+      '(supporting=%, contradictory=%, inconclusive=%)',
+      NEW.id, NEW.supporting_count, NEW.contradictory_count, NEW.inconclusive_count,
+      actual_supporting, actual_contradictory, actual_inconclusive
+      USING ERRCODE = '23514';
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER trg_misconception_confidence_observation_counts_match_provenance
+AFTER INSERT ON core.misconception_confidence_observation
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION core.check_misconception_confidence_observation_counts();
 
 -- -------------------------------------------------------------------------------------------
 -- core.misconception_confidence_observation_evidence: the COMPLETE set of

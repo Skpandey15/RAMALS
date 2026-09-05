@@ -67,14 +67,43 @@ class GranularDiagnosticConfidenceMigrationContractTests {
   }
 
   @Test
-  void confidenceObservationGuardVerifiesLearnerOwnsTheAttemptButNeverReDerivesCountsLive()
+  void confidenceObservationGuardVerifiesLearnerOwnsTheAttemptButNeverReDerivesCountsFromALiveUnscopedQuery()
       throws IOException {
     assertThat(migration())
         .contains("SELECT learner_id INTO owning_learner_id FROM core.assessment_attempt WHERE id = NEW.attempt_id")
         .contains("does not match the learner who owns attempt")
-        // The deliberate historical-snapshot guarantee: no live re-aggregation of
-        // core.misconception_evidence_observation inside this guard.
+        // The deliberate historical-snapshot guarantee: the plain BEFORE guard never re-aggregates
+        // "every evidence row for this learner and misconception" -- that would be a live, unscoped
+        // query, which is what's rejected. The permitted count-consistency check (its own separate,
+        // deferred constraint trigger below) is scoped strictly to this row's own provenance set.
         .doesNotContain("FROM core.misconception_evidence_observation WHERE learner_id = NEW.learner_id");
+  }
+
+  @Test
+  void countsAreVerifiedAgainstTheRowsOwnProvenanceByADeferredConstraintTriggerAtCommit()
+      throws IOException {
+    assertThat(migration())
+        .contains("CREATE FUNCTION core.check_misconception_confidence_observation_counts")
+        .contains("FROM core.misconception_confidence_observation_evidence e")
+        .contains("JOIN core.misconception_evidence_observation o ON o.id = e.evidence_observation_id")
+        .contains("WHERE e.confidence_observation_id = NEW.id")
+        .contains("count(*) FILTER (WHERE o.outcome = 'SUPPORTING')")
+        .contains("count(*) FILTER (WHERE o.outcome = 'CONTRADICTORY')")
+        .contains("count(*) FILTER (WHERE o.outcome = 'INCONCLUSIVE')")
+        .contains("do not match the aggregated outcomes of its")
+        .contains("CREATE CONSTRAINT TRIGGER trg_misconception_confidence_observation_counts_match_provenance")
+        .contains("AFTER INSERT ON core.misconception_confidence_observation")
+        .contains("DEFERRABLE INITIALLY DEFERRED");
+  }
+
+  @Test
+  void theDeferredCountCheckIsScopedToTheRowsOwnIdNeverAllEvidenceForTheLearnerAndMisconception()
+      throws IOException {
+    // The distinction M2-ADR-028 SS6 draws: WHERE e.confidence_observation_id = NEW.id is a
+    // self-consistency check on this row's own two halves, never a query keyed by learner_id/
+    // misconception_id alone (which would be exactly the rejected live, unscoped re-aggregation).
+    assertThat(migration())
+        .doesNotContain("WHERE o.learner_id = NEW.learner_id AND o.misconception_id = NEW.misconception_id");
   }
 
   @Test

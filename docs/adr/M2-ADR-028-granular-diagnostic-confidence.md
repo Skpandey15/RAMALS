@@ -75,7 +75,8 @@ no new transaction boundary is introduced.
 evidence feeding a deterministic band, needing full audit reconstruction) justify the same choice,
 not a mechanical copy of H5's schema.
 
-### 6. Historical snapshots are bound to their own contributing evidence set, permanently
+### 6. Historical snapshots are bound to their own contributing evidence set, permanently — and the
+   database proves it, scoped strictly to each snapshot's own citations
 
 A confidence snapshot's meaning is fixed by the evidence that existed at the moment it was computed,
 recorded explicitly via the complete provenance join table (§7) — never by a live re-aggregation of
@@ -84,16 +85,50 @@ later global aggregation once further attempts add evidence for the same misconc
 if attempt A1 produces evidence `{E1, E2}` and snapshot `S1` cites exactly `{E1, E2}`, and a later
 attempt A2 produces further evidence `{E3, E4}` and snapshot `S2` cites `{E1, E2, E3, E4}`, `S1`
 remains historically correct for `{E1, E2}` forever — it is never revisited, recomputed, or
-reinterpreted by `S2`'s existence. No database invariant may imply otherwise: there is deliberately
-no trigger or constraint that ties an existing snapshot's persisted counts to a *live* query over
-`core.misconception_evidence_observation` — only to the counts and provenance set it was given at
-its own insert time. (Contrast this with `core.misconception_evidence_observation`'s own guard,
-which independently re-derives its outcome from immutable, already-fixed facts anchored to one
-specific response's own `created_at` — a genuinely fixed point that never moves. A confidence
-snapshot's own evidence set is not anchored to a single fixed timestamp the same way; its
-correctness is guaranteed by application discipline at write time — reading the complete evidence
-set once and deriving counts, calculator input, band, and provenance ids all from that *same* read —
-not by a database trigger re-deriving it independently after the fact.)
+reinterpreted by `S2`'s existence.
+
+Two distinct database mechanisms are involved here, and it matters that they not be conflated. There
+is deliberately **no** trigger comparing a row's persisted counts against a *live, unscoped*
+re-aggregation of "every evidence row that currently exists for this learner and misconception" —
+such a check would only ever prove correctness at the row's own insert time (it cannot retroactively
+re-validate an already-committed row later), so it would protect nothing a correct write-time read
+did not already guarantee, while inviting the false impression that persisted counts are always
+"current" against whatever the evidence table holds right now.
+
+What **is** enforced — added after initial review, closing a real gap the first version of this
+design left open — is narrower and permanent: a `DEFERRABLE INITIALLY DEFERRED` constraint trigger
+on `core.misconception_confidence_observation`, evaluated at transaction commit, requiring that a
+row's persisted `supporting_count`/`contradictory_count`/`inconclusive_count` exactly equal the
+aggregated outcomes of the evidence rows *that row itself* cites in
+`core.misconception_confidence_observation_evidence` — never anything outside that explicit
+citation set. This closes exactly the gap the band-matches-counts `CHECK` (§ below) cannot: that
+`CHECK` only proves `band` is consistent with whatever counts happen to be persisted, never that
+those counts are themselves consistent with the row's own declared evidence. Without this check, a
+buggy or privileged writer could persist `supporting_count = 4, band = HIGH` while citing zero, an
+incomplete, or a wrong-category set of provenance rows, and the database would have accepted it —
+strictly weaker than V058's own guarantee, where an observation's outcome is independently
+re-derivable from authoritative facts regardless of provenance completeness.
+
+The deferral is necessary, not incidental: at the moment a confidence row is inserted, its own
+provenance rows have not yet been written (the application writes them immediately afterward, in
+the same transaction), so an immediate check would see an empty set and reject every legitimate
+insert. Deferring to commit lets every provenance row the transaction wrote become visible first.
+
+Critically, this check is scoped to `NEW.id`'s own provenance rows only — it is a self-consistency
+check between a row's two halves (its declared counts and its own declared citations), not a claim
+about global state. A later submission's new evidence and new provenance rows belong to a different
+`confidence_observation_id` entirely; PostgreSQL only ever evaluates a constraint trigger against the
+specific row(s) written in *its own* transaction, so this check can never re-open, re-validate, or
+be affected by an already-committed historical snapshot. `S1`'s own commit already proved `S1`
+internally consistent, once, forever; `S2`'s later commit proves `S2` consistent with *its* own
+citations, entirely independently. (Contrast both of these with
+`core.misconception_evidence_observation`'s own guard, which independently re-derives its outcome
+from immutable, already-fixed facts anchored to one specific response's own `created_at` — a
+genuinely fixed point that never moves. A confidence snapshot's evidence set is not anchored to a
+single timestamp the same way; its correctness is guaranteed by the combination of application
+discipline at write time — reading the complete evidence set once and deriving counts, calculator
+input, band, and provenance ids all from that *same* read — and this deferred, row-scoped check that
+proves the two halves it wrote agree with each other.)
 
 ### 7. Complete evidence provenance, including `INCONCLUSIVE`
 
@@ -149,15 +184,20 @@ stateless calculator with H5 — no shared table, no shared service, no shared r
   model. No longer fits once recomputation is batched per submission: a snapshot may legitimately
   summarize several observations, so there is no single "the" triggering row to key off. Replaced by
   `UNIQUE(attempt_id, misconception_id)` (§3).
-- **A DB trigger re-deriving a confidence row's persisted counts from a live re-aggregation of
-  `core.misconception_evidence_observation`, independent of the application layer** (the same
-  discipline V058 applied to its own observation guard). Rejected specifically for the *historical*
-  snapshot table: such a trigger, evaluated only at insert time, cannot retroactively invalidate an
-  already-written row when new evidence arrives later — so it would not actually protect anything a
-  correct write-time read did not already guarantee, while creating the appearance that persisted
-  counts are always "current," which is precisely the false impression §6 rules out. The band-matches-
-  its-own-counts `CHECK` (§ below, same idiom as V056) is kept, because that is a static, permanent
-  arithmetic fact about the row's own persisted values, never a claim about live state.
+- **A DB trigger re-deriving a confidence row's persisted counts from a *live, unscoped*
+  re-aggregation of "every `core.misconception_evidence_observation` row that currently exists for
+  this learner and misconception."** Rejected specifically for the *historical* snapshot table: such
+  a trigger, evaluated only at insert time, cannot retroactively invalidate an already-written row
+  when new evidence arrives later — so it would not actually protect anything a correct write-time
+  read did not already guarantee, while creating the appearance that persisted counts are always
+  "current," which is precisely the false impression §6 rules out.
+  **Accepted instead (added after initial review):** a `DEFERRABLE INITIALLY DEFERRED` constraint
+  trigger, scoped strictly to each row's own cited provenance set in
+  `core.misconception_confidence_observation_evidence` — a self-consistency check between a row's
+  two halves, never a claim about global or current state, and therefore fully compatible with §6's
+  permanence guarantee (see §6 for the full reasoning). The band-matches-its-own-counts `CHECK` (§
+  below, same idiom as V056) is kept alongside it, because that is a separate, static, permanent
+  arithmetic fact about the row's own persisted values.
 - **Count-only or watermark-based (max `created_at`/max id) snapshot boundary.** Both are
   approximations requiring a later as-of re-query to reconstruct, and the watermark forms are
   vulnerable to timestamp/id ties. The explicit join table (§7) records the exact set directly, with

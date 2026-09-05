@@ -162,9 +162,11 @@ class GranularDiagnosticConfidencePersistenceIntegrationTests {
   @Test
   void threeSupportingObservationsAcrossThreeSeparateSubmissionsIsHigh() {
     wire();
-    // Also proves cross-submission (and therefore cross-assessment-version-capable) aggregation
-    // (M2-ADR-028 SS2): each attempt is its own separate submission, yet all three contribute to one
-    // final band.
+    // Proves cross-submission aggregation: each attempt is its own separate submission, yet all
+    // three contribute to one final band. All three attempts are against the SAME assessment
+    // version here -- this test does not by itself prove cross-ASSESSMENT-VERSION aggregation
+    // (M2-ADR-028 SS2); see confidenceAggregatesEvidenceAcrossTwoDistinctRealAssessmentVersionsFor...
+    // below for that, which uses two genuinely different assessment_version/item_version pairs.
     UUID misconceptionId = newPublishedMisconception("three supporting fixture");
     mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
     Learner learner = learners.provisionForSubject("confidence-three-supporting");
@@ -180,6 +182,43 @@ class GranularDiagnosticConfidencePersistenceIntegrationTests {
         confidenceRepository.findByAttemptAndMisconception(attempt3, misconceptionId).orElseThrow();
     assertThat(snapshot.supportingCount()).isEqualTo(3);
     assertThat(snapshot.band()).isEqualTo(DiagnosticConfidenceBand.HIGH);
+  }
+
+  @Test
+  void confidenceAggregatesEvidenceAcrossTwoDistinctRealAssessmentVersionsForTheSameMisconception() {
+    wire();
+    // M2-ADR-028 SS2's actual claim: evidence from a GENUINELY different assessment_version and
+    // item_version, mapped to the identical published misconception_id, contributes to the same
+    // confidence stream. Assessment Version A is the real, already-seeded ASSESSMENT_V2; Assessment
+    // Version B is a fresh, independently published assessment_version/item_version pair created for
+    // this test alone -- not a second attempt against the same version.
+    UUID misconceptionId = newPublishedMisconception("cross-assessment-version fixture");
+    mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
+    UUID assessmentVersionB =
+        createPublishedAssessmentVersionWithOneItem("confidence-cross-version-b");
+    UUID itemVersionB = onlyItemVersionIdFor(assessmentVersionB);
+    mapAndPublish(itemVersionB, "A", misconceptionId);
+    Learner learner = learners.provisionForSubject("confidence-cross-assessment-version");
+
+    // Evidence E1: Assessment Version A (ASSESSMENT_V2), the real seeded ACKS_MCQ_A1 item.
+    UUID attemptA = freshAttempt(learner.id(), ASSESSMENT_V2);
+    submit(learner.subject(), attemptA, oneResponse(ACKS_MCQ_A1, "A"));
+    UUID e1 = evidenceObservations
+        .findByResponseAndMisconception(onlyResponseIdFor(attemptA, ACKS_MCQ_A1), misconceptionId)
+        .orElseThrow().id();
+
+    // Evidence E2: Assessment Version B, a completely different assessment_version/item_version.
+    UUID attemptB = freshAttempt(learner.id(), assessmentVersionB);
+    submit(learner.subject(), attemptB, oneResponse(itemVersionB, "A"));
+    UUID e2 = evidenceObservations
+        .findByResponseAndMisconception(onlyResponseIdFor(attemptB, itemVersionB), misconceptionId)
+        .orElseThrow().id();
+
+    MisconceptionConfidenceObservation snapshot =
+        confidenceRepository.findByAttemptAndMisconception(attemptB, misconceptionId).orElseThrow();
+    assertThat(snapshot.supportingCount()).isEqualTo(2);
+    assertThat(snapshot.band()).isEqualTo(DiagnosticConfidenceBand.MODERATE);
+    assertThat(confidenceRepository.findProvenanceFor(snapshot.id())).containsExactlyInAnyOrder(e1, e2);
   }
 
   @Test
@@ -406,6 +445,126 @@ class GranularDiagnosticConfidencePersistenceIntegrationTests {
         .isEqualTo(2);
   }
 
+  // -------------------------------------------------------------------------------------------
+  // The deferred count-vs-provenance constraint trigger (added on review of PR #256): persisted
+  // counts must exactly equal the aggregated outcomes of the row's own cited provenance, checked at
+  // COMMIT rather than at the individual INSERT statements, since provenance rows are written
+  // immediately after their parent within the same transaction. Each rejection scenario below writes
+  // a deliberately broken row directly through MisconceptionConfidenceRepository (bypassing
+  // MisconceptionConfidenceService, which always derives counts and provenance from one same read
+  // and so can never disagree with itself) inside its own explicit transaction, and asserts that
+  // COMMIT itself fails.
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void parentWithCountsExceedingItsOwnProvenanceOutcomesIsRejectedAtCommit() {
+    wire();
+    UUID misconceptionId = newPublishedMisconception("counts-exceed-provenance fixture");
+    mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
+    Learner learner = learners.provisionForSubject("confidence-counts-exceed-provenance");
+    UUID attemptId = freshAttempt(learner.id());
+    submit(learner.subject(), attemptId, oneResponse(ACKS_MCQ_A1, "A"));
+    UUID onlyRealEvidence = evidenceObservations
+        .findByResponseAndMisconception(onlyResponseIdFor(attemptId, ACKS_MCQ_A1), misconceptionId)
+        .orElseThrow().id();
+
+    // Claims 4 SUPPORTING (HIGH, satisfying the band-matches-counts CHECK on its own) while citing
+    // only the one real SUPPORTING observation that actually exists.
+    UUID fakeAttemptId = freshAttempt(learner.id());
+    DiagnosticConfidenceResult brokenResult = new DiagnosticConfidenceResult(
+        DiagnosticConfidenceBand.HIGH, 4, 0, 0, DiagnosticConfidenceCalculatorV1.POLICY_VERSION);
+
+    assertThatThrownBy(() -> transactionTemplate.execute(status -> {
+      UUID brokenId =
+          confidenceRepository.insert(fakeAttemptId, learner.id(), misconceptionId, brokenResult);
+      confidenceRepository.insertProvenance(brokenId, onlyRealEvidence);
+      return null;
+    })).isInstanceOf(RuntimeException.class);
+  }
+
+  @Test
+  void parentWithMoreProvenanceThanItsOwnClaimedCountsIsRejectedAtCommit() {
+    wire();
+    UUID misconceptionId = newPublishedMisconception("extra-provenance fixture");
+    mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
+    mapAndPublish(ACKS_MCQ_I2, "A", misconceptionId);
+    Learner learner = learners.provisionForSubject("confidence-extra-provenance");
+    UUID attemptId = freshAttempt(learner.id());
+    submit(learner.subject(), attemptId, new DiagnosticSubmissionRequest(List.of(
+        new ItemResponse(ACKS_MCQ_A1.toString(), List.of("A")),
+        new ItemResponse(ACKS_MCQ_I2.toString(), List.of("A")))));
+    UUID evidenceOne = evidenceObservations
+        .findByResponseAndMisconception(onlyResponseIdFor(attemptId, ACKS_MCQ_A1), misconceptionId)
+        .orElseThrow().id();
+    UUID evidenceTwo = evidenceObservations
+        .findByResponseAndMisconception(onlyResponseIdFor(attemptId, ACKS_MCQ_I2), misconceptionId)
+        .orElseThrow().id();
+
+    // Claims only 1 SUPPORTING (LOW, satisfying the band-matches-counts CHECK on its own) while
+    // citing BOTH real SUPPORTING observations -- more provenance than the persisted counts admit.
+    UUID fakeAttemptId = freshAttempt(learner.id());
+    DiagnosticConfidenceResult brokenResult = new DiagnosticConfidenceResult(
+        DiagnosticConfidenceBand.LOW, 1, 0, 0, DiagnosticConfidenceCalculatorV1.POLICY_VERSION);
+
+    assertThatThrownBy(() -> transactionTemplate.execute(status -> {
+      UUID brokenId =
+          confidenceRepository.insert(fakeAttemptId, learner.id(), misconceptionId, brokenResult);
+      confidenceRepository.insertProvenance(brokenId, evidenceOne);
+      confidenceRepository.insertProvenance(brokenId, evidenceTwo);
+      return null;
+    })).isInstanceOf(RuntimeException.class);
+  }
+
+  @Test
+  void categoryMismatchBetweenClaimedCountsAndTheCitedEvidencesActualOutcomeIsRejectedAtCommit() {
+    wire();
+    UUID misconceptionId = newPublishedMisconception("category-mismatch fixture");
+    mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
+    Learner learner = learners.provisionForSubject("confidence-category-mismatch");
+    UUID attemptId = freshAttempt(learner.id());
+    // The real correct answer -- the evidence this produces is CONTRADICTORY, not SUPPORTING.
+    submit(learner.subject(), attemptId, oneResponse(ACKS_MCQ_A1, "B"));
+    UUID contradictoryEvidence = evidenceObservations
+        .findByResponseAndMisconception(onlyResponseIdFor(attemptId, ACKS_MCQ_A1), misconceptionId)
+        .orElseThrow().id();
+
+    // Claims the cited (actually CONTRADICTORY) observation as SUPPORTING instead -- a category
+    // swap, not merely a count mismatch; the aggregated outcome of what's cited is (s=0, c=1), not
+    // the claimed (s=1, c=0).
+    UUID fakeAttemptId = freshAttempt(learner.id());
+    DiagnosticConfidenceResult brokenResult = new DiagnosticConfidenceResult(
+        DiagnosticConfidenceBand.LOW, 1, 0, 0, DiagnosticConfidenceCalculatorV1.POLICY_VERSION);
+
+    assertThatThrownBy(() -> transactionTemplate.execute(status -> {
+      UUID brokenId =
+          confidenceRepository.insert(fakeAttemptId, learner.id(), misconceptionId, brokenResult);
+      confidenceRepository.insertProvenance(brokenId, contradictoryEvidence);
+      return null;
+    })).isInstanceOf(RuntimeException.class);
+  }
+
+  @Test
+  void correctlyDerivedCountsWithCompleteMatchingProvenanceCommitsSuccessfully() {
+    wire();
+    UUID misconceptionId = newPublishedMisconception("correct-provenance-commits fixture");
+    mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
+    mapAndPublish(ACKS_MCQ_I2, "A", misconceptionId);
+    Learner learner = learners.provisionForSubject("confidence-correct-provenance-commits");
+    UUID attemptId = freshAttempt(learner.id());
+
+    // Must not throw: MisconceptionConfidenceService always derives counts and provenance from the
+    // same single read, so the deferred constraint trigger's own re-aggregation can never disagree
+    // with what it persisted, in normal operation.
+    submit(learner.subject(), attemptId, new DiagnosticSubmissionRequest(List.of(
+        new ItemResponse(ACKS_MCQ_A1.toString(), List.of("A")),
+        new ItemResponse(ACKS_MCQ_I2.toString(), List.of("A")))));
+
+    MisconceptionConfidenceObservation snapshot =
+        confidenceRepository.findByAttemptAndMisconception(attemptId, misconceptionId).orElseThrow();
+    assertThat(snapshot.supportingCount()).isEqualTo(2);
+    assertThat(confidenceRepository.findProvenanceFor(snapshot.id())).hasSize(2);
+  }
+
   @Test
   void confidenceWriteFailureRollsBackTheWholeSubmissionTransaction() throws SQLException {
     wire();
@@ -429,7 +588,10 @@ class GranularDiagnosticConfidencePersistenceIntegrationTests {
   // -------------------------------------------------------------------------------------------
   // The mandatory historical-snapshot test: an older snapshot is bound to its own evidence set
   // forever, and is never revisited when a later submission adds more evidence for the same
-  // misconception.
+  // misconception. S1's own commit is independently checked, at that transaction's own commit time,
+  // by the deferred count-vs-provenance constraint trigger above; S2's later commit is an entirely
+  // separate check against S2's own row and citations -- proving directly that the deferred trigger
+  // does not, and structurally cannot, reach back into an already-committed historical snapshot.
   // -------------------------------------------------------------------------------------------
 
   @Test
@@ -505,13 +667,71 @@ class GranularDiagnosticConfidencePersistenceIntegrationTests {
   }
 
   private UUID freshAttempt(UUID learnerId) {
+    return freshAttempt(learnerId, ASSESSMENT_V2);
+  }
+
+  private UUID freshAttempt(UUID learnerId, UUID assessmentVersionId) {
     UUID attemptId = UUID.randomUUID();
     runtimeJdbc.update("""
         INSERT INTO core.assessment_attempt
           (id, learner_id, assessment_version_id, status, idempotency_key)
         VALUES (?, ?, ?, 'IN_PROGRESS', ?)
-        """, attemptId, learnerId, ASSESSMENT_V2, "confidence-fixture-" + attemptId);
+        """, attemptId, learnerId, assessmentVersionId, "confidence-fixture-" + attemptId);
     return attemptId;
+  }
+
+  /**
+   * A second, genuinely distinct, real assessment_version -- a fresh row under the SAME real
+   * assessment/domain as {@link #ASSESSMENT_V2} (so {@code submit(..., "KAFKA", ...)} still
+   * resolves), with its own fresh item_version, published the same way real content is: DRAFT,
+   * given one VERIFIED_CONTENT item, then transitioned to PUBLISHED. Used only to prove M2-ADR-028
+   * SS2's cross-assessment-version aggregation claim against something that is actually a different
+   * assessment_version/item_version, not merely a different attempt against the same one.
+   */
+  private UUID createPublishedAssessmentVersionWithOneItem(String versionCode) {
+    UUID assessmentId = runtimeJdbc.queryForObject(
+        "SELECT assessment_id FROM core.assessment_version WHERE id = ?", UUID.class, ASSESSMENT_V2);
+    UUID curriculumVersionId = runtimeJdbc.queryForObject(
+        "SELECT curriculum_version_id FROM core.assessment_version WHERE id = ?", UUID.class, ASSESSMENT_V2);
+    UUID skillId = runtimeJdbc.queryForObject(
+        "SELECT skill_id FROM core.assessment_item_version WHERE id = ?", UUID.class, ACKS_MCQ_A1);
+
+    UUID assessmentVersionId = UUID.randomUUID();
+    runtimeJdbc.update("""
+        INSERT INTO core.assessment_version (id, assessment_id, curriculum_version_id, version_code, status)
+        VALUES (?, ?, ?, ?, 'DRAFT')
+        """, assessmentVersionId, assessmentId, curriculumVersionId, versionCode);
+
+    UUID itemVersionId = UUID.randomUUID();
+    runtimeJdbc.update("""
+        INSERT INTO core.assessment_item_version
+          (id, assessment_version_id, skill_id, item_code, item_type, stem, options_jsonb,
+           answer_key_jsonb, difficulty, display_order, trust_state, verified_by, verified_at)
+        VALUES (?, ?, ?, 'CONFIDENCE_CROSS_VERSION_ITEM', 'SINGLE_CHOICE',
+                'Cross-assessment-version fixture stem',
+                '[{"id":"A","text":"wrong"},{"id":"B","text":"right"}]'::jsonb,
+                '{"correct":["B"]}'::jsonb, 'FOUNDATIONAL', 1, 'VERIFIED_CONTENT',
+                'confidence-test-fixture', CURRENT_TIMESTAMP)
+        """, itemVersionId, assessmentVersionId, skillId);
+
+    // A fresh logical question, established by this its first (and only) version -- V048 requires
+    // every item to have a lineage row before its assessment_version can publish.
+    runtimeJdbc.update(
+        "INSERT INTO core.assessment_item_lineage (item_version_id, logical_item_id) VALUES (?, ?)",
+        itemVersionId, UUID.randomUUID());
+
+    // Fires trg_assessment_version_publication (BEFORE UPDATE): requires >=1 item, all
+    // VERIFIED_CONTENT (both satisfied above), and auto-fills published_at.
+    runtimeJdbc.update(
+        "UPDATE core.assessment_version SET status = 'PUBLISHED' WHERE id = ?", assessmentVersionId);
+
+    return assessmentVersionId;
+  }
+
+  private UUID onlyItemVersionIdFor(UUID assessmentVersionId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT id FROM core.assessment_item_version WHERE assessment_version_id = ?",
+        UUID.class, assessmentVersionId);
   }
 
   private DiagnosticSubmissionRequest oneResponse(UUID itemVersionId, String selectedOption) {
