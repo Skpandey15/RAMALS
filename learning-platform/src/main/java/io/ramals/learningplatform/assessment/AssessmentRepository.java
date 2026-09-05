@@ -112,13 +112,20 @@ public class AssessmentRepository {
    * deliberately: it is what keeps a candidate probe item guaranteed to belong to the same pool the
    * new attempt selects from, never a cross-version mismatch. Not an arbitrary history scan --
    * exactly one attempt, or none.
+   *
+   * <p>{@code ORDER BY created_at DESC, id DESC} rather than {@code created_at} alone: two eligible
+   * completed attempts can share the same timestamp, and an ordering PostgreSQL is free to break
+   * arbitrarily is not acceptable for a selector that must be deterministic and reproducible. {@code
+   * id} is a total order over every row regardless of timestamp collisions, so the tie always
+   * resolves the same way -- the same secondary-key convention {@code AdminAuditQueryRepository}
+   * already uses for its own "most recent" queries.
    */
   public Optional<AssessmentAttempt> findMostRecentCompletedAttempt(
       UUID learnerId, UUID assessmentVersionId) {
     return jdbcTemplate.query(
         ATTEMPT_SELECT + """
              WHERE learner_id = ? AND assessment_version_id = ? AND status = 'COMPLETED'
-             ORDER BY created_at DESC
+             ORDER BY created_at DESC, id DESC
              LIMIT 1
             """,
         ATTEMPT_MAPPER, learnerId, assessmentVersionId).stream().findFirst();

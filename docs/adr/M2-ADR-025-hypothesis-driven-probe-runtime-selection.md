@@ -82,6 +82,12 @@ and completes, it — not attempt N — is "the immediately preceding attempt" f
 miss is never reconsidered. H7's longitudinal validation is not built here; this is a one-hop rule,
 not a history model.
 
+Two eligible completed attempts can share the same `created_at`. Ties are resolved with an explicit
+deterministic secondary ordering — `ORDER BY created_at DESC, id DESC` — the same secondary-key
+convention already used elsewhere in this codebase for "most recent" lookups
+(`AdminAuditQueryRepository`), not left to whatever order PostgreSQL happens to return matching rows
+in.
+
 ### 5. V4 vs. V5 precedence: explicit, and a direct consequence of §1's order
 
 Both V4 and V5 replace a skill's whole `SkillMasterySignal` entry when they touch it. Running V5

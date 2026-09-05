@@ -267,6 +267,48 @@ class HypothesisDrivenProbeSelectionPersistenceIntegrationTests {
   }
 
   // -------------------------------------------------------------------------------------------
+  // Determinism hardening: two eligible completed attempts with an identical created_at must still
+  // resolve to exactly one, chosen by the explicit ORDER BY created_at DESC, id DESC secondary
+  // ordering -- never left to whatever order PostgreSQL happens to return tied rows in.
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void tiedCreatedAtAttemptsResolveDeterministicallyByIdNotInsertionOrder() {
+    wire();
+    Learner learner = learners.provisionForSubject("v5-tied-created-at");
+    snapshot(learner.id(), BROKER_SKILL, MasteryStatus.MASTERED,
+        Set.of(MasteryDifficultyBand.EASY, MasteryDifficultyBand.MEDIUM, MasteryDifficultyBand.HARD));
+    snapshot(learner.id(), ACKS_SKILL, MasteryStatus.MASTERED,
+        Set.of(MasteryDifficultyBand.EASY, MasteryDifficultyBand.MEDIUM, MasteryDifficultyBand.HARD));
+
+    // Both ACKS_MCQ_A1 and ACKS_MCQ_I2 are tagged to the same objective (ACKS_DURABILITY_TRADEOFFS,
+    // d11), so either miss alone resolves the identical ROOT_CAUSE_PROBE -> ACKS_MCQ_A2 probe --
+    // deliberately, so the only way this test can pass is if the *recorded* source attempt is the
+    // one the deterministic tie-break selects, not merely "a probe was found at all".
+    UUID expectedWinnerId = UUID.fromString("00000000-0000-4000-8000-00000000000b");
+    UUID expectedLoserId = UUID.fromString("00000000-0000-4000-8000-00000000000a");
+    String sharedCreatedAt = "TIMESTAMPTZ '2026-01-01 00:00:00+00'";
+    // Written in reverse of the order the tie-break must resolve them -- the row that must LOSE the
+    // tie (the lower id) is inserted first, and the row that must WIN (the higher id) is inserted
+    // second. A passing result therefore cannot be explained by "whichever attempt happened to be
+    // inserted, or physically stored, last" -- only by the explicit id DESC secondary key.
+    completedAttemptWithOneResponseAtExactId(
+        expectedLoserId, learner.id(), ACKS_MCQ_I2, false, sharedCreatedAt);
+    completedAttemptWithOneResponseAtExactId(
+        expectedWinnerId, learner.id(), ACKS_MCQ_A1, false, sharedCreatedAt);
+
+    AttemptCreation creation = diagnostics.createAttempt("v5-tied-created-at", "KAFKA", "key-2");
+
+    Optional<ProbeProvenance> provenance =
+        probeProvenanceRepository.findByAttemptAndItem(creation.attempt().id(), ACKS_MCQ_A2);
+    assertThat(provenance).isPresent();
+    assertThat(provenance.get().sourceAttemptId())
+        .isEqualTo(expectedWinnerId)
+        .isNotEqualTo(expectedLoserId);
+    assertThat(provenance.get().sourceItemVersionId()).isEqualTo(ACKS_MCQ_A1);
+  }
+
+  // -------------------------------------------------------------------------------------------
   // V3 interaction: the probe's own band is never allowed to exceed V3's prerequisite cap.
   // -------------------------------------------------------------------------------------------
 
@@ -355,6 +397,33 @@ class HypothesisDrivenProbeSelectionPersistenceIntegrationTests {
         INSERT INTO core.assessment_attempt
           (id, learner_id, assessment_version_id, status, idempotency_key, created_at, updated_at)
         VALUES (?, ?, ?, 'IN_PROGRESS', ?, """ + createdAtExpression + ", " + createdAtExpression + """
+        )
+        """, attemptId, learnerId, ASSESSMENT_V2, "v5-source-fixture-" + attemptId);
+    runtimeJdbc.update("""
+        INSERT INTO core.assessment_attempt_item
+          (id, attempt_id, item_version_id, presentation_order, selection_reason)
+        VALUES (?, ?, ?, 1, 'UNSEEN_ITEM')
+        """, UUID.randomUUID(), attemptId, itemVersionId);
+    runtimeJdbc.update("""
+        INSERT INTO core.assessment_response (id, attempt_id, item_version_id, response_jsonb, is_correct)
+        VALUES (?, ?, ?, '{"selected":["A"]}'::jsonb, ?)
+        """, UUID.randomUUID(), attemptId, itemVersionId, isCorrect);
+    runtimeJdbc.update(
+        "UPDATE core.assessment_attempt SET status = 'COMPLETED' WHERE id = ?", attemptId);
+    return attemptId;
+  }
+
+  /**
+   * Like {@link #completedAttemptWithOneResponseAt} but with an explicit attempt id and an exact,
+   * literal {@code created_at} (rather than an offset from {@code CURRENT_TIMESTAMP}) -- what lets a
+   * test force two attempts to share the identical timestamp and differ only by id.
+   */
+  private UUID completedAttemptWithOneResponseAtExactId(
+      UUID attemptId, UUID learnerId, UUID itemVersionId, boolean isCorrect, String createdAtLiteral) {
+    runtimeJdbc.update("""
+        INSERT INTO core.assessment_attempt
+          (id, learner_id, assessment_version_id, status, idempotency_key, created_at, updated_at)
+        VALUES (?, ?, ?, 'IN_PROGRESS', ?, """ + createdAtLiteral + ", " + createdAtLiteral + """
         )
         """, attemptId, learnerId, ASSESSMENT_V2, "v5-source-fixture-" + attemptId);
     runtimeJdbc.update("""
