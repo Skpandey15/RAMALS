@@ -6,7 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-026): the runtime consumer of H4b's evidence model and V5's
+ * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-023 §2): the runtime consumer of H4b's evidence model and V5's
  * provenance model -- given one just-scored response, decides whether it is a probe response (one
  * {@code core.diagnostic_probe_provenance} names), and if so, recomputes and appends the hypothesis
  * tuple's confidence observation. Called from inside

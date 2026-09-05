@@ -64,7 +64,7 @@ class DiagnosticSubmissionApiContractTests {
   @MockitoBean
   RecommendationService recommendationService;
 
-  // H5 (M2-ADR-026): DiagnosticSubmissionService.score() calls this unconditionally for every
+  // H5: DiagnosticSubmissionService.score() calls this unconditionally for every
   // scored response (never gated on selection policy the way V5's own probe-relationship reads
   // are), so it must be mocked here like every other collaborator -- otherwise it hits the real
   // (Flyway-disabled, schema-less) H2 database this test class deliberately runs against.

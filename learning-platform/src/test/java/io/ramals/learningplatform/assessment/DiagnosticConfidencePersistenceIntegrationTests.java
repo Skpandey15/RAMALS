@@ -46,7 +46,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-026) against real PostgreSQL and the real, already-seeded KAFKA
+ * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-023 §2) against real PostgreSQL and the real, already-seeded KAFKA
  * v2 curriculum/bank and #251's real seeded relationships (V054) -- the same accepted pattern
  * {@code HypothesisDrivenProbeSelectionPersistenceIntegrationTests} already established for V5,
  * extended one step further: a probe response is actually submitted through
@@ -425,6 +425,173 @@ class DiagnosticConfidencePersistenceIntegrationTests {
            triggering_provenance_id, supporting_count, contradictory_count, inconclusive_count,
            band, policy_version)
         VALUES (?, ?, ?, ?, 'ROOT_CAUSE_PROBE', ?, 1, 0, 0, 'LOW', 'DIAGNOSTIC_CONFIDENCE_V2')
+        """, UuidV7.generate(), learner.id(), SOURCE_OBJECTIVE_D11, TARGET_OBJECTIVE_D12,
+        triggeringProvenanceId))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Hardening: an observation's own hypothesis identity cannot diverge from the
+  // triggering_provenance_id row it claims to have been computed from -- neither the learner (via
+  // the provenance row's owning attempt), the source/target objective, nor the relationship type.
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void aLearnerIdThatDoesNotOwnTheTriggeringProvenanceRowsAttemptIsRejected() {
+    wire();
+    Learner learner = learners.provisionForSubject("h5-wrong-learner-owner");
+    Learner otherLearner = learners.provisionForSubject("h5-wrong-learner-imposter");
+    secureBrokerAndAcks(learner.id());
+    completedAttemptWithOneResponse(learner.id(), ACKS_MCQ_A1, false);
+    AttemptCreation creation = diagnostics.createAttempt("h5-wrong-learner-owner", "KAFKA", "key-2");
+    submit("h5-wrong-learner-owner", creation.attempt().id(), new DiagnosticSubmissionRequest(
+        List.of(new ItemResponse(ACKS_MCQ_A2.toString(), List.of("A")))));
+    UUID triggeringProvenanceId = probeProvenanceRepository
+        .findByAttemptAndItem(creation.attempt().id(), ACKS_MCQ_A2).orElseThrow().id();
+
+    // otherLearner never answered this probe -- the real provenance row's own attempt belongs to
+    // `learner`, not `otherLearner` -- so claiming otherLearner here is a genuine identity mismatch,
+    // not merely an arbitrary substitution.
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.diagnostic_confidence_observation
+          (id, learner_id, source_objective_id, target_objective_id, relationship_type,
+           triggering_provenance_id, supporting_count, contradictory_count, inconclusive_count,
+           band, policy_version)
+        VALUES (?, ?, ?, ?, 'ROOT_CAUSE_PROBE', ?, 1, 0, 0, 'LOW', 'DIAGNOSTIC_CONFIDENCE_V1')
+        """, UuidV7.generate(), otherLearner.id(), SOURCE_OBJECTIVE_D11, TARGET_OBJECTIVE_D12,
+        triggeringProvenanceId))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+
+  @Test
+  void aSourceObjectiveIdThatDoesNotMatchTheTriggeringProvenanceRowIsRejected() {
+    wire();
+    Learner learner = learners.provisionForSubject("h5-wrong-source-objective");
+    secureBrokerAndAcks(learner.id());
+    completedAttemptWithOneResponse(learner.id(), ACKS_MCQ_A1, false);
+    AttemptCreation creation = diagnostics.createAttempt("h5-wrong-source-objective", "KAFKA", "key-2");
+    submit("h5-wrong-source-objective", creation.attempt().id(), new DiagnosticSubmissionRequest(
+        List.of(new ItemResponse(ACKS_MCQ_A2.toString(), List.of("A")))));
+    UUID triggeringProvenanceId = probeProvenanceRepository
+        .findByAttemptAndItem(creation.attempt().id(), ACKS_MCQ_A2).orElseThrow().id();
+
+    // The real provenance row's own source_objective_id is d11 -- claiming d12 (a real objective,
+    // just the wrong one for this row) must be rejected by the composite FK, not silently accepted.
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.diagnostic_confidence_observation
+          (id, learner_id, source_objective_id, target_objective_id, relationship_type,
+           triggering_provenance_id, supporting_count, contradictory_count, inconclusive_count,
+           band, policy_version)
+        VALUES (?, ?, ?, ?, 'ROOT_CAUSE_PROBE', ?, 1, 0, 0, 'LOW', 'DIAGNOSTIC_CONFIDENCE_V1')
+        """, UuidV7.generate(), learner.id(), TARGET_OBJECTIVE_D12, TARGET_OBJECTIVE_D12,
+        triggeringProvenanceId))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+
+  @Test
+  void aTargetObjectiveIdThatDoesNotMatchTheTriggeringProvenanceRowIsRejected() {
+    wire();
+    Learner learner = learners.provisionForSubject("h5-wrong-target-objective");
+    secureBrokerAndAcks(learner.id());
+    completedAttemptWithOneResponse(learner.id(), ACKS_MCQ_A1, false);
+    AttemptCreation creation = diagnostics.createAttempt("h5-wrong-target-objective", "KAFKA", "key-2");
+    submit("h5-wrong-target-objective", creation.attempt().id(), new DiagnosticSubmissionRequest(
+        List.of(new ItemResponse(ACKS_MCQ_A2.toString(), List.of("A")))));
+    UUID triggeringProvenanceId = probeProvenanceRepository
+        .findByAttemptAndItem(creation.attempt().id(), ACKS_MCQ_A2).orElseThrow().id();
+
+    // The real provenance row's own target_objective_id is d12 -- claiming d11 here must be
+    // rejected by the composite FK.
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.diagnostic_confidence_observation
+          (id, learner_id, source_objective_id, target_objective_id, relationship_type,
+           triggering_provenance_id, supporting_count, contradictory_count, inconclusive_count,
+           band, policy_version)
+        VALUES (?, ?, ?, ?, 'ROOT_CAUSE_PROBE', ?, 1, 0, 0, 'LOW', 'DIAGNOSTIC_CONFIDENCE_V1')
+        """, UuidV7.generate(), learner.id(), SOURCE_OBJECTIVE_D11, SOURCE_OBJECTIVE_D11,
+        triggeringProvenanceId))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+
+  @Test
+  void aRelationshipTypeThatDoesNotMatchTheTriggeringProvenanceRowIsRejected() {
+    wire();
+    Learner learner = learners.provisionForSubject("h5-wrong-relationship-type");
+    secureBrokerAndAcks(learner.id());
+    completedAttemptWithOneResponse(learner.id(), ACKS_MCQ_A1, false);
+    AttemptCreation creation = diagnostics.createAttempt("h5-wrong-relationship-type", "KAFKA", "key-2");
+    submit("h5-wrong-relationship-type", creation.attempt().id(), new DiagnosticSubmissionRequest(
+        List.of(new ItemResponse(ACKS_MCQ_A2.toString(), List.of("A")))));
+    UUID triggeringProvenanceId = probeProvenanceRepository
+        .findByAttemptAndItem(creation.attempt().id(), ACKS_MCQ_A2).orElseThrow().id();
+
+    // The real provenance row's own relationship_type is ROOT_CAUSE_PROBE -- claiming a different,
+    // otherwise-valid vocabulary value must be rejected by the composite FK.
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.diagnostic_confidence_observation
+          (id, learner_id, source_objective_id, target_objective_id, relationship_type,
+           triggering_provenance_id, supporting_count, contradictory_count, inconclusive_count,
+           band, policy_version)
+        VALUES (?, ?, ?, ?, 'SAME_OBJECTIVE_CONFIRMATION', ?, 1, 0, 0, 'LOW', 'DIAGNOSTIC_CONFIDENCE_V1')
+        """, UuidV7.generate(), learner.id(), SOURCE_OBJECTIVE_D11, TARGET_OBJECTIVE_D12,
+        triggeringProvenanceId))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Hardening: an observation's band cannot contradict what DIAGNOSTIC_CONFIDENCE_V1's frozen
+  // rule would have produced from its own persisted counts.
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void aBandInconsistentWithThePersistedCountsIsRejected() {
+    wire();
+    Learner learner = learners.provisionForSubject("h5-band-mismatch");
+    secureBrokerAndAcks(learner.id());
+    completedAttemptWithOneResponse(learner.id(), ACKS_MCQ_A1, false);
+    AttemptCreation creation = diagnostics.createAttempt("h5-band-mismatch", "KAFKA", "key-2");
+    submit("h5-band-mismatch", creation.attempt().id(), new DiagnosticSubmissionRequest(
+        List.of(new ItemResponse(ACKS_MCQ_A2.toString(), List.of("A")))));
+    UUID triggeringProvenanceId = probeProvenanceRepository
+        .findByAttemptAndItem(creation.attempt().id(), ACKS_MCQ_A2).orElseThrow().id();
+
+    // 3 supporting, 0 contradictory deterministically means HIGH under DIAGNOSTIC_CONFIDENCE_V1 --
+    // claiming LOW here is a semantically impossible state the CHECK constraint must reject, not an
+    // arbitrary value it happens to disallow.
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.diagnostic_confidence_observation
+          (id, learner_id, source_objective_id, target_objective_id, relationship_type,
+           triggering_provenance_id, supporting_count, contradictory_count, inconclusive_count,
+           band, policy_version)
+        VALUES (?, ?, ?, ?, 'ROOT_CAUSE_PROBE', ?, 3, 0, 0, 'LOW', 'DIAGNOSTIC_CONFIDENCE_V1')
+        """, UuidV7.generate(), learner.id(), SOURCE_OBJECTIVE_D11, TARGET_OBJECTIVE_D12,
+        triggeringProvenanceId))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+
+  @Test
+  void aBandClaimingHighDespiteWeakDominanceIsRejected() {
+    wire();
+    Learner learner = learners.provisionForSubject("h5-band-mismatch-dominance");
+    secureBrokerAndAcks(learner.id());
+    completedAttemptWithOneResponse(learner.id(), ACKS_MCQ_A1, false);
+    AttemptCreation creation =
+        diagnostics.createAttempt("h5-band-mismatch-dominance", "KAFKA", "key-2");
+    submit("h5-band-mismatch-dominance", creation.attempt().id(), new DiagnosticSubmissionRequest(
+        List.of(new ItemResponse(ACKS_MCQ_A2.toString(), List.of("A")))));
+    UUID triggeringProvenanceId = probeProvenanceRepository
+        .findByAttemptAndItem(creation.attempt().id(), ACKS_MCQ_A2).orElseThrow().id();
+
+    // 100 supporting, 97 contradictory is nearly balanced directional evidence under
+    // DIAGNOSTIC_CONFIDENCE_V1 (100 <= 3*97) -- MODERATE at best, never HIGH; this is exactly the
+    // identical-net-margin trap the calculator's own dominance test exists to catch, so the DB
+    // boundary must catch a row that tries to claim it anyway.
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.diagnostic_confidence_observation
+          (id, learner_id, source_objective_id, target_objective_id, relationship_type,
+           triggering_provenance_id, supporting_count, contradictory_count, inconclusive_count,
+           band, policy_version)
+        VALUES (?, ?, ?, ?, 'ROOT_CAUSE_PROBE', ?, 100, 97, 0, 'HIGH', 'DIAGNOSTIC_CONFIDENCE_V1')
         """, UuidV7.generate(), learner.id(), SOURCE_OBJECTIVE_D11, TARGET_OBJECTIVE_D12,
         triggeringProvenanceId))
         .isInstanceOf(org.springframework.dao.DataAccessException.class);

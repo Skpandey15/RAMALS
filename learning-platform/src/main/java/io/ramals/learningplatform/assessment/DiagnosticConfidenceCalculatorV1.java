@@ -3,7 +3,7 @@ package io.ramals.learningplatform.assessment;
 import org.springframework.stereotype.Component;
 
 /**
- * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-026): the deterministic, staged rule turning distinct evidence
+ * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-023 §2): the deterministic, staged rule turning distinct evidence
  * observation counts for one hypothesis tuple (learner + source objective + target objective +
  * relationship type) into a {@link DiagnosticConfidenceBand}. Pure -- no database access, the same
  * discipline {@code PrerequisiteAwareDiagnosticSelector}/{@code HypothesisDrivenProbeDiagnosticSelector}
@@ -59,7 +59,7 @@ import org.springframework.stereotype.Component;
  * <p><b>Never fed by, and never feeds, mastery.</b> This calculator takes no {@code MasteryStatus},
  * no {@code evidenceConfidence}, no {@code MasterySnapshot} field of any kind as input, and its
  * result is never read by {@code WeightedMasteryCalculator}, {@code EvidenceConfidenceCalculatorV2},
- * or {@code MasteryStatusPolicyV2} -- see M2-ADR-023 §2 and M2-ADR-026.
+ * or {@code MasteryStatusPolicyV2} -- see M2-ADR-023 §2.
  */
 @Component
 public class DiagnosticConfidenceCalculatorV1 {

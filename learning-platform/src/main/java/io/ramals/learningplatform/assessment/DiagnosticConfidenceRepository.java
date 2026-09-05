@@ -11,7 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 /**
- * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-026): reads every distinct evidence observation gathered so far
+ * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-023 §2): reads every distinct evidence observation gathered so far
  * for one hypothesis tuple, and is the only writer of {@code core.diagnostic_confidence_observation}.
  * Never touches {@code core.diagnostic_probe_provenance} or {@code core.diagnostic_probe_relationship}
  * except to read -- H5 consumes H4b/V5's models, it does not alter them (M2-ADR-024 §1,

@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 /**
- * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-026): pure, no-database tests of
+ * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-023 §2): pure, no-database tests of
  * {@link DiagnosticConfidenceCalculatorV1}'s staged, integer-only rule. Every case here is one row
  * of the boundary-vector table reviewed and approved before implementation -- see the class javadoc
  * for the rule and its justification.

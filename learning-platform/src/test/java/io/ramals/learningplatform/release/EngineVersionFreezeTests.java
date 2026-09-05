@@ -182,7 +182,7 @@ class EngineVersionFreezeTests {
       // V2's) adjustment chain unmodified, restricting the pool for one skill rather than changing
       // select() itself.
       Map.entry("DIAGNOSTIC_SELECTION_V5", "1c7e506ececfc55f9813ae8f9c0d48e5bdb2ac24776eedca48b73584ba41affd"),
-      // Minted with V056/H5 (M2-ADR-026), when the diagnostic-confidence calculator was first
+      // Minted with V056/H5 (M2-ADR-023 §2), when the diagnostic-confidence calculator was first
       // frozen.
       Map.entry("DIAGNOSTIC_CONFIDENCE_V1", "806bd48b24e66c3b080138069cc43dfb4e3a6758910bbfc2ad27706d642bb029"),
       Map.entry("SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647"),
@@ -712,7 +712,7 @@ class EngineVersionFreezeTests {
   }
 
   /**
-   * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-026) over every approved boundary vector: the four
+   * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-023 §2) over every approved boundary vector: the four
    * uncontested-support thresholds, the exact 3:1 dominance boundary (3S/1C vs. 4S/1C), the
    * identical-net-margin-different-band proof (4S/1C vs. 100S/97C), balanced and
    * contradiction-dominant evidence, and INCONCLUSIVE's non-participation. A change to any

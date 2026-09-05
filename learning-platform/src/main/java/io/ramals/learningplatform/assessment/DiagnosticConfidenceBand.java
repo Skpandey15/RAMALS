@@ -1,7 +1,7 @@
 package io.ramals.learningplatform.assessment;
 
 /**
- * H5 (M2-ADR-026): how strongly the {@code SUPPORTING}/{@code CONTRADICTORY} evidence gathered so
+ * H5 (M2-ADR-023 §2): how strongly the {@code SUPPORTING}/{@code CONTRADICTORY} evidence gathered so
  * far for one hypothesis tuple (learner + source objective + target objective + relationship type)
  * agrees with itself in favor of that hypothesis -- never a probability, never a claim about ground
  * truth, and never itself a {@code confirmedRootCause} state (no such state exists anywhere in this

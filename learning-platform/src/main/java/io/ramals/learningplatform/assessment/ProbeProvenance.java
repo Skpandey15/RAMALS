@@ -7,7 +7,7 @@ import java.util.UUID;
  * read back for audit -- the answer to "why did this item enter this packet". Never a diagnosis;
  * see {@link DiagnosticHypothesis}.
  *
- * @param id the row's own primary key -- H5 (M2-ADR-026) references this as
+ * @param id the row's own primary key -- H5 references this as
  *     {@code diagnostic_confidence_observation.triggering_provenance_id}, so a confidence
  *     observation always names the exact probe response that produced it.
  */

@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-026): one persisted {@code core.diagnostic_confidence_observation}
+ * DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-023 §2): one persisted {@code core.diagnostic_confidence_observation}
  * row, read back for audit -- the answer to "why is diagnostic confidence HIGH (or LOW, or
  * MODERATE) for this hypothesis, as of this observation". Never a diagnosis; see
  * {@link DiagnosticHypothesis} and {@link DiagnosticConfidenceBand}.

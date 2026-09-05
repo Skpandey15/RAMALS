@@ -1,7 +1,7 @@
 package io.ramals.learningplatform.assessment;
 
 /**
- * H5 (M2-ADR-026): every distinct evidence observation gathered so far for one hypothesis tuple,
+ * H5 (M2-ADR-023 §2): every distinct evidence observation gathered so far for one hypothesis tuple,
  * already classified by {@link HypothesisEvidenceOutcome} and reduced to counts -- the only shape
  * {@link DiagnosticConfidenceCalculatorV1} ever reads. {@code inconclusiveCount} is carried for
  * audit completeness only; per {@link HypothesisEvidenceOutcome}, it never contributes to or blocks
