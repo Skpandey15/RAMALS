@@ -46,6 +46,7 @@ public class DiagnosticSubmissionService {
   private final RecommendationService recommendationService;
   private final DiagnosticConfidenceService diagnosticConfidenceService;
   private final MisconceptionEvidenceCaptureService misconceptionEvidenceCaptureService;
+  private final MisconceptionConfidenceService misconceptionConfidenceService;
   private final ObjectMapper objectMapper;
 
   public DiagnosticSubmissionService(
@@ -57,6 +58,7 @@ public class DiagnosticSubmissionService {
       RecommendationService recommendationService,
       DiagnosticConfidenceService diagnosticConfidenceService,
       MisconceptionEvidenceCaptureService misconceptionEvidenceCaptureService,
+      MisconceptionConfidenceService misconceptionConfidenceService,
       ObjectMapper objectMapper) {
     this.repository = repository;
     this.learnerService = learnerService;
@@ -66,6 +68,7 @@ public class DiagnosticSubmissionService {
     this.recommendationService = recommendationService;
     this.diagnosticConfidenceService = diagnosticConfidenceService;
     this.misconceptionEvidenceCaptureService = misconceptionEvidenceCaptureService;
+    this.misconceptionConfidenceService = misconceptionConfidenceService;
     this.objectMapper = objectMapper;
   }
 
@@ -128,6 +131,13 @@ public class DiagnosticSubmissionService {
       // the H5 confidence write above already relies on.
       misconceptionEvidenceCaptureService.captureEvidence(attempt.learnerId(), attempt.id(), itemId);
     }
+
+    // M2-ADR-028: recomputed once per affected misconception, after every response in this
+    // submission has already been scored and had its evidence captured above -- never once per
+    // individual evidence observation, which would manufacture artificial diagnostic history within
+    // a single submission. A no-op if this attempt produced no misconception evidence at all. Runs
+    // inside this same transaction, so a failure here rolls this whole submission back too.
+    misconceptionConfidenceService.recomputeForAttempt(attempt.id(), attempt.learnerId());
 
     repository.completeAttempt(attempt.id());
     AssessmentAttempt completed = withStatus(attempt, "COMPLETED");

@@ -79,17 +79,17 @@ class CoverageUpgradePersistenceIntegrationTests {
   }
 
   @Test
-  void onlyTheFourteenNewMigrationsAreAppliedAndTheSchemaValidates() {
-    // Exactly V045 through V058. A different number means a migration was renumbered, skipped, or
+  void onlyTheFifteenNewMigrationsAreAppliedAndTheSchemaValidates() {
+    // Exactly V045 through V059. A different number means a migration was renumbered, skipped, or
     // re-applied, all of which are upgrade hazards a "did it succeed" assertion would miss.
-    assertThat(migrationsApplied).isEqualTo(14);
+    assertThat(migrationsApplied).isEqualTo(15);
     assertThat(flyway().load().validateWithResult().validationSuccessful).isTrue();
     // Read as the migration role: the runtime role is denied this table on purpose, so that the
     // application can never rewrite its own migration history.
     assertThat(appliedVersionsAfterTheUpgrade())
         .containsExactly(
             "045", "046", "047", "048", "049", "050", "051", "052", "053", "054", "055", "056",
-            "057", "058");
+            "057", "058", "059");
   }
 
   @Test

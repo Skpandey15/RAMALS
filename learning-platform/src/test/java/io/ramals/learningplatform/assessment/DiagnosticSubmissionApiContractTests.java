@@ -78,6 +78,12 @@ class DiagnosticSubmissionApiContractTests {
   @MockitoBean
   MisconceptionEvidenceCaptureService misconceptionEvidenceCaptureService;
 
+  // M2-ADR-028: DiagnosticSubmissionService.score() calls this unconditionally too, for the same
+  // reason -- must be mocked rather than hitting the real (schema-less) H2 database. Mockito's
+  // default no-op answer for a void method needs no explicit stubbing.
+  @MockitoBean
+  MisconceptionConfidenceService misconceptionConfidenceService;
+
   private static JwtRequestPostProcessor learner(String subject) {
     return jwt()
         .jwt(token -> token.subject(subject))
