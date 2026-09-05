@@ -610,7 +610,10 @@ class GranularDiagnosticRuntimeEvidencePersistenceIntegrationTests {
 
       submissions = new DiagnosticSubmissionService(assessments, learnerService,
           new DiagnosticScorerV2(), evidenceService, masteryService, recommendationService,
-          diagnosticConfidenceService, captureService, mapper);
+          diagnosticConfidenceService, captureService,
+          new MisconceptionConfidenceService(
+              new MisconceptionConfidenceRepository(runtimeJdbc), new DiagnosticConfidenceCalculatorV1()),
+          mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
   }

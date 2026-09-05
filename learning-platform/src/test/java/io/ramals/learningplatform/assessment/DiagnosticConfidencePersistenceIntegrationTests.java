@@ -743,6 +743,8 @@ class DiagnosticConfidencePersistenceIntegrationTests {
           diagnosticConfidenceService,
           new MisconceptionEvidenceCaptureService(new MisconceptionOptionMappingRepository(runtimeJdbc),
               new MisconceptionEvidenceObservationRepository(runtimeJdbc)),
+          new MisconceptionConfidenceService(
+              new MisconceptionConfidenceRepository(runtimeJdbc), new DiagnosticConfidenceCalculatorV1()),
           mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
