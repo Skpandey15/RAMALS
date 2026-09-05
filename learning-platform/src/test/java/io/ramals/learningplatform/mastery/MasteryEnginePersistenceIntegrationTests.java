@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.assessment.AdaptiveDiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector;
+import io.ramals.learningplatform.assessment.DiagnosticConfidenceCalculatorV1;
+import io.ramals.learningplatform.assessment.DiagnosticConfidenceRepository;
+import io.ramals.learningplatform.assessment.DiagnosticConfidenceService;
 import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.AssessmentRepository;
@@ -156,7 +159,10 @@ class MasteryEnginePersistenceIntegrationTests {
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorerV2(),
-          new EvidenceService(evidence), masteryService, recommendationService, mapper);
+          new EvidenceService(evidence), masteryService, recommendationService,
+          new DiagnosticConfidenceService(new ProbeProvenanceRepository(runtimeJdbc),
+              new DiagnosticConfidenceRepository(runtimeJdbc), new DiagnosticConfidenceCalculatorV1()),
+          mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
   }

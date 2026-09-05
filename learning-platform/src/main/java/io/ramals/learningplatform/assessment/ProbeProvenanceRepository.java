@@ -44,11 +44,12 @@ public class ProbeProvenanceRepository {
   /** Reads back one probe's provenance, for audit. */
   public Optional<ProbeProvenance> findByAttemptAndItem(UUID attemptId, UUID itemVersionId) {
     return jdbcTemplate.query("""
-        SELECT attempt_id, item_version_id, source_attempt_id, source_item_version_id,
+        SELECT id, attempt_id, item_version_id, source_attempt_id, source_item_version_id,
                source_objective_id, relationship_type, target_objective_id, authorizing_relationship_id
         FROM core.diagnostic_probe_provenance
         WHERE attempt_id = ? AND item_version_id = ?
         """, (result, row) -> new ProbeProvenance(
+            result.getObject("id", UUID.class),
             result.getObject("attempt_id", UUID.class),
             result.getObject("item_version_id", UUID.class),
             result.getObject("source_attempt_id", UUID.class),

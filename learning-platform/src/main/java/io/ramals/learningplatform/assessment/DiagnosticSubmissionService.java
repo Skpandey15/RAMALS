@@ -44,6 +44,7 @@ public class DiagnosticSubmissionService {
   private final EvidenceService evidenceService;
   private final MasteryService masteryService;
   private final RecommendationService recommendationService;
+  private final DiagnosticConfidenceService diagnosticConfidenceService;
   private final ObjectMapper objectMapper;
 
   public DiagnosticSubmissionService(
@@ -53,6 +54,7 @@ public class DiagnosticSubmissionService {
       EvidenceService evidenceService,
       MasteryService masteryService,
       RecommendationService recommendationService,
+      DiagnosticConfidenceService diagnosticConfidenceService,
       ObjectMapper objectMapper) {
     this.repository = repository;
     this.learnerService = learnerService;
@@ -60,6 +62,7 @@ public class DiagnosticSubmissionService {
     this.evidenceService = evidenceService;
     this.masteryService = masteryService;
     this.recommendationService = recommendationService;
+    this.diagnosticConfidenceService = diagnosticConfidenceService;
     this.objectMapper = objectMapper;
   }
 
@@ -110,6 +113,12 @@ public class DiagnosticSubmissionService {
       validateSelection(view, response.selectedOptions());
       boolean correct = scorer.isCorrect(view, response.selectedOptions());
       repository.insertResponse(attempt.id(), itemId, writeResponse(response.selectedOptions()), correct);
+      // DIAGNOSTIC_CONFIDENCE_V1 (M2-ADR-026): a no-op for the ordinary case where this item is not
+      // named by any core.diagnostic_probe_provenance row. Runs inside this same transaction, so a
+      // failure here rolls this response back too -- the same atomicity recordEvidence/recomputeMastery
+      // below already rely on.
+      diagnosticConfidenceService.recordObservationIfProbeResponse(
+          attempt.id(), itemId, attempt.learnerId(), attempt.assessmentVersionId());
     }
 
     repository.completeAttempt(attempt.id());
