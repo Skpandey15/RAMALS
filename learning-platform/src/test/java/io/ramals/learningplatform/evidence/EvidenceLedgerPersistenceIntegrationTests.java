@@ -17,6 +17,9 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.ProbeProvenanceRepository;
+import io.ramals.learningplatform.assessment.ProbeRelationshipRepository;
+import io.ramals.learningplatform.assessment.ProbeRelationshipService;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
@@ -139,7 +142,9 @@ class EvidenceLedgerPersistenceIntegrationTests {
       diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()),
           new MasteryRepository(runtimeJdbc),
-          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()));
+          new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()),
+          new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+          new ProbeProvenanceRepository(runtimeJdbc));
       MasteryService masteryService = new MasteryService(
           new MasteryRepository(runtimeJdbc), evidence, new WeightedMasteryCalculator(),
           new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());

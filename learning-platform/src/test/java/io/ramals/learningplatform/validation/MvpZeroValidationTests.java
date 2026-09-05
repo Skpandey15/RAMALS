@@ -15,6 +15,9 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.ProbeProvenanceRepository;
+import io.ramals.learningplatform.assessment.ProbeRelationshipRepository;
+import io.ramals.learningplatform.assessment.ProbeRelationshipService;
 import io.ramals.learningplatform.assessment.SubmissionResult;
 import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
 import io.ramals.learningplatform.curriculum.CurriculumRepository;
@@ -177,7 +180,9 @@ class MvpZeroValidationTests {
         new RecommendationService(new RecommendationPolicy(), recommendations, learnerService);
     diagnostics = new DiagnosticService(assessments, learnerService, formSelector(),
         new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
-        curriculumService);
+        curriculumService,
+        new ProbeRelationshipService(new ProbeRelationshipRepository(jdbc), assessments),
+        new ProbeProvenanceRepository(jdbc));
     submissions = new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorerV2(),
         new EvidenceService(evidence), masteryService, recommendationService, mapper);
     progression = new ProgressionService(curriculumService, learnerService,

@@ -82,11 +82,11 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 54 with V054 (the H4b diagnostic-probe-relationship foundation table). Asserting the count
-    // rather than merely that the upgrade succeeds is what makes an accidentally unapplied migration
-    // visible -- it caught V029 the first time it ran, V042 the first time this suite saw a real
-    // PostgreSQL, and V043 in CI.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(54);
+    // 55 with V055 (the H4b/V5 runtime hypothesis-driven-probe selection and provenance table).
+    // Asserting the count rather than merely that the upgrade succeeds is what makes an accidentally
+    // unapplied migration visible -- it caught V029 the first time it ran, V042 the first time this
+    // suite saw a real PostgreSQL, and V043 in CI.
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(55);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 

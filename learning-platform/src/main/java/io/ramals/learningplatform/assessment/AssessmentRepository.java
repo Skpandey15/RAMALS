@@ -105,6 +105,44 @@ public class AssessmentRepository {
         .stream().findFirst();
   }
 
+  /**
+   * DIAGNOSTIC_SELECTION_V5 (M2-ADR-025 §4): the single source attempt a hypothesis-driven probe may
+   * be raised from -- the most recent {@code COMPLETED} attempt for the same
+   * {@code assessment_version_id} as the attempt being created. Scoped to the same version
+   * deliberately: it is what keeps a candidate probe item guaranteed to belong to the same pool the
+   * new attempt selects from, never a cross-version mismatch. Not an arbitrary history scan --
+   * exactly one attempt, or none.
+   */
+  public Optional<AssessmentAttempt> findMostRecentCompletedAttempt(
+      UUID learnerId, UUID assessmentVersionId) {
+    return jdbcTemplate.query(
+        ATTEMPT_SELECT + """
+             WHERE learner_id = ? AND assessment_version_id = ? AND status = 'COMPLETED'
+             ORDER BY created_at DESC
+             LIMIT 1
+            """,
+        ATTEMPT_MAPPER, learnerId, assessmentVersionId).stream().findFirst();
+  }
+
+  /**
+   * DIAGNOSTIC_SELECTION_V5: every item {@code attemptId} presented that this learner answered
+   * incorrectly, in {@code presentation_order} -- the existing, already-deterministic field
+   * {@code DiagnosticService} walks to pick which miss to try first (M2-ADR-025 §2), rather than
+   * inventing a new ordering or score. Every presented item is, by construction, one this attempt's
+   * own selector already restricted to a scoreable type (V047's {@code AssessmentItemType}), so no
+   * further type filter is needed here.
+   */
+  public List<UUID> findIncorrectItemVersionIdsInPresentationOrder(UUID attemptId) {
+    return jdbcTemplate.query("""
+        SELECT ai.item_version_id
+        FROM core.assessment_attempt_item ai
+        JOIN core.assessment_response ar
+          ON ar.attempt_id = ai.attempt_id AND ar.item_version_id = ai.item_version_id
+        WHERE ai.attempt_id = ? AND ar.is_correct = FALSE
+        ORDER BY ai.presentation_order
+        """, (result, row) -> result.getObject("item_version_id", UUID.class), attemptId);
+  }
+
   /** Server-only: loads items with their answer keys for correctness decisions during submit. */
   public List<AssessmentItemScoringView> findItemScoringViews(UUID assessmentVersionId) {
     return jdbcTemplate.query("""

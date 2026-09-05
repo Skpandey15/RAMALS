@@ -43,6 +43,8 @@ public class DiagnosticService {
   private final AdaptiveDiagnosticSelector adaptiveSelector;
   private final MasteryRepository masteryRepository;
   private final CurriculumService curriculumService;
+  private final ProbeRelationshipService probeRelationshipService;
+  private final ProbeProvenanceRepository probeProvenanceRepository;
 
   public DiagnosticService(
       AssessmentRepository repository,
@@ -50,13 +52,17 @@ public class DiagnosticService {
       DiagnosticFormSelector selector,
       AdaptiveDiagnosticSelector adaptiveSelector,
       MasteryRepository masteryRepository,
-      CurriculumService curriculumService) {
+      CurriculumService curriculumService,
+      ProbeRelationshipService probeRelationshipService,
+      ProbeProvenanceRepository probeProvenanceRepository) {
     this.repository = repository;
     this.learnerService = learnerService;
     this.selector = selector;
     this.adaptiveSelector = adaptiveSelector;
     this.masteryRepository = masteryRepository;
     this.curriculumService = curriculumService;
+    this.probeRelationshipService = probeRelationshipService;
+    this.probeProvenanceRepository = probeProvenanceRepository;
   }
 
   @Transactional
@@ -79,12 +85,14 @@ public class DiagnosticService {
     try {
       String selectionPolicy = repository.findSelectionPolicyVersion(versionId)
           .orElse(DiagnosticFormSelector.SELECTION_POLICY_VERSION);
-      // V3 and V4 both compose with V2's round-robin unchanged (see
-      // PrerequisiteAwareDiagnosticSelector, HypothesisConfirmationDiagnosticSelector), so the
-      // packet either produces has the same shape V2's does -- one packet-policy label for all three.
+      // V3, V4 and V5 all compose with V2's round-robin unchanged (see
+      // PrerequisiteAwareDiagnosticSelector, HypothesisConfirmationDiagnosticSelector,
+      // HypothesisDrivenProbeDiagnosticSelector), so the packet any of them produces has the same
+      // shape V2's does -- one packet-policy label for all four.
       boolean isAdaptivePacket = AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
           || PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
-          || HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy);
+          || HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
+          || HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy);
       String packetPolicy = isAdaptivePacket ? AdaptiveDiagnosticSelector.PACKET_POLICY : null;
       AssessmentAttempt created =
           repository.insertAttempt(learner.id(), versionId, key, selectionPolicy, packetPolicy);
@@ -129,7 +137,9 @@ public class DiagnosticService {
    */
   private void selectForm(
       AssessmentAttempt attempt, UUID learnerId, ResolvedDiagnostic diagnostic, String selectionPolicy) {
-    if (HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
+    if (HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
+      selectHypothesisDrivenProbeForm(attempt, learnerId, diagnostic);
+    } else if (HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
       selectHypothesisConfirmingForm(attempt, learnerId, diagnostic);
     } else if (PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
       selectPrerequisiteAwareForm(attempt, learnerId, diagnostic);
@@ -223,6 +233,97 @@ public class DiagnosticService {
         adaptiveSelector.select(inputs.unseenPool(), finalSignals, ThreadLocalRandom.current());
     finishAdaptiveSelection(attempt, learnerId, inputs, packet,
         HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION);
+  }
+
+  /**
+   * DIAGNOSTIC_SELECTION_V5 (M2-ADR-025): V3's cap and V4's regression reprioritisation applied
+   * first, exactly as for V4, then {@link HypothesisDrivenProbeDiagnosticSelector}'s own step --
+   * restricting the target skill's pool to the single chosen H4b candidate, reprioritising, never
+   * re-banding -- for whichever miss in the immediately preceding completed attempt first resolves
+   * an actionable probe under {@link HypothesisDrivenProbeDiagnosticSelector#RELATIONSHIP_TYPE_PRIORITY}.
+   * Composition order is what gives V5 precedence over V4 on a shared skill (M2-ADR-025 §5), not
+   * special-case logic here.
+   */
+  private void selectHypothesisDrivenProbeForm(
+      AssessmentAttempt attempt, UUID learnerId, ResolvedDiagnostic diagnostic) {
+    AdaptiveSelectionInputs inputs = resolveAdaptiveInputs(learnerId, diagnostic.assessmentVersionId());
+    Map<String, SkillMasterySignal> afterPrerequisiteCap = PrerequisiteAwareDiagnosticSelector
+        .adjustForPrerequisites(
+            inputs.signals(), prerequisitesBySkillCode(inputs.curriculumVersionId()),
+            inputs.statusBySkillCode());
+    Set<String> regressedSkillCodes = detectRegressedSkills(
+        learnerId, inputs.skillIdByCode(), inputs.curriculumVersionId());
+    Map<String, SkillMasterySignal> afterRegression = HypothesisConfirmationDiagnosticSelector
+        .adjustForRegressions(afterPrerequisiteCap, regressedSkillCodes);
+
+    HypothesisDrivenProbeDiagnosticSelector.Selection probeSelection =
+        resolveHypothesisProbeSelection(learnerId, diagnostic, inputs);
+    HypothesisDrivenProbeDiagnosticSelector.Adjusted adjusted = HypothesisDrivenProbeDiagnosticSelector
+        .adjustForHypothesisProbe(afterRegression, inputs.unseenPool(), probeSelection);
+
+    AdaptivePacket packet =
+        adaptiveSelector.select(adjusted.pool(), adjusted.signals(), ThreadLocalRandom.current());
+    finishAdaptiveSelection(attempt, learnerId, inputs, packet,
+        HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION);
+
+    if (probeSelection != null && packet.items().stream()
+        .anyMatch(item -> item.itemVersionId().equals(probeSelection.chosenItemVersionId()))) {
+      probeProvenanceRepository.insert(attempt.id(), probeSelection);
+    }
+  }
+
+  /**
+   * Walks the learner's immediately preceding completed attempt (same assessment version) for the
+   * first eligible hypothesis-driven probe, per M2-ADR-025 §2 and §4: misses tried in
+   * {@code presentation_order}, each tried under
+   * {@link HypothesisDrivenProbeDiagnosticSelector#RELATIONSHIP_TYPE_PRIORITY} in order; the first
+   * type that resolves {@link ProbeResolutionOutcome#CANDIDATES_AVAILABLE} wins. A miss whose trigger
+   * item has no objective, or an ambiguous one, is simply not eligible -- never a reason to fail
+   * attempt creation. Returns {@code null} if no source attempt exists or nothing is eligible.
+   */
+  private HypothesisDrivenProbeDiagnosticSelector.Selection resolveHypothesisProbeSelection(
+      UUID learnerId, ResolvedDiagnostic diagnostic, AdaptiveSelectionInputs inputs) {
+    Optional<AssessmentAttempt> sourceAttempt =
+        repository.findMostRecentCompletedAttempt(learnerId, diagnostic.assessmentVersionId());
+    if (sourceAttempt.isEmpty()) {
+      return null;
+    }
+
+    List<UUID> misses =
+        repository.findIncorrectItemVersionIdsInPresentationOrder(sourceAttempt.get().id());
+    for (UUID missedItemVersionId : misses) {
+      for (ProbeRelationshipType type : HypothesisDrivenProbeDiagnosticSelector.RELATIONSHIP_TYPE_PRIORITY) {
+        ProbeResolution resolution;
+        try {
+          resolution = probeRelationshipService.resolve(missedItemVersionId, type, learnerId);
+        } catch (TriggerItemHasNoObjectiveException | TriggerItemHasAmbiguousObjectiveException notEligible) {
+          // Whichever objective the trigger item resolves to (or fails to) does not depend on the
+          // relationship type being tried -- this miss is ineligible under every type, so move on
+          // to the next miss rather than retrying the same failure three more times.
+          break;
+        }
+        if (resolution.outcome() != ProbeResolutionOutcome.CANDIDATES_AVAILABLE) {
+          continue;
+        }
+        UUID chosenItemVersionId = resolution.candidates().get(0).itemVersionId();
+        String targetSkillCode = skillCodeOfItem(inputs.unseenPool(), chosenItemVersionId);
+        if (targetSkillCode == null) {
+          continue; // not part of this attempt's own unseen pool -- nothing this round can do with it
+        }
+        return new HypothesisDrivenProbeDiagnosticSelector.Selection(
+            resolution.hypothesis(), sourceAttempt.get().id(), targetSkillCode, chosenItemVersionId);
+      }
+    }
+    return null;
+  }
+
+  private static String skillCodeOfItem(List<AdaptiveEligibleItem> pool, UUID itemVersionId) {
+    for (AdaptiveEligibleItem item : pool) {
+      if (item.itemVersionId().equals(itemVersionId)) {
+        return item.skillCode();
+      }
+    }
+    return null;
   }
 
   /** Shared by V3 and V4: every in-scope skill's direct prerequisite codes, read from the
