@@ -1,5 +1,8 @@
 package io.ramals.learningplatform.assessment;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -86,5 +89,66 @@ public class MisconceptionOptionMappingRepository {
 
   /** The raw scoring fact behind one counted SINGLE_CHOICE response -- see {@link #scoredResponse}. */
   public record ScoredMisconceptionProbeResponse(String selectedOptionId, boolean isCorrect) {
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Granular diagnostic runtime evidence capture (M2-ADR-027). These methods are additive and used
+  // only by MisconceptionEvidenceCaptureService -- everything above remains exactly as #254 left it,
+  // still used by the foundation-stage MisconceptionEvidenceService, which has no event-time
+  // awareness and is not part of the runtime capture path.
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * The scored response {@link MisconceptionEvidenceCaptureService} anchors evidence to -- the
+   * response's own id and {@code created_at} (the authoritative event-time boundary, M2-ADR-027
+   * §1), alongside the same selected-option/correctness facts {@link #scoredResponse} already
+   * exposes. Empty under the identical conditions {@link #scoredResponse} is (not answered, or not
+   * SINGLE_CHOICE).
+   */
+  public Optional<ScoredResponseForCapture> scoredResponseForCapture(UUID attemptId, UUID itemVersionId) {
+    return jdbcTemplate.query("""
+        SELECT ar.id AS response_id, ar.response_jsonb -> 'selectedOptions' ->> 0 AS selected_option_id,
+               ar.is_correct, ar.created_at
+        FROM core.assessment_response ar
+        JOIN core.assessment_item_version iv ON iv.id = ar.item_version_id
+        WHERE ar.attempt_id = ? AND ar.item_version_id = ? AND iv.item_type = 'SINGLE_CHOICE'
+        """, (result, row) -> new ScoredResponseForCapture(
+            result.getObject("response_id", UUID.class),
+            result.getString("selected_option_id"),
+            result.getBoolean("is_correct"),
+            instant(result.getObject("created_at", OffsetDateTime.class))),
+        attemptId, itemVersionId).stream().findFirst();
+  }
+
+  /** {@code response_id}, selected option, correctness, and the authoritative event-time boundary
+   * ({@code created_at}) a response is anchored to -- see {@link #scoredResponseForCapture}. */
+  public record ScoredResponseForCapture(
+      UUID responseId, String selectedOptionId, boolean isCorrect, Instant createdAt) {
+  }
+
+  /**
+   * Every {@code PUBLISHED} mapping for {@code itemVersionId} whose {@code published_at} is at or
+   * before {@code asOf} (the response's own {@code created_at}) -- the complete event-time
+   * eligibility set this item carries, grouped by nothing here; the caller groups by
+   * {@code misconceptionId} to determine which misconceptions are event-time-eligible and which of
+   * their own options are. A mapping published after {@code asOf} is excluded, never merely
+   * ignored -- it structurally cannot appear in this result at all (M2-ADR-027 §2).
+   */
+  public List<EligibleMapping> eligibleMappingsAsOf(UUID itemVersionId, Instant asOf) {
+    return jdbcTemplate.query("""
+        SELECT misconception_id, option_id
+        FROM core.assessment_item_option_misconception
+        WHERE item_version_id = ? AND status = 'PUBLISHED' AND published_at <= ?
+        """, (result, row) -> new EligibleMapping(
+            result.getObject("misconception_id", UUID.class), result.getString("option_id")),
+        itemVersionId, java.sql.Timestamp.from(asOf));
+  }
+
+  /** One event-time-eligible mapping -- see {@link #eligibleMappingsAsOf}. */
+  public record EligibleMapping(UUID misconceptionId, String optionId) {
+  }
+
+  private static Instant instant(OffsetDateTime value) {
+    return value == null ? null : value.toInstant();
   }
 }

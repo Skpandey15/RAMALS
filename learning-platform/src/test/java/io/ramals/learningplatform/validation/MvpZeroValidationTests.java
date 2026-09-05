@@ -18,6 +18,9 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.MisconceptionEvidenceCaptureService;
+import io.ramals.learningplatform.assessment.MisconceptionEvidenceObservationRepository;
+import io.ramals.learningplatform.assessment.MisconceptionOptionMappingRepository;
 import io.ramals.learningplatform.assessment.ProbeProvenanceRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipService;
@@ -190,6 +193,8 @@ class MvpZeroValidationTests {
         new EvidenceService(evidence), masteryService, recommendationService,
         new DiagnosticConfidenceService(new ProbeProvenanceRepository(jdbc),
             new DiagnosticConfidenceRepository(jdbc), new DiagnosticConfidenceCalculatorV1()),
+        new MisconceptionEvidenceCaptureService(new MisconceptionOptionMappingRepository(jdbc),
+            new MisconceptionEvidenceObservationRepository(jdbc)),
         mapper);
     progression = new ProgressionService(curriculumService, learnerService,
         new ProgressionRepository(jdbc), new ProgressionPolicy());

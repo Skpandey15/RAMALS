@@ -45,6 +45,7 @@ public class DiagnosticSubmissionService {
   private final MasteryService masteryService;
   private final RecommendationService recommendationService;
   private final DiagnosticConfidenceService diagnosticConfidenceService;
+  private final MisconceptionEvidenceCaptureService misconceptionEvidenceCaptureService;
   private final ObjectMapper objectMapper;
 
   public DiagnosticSubmissionService(
@@ -55,6 +56,7 @@ public class DiagnosticSubmissionService {
       MasteryService masteryService,
       RecommendationService recommendationService,
       DiagnosticConfidenceService diagnosticConfidenceService,
+      MisconceptionEvidenceCaptureService misconceptionEvidenceCaptureService,
       ObjectMapper objectMapper) {
     this.repository = repository;
     this.learnerService = learnerService;
@@ -63,6 +65,7 @@ public class DiagnosticSubmissionService {
     this.masteryService = masteryService;
     this.recommendationService = recommendationService;
     this.diagnosticConfidenceService = diagnosticConfidenceService;
+    this.misconceptionEvidenceCaptureService = misconceptionEvidenceCaptureService;
     this.objectMapper = objectMapper;
   }
 
@@ -119,6 +122,11 @@ public class DiagnosticSubmissionService {
       // below already rely on.
       diagnosticConfidenceService.recordObservationIfProbeResponse(
           attempt.id(), itemId, attempt.learnerId(), attempt.assessmentVersionId());
+      // MISCONCEPTION_EVIDENCE_V1 (M2-ADR-027): a no-op for the ordinary case where this item
+      // carries no event-time-eligible misconception mapping at all. Runs inside this same
+      // transaction, so a failure here rolls this response back too -- the same atomicity guarantee
+      // the H5 confidence write above already relies on.
+      misconceptionEvidenceCaptureService.captureEvidence(attempt.learnerId(), attempt.id(), itemId);
     }
 
     repository.completeAttempt(attempt.id());

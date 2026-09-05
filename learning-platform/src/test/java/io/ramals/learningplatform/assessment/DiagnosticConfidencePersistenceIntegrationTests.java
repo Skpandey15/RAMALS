@@ -740,7 +740,10 @@ class DiagnosticConfidencePersistenceIntegrationTests {
 
       submissions = new DiagnosticSubmissionService(assessments, learnerService,
           new DiagnosticScorerV2(), evidenceService, masteryService, recommendationService,
-          diagnosticConfidenceService, mapper);
+          diagnosticConfidenceService,
+          new MisconceptionEvidenceCaptureService(new MisconceptionOptionMappingRepository(runtimeJdbc),
+              new MisconceptionEvidenceObservationRepository(runtimeJdbc)),
+          mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
   }

@@ -20,6 +20,9 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.MisconceptionEvidenceCaptureService;
+import io.ramals.learningplatform.assessment.MisconceptionEvidenceObservationRepository;
+import io.ramals.learningplatform.assessment.MisconceptionOptionMappingRepository;
 import io.ramals.learningplatform.assessment.ProbeProvenanceRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipService;
@@ -164,6 +167,8 @@ class RecommendationPersistenceIntegrationTests {
           masteryService, recommendationService,
           new DiagnosticConfidenceService(new ProbeProvenanceRepository(runtimeJdbc),
               new DiagnosticConfidenceRepository(runtimeJdbc), new DiagnosticConfidenceCalculatorV1()),
+          new MisconceptionEvidenceCaptureService(new MisconceptionOptionMappingRepository(runtimeJdbc),
+              new MisconceptionEvidenceObservationRepository(runtimeJdbc)),
           mapper);
       transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
     }
