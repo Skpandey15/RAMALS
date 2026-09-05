@@ -73,6 +73,51 @@ class HypothesisDrivenProbeSelectionMigrationContractTests {
         .doesNotContain("UPDATE core.diagnostic_probe_relationship");
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Hardening: internal audit-provenance consistency enforced at the DB boundary, not trusted
+  // from the application writer alone.
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void theSourceItemMustHaveActuallyBeenPresentedInTheSourceAttempt() throws IOException {
+    assertThat(migration())
+        .contains("FOREIGN KEY (source_attempt_id, source_item_version_id)")
+        .contains("REFERENCES core.assessment_attempt_item(attempt_id, item_version_id)");
+  }
+
+  @Test
+  void theSourceObjectiveMustActuallyTagTheSourceItem() throws IOException {
+    assertThat(migration())
+        .contains("FOREIGN KEY (source_item_version_id, source_objective_id)")
+        .contains("REFERENCES core.assessment_item_objective(item_version_id, objective_id)");
+  }
+
+  @Test
+  void theTargetObjectiveMustActuallyTagTheSelectedItem() throws IOException {
+    assertThat(migration())
+        .contains("FOREIGN KEY (item_version_id, target_objective_id)")
+        .contains("REFERENCES core.assessment_item_objective(item_version_id, objective_id)");
+  }
+
+  @Test
+  void authorizingRelationshipIsRequiredForHandAuthoredTypesAndForbiddenForGraphDerivedOnes()
+      throws IOException {
+    assertThat(migration())
+        .contains("ck_diagnostic_probe_provenance_authorization")
+        .contains("(relationship_type IN ('ROOT_CAUSE_PROBE', 'CONTRADICTION_CHECK'))")
+        .contains("= (authorizing_relationship_id IS NOT NULL)");
+  }
+
+  @Test
+  void aPresentAuthorizingRelationshipMustExistBePublishedAndMatchExactly() throws IOException {
+    assertThat(migration())
+        .contains("authorizing_row.status <> 'PUBLISHED'")
+        .contains("authorizing_row.source_objective_id <> NEW.source_objective_id")
+        .contains("authorizing_row.target_objective_id <> NEW.target_objective_id")
+        .contains("authorizing_row.relationship_type <> NEW.relationship_type")
+        .contains("does not authorize this provenance row");
+  }
+
   private String migration() throws IOException {
     try (var input = getClass().getResourceAsStream(
         "/db/migration/V055__hypothesis_driven_probe_selection.sql")) {

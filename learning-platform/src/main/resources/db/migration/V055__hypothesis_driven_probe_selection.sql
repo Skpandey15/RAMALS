@@ -39,6 +39,28 @@ ALTER TABLE core.assessment_attempt_item ADD CONSTRAINT ck_assessment_attempt_it
 -- vocabulary from core.diagnostic_probe_relationship's own two-value CHECK: that table only ever
 -- stores the two hand-authored types, but V5 can trigger a probe under any of the four semantics
 -- #251 defined, including the two that are read from existing curriculum tables rather than stored.
+--
+-- This is authoritative audit provenance, not a log line, so its internal consistency is enforced
+-- at the database boundary rather than trusted from the application alone -- the same discipline
+-- core.assessment_response already holds itself to (core.protect_assessment_response verifies a
+-- response names an item this attempt actually selected, not just any item that exists). Four
+-- consistency facts, each checked by whichever mechanism actually expresses it:
+--
+--  1. source_item_version_id was really presented in source_attempt_id: a composite FK against
+--     core.assessment_attempt_item's own (attempt_id, item_version_id) unique key (V045) --
+--     the same key the row's own (attempt_id, item_version_id) FK below already uses for the new
+--     attempt, applied here to the source one instead.
+--  2/3. source_objective_id really tags source_item_version_id, and target_objective_id really
+--     tags the selected item_version_id: two composite FKs against
+--     core.assessment_item_objective's own (item_version_id, objective_id) primary key (V046).
+--  4/5. For ROOT_CAUSE_PROBE/CONTRADICTION_CHECK, authorizing_relationship_id must be set, and for
+--     SAME_OBJECTIVE_CONFIRMATION/PREREQUISITE_VALIDATION it must be null -- one CHECK, since
+--     "required for these two" and "forbidden for the other two" are the same boolean condition
+--     stated once. Whether a *present* id actually authorizes this exact row -- exists, is
+--     PUBLISHED, and its own source/target/type match -- cannot be a plain FK (there is no column
+--     to compare a literal 'PUBLISHED' against), so trg_probe_provenance_guard below does that
+--     lookup explicitly, the same way core.protect_assessment_response already does an EXISTS
+--     check no FK could express either.
 CREATE TABLE core.diagnostic_probe_provenance (
   id UUID PRIMARY KEY,
   attempt_id UUID NOT NULL,
@@ -55,10 +77,25 @@ CREATE TABLE core.diagnostic_probe_provenance (
   UNIQUE (attempt_id, item_version_id),
   FOREIGN KEY (attempt_id, item_version_id)
     REFERENCES core.assessment_attempt_item(attempt_id, item_version_id) ON DELETE RESTRICT,
+  -- Fact 1: the source item genuinely belonged to the source attempt's own selected form.
+  FOREIGN KEY (source_attempt_id, source_item_version_id)
+    REFERENCES core.assessment_attempt_item(attempt_id, item_version_id) ON DELETE RESTRICT,
+  -- Fact 2: the source objective genuinely tags the source item.
+  FOREIGN KEY (source_item_version_id, source_objective_id)
+    REFERENCES core.assessment_item_objective(item_version_id, objective_id) ON DELETE RESTRICT,
+  -- Fact 3: the target objective genuinely tags the selected (probe) item.
+  FOREIGN KEY (item_version_id, target_objective_id)
+    REFERENCES core.assessment_item_objective(item_version_id, objective_id) ON DELETE RESTRICT,
   CONSTRAINT ck_diagnostic_probe_provenance_type CHECK (
     relationship_type IN (
       'SAME_OBJECTIVE_CONFIRMATION', 'PREREQUISITE_VALIDATION', 'ROOT_CAUSE_PROBE', 'CONTRADICTION_CHECK'
     )
+  ),
+  -- Facts 4/5: required for the two hand-authored types, forbidden for the two graph-derived ones --
+  -- one iff, not two separate rules that could individually be relaxed.
+  CONSTRAINT ck_diagnostic_probe_provenance_authorization CHECK (
+    (relationship_type IN ('ROOT_CAUSE_PROBE', 'CONTRADICTION_CHECK'))
+    = (authorizing_relationship_id IS NOT NULL)
   )
 );
 
@@ -73,12 +110,18 @@ CREATE INDEX idx_diagnostic_probe_provenance_source_attempt
 
 -- Immutable once written, the same guarantee core.assessment_attempt_item's own trigger gives the
 -- packet it explains, and insertable only alongside it -- while the owning attempt is IN_PROGRESS.
+-- Also validates the one consistency fact no FK or CHECK above can express: when
+-- authorizing_relationship_id is present, it must actually authorize this exact row -- exist, be
+-- PUBLISHED, and have the same source_objective_id/target_objective_id/relationship_type this row
+-- itself claims. A row citing a DRAFT, retracted, or mismatched relationship is exactly the
+-- inconsistent audit state this whole migration exists to make unrepresentable.
 CREATE FUNCTION core.protect_probe_provenance()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 DECLARE
   attempt_status VARCHAR(16);
+  authorizing_row core.diagnostic_probe_relationship%ROWTYPE;
 BEGIN
   IF TG_OP IN ('UPDATE', 'DELETE') THEN
     RAISE EXCEPTION 'probe provenance is immutable' USING ERRCODE = '55000';
@@ -88,6 +131,24 @@ BEGIN
     RAISE EXCEPTION 'probe provenance may only be recorded for an in-progress attempt'
       USING ERRCODE = '55000';
   END IF;
+
+  IF NEW.authorizing_relationship_id IS NOT NULL THEN
+    SELECT * INTO authorizing_row
+      FROM core.diagnostic_probe_relationship
+     WHERE id = NEW.authorizing_relationship_id;
+    IF NOT FOUND
+        OR authorizing_row.status <> 'PUBLISHED'
+        OR authorizing_row.source_objective_id <> NEW.source_objective_id
+        OR authorizing_row.target_objective_id <> NEW.target_objective_id
+        OR authorizing_row.relationship_type <> NEW.relationship_type THEN
+      RAISE EXCEPTION
+        'authorizing_relationship_id % does not authorize this provenance row -- it must exist, be '
+        'PUBLISHED, and its source_objective_id/target_objective_id/relationship_type must exactly '
+        'match', NEW.authorizing_relationship_id
+        USING ERRCODE = '23514';
+    END IF;
+  END IF;
+
   RETURN NEW;
 END;
 $$;

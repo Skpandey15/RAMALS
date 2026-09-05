@@ -4,7 +4,8 @@
 - **Decides:** the runtime constraints binding `DIAGNOSTIC_SELECTION_V5` — cross-attempt trigger
   eligibility, probe quota, precedence with V4, interaction with V3, the provenance model, and why
   ambiguity stays non-actionable at runtime, exactly as M2-ADR-024 governed the read-only foundation
-  those decisions consume.
+  those decisions consume. §8 (added on review, before merge): the provenance model's internal
+  consistency is enforced at the database boundary, not trusted from the application writer alone.
 - **Relates to, and builds on, M2-ADR-024** (`docs/adr/M2-ADR-024-hypothesis-driven-probe-relationship-foundation.md`,
   PR #251): this ADR does not revisit any of §1–§5 there — `ProbeRelationshipService`/`Resolver`
   stay exactly as governed, read-only, called now by exactly one caller.
@@ -76,7 +77,7 @@ exactly one) are both satisfied with zero special-casing: they are consequences 
 Scoped to the same `assessment_version_id` as the attempt being created — the simplest reading of
 "same assessment/curriculum context" that cannot itself produce a version mismatch between the
 trigger item and the candidate pool. No arbitrary history scan; no attempt is preferred over another
-by convenience. This is also what enforces §9 (no stale hypothesis): the moment attempt N+1 exists
+by convenience. This is also what enforces the no-stale-hypothesis guarantee: the moment attempt N+1 exists
 and completes, it — not attempt N — is "the immediately preceding attempt" for N+2, so N's original
 miss is never reconsidered. H7's longitudinal validation is not built here; this is a one-hop rule,
 not a history model.
@@ -119,6 +120,55 @@ only ever stores the two hand-authored types), `target_objective_id`, `authorizi
 `core.assessment_attempt_item` already is: immutable once written, insertable only while the owning
 attempt is `IN_PROGRESS`. Nothing here claims a diagnosis — it records the reason a probe was
 selected, and nothing more.
+
+### 8a. Provenance consistency is enforced at the database boundary
+
+*(Added on review, before merge — the provenance model as first described in §8 relied on the
+application writer alone; this section closes that gap.)*
+
+`core.diagnostic_probe_provenance` is authoritative audit provenance, not a log line, so it must not
+be representable in an internally inconsistent state — a row could otherwise claim a source item
+that was never presented in the attempt it names, an objective that never tagged the item it names,
+or an authorizing relationship that does not actually say what the row claims it says. Trusting the
+application writer to always get this right is the same shortcut this project has already rejected
+for `core.assessment_response` (`core.protect_assessment_response` independently verifies a response
+names an item the attempt actually selected, not just any item that exists) — the same discipline
+applies here.
+
+Five facts, each enforced by whichever mechanism actually expresses it, never more machinery than
+the fact requires:
+
+1. **`source_item_version_id` was really presented in `source_attempt_id`** — a composite foreign
+   key against `core.assessment_attempt_item`'s own `(attempt_id, item_version_id)` unique key
+   (V045), applied to the *source* attempt the same way the row's own `(attempt_id,
+   item_version_id)` FK already applies it to the *new* one.
+2. **`source_objective_id` really tags `source_item_version_id`**, and 3. **`target_objective_id`
+   really tags the selected `item_version_id`** — two composite foreign keys against
+   `core.assessment_item_objective`'s own `(item_version_id, objective_id)` primary key (V046).
+4/5. **`authorizing_relationship_id` is required for `ROOT_CAUSE_PROBE`/`CONTRADICTION_CHECK` and
+   forbidden for `SAME_OBJECTIVE_CONFIRMATION`/`PREREQUISITE_VALIDATION`** — one `CHECK`, an
+   if-and-only-if condition, since "required for these two" and "forbidden for the other two" are
+   the same boolean statement made once rather than two rules that could individually be relaxed
+   without the other noticing.
+
+A sixth fact — when `authorizing_relationship_id` **is** present, it must actually authorize this
+exact row: the relationship must exist, be `PUBLISHED` (not `DRAFT`), and its own
+`source_objective_id`/`target_objective_id`/`relationship_type` must exactly match what the
+provenance row claims — cannot be a plain foreign key, because there is no column on this table to
+compare a literal `'PUBLISHED'` against, and matching three fields against a joined row is a lookup,
+not a key reference. `trg_probe_provenance_guard` (already responsible for immutability and the
+`IN_PROGRESS` insert guard) does this lookup explicitly and rejects the insert otherwise — the same
+kind of `EXISTS`-shaped validation `core.protect_assessment_response` already does for a different
+table, extended here rather than duplicated as a second trigger.
+
+None of this changes what the application ever writes: `ProbeRelationshipService`/`Resolver`
+already only ever produce a `DiagnosticHypothesis` whose fields are true by construction (the
+target objective came from the same row the authorizing id names; the source objective came from
+the same query that resolved the trigger item's own tag), so `ProbeProvenanceRepository.insert`
+never wrote an inconsistent row before this section existed either. This is defense-in-depth, not a
+behavior change — proven by the existing end-to-end tests continuing to pass unmodified against the
+hardened schema, and by new tests proving each of the five (six, counting the authorizing-relationship
+lookup) invalid shapes is independently rejected.
 
 ### 9. One new `SelectionReason`, not four
 
@@ -168,6 +218,10 @@ quota, and provenance is deterministic and reproducible from already-authoritati
   a quiet refactor.
 - `core.diagnostic_probe_provenance` is the only new table; a future PR persisting provenance as
   JSON on `assessment_attempt_item` or in logs only is a defect against §8.
+- Every one of §8a's five (six) consistency facts must stay enforced at the database boundary — a
+  future migration weakening any of them (dropping a composite FK, loosening the CHECK, or removing
+  the authorizing-relationship lookup from the trigger) is a defect against §8a, not a
+  simplification.
 
 ## Revisit triggers
 
