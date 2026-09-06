@@ -63,6 +63,45 @@ class ArchitectureGuardrailTests {
       .because("AI adapters must not acquire a database handle");
 
   @ArchTest
+  static final ArchRule mcpCannotReachAuthoritativeWriters = noClasses()
+      .that().resideInAnyPackage(BASE + ".mcp..")
+      .should().dependOnClassesThat().haveFullyQualifiedName(BASE + ".evidence.EvidenceRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".evidence.EvidenceService")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".mastery.MasteryRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".mastery.MasteryService")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".recommendation.RecommendationRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".recommendation.RecommendationService")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".learning.LearningSessionRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".learning.LearningSessionService")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".learning.ProgressionRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".learning.ProgressionService")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".assessment.AssessmentRepository")
+      .orShould().dependOnClassesThat().haveFullyQualifiedName(BASE + ".assessment.DiagnosticSubmissionService")
+      .orShould().dependOnClassesThat()
+          .haveFullyQualifiedName(BASE + ".assessment.MisconceptionEvidenceCaptureService")
+      .orShould().dependOnClassesThat()
+          .haveFullyQualifiedName(BASE + ".assessment.MisconceptionConfidenceRepository")
+      .orShould().dependOnClassesThat()
+          .haveFullyQualifiedName(BASE + ".assessment.MisconceptionConfidenceService")
+      .orShould().dependOnClassesThat()
+          .haveFullyQualifiedName(BASE + ".assessment.DiagnosticConfidenceRepository")
+      .orShould().dependOnClassesThat()
+          .haveFullyQualifiedName(BASE + ".assessment.DiagnosticConfidenceService")
+      .because("M2-ADR-031 (MCP-1): the MCP transport/security foundation must never be able to "
+          + "write mastery, G2 evidence, G3 misconception confidence, H5 diagnostic confidence, "
+          + "progression, learner-session state, or authoritative assessment scoring -- MCP-1 "
+          + "registers zero business capabilities, and the boundary this rule protects must already "
+          + "hold before any future capability is added, not be introduced alongside the first one "
+          + "that needs it");
+
+  @ArchTest
+  static final ArchRule mcpCannotUseDatabasePrimitives = noClasses()
+      .that().resideInAnyPackage(BASE + ".mcp..")
+      .should().dependOnClassesThat().areAssignableTo(JdbcTemplate.class)
+      .because("the MCP transport/security foundation must not acquire a database handle -- every "
+          + "future MCP resource reads through an existing application service, never JDBC directly");
+
+  @ArchTest
   static final ArchRule evaluationGateCannotReachAuthoritativeLearnerStateWriters = noClasses()
       .that().resideInAnyPackage(BASE + ".assessmentevaluation..")
       .should().dependOnClassesThat().haveFullyQualifiedName(BASE + ".evidence.EvidenceRepository")

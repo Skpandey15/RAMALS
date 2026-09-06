@@ -151,6 +151,26 @@ ramals:
     abuse-counter-purge:
       enabled: ${RAMALS_ABUSE_COUNTER_PURGE_ENABLED:true}
       interval-ms: ${RAMALS_ABUSE_COUNTER_PURGE_INTERVAL_MS:3600000}
+  # MCP-1 (M2-ADR-031): one governed Streamable HTTP transport, disabled unless explicitly turned
+  # on -- an unconfigured deployment gets no MCP server and no new attack surface. Zero business
+  # capabilities are registered at this stage; see McpCapabilityRegistry. workload-audience is the
+  # audience the MCP transport's own workload authentication must carry (aud=ramals-ai, reused
+  # unchanged from M1-ADR-003, not a new service-authentication system) -- it authenticates *which
+  # workload is calling*, never *which learner it acts for*. That second question belongs to the
+  # separate delegated learner-context credential (aud=ramals-mcp, a deliberately different
+  # audience so the two credentials can never substitute for each other). Its issuer/audience/ttl
+  # and signing-key material (ramals.mcp.delegated-context.*) are, like Contract B's own encryption
+  # keys, intentionally NOT scaffolded here: they are secret-shaped configuration, resolved purely
+  # through Spring's environment-variable relaxed binding (RAMALS_MCP_DELEGATED_CONTEXT_ISSUER,
+  # ...AUDIENCE, ...TTL_SECONDS, ...ACTIVE_KEY_ID, ...KEYS_<KEYID>) so no placeholder ever invites a
+  # real key into this version-controlled file. Every field defaults to empty/blank in Java, and
+  # DelegatedLearnerContextSigningKeys resolves and validates it lazily, on first actual use, exactly
+  # like EnvironmentResultEncryptionKeyProvider does -- not wired to any Spring bean that reads it
+  # for issuance/validation yet, since no learner-scoped MCP capability exists to call one.
+  mcp:
+    enabled: ${RAMALS_MCP_ENABLED:false}
+    endpoint: ${RAMALS_MCP_ENDPOINT:/mcp}
+    workload-audience: ${RAMALS_MCP_WORKLOAD_AUDIENCE:ramals-ai}
 
 management:
   otlp:
