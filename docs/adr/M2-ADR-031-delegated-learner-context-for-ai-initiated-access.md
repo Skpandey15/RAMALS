@@ -17,12 +17,30 @@ untouched by this ADR.
 
 MCP introduces the **reverse** direction: `ramals-ai`/LangGraph calling *into* Java to read
 learner-scoped authoritative facts (H6, H7, mastery) on behalf of an interaction Java itself already
-authorized. A valid `ramals-ai` workload token proves exactly one fact:
+authorized.
 
-> **this caller is the authenticated `ramals-ai` workload.**
+**This is not M1-ADR-003's credential run backwards, and reusing it as if it were is a defect, not a
+simplification.** `ramals-core-workload`/`aud=ramals-ai` authenticates *Java calling `ramals-ai`* —
+only Java ever holds that client's secret ([`WorkloadTokenProvider`](../../learning-platform/src/main/java/io/ramals/learningplatform/ai/WorkloadTokenProvider.java)
+requests it, `ramals-ai` only ever receives it); `ramals-ai` has no credential that lets it mint a
+token audienced `ramals-ai`, and validating incoming MCP requests against that audience would accept,
+at most, Java replaying its own outbound-only credential back at itself — never an actual call
+originating from `ramals-ai`. Principal and audience are distinct facts about a token: **audience
+names the intended *receiver*; it says nothing about who the *caller* is.** `ramals-core-workload`'s
+`aud=ramals-ai` names `ramals-ai` as receiver precisely *because* Java is the caller in that
+direction — it cannot simultaneously mean "`ramals-ai` is the caller" for the opposite direction.
+
+This ADR therefore introduces a **second, distinct Keycloak workload identity** for this direction —
+a dedicated confidential client, conceptually `ramals-ai-workload` (`serviceAccountsEnabled=true`, no
+user flows, its own audience mapper naming Java's MCP transport as receiver: `aud=ramals-mcp`) — never
+`ramals-core-workload`, and never sharing its secret. A valid token from this new client proves exactly
+one fact:
+
+> **this caller is the authenticated `ramals-ai` workload, and the intended receiver is Java's MCP
+> transport.**
 
 It proves nothing about *which learner* that workload may act on behalf of for *this* call. If Java's
-MCP surface accepted a workload token plus a caller-supplied `learnerId`/`learnerRef` as sufficient
+MCP surface accepted this workload token plus a caller-supplied `learnerId`/`learnerRef` as sufficient
 authorization, the workload's own authentication would be silently repurposed as authorization for an
 arbitrary learner — an IDOR / confused-deputy defect, reachable by a compromised, buggy,
 manipulated, or simply hallucinating AI workflow, without any RAMALS system being individually wrong.
@@ -42,8 +60,17 @@ learner interaction*, independent of whatever protocol carries the resulting cal
   interaction — never a grant the second principal can create, extend, or widen for itself.
 - **Learner identity** — the opaque reference to the specific learner an interaction concerns
   (`LearnerRef.learnerRef`, unchanged, M1-ADR-003's own convention).
-- **Workload identity** — the identity of the `ramals-ai` service process itself (M1-ADR-003's
-  `ramals-core-workload` client, `aud=ramals-ai`), unrelated to any learner.
+- **Workload identity** — proof of *which service process* is calling, unrelated to any learner. Two
+  distinct instances exist, for two distinct call directions, and neither is the other reused:
+  - *Java's* workload identity toward `ramals-ai` — M1-ADR-003's `ramals-core-workload` client,
+    `aud=ramals-ai`. Unchanged by this ADR.
+  - *`ramals-ai`'s* workload identity toward Java's MCP transport — this ADR's own, new
+    `ramals-ai-workload` client, `aud=ramals-mcp`. Introduced here (§A.1).
+- **Token audience** — the intended *receiving* service, not the caller. `ramals-core-workload`'s
+  `aud=ramals-ai` names `ramals-ai` as receiver because Java is the caller in that direction; it
+  cannot also mean "`ramals-ai` is the caller" for the reverse direction MCP introduces. Audience and
+  workload identity are checked as two independent facts about a token, never inferred from each
+  other (§A.1).
 - **Interaction identity** — `interactionId` (M1-ADR-001's own correlation identifier for one
   logical learner action), reused unchanged.
 - **Capability scope** — the explicit, allowlisted set of MCP capability names a delegated context
@@ -68,10 +95,17 @@ learner interaction*, independent of whatever protocol carries the resulting cal
   is the direct precedent this ADR reuses, not invents.
 - **`infrastructure/docker/keycloak/ramals-realm.json`**: each existing client (`ramals-web-ui`,
   `ramals-core-workload`) carries a *static* hardcoded-audience protocol mapper
-  (`included.client.audience: ramals-api` / `ramals-ai`, respectively). No `token-exchange` feature is
-  configured in this realm. A dynamically-scoped, per-interaction Keycloak-issued token (via RFC 8693
-  standard token exchange) is therefore **not a drop-in today** — it would require enabling and
-  configuring a currently-absent Keycloak realm feature, a real precondition, not a trivial reuse.
+  (`included.client.audience: ramals-api` / `ramals-ai`, respectively) naming *its own caller's*
+  intended receiver — confirming audience-as-receiver, not audience-as-caller, is this realm's
+  existing, consistent convention, which this ADR's own new client follows rather than breaks. No
+  `token-exchange` feature is configured in this realm. A dynamically-scoped, per-interaction
+  Keycloak-issued token (via RFC 8693 standard token exchange) is therefore **not a drop-in today** —
+  it would require enabling and configuring a currently-absent Keycloak realm feature, a real
+  precondition, not a trivial reuse. This ADR adds a further, distinct client to that same file —
+  `ramals-ai-workload` — following the identical confidential-client/service-account/no-user-flows
+  pattern, its own audience mapper set to `ramals-mcp`. Its secret **MUST NOT** be the
+  `ramals-core-workload` secret, and `ramals-core-workload`'s own client definition and audience
+  mapper are unmodified by this ADR.
 - **`WorkloadTokenProvider.java`**: the existing workload token is a **shared, cached, service-level**
   credential, refreshed ahead of expiry and reused across every call the process makes. Its lifecycle
   is the deliberate opposite of what this ADR needs: a delegated learner-context credential MUST be
@@ -97,8 +131,18 @@ learner interaction*, independent of whatever protocol carries the resulting cal
 An AI-initiated Java MCP request for a learner-scoped capability MUST present **both**, and neither
 substitutes for the other:
 
-1. **Workload authentication** — the existing Keycloak client-credentials token, `aud=ramals-ai`,
-   unchanged, reused exactly as M1-ADR-003 already established. Proves *which service* is calling.
+1. **Workload authentication** — a Keycloak client-credentials token from a **new, dedicated client**
+   for this direction (conceptually `ramals-ai-workload`), `aud=ramals-mcp` naming Java's MCP
+   transport as receiver. **Not** M1-ADR-003's `ramals-core-workload`/`aud=ramals-ai` credential,
+   which authenticates the opposite direction (Java calling `ramals-ai`) and whose secret only Java
+   ever holds — `ramals-ai` cannot mint that token, so validating incoming MCP requests against it
+   would not authenticate `ramals-ai` at all. Validation independently checks both facts a token
+   carries: **audience** (`ramals-mcp`, not `ramals-ai` or `ramals-api`) and **authorized party**
+   (`azp`, falling back to `client_id`, pinned to the new client's id) — audience alone would admit
+   any client the realm chooses to mint a `ramals-mcp` token for, so authorized-party binding is
+   required here for the same reason `ramals_ai.security.workload_identity.WorkloadTokenVerifier`
+   already pins `expected_workload_client_id` for M1-ADR-003's own direction. Proves *which service*
+   is calling, and that it is the one client this boundary trusts.
 2. **Delegated learner-context authorization** — a new, short-lived, signed credential, described
    below. Proves *which already-authorized learner interaction* this specific call may act for, and
    *which capabilities* it may invoke.
@@ -267,8 +311,13 @@ Future tests MUST be able to assert, at minimum:
    includes it.
 6. A delegated context cannot invoke a capability outside its own capability-scope allowlist.
 7. An expired delegated context is rejected.
-8. A token presented with the wrong audience (e.g. a `ramals-ai` workload token, or a `ramals-api`
-   learner token, presented where `ramals-mcp` is required) is rejected.
+8. A token presented with the wrong audience is rejected: M1-ADR-003's own `ramals-core-workload`
+   token (`aud=ramals-ai`) and a learner token (`aud=ramals-api`) both fail where the MCP workload
+   audience (`ramals-mcp`) is required, and a delegated-context token (also `aud=ramals-mcp`, but
+   Java-self-issued and HS256-signed) cannot satisfy the Keycloak-issued workload check regardless of
+   audience, because it fails signature/issuer verification against the realm's JWKS. Independently, a
+   token with the *correct* workload audience but the wrong authorized party/client id (`azp` or
+   `client_id` not `ramals-ai-workload`) is also rejected — audience alone is never sufficient (§A.1).
 9. If workload binding is included in the final claim set, a delegated context issued for a different
    workload instance is rejected when presented by another.
 10. No MCP capability governed by this ADR can mutate authoritative learner state (H6/H7/mastery/G2/
@@ -285,6 +334,10 @@ Future tests MUST be able to assert, at minimum:
   artifact, but not a new identity provider, a new rotation *ceremony* beyond what already exists for
   comparable secrets (`RAMALS_AI_WORKLOAD_CLIENT_SECRET`'s own precedent), or a new persistence
   requirement.
+- The realm gains one new confidential client, `ramals-ai-workload`, for the reverse call direction —
+  same operational shape as `ramals-core-workload` (service account, no user flows, environment-
+  supplied secret, absent from Git), and a distinct secret from it. `ramals-core-workload`'s own
+  client definition, audience mapper, and semantics are unchanged.
 - Any future MCP (or non-MCP) AI-initiated call into Java's learner-scoped capabilities MUST be
   built against this boundary — a capability that skips it is not a smaller, faster version of the
   same feature; it is the exact defect this ADR exists to prevent.

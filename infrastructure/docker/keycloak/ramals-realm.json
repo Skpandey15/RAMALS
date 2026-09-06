@@ -115,6 +115,31 @@
       ]
     },
     {
+      "clientId": "ramals-ai-workload",
+      "name": "RAMALS AI workload (ramals-ai -> Java MCP)",
+      "description": "Service account ramals-ai/LangGraph uses to call the Java-hosted MCP transport (M2-ADR-031). Confidential, no user flows: it authenticates the AI plane process itself, never a learner, and is a distinct identity from ramals-core-workload -- that client authenticates Java calling ramals-ai (M1-ADR-003), the opposite direction. The secret is supplied by the environment, is deliberately absent from this file, and MUST NOT be the same secret as ramals-core-workload's.",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "ramals-mcp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "ramals-mcp",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    },
+    {
       "clientId": "ramals-registration-admin",
       "name": "RAMALS registration administration",
       "description": "Dedicated least-privilege identity for learner creation and verification reconciliation. Secret is external and absent from Git.",

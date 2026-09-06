@@ -7,8 +7,11 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
@@ -158,6 +161,42 @@ class DelegatedLearnerContextValidatorTests {
         .isInstanceOf(DelegatedLearnerContextException.class)
         .extracting(failure -> ((DelegatedLearnerContextException) failure).reason())
         .isEqualTo(DelegatedLearnerContextException.Reason.WRONG_ISSUER);
+  }
+
+  // -- negative: cross-credential substitution ------------------------------------------------------
+
+  /**
+   * Test #6 (M2-ADR-031 review): a real Keycloak-shaped workload token -- RS256-signed, {@code
+   * aud=ramals-mcp}, {@code azp=ramals-ai-workload} -- cannot substitute for a delegated learner
+   * context, even under a deliberate {@code kid} collision with the validator's own configured HMAC
+   * key id ("current"). Rejected on the signature check alone: {@link
+   * com.nimbusds.jose.crypto.MACVerifier} does not support RS256, so the algorithm mismatch -- not
+   * merely an unrecognized key id -- is what defeats it. This is the audience/claims-independent proof
+   * that a workload JWT (asymmetric, Keycloak-issued) and a delegated-context JWT (symmetric,
+   * Java-self-issued) are never interchangeable, regardless of any claim they might share.
+   */
+  @Test
+  void workloadShapedRs256TokenCannotSubstituteForDelegatedContext() throws Exception {
+    Clock clock = Clock.fixed(Instant.parse("2026-09-06T00:00:00Z"), ZoneOffset.UTC);
+    KeyPair rsaKeyPair = KeyPairGenerator.getInstance("RSA").generateKeyPair();
+
+    JWTClaimsSet workloadShapedClaims = new JWTClaimsSet.Builder()
+        .issuer("http://localhost:8081/realms/ramals")
+        .audience(AUDIENCE)
+        .claim("azp", "ramals-ai-workload")
+        .issueTime(Date.from(clock.instant()))
+        .expirationTime(Date.from(clock.instant().plus(Duration.ofMinutes(2))))
+        .build();
+    SignedJWT workloadShapedJwt = new SignedJWT(
+        // Same "current" kid the delegated-context validator's HMAC key map uses -- deliberately
+        // colliding, so a match here would prove the failure was never about the key id at all.
+        new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("current").build(), workloadShapedClaims);
+    workloadShapedJwt.sign(new RSASSASigner(rsaKeyPair.getPrivate()));
+
+    assertThatThrownBy(() -> validator(clock).validate(workloadShapedJwt.serialize()))
+        .isInstanceOf(DelegatedLearnerContextException.class)
+        .extracting(failure -> ((DelegatedLearnerContextException) failure).reason())
+        .isEqualTo(DelegatedLearnerContextException.Reason.BAD_SIGNATURE);
   }
 
   // -- negative: expiry ------------------------------------------------------------------------------

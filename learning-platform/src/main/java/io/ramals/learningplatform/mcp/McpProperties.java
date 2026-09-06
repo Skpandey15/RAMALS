@@ -11,16 +11,29 @@ import org.springframework.validation.annotation.Validated;
  * configuration surface, and no new attack surface -- exactly the same "absent means safely off"
  * discipline {@code AiClientConfiguration} already holds the AI-plane client to.
  *
- * <p>{@link #workloadAudience} and {@link DelegatedContext#audience} are deliberately distinct
- * concerns, on purpose kept as two separately-named fields rather than one: the former is the
- * audience the MCP transport's own <em>workload</em> authentication must carry (reused unchanged
- * from M1-ADR-003, defaulting to the existing {@code ramals-ai} audience); the latter is the
- * audience a <em>delegated learner-context</em> credential must carry ({@code ramals-mcp}, a new
- * audience M2-ADR-031 introduces). A workload token proves only "this caller is the authenticated
- * {@code ramals-ai} workload" -- never "this workload may act for learner X" -- so the two
- * credentials, and the two audiences that gate them, must never be substitutable for one another.
- * See {@link io.ramals.learningplatform.mcp.McpSecurityConfig} and {@link
- * io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator} for where each is enforced.
+ * <p><b>Two directions, two distinct workload identities -- neither is {@code ramals-core-workload}
+ * reused.</b> M1-ADR-003's {@code ramals-core-workload} client (Keycloak) authenticates
+ * <em>Java calling ramals-ai</em>, {@code aud=ramals-ai}; only Java ever holds that client's secret,
+ * so {@code ramals-ai} could never present a token audienced {@code ramals-ai} back to Java -- it has
+ * no way to mint one. The MCP transport instead validates a <em>different</em>, dedicated Keycloak
+ * client -- conceptually {@code ramals-ai-workload}, {@code serviceAccountsEnabled=true}, its own
+ * audience mapper set to {@link #workloadAudience} (default {@code ramals-mcp}, not {@code
+ * ramals-ai}) -- that authenticates <em>ramals-ai calling Java</em>, the reverse direction M1-ADR-003
+ * never covered. {@link #workloadClientId} additionally pins the expected authorized-party
+ * ({@code azp}) claim, so audience alone (which any client the realm chooses to mint a {@code
+ * ramals-mcp} token for would satisfy) is never sufficient by itself -- mirroring the identical
+ * discipline {@code ramals_ai.security.workload_identity.WorkloadTokenVerifier} already applies to
+ * M1-ADR-003's own direction.
+ *
+ * <p>{@link #workloadAudience} and {@link DelegatedContext#audience} may legitimately share the same
+ * literal value ({@code ramals-mcp} both name "the receiver is Java's MCP transport"), but the two
+ * credentials they gate are never conflated: a workload token is Keycloak-issued, RS256/JWKS-verified,
+ * and proves only <em>which service is calling</em>; a delegated-context token is Java-self-issued,
+ * HS256/HMAC-verified, and proves <em>which already-authorized learner interaction and capability
+ * scope</em> this call may act for. Neither substitutes for the other -- see {@link
+ * io.ramals.learningplatform.mcp.McpSecurityConfig} and {@link
+ * io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator} for where each is enforced
+ * independently.
  */
 @Validated
 @ConfigurationProperties(prefix = "ramals.mcp")
@@ -33,16 +46,32 @@ public class McpProperties {
   private String endpoint = "/mcp";
 
   /**
-   * The audience workload authentication for the MCP transport itself must carry.
+   * The audience a workload token presented to the MCP transport must carry.
    *
-   * <p>Deliberately defaults to {@code ramals-ai} -- the existing M1-ADR-003 workload audience,
-   * reused unchanged for the MCP transport's own authentication leg (M2-ADR-031 §A.1: "reuse the
-   * existing workload-identity architecture... do not invent another service-authentication
-   * system"). This authenticates <em>which workload is calling</em>; it says nothing about which
-   * learner, if any, that call is acting for -- that is exactly what {@link DelegatedContext}
-   * governs, under its own, deliberately different, {@link DelegatedContext#audience}.
+   * <p>Defaults to {@code ramals-mcp} -- naming <em>Java's MCP transport</em> as the intended
+   * receiver, exactly the same audience-as-receiver convention every other client in this realm
+   * already follows ({@code ramals-web-ui}/{@code ramals-core-workload} name {@code ramals-api}/
+   * {@code ramals-ai} as their own receivers). It is deliberately <b>not</b> {@code ramals-ai}: that
+   * audience names {@code ramals-ai} as the receiver, which is correct for M1-ADR-003's own Java-to-
+   * {@code ramals-ai} direction and wrong for this one. A stray {@code ramals-ai}-audienced token
+   * presented here (e.g. a replayed {@code ramals-core-workload} token) is rejected by audience
+   * mismatch alone, before {@link #workloadClientId} is even consulted.
    */
-  private String workloadAudience = "ramals-ai";
+  private String workloadAudience = "ramals-mcp";
+
+  /**
+   * The expected authorized-party (Keycloak {@code azp}, falling back to {@code client_id}) claim a
+   * workload token presented to the MCP transport must carry.
+   *
+   * <p>Audience alone would admit any client the realm chooses to mint a {@link #workloadAudience}
+   * token for; pinning the client id keeps the door open to exactly one workload -- the same
+   * reasoning, and the same claim precedence, {@code
+   * ramals_ai.security.workload_identity.WorkloadTokenVerifier} already applies for M1-ADR-003's own
+   * direction. Defaults to {@code ramals-ai-workload}, the dedicated Keycloak client this transport
+   * expects -- never {@code ramals-core-workload}, which is a different identity for the opposite
+   * call direction and does not hold this audience's secret.
+   */
+  private String workloadClientId = "ramals-ai-workload";
 
   private final DelegatedContext delegatedContext = new DelegatedContext();
 
@@ -70,6 +99,14 @@ public class McpProperties {
     this.workloadAudience = workloadAudience;
   }
 
+  public String getWorkloadClientId() {
+    return workloadClientId;
+  }
+
+  public void setWorkloadClientId(String workloadClientId) {
+    this.workloadClientId = workloadClientId;
+  }
+
   public DelegatedContext getDelegatedContext() {
     return delegatedContext;
   }
@@ -95,9 +132,13 @@ public class McpProperties {
     private String issuer = "ramals-learning-platform";
 
     /**
-     * The audience a delegated learner-context token must carry. Deliberately not {@code
-     * ramals-ai}: a workload token that merely authenticates the {@code ramals-ai} caller must
-     * never be accepted as authorization to act for a specific learner, and vice versa.
+     * The audience a delegated learner-context token must carry. May coincide, as a literal string,
+     * with {@link McpProperties#workloadAudience} (both legitimately name "the receiver is Java's
+     * MCP transport") -- what keeps the two credentials from being conflated is mechanism, not the
+     * audience string: this one is Java-self-issued and HS256/HMAC-verified by {@link
+     * io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator}, never Keycloak-issued or
+     * JWKS-verified, and a workload token can never satisfy it (wrong issuer, wrong signature
+     * mechanism entirely) even if its audience happens to match.
      */
     private String audience = "ramals-mcp";
 

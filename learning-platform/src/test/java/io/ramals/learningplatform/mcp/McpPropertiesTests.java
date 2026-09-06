@@ -5,26 +5,39 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 /**
- * M2-ADR-031: {@link McpProperties#getWorkloadAudience()} (the MCP transport's own workload
- * authentication, {@code aud=ramals-ai}) and {@link McpProperties.DelegatedContext#getAudience()}
- * (the delegated learner-context credential, {@code aud=ramals-mcp}) are two independent fields with
- * two independent defaults -- proving structurally, not just by convention, that they can never
- * collapse into one audience by accident. See {@link io.ramals.learningplatform.mcp.McpSecurityConfig}
- * for where a workload token's audience is enforced, and {@link
+ * M2-ADR-031: {@link McpProperties#getWorkloadAudience()} (a Keycloak-issued workload token
+ * authenticating {@code ramals-ai} calling Java) and {@link
+ * McpProperties.DelegatedContext#getAudience()} (a Java-self-issued delegated learner-context
+ * credential) both default to the literal {@code ramals-mcp} -- both legitimately name "the receiver
+ * is Java's MCP transport" -- but are two structurally independent fields on two independent
+ * mechanisms, never one collapsed into the other: changing one never touches the other, and {@link
+ * McpProperties#getWorkloadClientId()} (default {@code ramals-ai-workload}) additionally pins the
+ * workload token to one specific Keycloak client, which the delegated-context credential has no
+ * equivalent of at all (it is verified by signature/issuer, never by a client-identity claim). See
+ * {@link io.ramals.learningplatform.mcp.McpSecurityConfig} for where a workload token's audience
+ * <em>and</em> authorized-party are independently enforced, and {@link
  * io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator} for where a delegated
- * context's own, different, audience is enforced.
+ * context's own audience is enforced by an entirely different (HS256/HMAC, not Keycloak/JWKS)
+ * mechanism.
  */
 class McpPropertiesTests {
 
   @Test
-  void defaultsToDisabledWithDistinctWorkloadAndDelegatedContextAudiences() {
+  void defaultsToDisabledWithWorkloadIdentityDistinctFromRamalsCoreWorkload() {
     McpProperties properties = new McpProperties();
 
     assertThat(properties.isEnabled()).isFalse();
-    assertThat(properties.getWorkloadAudience()).isEqualTo("ramals-ai");
+    // Both name "receiver is Java's MCP transport" -- legitimately the same literal (M2-ADR-031
+    // review) -- but never M1-ADR-003's ramals-ai (that names ramals-ai as receiver, the opposite
+    // direction) and never ramals-api (the learner-facing API's own audience).
+    assertThat(properties.getWorkloadAudience()).isEqualTo("ramals-mcp");
     assertThat(properties.getDelegatedContext().getAudience()).isEqualTo("ramals-mcp");
-    assertThat(properties.getWorkloadAudience())
-        .isNotEqualTo(properties.getDelegatedContext().getAudience());
+    assertThat(properties.getWorkloadAudience()).isNotEqualTo("ramals-ai");
+    assertThat(properties.getWorkloadAudience()).isNotEqualTo("ramals-api");
+    // The workload leg additionally pins a specific Keycloak client -- never ramals-core-workload,
+    // which is a different identity for the opposite call direction.
+    assertThat(properties.getWorkloadClientId()).isEqualTo("ramals-ai-workload");
+    assertThat(properties.getWorkloadClientId()).isNotEqualTo("ramals-core-workload");
   }
 
   @Test
@@ -42,7 +55,16 @@ class McpPropertiesTests {
 
     properties.getDelegatedContext().setAudience("some-other-delegated-audience");
 
-    assertThat(properties.getWorkloadAudience()).isEqualTo("ramals-ai");
+    assertThat(properties.getWorkloadAudience()).isEqualTo("ramals-mcp");
+  }
+
+  @Test
+  void changingWorkloadClientIdLeavesWorkloadAudienceUntouched() {
+    McpProperties properties = new McpProperties();
+
+    properties.setWorkloadClientId("some-other-client");
+
+    assertThat(properties.getWorkloadAudience()).isEqualTo("ramals-mcp");
   }
 
   @Test

@@ -20,27 +20,40 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
- * MCP-1 (M2-ADR-031): protects the MCP transport itself with the existing workload-identity
- * architecture -- reused unchanged, never a second service-authentication system.
+ * MCP-1 (M2-ADR-031): protects the MCP transport with a Keycloak-issued workload token authenticating
+ * <em>{@code ramals-ai} calling Java</em> -- a direction M1-ADR-003 never covered, and never satisfied
+ * by reusing M1-ADR-003's own {@code ramals-core-workload}/{@code aud=ramals-ai} credential, which
+ * authenticates the opposite direction (Java calling {@code ramals-ai}) and whose secret only Java
+ * ever holds. {@code ramals-ai} has no way to mint a {@code ramals-core-workload} token, so this chain
+ * validates a dedicated, separate Keycloak client instead -- see {@link McpProperties} for exactly
+ * which one and why.
  *
  * <p>A dedicated {@link SecurityFilterChain}, matched only to {@code ramals.mcp.endpoint}, ordered
  * ahead of the application's main chain ({@code SecurityConfig}, left completely untouched) so this
  * one governs the MCP path and the main chain continues to govern everything else exactly as before.
  *
- * <p>This chain validates a Keycloak-issued workload token carrying {@code aud=ramals-ai} -- the
- * same audience, issuer and JWKS trust M1-ADR-003 already established for Java's own outbound call to
- * {@code ramals-ai} — reused here for the reverse direction's transport-level authentication, exactly
- * as M2-ADR-031 §A.1 requires ("reuse the existing workload-identity architecture... do not invent
- * another service-authentication system"). It is deliberately a <em>different</em> audience than the
- * main API's {@code ramals-api} (`application.yml`'s own {@code RAMALS_OIDC_AUDIENCE}), so a learner
- * token can never authenticate here and a workload token can never authenticate to the learner-facing
- * API -- the same audience-separation mechanism M1-ADR-003 relies on, applied symmetrically.
+ * <p>Two independent checks gate this workload token, both required:
+ * <ol>
+ *   <li><b>Audience</b> ({@link McpProperties#getWorkloadAudience()}, default {@code ramals-mcp}) --
+ *       names Java's MCP transport as the intended receiver. Rejects, among others, a replayed
+ *       {@code ramals-core-workload} token (audienced {@code ramals-ai}) and a learner token
+ *       (audienced {@code ramals-api}).
+ *   <li><b>Authorized party</b> ({@link McpProperties#getWorkloadClientId()}, default {@code
+ *       ramals-ai-workload}, read from the token's {@code azp} claim, falling back to {@code
+ *       client_id}) -- audience alone would admit any client the realm chooses to mint a {@code
+ *       ramals-mcp} token for; this pins the door to exactly one workload, mirroring the identical
+ *       discipline {@code ramals_ai.security.workload_identity.WorkloadTokenVerifier} already applies
+ *       to M1-ADR-003's own direction.
+ * </ol>
  *
  * <p><b>This chain governs transport/session authentication only.</b> It has no opinion about
  * delegated learner context (M2-ADR-031 §D) -- MCP-1 has no learner-scoped capability to gate, so no
  * delegated-context check is wired into any live request path yet; {@link
  * io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator} exists and is tested
- * independently, ready for a future capability to call.
+ * independently, ready for a future capability to call. The two credential types are never conflated
+ * even though their audiences may share the literal {@code ramals-mcp}: this chain only ever accepts
+ * a Keycloak-issued, RS256/JWKS-verified token; a Java-self-issued, HS256/HMAC-signed delegated-context
+ * token cannot satisfy it (wrong issuer, unverifiable signature) even if its audience matches.
  */
 @Configuration
 @ConditionalOnProperty(prefix = "ramals.mcp", name = "enabled", havingValue = "true")
@@ -68,13 +81,15 @@ public class McpSecurityConfig {
     NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
     OAuth2TokenValidator<Jwt> withIssuer = JwtValidators.createDefaultWithIssuer(issuerUri);
     OAuth2TokenValidator<Jwt> withAudience = mcpWorkloadAudienceValidator(properties.getWorkloadAudience());
-    decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(withIssuer, withAudience));
+    OAuth2TokenValidator<Jwt> withPrincipal = mcpWorkloadPrincipalValidator(properties.getWorkloadClientId());
+    decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(withIssuer, withAudience, withPrincipal));
     return decoder;
   }
 
-  /** {@code aud} must contain the configured workload audience ({@code ramals-ai} by default) --
-   * never merely a token that happens to be otherwise valid for {@code ramals-api} or any other
-   * audience. This is the exact mechanism, not a new one: the same audience-separation check
+  /** {@code aud} must contain the configured workload audience ({@code ramals-mcp} by default) --
+   * never merely a token that happens to be otherwise valid for {@code ramals-api} (the learner-facing
+   * API) or {@code ramals-ai} (M1-ADR-003's own, opposite-direction, Java-to-{@code ramals-ai}
+   * credential). This is the exact mechanism, not a new one: the same audience-separation check
    * {@code application.yml}'s own {@code spring.security.oauth2.resourceserver.jwt.audiences}
    * property already performs for the main API, built by hand here because that property only
    * configures Spring Boot's single default resource server. Package-visible (not private) so its
@@ -87,6 +102,29 @@ public class McpSecurityConfig {
       }
       return OAuth2TokenValidatorResult.failure(new OAuth2Error(
           "invalid_token", "The token audience does not include " + requiredAudience, null));
+    };
+  }
+
+  /**
+   * The token's authorized party must name the expected Keycloak client (default
+   * {@code ramals-ai-workload}) -- read from {@code azp}, Keycloak's standard claim for the client a
+   * client-credentials-grant token was issued to, falling back to {@code client_id} for parity with
+   * {@code ramals_ai.security.workload_identity.WorkloadTokenVerifier}'s own claim precedence.
+   * Audience alone would admit any client the realm mints a {@code ramals-mcp} token for; this closes
+   * that gap. Package-visible for the same direct-unit-test reason as {@link
+   * #mcpWorkloadAudienceValidator}.
+   */
+  static OAuth2TokenValidator<Jwt> mcpWorkloadPrincipalValidator(String expectedClientId) {
+    return token -> {
+      String clientId = token.getClaimAsString("azp");
+      if (clientId == null || clientId.isBlank()) {
+        clientId = token.getClaimAsString("client_id");
+      }
+      if (expectedClientId.equals(clientId)) {
+        return OAuth2TokenValidatorResult.success();
+      }
+      return OAuth2TokenValidatorResult.failure(new OAuth2Error(
+          "invalid_token", "The token's authorized party is not the expected MCP workload client", null));
     };
   }
 
