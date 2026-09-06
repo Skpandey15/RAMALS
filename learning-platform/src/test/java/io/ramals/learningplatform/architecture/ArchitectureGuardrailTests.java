@@ -98,8 +98,28 @@ class ArchitectureGuardrailTests {
   static final ArchRule mcpCannotUseDatabasePrimitives = noClasses()
       .that().resideInAnyPackage(BASE + ".mcp..")
       .should().dependOnClassesThat().areAssignableTo(JdbcTemplate.class)
+      .orShould().dependOnClassesThat().resideInAPackage("org.flywaydb..")
       .because("the MCP transport/security foundation must not acquire a database handle -- every "
-          + "future MCP resource reads through an existing application service, never JDBC directly");
+          + "MCP resource reads through an existing application service, never JDBC/Flyway directly "
+          + "(this codebase has no JPA/EntityManager at all to additionally forbid)");
+
+  @ArchTest
+  static final ArchRule mcpResourcesCannotBypassApplicationServices = noClasses()
+      .that().resideInAnyPackage(BASE + ".mcp.resources..")
+      .should().dependOnClassesThat().haveNameMatching(".*Repository")
+      .because("MCP-2 (M2-ADR-031): a resource adapter reads through an existing authoritative "
+          + "application service (DiagnosticReportService, LongitudinalEvidenceService, "
+          + "MasteryMapService), never any *Repository directly, by name -- broader than the "
+          + "explicit fully-qualified list above, so a future repository this rule does not yet "
+          + "name is still caught");
+
+  @ArchTest
+  static final ArchRule mcpCannotReachAiProviderGatewayOrLangGraph = noClasses()
+      .that().resideInAnyPackage(BASE + ".mcp..")
+      .should().dependOnClassesThat().resideInAnyPackage(BASE + ".ai..")
+      .because("M2-ADR-031: the MCP transport/resources must not depend on the AI provider gateway "
+          + "package (workload-token acquisition, provider SDK clients, LangGraph integration) -- "
+          + "MCP is a read adapter Java exposes to that plane, never a caller of it");
 
   @ArchTest
   static final ArchRule evaluationGateCannotReachAuthoritativeLearnerStateWriters = noClasses()
