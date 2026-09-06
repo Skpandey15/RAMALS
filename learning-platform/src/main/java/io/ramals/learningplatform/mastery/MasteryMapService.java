@@ -36,4 +36,15 @@ public class MasteryMapService {
         .map(learnerId -> masteryRepository.latestMasteryMap(learnerId, curriculumVersionId))
         .orElseGet(List::of);
   }
+
+  /** Admin/MCP equivalent: {@code learnerId} is already known and already authorized by the caller,
+   * mirroring the same {@code ...ForLearner} convention {@code DiagnosticReportService}/{@code
+   * LongitudinalEvidenceService} already use for their own callers that hold a learnerId rather than
+   * an authenticated subject. A learner with no mastery record at all yields an empty list, the same
+   * convention {@link #masteryMap} itself uses. */
+  @Transactional(readOnly = true)
+  public List<MasteryMapEntry> masteryMapForLearner(UUID learnerId, String domainCode, String versionCode) {
+    UUID curriculumVersionId = curriculumService.graph(domainCode, versionCode).curriculumVersionId();
+    return masteryRepository.latestMasteryMap(learnerId, curriculumVersionId);
+  }
 }

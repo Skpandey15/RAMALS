@@ -3,10 +3,15 @@ package io.ramals.learningplatform.mcp;
 import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
+import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.server.transport.HttpServletStreamableServerTransportProvider;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextSigningKeys;
+import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator;
+import io.ramals.learningplatform.mcp.authorization.McpCapabilityAuthorization;
+import java.time.Clock;
+import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
@@ -28,11 +33,12 @@ import tools.jackson.databind.json.JsonMapper;
  * {@link ServletRegistrationBean}, needing no Spring MVC {@code RouterFunction} and no
  * {@code org.springframework.ai} transport module.
  *
- * <p><b>Zero business capabilities are registered.</b> The {@link McpSyncServer} built here declares
- * no tools, no resources, no prompts -- {@code ServerCapabilities.builder().build()}'s own default is
- * "none of the above" -- and {@link McpCapabilityRegistry#empty()} is the only registry this PR ever
- * constructs. A future capability is added by changing this class and its registry together, in a
- * reviewed change, never by annotation scanning.
+ * <p><b>MCP-2</b>: exactly five read-only, learner-scoped business capabilities are registered --
+ * {@link McpCapabilityRegistry#mcp2()} -- as explicit MCP tools (see {@code
+ * io.ramals.learningplatform.mcp.resources}), each its own {@code @Bean}, collected here via ordinary
+ * Spring DI (a {@code List<SyncToolSpecification>} parameter), never reflection or classpath
+ * scanning: adding a sixth capability means adding a sixth {@code @Bean} and a sixth registry entry,
+ * in the same reviewed change, never automatically.
  */
 @Configuration
 @EnableConfigurationProperties(McpProperties.class)
@@ -41,7 +47,35 @@ public class McpServerConfig {
 
   @Bean
   McpCapabilityRegistry mcpCapabilityRegistry() {
-    return McpCapabilityRegistry.empty();
+    return McpCapabilityRegistry.mcp2();
+  }
+
+  /**
+   * MCP-2: now wired against real key material, since real learner-scoped capabilities exist to call
+   * it. Still harmless without configuration -- {@link DelegatedLearnerContextSigningKeys#allSigningKeys}
+   * returns an empty map when nothing is configured (never throws for an empty map), so an
+   * unconfigured deployment simply fails every delegated-context validation with {@code
+   * UNKNOWN_KEY_ID} rather than failing to start.
+   */
+  @Bean
+  DelegatedLearnerContextValidator delegatedLearnerContextValidator(
+      McpProperties properties, DelegatedLearnerContextSigningKeys signingKeys) {
+    McpProperties.DelegatedContext delegatedContext = properties.getDelegatedContext();
+    return new DelegatedLearnerContextValidator(
+        delegatedContext.getIssuer(), delegatedContext.getAudience(),
+        signingKeys.allSigningKeys(), Clock.systemUTC());
+  }
+
+  /**
+   * MCP-2: the shared capability/domain/learner-scope authorization layer every tool handler in
+   * {@code io.ramals.learningplatform.mcp.resources} routes through. Registered here, not as its own
+   * {@code @Component}, so it only exists -- and only ever requires {@link McpCapabilityRegistry} to
+   * exist -- while MCP itself is enabled.
+   */
+  @Bean
+  McpCapabilityAuthorization mcpCapabilityAuthorization(
+      McpCapabilityRegistry registry, DelegatedLearnerContextValidator validator) {
+    return new McpCapabilityAuthorization(registry, validator);
   }
 
   /**
@@ -70,23 +104,43 @@ public class McpServerConfig {
     return HttpServletStreamableServerTransportProvider.builder()
         .jsonMapper(jsonMapper)
         .mcpEndpoint(properties.getEndpoint())
+        // Security-review fix: lifts the delegated learner-context credential out of a dedicated
+        // HTTP header (never a JSON-RPC tool argument) into the exchange-scoped transport context
+        // every tool handler reads from -- the SDK's own supported per-request metadata hook, not an
+        // invented ThreadLocal. See McpDelegatedContextTransportExtractor's own javadoc.
+        .contextExtractor(new McpDelegatedContextTransportExtractor())
         .build();
   }
 
   /**
    * Constructing this server is what wires the transport provider's session handling into effect
    * (the provider's own session factory is set during {@code McpServer.sync(...).build()}), so this
-   * bean must exist as a live singleton even though nothing else in MCP-1 calls a method on it
+   * bean must exist as a live singleton even though nothing else in MCP-2 calls a method on it
    * directly.
+   *
+   * <p>{@code tools} is every {@code SyncToolSpecification} bean Spring finds -- exactly the five
+   * {@code @Bean} methods in {@code io.ramals.learningplatform.mcp.resources}, collected by ordinary
+   * dependency injection, not a scan of arbitrary classes: only a class explicitly declared as
+   * producing this exact bean type is ever included.
    */
   @Bean
-  McpSyncServer mcpSyncServer(HttpServletStreamableServerTransportProvider transportProvider) {
+  McpSyncServer mcpSyncServer(
+      HttpServletStreamableServerTransportProvider transportProvider,
+      List<SyncToolSpecification> tools) {
     return McpServer.sync(transportProvider)
         .serverInfo(new McpSchema.Implementation("ramals-learning-platform", "1.0.0"))
-        // No capability declared: MCP-1 offers no tool, no resource, no prompt. Widening any of
-        // these is exactly the kind of change that must happen alongside a McpCapabilityRegistry
-        // change, in the same reviewed commit -- never independently.
-        .capabilities(McpSchema.ServerCapabilities.builder().build())
+        // MCP-2 offers tools only -- no resource, no prompt. Widening the capability set beyond
+        // tools is exactly the kind of change that must happen alongside a McpCapabilityRegistry
+        // change, in the same reviewed commit -- never independently. `false` (no listChanged
+        // support): the tool set is fixed at startup by explicit @Bean registration, never mutated
+        // at runtime, so there is never a list-changed event to notify a client about.
+        .capabilities(McpSchema.ServerCapabilities.builder().tools(false).build())
+        .tools(tools)
+        // Validates every call's arguments against each tool's own declared inputSchema (including
+        // additionalProperties: false) before a handler ever runs -- a first, protocol-level line of
+        // defense against a learner-identifying or otherwise unexpected parameter, ahead of every
+        // handler's own explicit checks.
+        .validateToolInputs(true)
         .build();
   }
 
