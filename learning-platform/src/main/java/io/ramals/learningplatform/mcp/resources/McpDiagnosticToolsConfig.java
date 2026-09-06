@@ -23,10 +23,17 @@ import org.springframework.context.annotation.Configuration;
  * repository dependencies structurally.
  *
  * <p>Registered as MCP <b>tools</b>, not resources: both take request-specific input (a domain code,
- * an attempt id) and a per-call delegated-context credential, and MCP resources are meant for static,
- * URI-addressable content rather than a parameterized, per-caller-authorized read -- the same
- * distinction the official SDK's own tool/resource split exists to express. Read-only in effect
- * despite being a "tool": neither handler below can reach a mutation.
+ * an attempt id), and MCP resources are meant for static, URI-addressable content rather than a
+ * parameterized, per-caller-authorized read -- the same distinction the official SDK's own
+ * tool/resource split exists to express. Read-only in effect despite being a "tool": neither handler
+ * below can reach a mutation.
+ *
+ * <p><b>Neither tool's input schema declares a {@code delegatedContext} field.</b> The delegated
+ * learner-context credential is an authorization credential, never a business lookup input a model
+ * should choose or carry -- it arrives via a dedicated HTTP header ({@link
+ * io.ramals.learningplatform.mcp.McpDelegatedContextTransportExtractor}) into the MCP exchange's own
+ * transport context, and {@link McpToolSupport#delegatedContextToken} reads it from there. Tool
+ * arguments here are business lookup inputs only ({@code domainCode}, {@code attemptId}).
  */
 @Configuration
 @ConditionalOnProperty(prefix = "ramals.mcp", name = "enabled", havingValue = "true")
@@ -43,22 +50,23 @@ public class McpDiagnosticToolsConfig {
         .title("Current domain diagnostic report")
         .description("The learner's complete current H6 diagnostic view for one domain: every "
             + "misconception with evidence, each at its own latest governed confidence state, plus "
-            + "current mastery context. Read-only; never recomputes confidence.")
+            + "current mastery context. Read-only; never recomputes confidence. The caller is "
+            + "identified solely by the workload's own delegated authorization, never by a request "
+            + "argument.")
         .inputSchema(Map.of(
             "type", "object",
             "properties", Map.of(
-                "delegatedContext", Map.of("type", "string",
-                    "description", "The caller's delegated learner-context credential (M2-ADR-031)."),
                 "domainCode", Map.of("type", "string",
                     "description", "The learning domain code, e.g. KAFKA.")),
-            "required", List.of("delegatedContext", "domainCode"),
+            "required", List.of("domainCode"),
             "additionalProperties", false))
         .build();
 
     return SyncToolSpecification.builder()
         .tool(tool)
         .callHandler((exchange, request) -> McpToolSupport.run(CURRENT_DOMAIN_REPORT, () -> {
-          String delegatedContextToken = McpToolSupport.delegatedContextToken(request.arguments());
+          String delegatedContextToken =
+              McpToolSupport.delegatedContextToken(exchange.transportContext());
           String domainCode = McpToolSupport.requiredString(request.arguments(), "domainCode");
           if (domainCode == null) {
             throw new McpAuthorizationException(Reason.MALFORMED_REQUEST);
@@ -83,22 +91,22 @@ public class McpDiagnosticToolsConfig {
         .title("Attempt diagnostic report")
         .description("The exact-attempt H6 diagnostic findings one specific assessment attempt "
             + "produced -- never 'learner state as of this attempt', never mastery, never H5. "
-            + "Read-only; never recomputes confidence.")
+            + "Read-only; never recomputes confidence. The caller is identified solely by the "
+            + "workload's own delegated authorization, never by a request argument.")
         .inputSchema(Map.of(
             "type", "object",
             "properties", Map.of(
-                "delegatedContext", Map.of("type", "string",
-                    "description", "The caller's delegated learner-context credential (M2-ADR-031)."),
                 "attemptId", Map.of("type", "string",
                     "description", "The assessment attempt id.")),
-            "required", List.of("delegatedContext", "attemptId"),
+            "required", List.of("attemptId"),
             "additionalProperties", false))
         .build();
 
     return SyncToolSpecification.builder()
         .tool(tool)
         .callHandler((exchange, request) -> McpToolSupport.run(ATTEMPT_REPORT, () -> {
-          String delegatedContextToken = McpToolSupport.delegatedContextToken(request.arguments());
+          String delegatedContextToken =
+              McpToolSupport.delegatedContextToken(exchange.transportContext());
           String attemptId = McpToolSupport.requiredString(request.arguments(), "attemptId");
           if (attemptId == null) {
             throw new McpAuthorizationException(Reason.MALFORMED_REQUEST);

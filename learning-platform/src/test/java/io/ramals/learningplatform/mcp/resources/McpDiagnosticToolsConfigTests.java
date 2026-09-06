@@ -1,18 +1,18 @@
 package io.ramals.learningplatform.mcp.resources;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.ramals.learningplatform.assessment.AttemptNotFoundException;
 import io.ramals.learningplatform.assessment.DiagnosticReport;
-import io.ramals.learningplatform.assessment.DiagnosticReport.ConfidenceState;
 import io.ramals.learningplatform.assessment.DiagnosticReport.DiagnosticDataStatus;
 import io.ramals.learningplatform.assessment.DiagnosticReport.ReportMode;
 import io.ramals.learningplatform.assessment.DiagnosticReportService;
@@ -37,6 +37,11 @@ import org.junit.jupiter.api.Test;
  * McpCapabilityAuthorization} (real registry, real validator/issuer) with {@link
  * DiagnosticReportService} mocked, so the security path is genuine and only the authoritative
  * H6 read itself is stubbed.
+ *
+ * <p>Security-review fix: the delegated-context token is supplied via {@link
+ * McpTestExchanges#withDelegatedContextToken}, mirroring the exchange transport context {@link
+ * io.ramals.learningplatform.mcp.McpDelegatedContextTransportExtractor} populates from the real HTTP
+ * header -- never as a tool argument.
  */
 class McpDiagnosticToolsConfigTests {
 
@@ -78,14 +83,13 @@ class McpDiagnosticToolsConfigTests {
 
     SyncToolSpecification tool = new McpDiagnosticToolsConfig()
         .mcpDiagnosticsCurrentDomainReportTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(
+        token(learnerId, "KAFKA", McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT,
-        Map.of("delegatedContext", token(learnerId, "KAFKA", McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT),
-            "domainCode", "KAFKA")));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT, Map.of("domainCode", "KAFKA")));
 
     assertThat(result.isError()).isFalse();
-    assertThat(result.structuredContent()).isInstanceOf(McpDiagnosticReport.class);
     McpDiagnosticReport report = (McpDiagnosticReport) result.structuredContent();
     assertThat(report.reportMode()).isEqualTo("CURRENT_DOMAIN");
     assertThat(report.diagnosticDataStatus()).isEqualTo("NO_EVIDENCE");
@@ -98,37 +102,72 @@ class McpDiagnosticToolsConfigTests {
     DiagnosticReportService service = mock(DiagnosticReportService.class);
     SyncToolSpecification tool = new McpDiagnosticToolsConfig()
         .mcpDiagnosticsCurrentDomainReportTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(
+        token(learnerId, "KAFKA", McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT,
-        Map.of("delegatedContext", token(learnerId, "KAFKA", McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT),
-            "domainCode", "SPRING_SECURITY")));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT, Map.of("domainCode", "SPRING_SECURITY")));
 
     assertThat(result.isError()).isTrue();
     assertThat(result.content().toString()).contains("DOMAIN_MISMATCH");
+    verifyNoInteractions(service);
   }
 
+  /** Test #4 (transport-credential review): no HTTP header at all -- no transport-context entry --
+   * is refused exactly like any other missing delegated context, and the authoritative service is
+   * never called. */
   @Test
-  void currentDomainReportInputSchemaNeverDeclaresLearnerIdOrLearnerRef() {
+  void missingTransportLevelDelegatedContextIsRejectedAndServiceIsNeverCalled() {
+    DiagnosticReportService service = mock(DiagnosticReportService.class);
+    SyncToolSpecification tool = new McpDiagnosticToolsConfig()
+        .mcpDiagnosticsCurrentDomainReportTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(null);
+
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT, Map.of("domainCode", "KAFKA")));
+
+    assertThat(result.isError()).isTrue();
+    assertThat(result.content().toString()).contains("MISSING");
+    verifyNoInteractions(service);
+  }
+
+  /** Test #1: no MCP tool input schema contains "delegatedContext" -- the model-visible schema
+   * carries only business lookup inputs. */
+  @Test
+  void currentDomainReportInputSchemaNeverContainsDelegatedContextOrLearnerIdentifiers() {
     SyncToolSpecification tool = new McpDiagnosticToolsConfig()
         .mcpDiagnosticsCurrentDomainReportTool(authorization(), mock(DiagnosticReportService.class));
 
     @SuppressWarnings("unchecked")
     Map<String, Object> properties = (Map<String, Object>) tool.tool().inputSchema().get("properties");
 
-    assertThat(properties).doesNotContainKeys("learnerId", "learnerRef");
+    assertThat(properties).doesNotContainKeys("delegatedContext", "learnerId", "learnerRef");
+    assertThat(properties).containsOnlyKeys("domainCode");
     assertThat(tool.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
   }
 
+  /** Test #6: a model-supplied argument literally named "delegatedContext" is rejected structurally
+   * by {@code additionalProperties:false}, never read by the handler (the handler never even looks
+   * at {@code request.arguments()} for this field any more -- it reads the exchange's own transport
+   * context instead), and the value supplied there cannot substitute for a real transport-level
+   * credential. */
   @Test
-  void currentDomainReportRejectsALearnerSuppliedIdViaAdditionalPropertiesFalse() {
-    // additionalProperties:false is the protocol-level guarantee that a client-supplied learnerId
-    // could never be read even if a caller tried to smuggle one in; this proves the schema itself
-    // carries that guarantee rather than asserting it only informally in prose.
+  void argumentNamedDelegatedContextCannotSubstituteForTheTransportCredential() {
+    UUID learnerId = UUID.randomUUID();
+    DiagnosticReportService service = mock(DiagnosticReportService.class);
     SyncToolSpecification tool = new McpDiagnosticToolsConfig()
-        .mcpDiagnosticsCurrentDomainReportTool(authorization(), mock(DiagnosticReportService.class));
+        .mcpDiagnosticsCurrentDomainReportTool(authorization(), service);
+    // No transport-level credential at all -- only a model-supplied argument pretending to be one.
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(null);
+    String modelSuppliedToken = token(learnerId, "KAFKA", McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT);
 
-    assertThat(tool.tool().inputSchema()).containsEntry("additionalProperties", false);
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT,
+        Map.of("domainCode", "KAFKA", "delegatedContext", modelSuppliedToken)));
+
+    assertThat(result.isError()).isTrue();
+    assertThat(result.content().toString()).contains("MISSING");
+    verifyNoInteractions(service);
   }
 
   // -- attempt-report ---------------------------------------------------------------------------
@@ -143,11 +182,11 @@ class McpDiagnosticToolsConfigTests {
 
     SyncToolSpecification tool = new McpDiagnosticToolsConfig()
         .mcpDiagnosticsAttemptReportTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(
+        token(learnerId, "KAFKA", McpDiagnosticToolsConfig.ATTEMPT_REPORT));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpDiagnosticToolsConfig.ATTEMPT_REPORT,
-        Map.of("delegatedContext", token(learnerId, "KAFKA", McpDiagnosticToolsConfig.ATTEMPT_REPORT),
-            "attemptId", attemptId.toString())));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpDiagnosticToolsConfig.ATTEMPT_REPORT, Map.of("attemptId", attemptId.toString())));
 
     assertThat(result.isError()).isFalse();
     McpDiagnosticReport report = (McpDiagnosticReport) result.structuredContent();
@@ -169,41 +208,59 @@ class McpDiagnosticToolsConfigTests {
 
     SyncToolSpecification tool = new McpDiagnosticToolsConfig()
         .mcpDiagnosticsAttemptReportTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(
+        token(learnerId, "KAFKA", McpDiagnosticToolsConfig.ATTEMPT_REPORT));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpDiagnosticToolsConfig.ATTEMPT_REPORT,
-        Map.of("delegatedContext", token(learnerId, "KAFKA", McpDiagnosticToolsConfig.ATTEMPT_REPORT),
-            "attemptId", attemptId)));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpDiagnosticToolsConfig.ATTEMPT_REPORT, Map.of("attemptId", attemptId)));
 
     assertThat(result.isError()).isTrue();
     assertThat(result.content().toString()).contains("ATTEMPT_NOT_OWNED");
   }
 
   @Test
-  void attemptReportInputSchemaNeverDeclaresLearnerIdOrLearnerRef() {
+  void attemptReportInputSchemaNeverContainsDelegatedContextOrLearnerIdentifiers() {
     SyncToolSpecification tool = new McpDiagnosticToolsConfig()
         .mcpDiagnosticsAttemptReportTool(authorization(), mock(DiagnosticReportService.class));
 
     @SuppressWarnings("unchecked")
     Map<String, Object> properties = (Map<String, Object>) tool.tool().inputSchema().get("properties");
 
-    assertThat(properties).doesNotContainKeys("learnerId", "learnerRef");
+    assertThat(properties).doesNotContainKeys("delegatedContext", "learnerId", "learnerRef");
+    assertThat(properties).containsOnlyKeys("attemptId");
     assertThat(tool.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
   }
 
   @Test
-  void missingCapabilityIsDeniedForBothDiagnosticTools() {
+  void missingCapabilityIsDeniedForBothDiagnosticToolsAndServiceIsNeverCalled() {
     UUID learnerId = UUID.randomUUID();
     // Token only allowlists mastery.current -- neither diagnostic capability.
     String token = token(learnerId, "KAFKA", "mastery.current");
+    DiagnosticReportService service = mock(DiagnosticReportService.class);
     SyncToolSpecification currentDomainTool = new McpDiagnosticToolsConfig()
-        .mcpDiagnosticsCurrentDomainReportTool(authorization(), mock(DiagnosticReportService.class));
+        .mcpDiagnosticsCurrentDomainReportTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(token);
 
-    CallToolResult result = currentDomainTool.callHandler().apply(null, new CallToolRequest(
-        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT,
-        Map.of("delegatedContext", token, "domainCode", "KAFKA")));
+    CallToolResult result = currentDomainTool.callHandler().apply(exchange, new CallToolRequest(
+        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT, Map.of("domainCode", "KAFKA")));
 
     assertThat(result.isError()).isTrue();
     assertThat(result.content().toString()).contains("CAPABILITY_NOT_DELEGATED");
+    verifyNoInteractions(service);
+  }
+
+  /** Test #11: the raw delegated-context token never appears in a denied call's result. */
+  @Test
+  void deniedResultNeverContainsTheRawToken() {
+    UUID learnerId = UUID.randomUUID();
+    String rawToken = token(learnerId, "KAFKA", "mastery.current");
+    SyncToolSpecification tool = new McpDiagnosticToolsConfig()
+        .mcpDiagnosticsCurrentDomainReportTool(authorization(), mock(DiagnosticReportService.class));
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(rawToken);
+
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpDiagnosticToolsConfig.CURRENT_DOMAIN_REPORT, Map.of("domainCode", "KAFKA")));
+
+    assertThat(result.content().toString()).doesNotContain(rawToken);
   }
 }

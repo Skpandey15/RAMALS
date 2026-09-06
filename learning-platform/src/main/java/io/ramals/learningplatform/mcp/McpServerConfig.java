@@ -104,6 +104,11 @@ public class McpServerConfig {
     return HttpServletStreamableServerTransportProvider.builder()
         .jsonMapper(jsonMapper)
         .mcpEndpoint(properties.getEndpoint())
+        // Security-review fix: lifts the delegated learner-context credential out of a dedicated
+        // HTTP header (never a JSON-RPC tool argument) into the exchange-scoped transport context
+        // every tool handler reads from -- the SDK's own supported per-request metadata hook, not an
+        // invented ThreadLocal. See McpDelegatedContextTransportExtractor's own javadoc.
+        .contextExtractor(new McpDelegatedContextTransportExtractor())
         .build();
   }
 

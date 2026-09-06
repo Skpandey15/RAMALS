@@ -3,9 +3,11 @@ package io.ramals.learningplatform.mcp.resources;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.ramals.learningplatform.mastery.MasteryMapEntry;
@@ -26,7 +28,8 @@ import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/** MCP-2: {@code mastery.current} -- real authorization layer, {@link MasteryMapService} mocked. */
+/** MCP-2: {@code mastery.current} -- real authorization layer, {@link MasteryMapService} mocked. The
+ * delegated-context token is supplied via the exchange's transport context, never a tool argument. */
 class McpMasteryToolsConfigTests {
 
   private static final String ISSUER = "ramals-learning-platform";
@@ -61,10 +64,10 @@ class McpMasteryToolsConfigTests {
             "SKILL_A", new BigDecimal("0.75"), new BigDecimal("0.60"), "PROFICIENT", 3)));
 
     SyncToolSpecification tool = new McpMasteryToolsConfig().mcpMasteryCurrentTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(token(learnerId, "KAFKA"));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpMasteryToolsConfig.MASTERY_CURRENT,
-        Map.of("delegatedContext", token(learnerId, "KAFKA"), "domainCode", "KAFKA", "versionCode", "v1")));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpMasteryToolsConfig.MASTERY_CURRENT, Map.of("domainCode", "KAFKA", "versionCode", "v1")));
 
     assertThat(result.isError()).isFalse();
     McpMasteryReport report = (McpMasteryReport) result.structuredContent();
@@ -77,40 +80,75 @@ class McpMasteryToolsConfigTests {
   @Test
   void masteryCurrentDeniesACrossDomainRequest() {
     UUID learnerId = UUID.randomUUID();
-    SyncToolSpecification tool =
-        new McpMasteryToolsConfig().mcpMasteryCurrentTool(authorization(), mock(MasteryMapService.class));
+    MasteryMapService service = mock(MasteryMapService.class);
+    SyncToolSpecification tool = new McpMasteryToolsConfig().mcpMasteryCurrentTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(token(learnerId, "KAFKA"));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpMasteryToolsConfig.MASTERY_CURRENT,
-        Map.of("delegatedContext", token(learnerId, "KAFKA"), "domainCode", "CBSE", "versionCode", "v1")));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpMasteryToolsConfig.MASTERY_CURRENT, Map.of("domainCode", "CBSE", "versionCode", "v1")));
 
     assertThat(result.isError()).isTrue();
     assertThat(result.content().toString()).contains("DOMAIN_MISMATCH");
+    verifyNoInteractions(service);
+  }
+
+  /** Canonical uppercase domain comparison (security-review fix): "kafka" and "KAFKA" are the same
+   * governed domain, matching H6/H7's own {@code toUpperCase(Locale.ROOT)} normalization -- not a
+   * generic case-insensitive match. */
+  @Test
+  void domainComparisonIsCanonicalUppercaseNotArbitraryCase() {
+    UUID learnerId = UUID.randomUUID();
+    MasteryMapService service = mock(MasteryMapService.class);
+    when(service.masteryMapForLearner(eq(learnerId), eq("kafka"), eq("v1"))).thenReturn(List.of());
+    SyncToolSpecification tool = new McpMasteryToolsConfig().mcpMasteryCurrentTool(authorization(), service);
+    // Delegated domain scope is "KAFKA" (issued below); request lower-cases it.
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(token(learnerId, "KAFKA"));
+
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpMasteryToolsConfig.MASTERY_CURRENT, Map.of("domainCode", "kafka", "versionCode", "v1")));
+
+    assertThat(result.isError()).isFalse();
   }
 
   @Test
-  void masteryCurrentInputSchemaNeverDeclaresLearnerIdOrLearnerRef() {
+  void masteryCurrentInputSchemaNeverContainsDelegatedContextOrLearnerIdentifiers() {
     SyncToolSpecification tool =
         new McpMasteryToolsConfig().mcpMasteryCurrentTool(authorization(), mock(MasteryMapService.class));
 
     @SuppressWarnings("unchecked")
     Map<String, Object> properties = (Map<String, Object>) tool.tool().inputSchema().get("properties");
 
-    assertThat(properties).doesNotContainKeys("learnerId", "learnerRef");
+    assertThat(properties).doesNotContainKeys("delegatedContext", "learnerId", "learnerRef");
+    assertThat(properties).containsOnlyKeys("domainCode", "versionCode");
     assertThat(tool.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
   }
 
   @Test
   void malformedRequestMissingVersionCodeIsRejected() {
     UUID learnerId = UUID.randomUUID();
-    SyncToolSpecification tool =
-        new McpMasteryToolsConfig().mcpMasteryCurrentTool(authorization(), mock(MasteryMapService.class));
+    MasteryMapService service = mock(MasteryMapService.class);
+    SyncToolSpecification tool = new McpMasteryToolsConfig().mcpMasteryCurrentTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(token(learnerId, "KAFKA"));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpMasteryToolsConfig.MASTERY_CURRENT,
-        Map.of("delegatedContext", token(learnerId, "KAFKA"), "domainCode", "KAFKA")));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpMasteryToolsConfig.MASTERY_CURRENT, Map.of("domainCode", "KAFKA")));
 
     assertThat(result.isError()).isTrue();
     assertThat(result.content().toString()).contains("MALFORMED_REQUEST");
+    verifyNoInteractions(service);
+  }
+
+  @Test
+  void missingTransportLevelDelegatedContextIsRejectedAndServiceIsNeverCalled() {
+    MasteryMapService service = mock(MasteryMapService.class);
+    SyncToolSpecification tool = new McpMasteryToolsConfig().mcpMasteryCurrentTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(null);
+
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpMasteryToolsConfig.MASTERY_CURRENT, Map.of("domainCode", "KAFKA", "versionCode", "v1")));
+
+    assertThat(result.isError()).isTrue();
+    assertThat(result.content().toString()).contains("MISSING");
+    verifyNoInteractions(service);
   }
 }

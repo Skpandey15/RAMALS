@@ -29,6 +29,10 @@ import org.springframework.context.annotation.Configuration;
  * still absolute: the learner id is always the one {@link McpCapabilityAuthorization#resolveLearnerId}
  * resolves, so two different delegated contexts calling the same misconceptionId each see only their
  * own scoped state.
+ *
+ * <p><b>Neither tool's input schema declares a {@code delegatedContext} field</b> -- it arrives via a
+ * dedicated HTTP header into the MCP exchange's own transport context, never a tool argument. See
+ * {@link McpDiagnosticToolsConfig}'s own javadoc for the full rationale.
  */
 @Configuration
 @ConditionalOnProperty(prefix = "ramals.mcp", name = "enabled", havingValue = "true")
@@ -49,18 +53,17 @@ public class McpLongitudinalToolsConfig {
         .inputSchema(Map.of(
             "type", "object",
             "properties", Map.of(
-                "delegatedContext", Map.of("type", "string",
-                    "description", "The caller's delegated learner-context credential (M2-ADR-031)."),
                 "domainCode", Map.of("type", "string",
                     "description", "The learning domain code, e.g. KAFKA.")),
-            "required", List.of("delegatedContext", "domainCode"),
+            "required", List.of("domainCode"),
             "additionalProperties", false))
         .build();
 
     return SyncToolSpecification.builder()
         .tool(tool)
         .callHandler((exchange, request) -> McpToolSupport.run(LONGITUDINAL_SUMMARY, () -> {
-          String delegatedContextToken = McpToolSupport.delegatedContextToken(request.arguments());
+          String delegatedContextToken =
+              McpToolSupport.delegatedContextToken(exchange.transportContext());
           String domainCode = McpToolSupport.requiredString(request.arguments(), "domainCode");
           if (domainCode == null) {
             throw new McpAuthorizationException(Reason.MALFORMED_REQUEST);
@@ -89,18 +92,17 @@ public class McpLongitudinalToolsConfig {
         .inputSchema(Map.of(
             "type", "object",
             "properties", Map.of(
-                "delegatedContext", Map.of("type", "string",
-                    "description", "The caller's delegated learner-context credential (M2-ADR-031)."),
                 "misconceptionId", Map.of("type", "string",
                     "description", "The misconception id.")),
-            "required", List.of("delegatedContext", "misconceptionId"),
+            "required", List.of("misconceptionId"),
             "additionalProperties", false))
         .build();
 
     return SyncToolSpecification.builder()
         .tool(tool)
         .callHandler((exchange, request) -> McpToolSupport.run(MISCONCEPTION_LONGITUDINAL_DETAIL, () -> {
-          String delegatedContextToken = McpToolSupport.delegatedContextToken(request.arguments());
+          String delegatedContextToken =
+              McpToolSupport.delegatedContextToken(exchange.transportContext());
           String misconceptionId = McpToolSupport.requiredString(request.arguments(), "misconceptionId");
           if (misconceptionId == null) {
             throw new McpAuthorizationException(Reason.MALFORMED_REQUEST);

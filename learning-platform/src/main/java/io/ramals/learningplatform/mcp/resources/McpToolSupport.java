@@ -1,6 +1,8 @@
 package io.ramals.learningplatform.mcp.resources;
 
+import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.ramals.learningplatform.mcp.McpDelegatedContextTransportExtractor;
 import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextException;
 import io.ramals.learningplatform.mcp.authorization.McpAuthorizationException;
 import io.ramals.learningplatform.observability.CorrelationContext;
@@ -29,12 +31,20 @@ final class McpToolSupport {
   private McpToolSupport() {
   }
 
-  /** The raw delegated-context token argument, or {@code null} if absent/not a string -- {@code
-   * McpCapabilityAuthorization#authorizeCapability} maps a {@code null} token to the same {@code
-   * MISSING} reason {@link io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator}
-   * already uses, so there is no separate "absent" code to keep consistent with it. */
-  static String delegatedContextToken(Map<String, Object> arguments) {
-    Object raw = arguments == null ? null : arguments.get("delegatedContext");
+  /**
+   * The raw delegated-context token, read from the MCP exchange's own transport context -- never
+   * from tool arguments. {@link McpDelegatedContextTransportExtractor} is what populates this,
+   * from a dedicated HTTP header the calling workload sets, before any tool handler runs; nothing
+   * here parses a header directly, and nothing in a tool's own JSON schema names this field, so no
+   * model or tool-call-generation logic can see, choose, or fabricate it.
+   *
+   * <p>{@code null} if absent -- {@code McpCapabilityAuthorization#authorizeCapability} maps that to
+   * the same {@code MISSING} reason {@link io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator}
+   * already uses, so there is no separate "absent" code to keep consistent with it.
+   */
+  static String delegatedContextToken(McpTransportContext transportContext) {
+    Object raw = transportContext == null
+        ? null : transportContext.get(McpDelegatedContextTransportExtractor.TRANSPORT_CONTEXT_KEY);
     return raw instanceof String token ? token : null;
   }
 

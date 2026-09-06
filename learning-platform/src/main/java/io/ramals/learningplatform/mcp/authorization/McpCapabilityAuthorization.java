@@ -3,6 +3,7 @@ package io.ramals.learningplatform.mcp.authorization;
 import io.ramals.learningplatform.mcp.McpCapabilityRegistry;
 import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContext;
 import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -65,13 +66,24 @@ public class McpCapabilityAuthorization {
 
   /**
    * For a domain-scoped capability: the requested domain code must exactly match {@code context}'s
-   * own domain scope (case-insensitively, per {@link DelegatedLearnerContext#permitsDomain}).
+   * own domain scope under this platform's one canonical normalization -- {@code
+   * toUpperCase(Locale.ROOT)}, the same rule {@code DiagnosticReportService}/{@code
+   * LongitudinalEvidenceService} already apply to every domain code before comparing (e.g. {@code
+   * DiagnosticReportService.requireDiagnostic}). Deliberately does <b>not</b> call {@link
+   * DelegatedLearnerContext#permitsDomain}, which uses {@code String.equalsIgnoreCase} -- a more
+   * permissive, less-governed comparison than this codebase's own canonical-uppercase convention (and
+   * one Unicode case-folding can make behave surprisingly for non-ASCII input); this method reuses
+   * H6/H7's own governed normalization instead of that separate, generic rule.
    *
    * @throws McpAuthorizationException {@link McpAuthorizationException.Reason#DOMAIN_MISMATCH}
    */
   public void authorizeDomain(DelegatedLearnerContext context, String requestedDomainCode) {
-    if (requestedDomainCode == null || requestedDomainCode.isBlank()
-        || !context.permitsDomain(requestedDomainCode)) {
+    if (requestedDomainCode == null || requestedDomainCode.isBlank()) {
+      throw new McpAuthorizationException(McpAuthorizationException.Reason.DOMAIN_MISMATCH);
+    }
+    String canonicalRequested = requestedDomainCode.toUpperCase(Locale.ROOT);
+    String canonicalDelegated = context.domainScope().toUpperCase(Locale.ROOT);
+    if (!canonicalDelegated.equals(canonicalRequested)) {
       throw new McpAuthorizationException(McpAuthorizationException.Reason.DOMAIN_MISMATCH);
     }
   }

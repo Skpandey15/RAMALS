@@ -5,7 +5,10 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import static org.mockito.Mockito.verifyNoInteractions;
+
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.ramals.learningplatform.assessment.LongitudinalDataStatus;
@@ -88,11 +91,11 @@ class McpLongitudinalToolsConfigTests {
 
     SyncToolSpecification tool =
         new McpLongitudinalToolsConfig().mcpLongitudinalSummaryTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(
+        token(learnerId, "KAFKA", McpLongitudinalToolsConfig.LONGITUDINAL_SUMMARY));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpLongitudinalToolsConfig.LONGITUDINAL_SUMMARY,
-        Map.of("delegatedContext", token(learnerId, "KAFKA", McpLongitudinalToolsConfig.LONGITUDINAL_SUMMARY),
-            "domainCode", "KAFKA")));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpLongitudinalToolsConfig.LONGITUDINAL_SUMMARY, Map.of("domainCode", "KAFKA")));
 
     assertThat(result.isError()).isFalse();
     assertThat(((McpLongitudinalReport) result.structuredContent()).domainCode()).isEqualTo("KAFKA");
@@ -101,16 +104,31 @@ class McpLongitudinalToolsConfigTests {
   @Test
   void summaryDeniesACrossDomainRequest() {
     UUID learnerId = UUID.randomUUID();
-    SyncToolSpecification tool = new McpLongitudinalToolsConfig()
-        .mcpLongitudinalSummaryTool(authorization(), mock(LongitudinalEvidenceService.class));
+    LongitudinalEvidenceService service = mock(LongitudinalEvidenceService.class);
+    SyncToolSpecification tool =
+        new McpLongitudinalToolsConfig().mcpLongitudinalSummaryTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(
+        token(learnerId, "KAFKA", McpLongitudinalToolsConfig.LONGITUDINAL_SUMMARY));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
-        McpLongitudinalToolsConfig.LONGITUDINAL_SUMMARY,
-        Map.of("delegatedContext", token(learnerId, "KAFKA", McpLongitudinalToolsConfig.LONGITUDINAL_SUMMARY),
-            "domainCode", "CBSE")));
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
+        McpLongitudinalToolsConfig.LONGITUDINAL_SUMMARY, Map.of("domainCode", "CBSE")));
 
     assertThat(result.isError()).isTrue();
     assertThat(result.content().toString()).contains("DOMAIN_MISMATCH");
+    verifyNoInteractions(service);
+  }
+
+  @Test
+  void summaryInputSchemaNeverContainsDelegatedContextOrLearnerIdentifiers() {
+    SyncToolSpecification tool = new McpLongitudinalToolsConfig()
+        .mcpLongitudinalSummaryTool(authorization(), mock(LongitudinalEvidenceService.class));
+
+    @SuppressWarnings("unchecked")
+    Map<String, Object> properties = (Map<String, Object>) tool.tool().inputSchema().get("properties");
+
+    assertThat(properties).doesNotContainKeys("delegatedContext", "learnerId", "learnerRef");
+    assertThat(properties).containsOnlyKeys("domainCode");
+    assertThat(tool.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
   }
 
   /** Semantic regression: every {@code LongitudinalDataStatus}/{@code LongitudinalEvidenceState}
@@ -149,17 +167,30 @@ class McpLongitudinalToolsConfigTests {
 
     SyncToolSpecification tool =
         new McpLongitudinalToolsConfig().mcpLongitudinalDetailTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(
+        token(learnerId, "KAFKA", McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
         McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL,
-        Map.of("delegatedContext",
-            token(learnerId, "KAFKA", McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL),
-            "misconceptionId", misconceptionId)));
+        Map.of("misconceptionId", misconceptionId)));
 
     assertThat(result.isError()).isFalse();
     McpLongitudinalReport report = (McpLongitudinalReport) result.structuredContent();
     assertThat(report.findings()).hasSize(1);
     assertThat(report.findings().get(0).dataStatus()).isEqualTo("NO_BASELINE");
+  }
+
+  @Test
+  void detailInputSchemaNeverContainsDelegatedContextOrLearnerIdentifiers() {
+    SyncToolSpecification tool = new McpLongitudinalToolsConfig()
+        .mcpLongitudinalDetailTool(authorization(), mock(LongitudinalEvidenceService.class));
+
+    @SuppressWarnings("unchecked")
+    Map<String, Object> properties = (Map<String, Object>) tool.tool().inputSchema().get("properties");
+
+    assertThat(properties).doesNotContainKeys("delegatedContext", "learnerId", "learnerRef");
+    assertThat(properties).containsOnlyKeys("misconceptionId");
+    assertThat(tool.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
   }
 
   /** Test #9 (MCP-2 review): a nonexistent misconception is denied, never leaking whether it exists
@@ -174,12 +205,12 @@ class McpLongitudinalToolsConfigTests {
 
     SyncToolSpecification tool =
         new McpLongitudinalToolsConfig().mcpLongitudinalDetailTool(authorization(), service);
+    McpSyncServerExchange exchange = McpTestExchanges.withDelegatedContextToken(
+        token(learnerId, "KAFKA", McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL));
 
-    CallToolResult result = tool.callHandler().apply(null, new CallToolRequest(
+    CallToolResult result = tool.callHandler().apply(exchange, new CallToolRequest(
         McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL,
-        Map.of("delegatedContext",
-            token(learnerId, "KAFKA", McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL),
-            "misconceptionId", misconceptionId)));
+        Map.of("misconceptionId", misconceptionId)));
 
     assertThat(result.isError()).isTrue();
     assertThat(result.content().toString()).contains("MISCONCEPTION_NOT_ACCESSIBLE");
@@ -203,17 +234,17 @@ class McpLongitudinalToolsConfigTests {
 
     SyncToolSpecification tool =
         new McpLongitudinalToolsConfig().mcpLongitudinalDetailTool(authorization(), service);
+    McpSyncServerExchange exchangeA = McpTestExchanges.withDelegatedContextToken(
+        token(learnerA, "KAFKA", McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL));
+    McpSyncServerExchange exchangeB = McpTestExchanges.withDelegatedContextToken(
+        token(learnerB, "KAFKA", McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL));
 
-    CallToolResult resultA = tool.callHandler().apply(null, new CallToolRequest(
+    CallToolResult resultA = tool.callHandler().apply(exchangeA, new CallToolRequest(
         McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL,
-        Map.of("delegatedContext",
-            token(learnerA, "KAFKA", McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL),
-            "misconceptionId", misconceptionId)));
-    CallToolResult resultB = tool.callHandler().apply(null, new CallToolRequest(
+        Map.of("misconceptionId", misconceptionId)));
+    CallToolResult resultB = tool.callHandler().apply(exchangeB, new CallToolRequest(
         McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL,
-        Map.of("delegatedContext",
-            token(learnerB, "KAFKA", McpLongitudinalToolsConfig.MISCONCEPTION_LONGITUDINAL_DETAIL),
-            "misconceptionId", misconceptionId)));
+        Map.of("misconceptionId", misconceptionId)));
 
     assertThat(((McpLongitudinalReport) resultA.structuredContent()).findings().get(0).dataStatus())
         .isEqualTo("HAS_BASELINE");

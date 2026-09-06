@@ -20,6 +20,10 @@ import org.springframework.context.annotation.Configuration;
  * MasteryMapController} exposes, via the learnerId-taking overload added alongside this PR to mirror
  * H6/H7's own {@code ...ForLearner} convention. No mastery calculation, no progression eligibility,
  * and no inference from H6/H7 exists anywhere in this class.
+ *
+ * <p><b>This tool's input schema does not declare a {@code delegatedContext} field</b> -- it arrives
+ * via a dedicated HTTP header into the MCP exchange's own transport context, never a tool argument.
+ * See {@link McpDiagnosticToolsConfig}'s own javadoc for the full rationale.
  */
 @Configuration
 @ConditionalOnProperty(prefix = "ramals.mcp", name = "enabled", havingValue = "true")
@@ -39,20 +43,19 @@ public class McpMasteryToolsConfig {
         .inputSchema(Map.of(
             "type", "object",
             "properties", Map.of(
-                "delegatedContext", Map.of("type", "string",
-                    "description", "The caller's delegated learner-context credential (M2-ADR-031)."),
                 "domainCode", Map.of("type", "string",
                     "description", "The learning domain code, e.g. KAFKA."),
                 "versionCode", Map.of("type", "string",
                     "description", "The curriculum version code.")),
-            "required", List.of("delegatedContext", "domainCode", "versionCode"),
+            "required", List.of("domainCode", "versionCode"),
             "additionalProperties", false))
         .build();
 
     return SyncToolSpecification.builder()
         .tool(tool)
         .callHandler((exchange, request) -> McpToolSupport.run(MASTERY_CURRENT, () -> {
-          String delegatedContextToken = McpToolSupport.delegatedContextToken(request.arguments());
+          String delegatedContextToken =
+              McpToolSupport.delegatedContextToken(exchange.transportContext());
           String domainCode = McpToolSupport.requiredString(request.arguments(), "domainCode");
           String versionCode = McpToolSupport.requiredString(request.arguments(), "versionCode");
           if (domainCode == null || versionCode == null) {
