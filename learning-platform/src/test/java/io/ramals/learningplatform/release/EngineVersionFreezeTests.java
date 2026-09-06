@@ -51,6 +51,7 @@ import io.ramals.learningplatform.orchestration.LearningWorkflow.Step;
 import io.ramals.learningplatform.orchestration.LearningWorkflowPolicy;
 import io.ramals.learningplatform.grounding.ProposalGroundingPolicy;
 import io.ramals.learningplatform.grounding.ProposalType;
+import io.ramals.learningplatform.assessment.LongitudinalEvidencePolicyV1;
 import io.ramals.learningplatform.learning.LearningSessionCommand;
 import io.ramals.learningplatform.learning.LearningSessionPolicy;
 import io.ramals.learningplatform.learning.LearningSessionStatus;
@@ -133,6 +134,8 @@ class EngineVersionFreezeTests {
         EngineVersionFreezeTests::hypothesisDrivenProbeDiagnosticSelection);
     put(DiagnosticConfidenceCalculatorV1.POLICY_VERSION,
         EngineVersionFreezeTests::diagnosticConfidence);
+    put(LongitudinalEvidencePolicyV1.POLICY_VERSION,
+        EngineVersionFreezeTests::longitudinalEvidence);
     put(LearningSessionPolicy.POLICY_VERSION, EngineVersionFreezeTests::sessionPolicy);
     put(GroundingRetrievalPolicy.V1.version(), EngineVersionFreezeTests::groundingRetrievalPolicy);
     put(ProposalGroundingPolicy.VERSION, EngineVersionFreezeTests::proposalGroundingPolicy);
@@ -185,6 +188,8 @@ class EngineVersionFreezeTests {
       // Minted with V056/H5 (M2-ADR-023 §2), when the diagnostic-confidence calculator was first
       // frozen.
       Map.entry("DIAGNOSTIC_CONFIDENCE_V1", "806bd48b24e66c3b080138069cc43dfb4e3a6758910bbfc2ad27706d642bb029"),
+      // Minted with H7 (M2-ADR-030), when the longitudinal-evidence classifier was first frozen.
+      Map.entry("LONGITUDINAL_EVIDENCE_V1", "30b0dff292698155645830e471fb2a62111393065a1b600d08f3220282259d7c"),
       Map.entry("SESSION_POLICY_V1", "195dbd7b65f733640229cac2b2fdc403e3d34350e9fd69f3a2e071a35da47647"),
       Map.entry("GROUNDING_RETRIEVAL_V1", "0ee0510ca9f6ec08721d4f5d476a0690dd4426abaf74a4aa0e4be11d2e8236ad"),
       Map.entry("PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a"),
@@ -734,6 +739,29 @@ class EngineVersionFreezeTests {
     // INCONCLUSIVE never participates -- same directional counts, growing inconclusive count.
     for (int inconclusive : List.of(0, 1, 50)) {
       out.append(calculator.compute(new DiagnosticConfidenceInputs(4, 1, inconclusive))).append('\n');
+    }
+    return out.toString();
+  }
+
+  /**
+   * LONGITUDINAL_EVIDENCE_V1 (M2-ADR-030) over every one of its five states: the exact-zero boundary,
+   * inconclusive-only with an increasing count (magnitude never changes the result), support-only and
+   * contradiction-only each with inconclusive evidence alongside (never changes the result), and
+   * mixed evidence at two different magnitudes (again, magnitude-invariant). A change to which counts
+   * route to which state, or an accidental dependence on magnitude, moves this hash.
+   */
+  private static String longitudinalEvidence() {
+    LongitudinalEvidencePolicyV1 policy = new LongitudinalEvidencePolicyV1();
+    StringBuilder out = new StringBuilder();
+    int[][] cases = {
+        {0, 0, 0},
+        {0, 0, 1}, {0, 0, 50},
+        {1, 0, 0}, {5, 0, 3},
+        {0, 1, 0}, {0, 4, 2},
+        {1, 1, 0}, {3, 7, 10},
+    };
+    for (int[] sci : cases) {
+      out.append(policy.classify(sci[0], sci[1], sci[2])).append('\n');
     }
     return out.toString();
   }
