@@ -3,6 +3,7 @@ package io.ramals.learningplatform.assessment;
 import io.ramals.learningplatform.observability.UuidV7;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -161,5 +162,75 @@ public class MisconceptionConfidenceRepository {
 
   private static Instant instant(OffsetDateTime value) {
     return value == null ? null : value.toInstant();
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Granular diagnostic report (M2-ADR-029, H6). These methods are additive and read-only -- used
+  // only by DiagnosticReportService -- everything above remains exactly as M2-ADR-028 left it,
+  // including the single-misconception findLatestFor this deliberately does not touch.
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * The single most recently computed snapshot for every misconception this learner has one for, in
+   * one round trip -- what a current-domain report needs instead of one {@link #findLatestFor} call
+   * per misconception. {@code ORDER BY misconception_id, created_at DESC, id DESC}: the same
+   * deterministic-tiebreak convention {@code AssessmentRepository.findMostRecentCompletedAttempt} and
+   * {@code AdminAuditQueryRepository} already established elsewhere in this codebase for "most
+   * recent" queries where two rows can share a timestamp -- {@code id} (UuidV7) is a total order
+   * over every row regardless of timestamp collisions, so the tie always resolves the same way.
+   */
+  public List<MisconceptionConfidenceObservation> findLatestForLearner(UUID learnerId) {
+    return jdbcTemplate.query("""
+        SELECT id, attempt_id, learner_id, misconception_id, supporting_count, contradictory_count,
+               inconclusive_count, band, policy_version, created_at
+        FROM (
+          SELECT DISTINCT ON (misconception_id) id, attempt_id, learner_id, misconception_id,
+                 supporting_count, contradictory_count, inconclusive_count, band, policy_version,
+                 created_at
+          FROM core.misconception_confidence_observation
+          WHERE learner_id = ?
+          ORDER BY misconception_id, created_at DESC, id DESC
+        ) latest
+        """, OBSERVATION_MAPPER, learnerId);
+  }
+
+  /**
+   * Every confidence snapshot {@code attemptId} itself wrote -- one per misconception that
+   * submission produced evidence for (M2-ADR-028 §4 guarantees exactly one, never zero-or-more races
+   * within the same attempt). This is the Attempt Diagnostic Report's own exact-attempt boundary: the
+   * findings this specific attempt produced, never substituted with today's latest snapshot for the
+   * same misconception (M2-ADR-029 §C).
+   */
+  public List<MisconceptionConfidenceObservation> findAllForAttempt(UUID attemptId) {
+    return jdbcTemplate.query("""
+        SELECT id, attempt_id, learner_id, misconception_id, supporting_count, contradictory_count,
+               inconclusive_count, band, policy_version, created_at
+        FROM core.misconception_confidence_observation
+        WHERE attempt_id = ?
+        """, OBSERVATION_MAPPER, attemptId);
+  }
+
+  /** Every provenance link for a batch of confidence snapshots in one round trip -- what a report
+   * covering several misconceptions needs instead of one {@link #findProvenanceFor} call per
+   * finding. */
+  public List<ProvenanceLink> findProvenanceForSnapshots(Collection<UUID> confidenceObservationIds) {
+    if (confidenceObservationIds.isEmpty()) {
+      return List.of();
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(
+        confidenceObservationIds.size(), "?"));
+    return jdbcTemplate.query(
+        "SELECT confidence_observation_id, evidence_observation_id "
+            + "FROM core.misconception_confidence_observation_evidence "
+            + "WHERE confidence_observation_id IN (" + placeholders + ")",
+        (result, row) -> new ProvenanceLink(
+            result.getObject("confidence_observation_id", UUID.class),
+            result.getObject("evidence_observation_id", UUID.class)),
+        confidenceObservationIds.toArray());
+  }
+
+  /** One (confidence snapshot, cited evidence observation) link, as read by
+   * {@link #findProvenanceForSnapshots}. */
+  public record ProvenanceLink(UUID confidenceObservationId, UUID evidenceObservationId) {
   }
 }
