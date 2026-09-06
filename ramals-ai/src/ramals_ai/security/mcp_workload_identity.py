@@ -56,8 +56,13 @@ class McpWorkloadTokenProvider:
         self._lock = anyio.Lock()
         self._cached: _CachedToken | None = None
 
-    async def get_token(self) -> str:
+    async def get_token(self, *, timeout_s: float) -> str:
         """Returns a cached, still-usable token, or acquires and caches a fresh one.
+
+        ``timeout_s`` bounds a real acquisition against the *caller's own remaining interaction
+        budget* -- never a fixed, independent value -- because token acquisition is part of the MCP
+        invocation's own budget, not a side channel exempt from it. The cached path never looks at
+        it: a cache hit costs no network call, so there is nothing here for a deadline to bound.
 
         Never retried here on failure -- token acquisition failure is reported as
         ``MCP_WORKLOAD_TOKEN_ACQUISITION_FAILED`` and it is the caller's own bounded-retry policy
@@ -67,15 +72,24 @@ class McpWorkloadTokenProvider:
         if cached is not None and cached.usable_now(clock=time.monotonic()):
             return cached.token
 
+        if timeout_s <= 0:
+            # Fails closed before ever constructing an httpx timeout: httpx2.Timeout(0) means "no
+            # timeout" to the transport, not "no time left" -- reaching the network with either
+            # value here would spend a real request against a budget that has already run out.
+            raise McpError(
+                McpErrorCode.MCP_DEADLINE_EXCEEDED,
+                "no time remains in the interaction deadline to acquire an MCP workload token",
+            )
+
         async with self._lock:
             cached = self._cached
             if cached is not None and cached.usable_now(clock=time.monotonic()):
                 return cached.token
-            return await self._fetch()
+            return await self._fetch(timeout_s=timeout_s)
 
-    async def _fetch(self) -> str:
+    async def _fetch(self, *, timeout_s: float) -> str:
         try:
-            async with httpx2.AsyncClient(timeout=httpx2.Timeout(10.0)) as client:
+            async with httpx2.AsyncClient(timeout=httpx2.Timeout(timeout_s)) as client:
                 response = await client.post(
                     self._token_url,
                     data={

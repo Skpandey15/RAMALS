@@ -182,10 +182,23 @@ class RamalsMcpReadClient:
 
         started_at = time.monotonic()
         try:
-            token = await self._token_provider.get_token()
-        except McpError:
-            self._log(capability, "DENIED", "MCP_WORKLOAD_TOKEN_ACQUISITION_FAILED", started_at)
+            token = await self._token_provider.get_token(timeout_s=remaining_ms / 1000.0)
+        except McpError as failure:
+            self._log(capability, "DENIED", failure.code.value, started_at)
             raise
+
+        # Token acquisition itself spends real wall-clock time out of this same interaction budget
+        # -- a cache miss can cost a full round trip to the identity provider. Recomputed rather
+        # than reusing the pre-token figure, or the MCP transport call would be given an allowance
+        # that already partly elapsed, and could run past the interaction's actual deadline while
+        # believing it still had the original one.
+        remaining_ms = context.deadline.remaining_ms()
+        if remaining_ms <= 0:
+            self._log(capability, "DENIED", McpErrorCode.MCP_DEADLINE_EXCEEDED.value, started_at)
+            raise McpError(
+                McpErrorCode.MCP_DEADLINE_EXCEEDED,
+                "the interaction deadline passed while acquiring the MCP workload token",
+            )
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -306,8 +319,12 @@ class RamalsMcpReadClient:
         )
 
 
-async def build_read_client(settings: Settings) -> RamalsMcpReadClient:
+def build_read_client(settings: Settings) -> RamalsMcpReadClient:
     """One shared client + token provider for the process -- the token provider's own cache is what
-    makes sharing safe; no per-interaction state lives on either object."""
+    makes sharing safe; no per-interaction state lives on either object.
+
+    Plain, synchronous construction: neither constructor performs I/O, so this needs no event loop
+    and can be called directly from the synchronous application factory (``main.py``) at startup.
+    """
     token_provider = McpWorkloadTokenProvider(settings)
     return RamalsMcpReadClient(settings, token_provider)

@@ -45,7 +45,7 @@ async def test_token_provider_requests_ramals_ai_workload_client_identity(
     _patch_async_client(monkeypatch, transport)
 
     provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
-    await provider.get_token()
+    await provider.get_token(timeout_s=10.0)
 
     assert len(captured_requests) == 1
     body = captured_requests[0].content.decode()
@@ -61,7 +61,7 @@ async def test_token_provider_targets_ramals_mcp_audience(
     _patch_async_client(monkeypatch, transport)
 
     provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
-    await provider.get_token()
+    await provider.get_token(timeout_s=10.0)
 
     body = captured_requests[0].content.decode()
     assert "audience=ramals-mcp" in body
@@ -78,7 +78,7 @@ async def test_token_provider_never_references_ramals_core_workload(
     _patch_async_client(monkeypatch, transport)
 
     provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
-    await provider.get_token()
+    await provider.get_token(timeout_s=10.0)
 
     body = captured_requests[0].content.decode()
     assert "ramals-core-workload" not in body
@@ -105,8 +105,8 @@ async def test_token_is_cached_across_calls(
     _patch_async_client(monkeypatch, transport)
 
     provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
-    first = await provider.get_token()
-    second = await provider.get_token()
+    first = await provider.get_token(timeout_s=10.0)
+    second = await provider.get_token(timeout_s=10.0)
 
     assert first == second == "fake-mcp-workload-token"
     assert len(captured_requests) == 1  # only one real request behind two calls
@@ -123,7 +123,7 @@ async def test_token_acquisition_failure_never_leaks_url_or_secret(
 
     provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
     with pytest.raises(McpError) as failure:
-        await provider.get_token()
+        await provider.get_token(timeout_s=10.0)
 
     assert failure.value.code is McpErrorCode.MCP_WORKLOAD_TOKEN_ACQUISITION_FAILED
     message = str(failure.value)
@@ -133,11 +133,104 @@ async def test_token_acquisition_failure_never_leaks_url_or_secret(
     assert _MCP_SETTINGS.mcp_workload_token_url not in message
 
 
-def _patch_async_client(monkeypatch: pytest.MonkeyPatch, transport: httpx2.MockTransport) -> None:
+def _patch_async_client(
+    monkeypatch: pytest.MonkeyPatch,
+    transport: httpx2.MockTransport,
+    *,
+    captured_kwargs: list[dict[str, Any]] | None = None,
+) -> None:
     original_init = httpx2.AsyncClient.__init__
 
     def patched_init(self: httpx2.AsyncClient, *args: Any, **kwargs: Any) -> None:
+        if captured_kwargs is not None:
+            captured_kwargs.append(dict(kwargs))
         kwargs["transport"] = transport
         original_init(self, *args, **kwargs)
 
     monkeypatch.setattr(httpx2.AsyncClient, "__init__", patched_init)
+
+
+# -- MCP-3 review round 2, Blocker 2: token acquisition must respect the caller's deadline ---------
+
+
+@pytest.mark.anyio
+async def test_cached_token_path_makes_no_network_request_regardless_of_timeout(
+    monkeypatch: pytest.MonkeyPatch, captured_requests: list[httpx2.Request]
+) -> None:
+    """Review test #1: a cache hit costs no token-endpoint call -- proven here with a deliberately
+    tiny ``timeout_s`` that a real fetch could not possibly complete within, to show the fast path
+    never even looks at it."""
+    transport = _fake_transport(captured_requests)
+    _patch_async_client(monkeypatch, transport)
+
+    provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
+    await provider.get_token(timeout_s=10.0)  # populates the cache
+    cached = await provider.get_token(timeout_s=0.001)  # would fail closed if this reached _fetch
+
+    assert cached == "fake-mcp-workload-token"
+    assert len(captured_requests) == 1  # still just the one real request, from the first call
+
+
+@pytest.mark.anyio
+async def test_real_acquisition_is_bounded_by_the_callers_remaining_timeout_not_a_fixed_value(
+    monkeypatch: pytest.MonkeyPatch, captured_requests: list[httpx2.Request]
+) -> None:
+    """Review test #2: with 100 ms remaining on the interaction, a real (uncached) acquisition must
+    be given a ~100 ms transport timeout, never the old fixed 10-second one -- proven by capturing
+    the actual ``httpx2.Timeout`` the provider builds its client with."""
+    transport = _fake_transport(captured_requests)
+    captured_kwargs: list[dict[str, Any]] = []
+    _patch_async_client(monkeypatch, transport, captured_kwargs=captured_kwargs)
+
+    provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
+    await provider.get_token(timeout_s=0.1)
+
+    assert len(captured_kwargs) == 1
+    timeout = captured_kwargs[0]["timeout"]
+    assert isinstance(timeout, httpx2.Timeout)
+    # httpx2.Timeout normalizes a single positional value onto every leg (connect/read/write/pool).
+    assert timeout.read == pytest.approx(0.1)
+    assert timeout.read != pytest.approx(10.0)
+
+
+@pytest.mark.anyio
+async def test_zero_or_negative_remaining_timeout_fails_closed_before_any_network_call(
+    captured_requests: list[httpx2.Request],
+) -> None:
+    """Review tests #3/#4 (provider half): once the caller's own remaining budget reaches zero,
+    acquisition must fail immediately with ``MCP_DEADLINE_EXCEEDED`` -- never attempt the network
+    call, and never be given ``httpx2.Timeout(0)``, which httpx reads as *no* timeout rather than
+    *no time left*. Uses a fresh, never-yet-cached provider, so the only way this could reach the
+    network is if the guard were missing."""
+    provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
+
+    with pytest.raises(McpError) as failure:
+        await provider.get_token(timeout_s=0.0)
+    assert failure.value.code is McpErrorCode.MCP_DEADLINE_EXCEEDED
+
+    with pytest.raises(McpError) as failure:
+        await provider.get_token(timeout_s=-5.0)
+    assert failure.value.code is McpErrorCode.MCP_DEADLINE_EXCEEDED
+
+    assert captured_requests == []  # neither attempt reached a transport at all
+
+
+@pytest.mark.anyio
+async def test_token_endpoint_failure_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, captured_requests: list[httpx2.Request]
+) -> None:
+    """Review test #6: exactly one request reaches the token endpoint per call; a failure there is
+    reported, never retried by this provider itself (bounded retry, if any, is the caller's own
+    policy, and only for safe transport-level failures -- never an auth/token failure)."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured_requests.append(request)
+        return httpx2.Response(500, text="internal keycloak error")
+
+    _patch_async_client(monkeypatch, httpx2.MockTransport(handler))
+
+    provider = McpWorkloadTokenProvider(_MCP_SETTINGS)
+    with pytest.raises(McpError):
+        await provider.get_token(timeout_s=10.0)
+
+    assert len(captured_requests) == 1

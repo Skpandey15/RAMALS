@@ -56,6 +56,28 @@ def test_registry_contains_exactly_five_capabilities() -> None:
     }
 
 
+def test_build_mcp_tool_registry_constructs_each_tool_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review cleanup: the dict comprehension this used to be called every factory twice (once for
+    its key, once for its value). Proven here by counting factory invocations directly rather than
+    by relying on ``ReadOnlyTool``'s own construction having no observable side effect."""
+    import ramals_ai.mcp.tools as tools_module
+
+    calls = 0
+    original_factories = tools_module._TOOL_FACTORIES
+
+    def counted(client: object, context: object) -> object:
+        nonlocal calls
+        calls += 1
+        return original_factories[0](client, context)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(tools_module, "_TOOL_FACTORIES", (counted,))
+    tools_module.build_mcp_tool_registry(_fake_client(), _context())
+
+    assert calls == 1
+
+
 def test_no_tool_run_signature_accepts_a_learner_identifying_argument(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -184,5 +184,8 @@ def build_mcp_tool_registry(
     ``allowlists`` defaults to :data:`_DEFAULT_ALLOWLISTS`; passed explicitly only where a caller
     needs a narrower allowlist than the default for a specific run.
     """
-    tools = {factory(client, context).name: factory(client, context) for factory in _TOOL_FACTORIES}
-    return ToolRegistry(tools=tools, allowlists=dict(allowlists or _DEFAULT_ALLOWLISTS))
+    built = [factory(client, context) for factory in _TOOL_FACTORIES]
+    return ToolRegistry(
+        tools={tool.name: tool for tool in built},
+        allowlists=dict(allowlists or _DEFAULT_ALLOWLISTS),
+    )
