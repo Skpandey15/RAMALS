@@ -19,6 +19,15 @@ dependencies = [
   "opentelemetry-sdk==1.44.0",
   "pydantic-settings==2.15.0",
   "uvicorn[standard]==0.52.3",
+  # MCP-3 (M2-ADR-031): the official MCP Python SDK, for the Streamable HTTP client that reaches
+  # Java's MCP-2 read-only capabilities. httpx2 and anyio are already transitive dependencies of mcp
+  # itself (and, for anyio, of starlette/fastapi too); both are declared explicitly here because
+  # production code (ramals_ai.mcp.client, ramals_ai.security.mcp_workload_identity,
+  # ramals_ai.mcp.tools) imports them directly, mirroring the same dependency-hygiene rule the Java
+  # side already applies to Nimbus JOSE+JWT (M2-ADR-031, MCP-1).
+  "mcp==2.1.1",
+  "httpx2==2.12.0",
+  "anyio==4.14.2",
 ]
 
 # Deliberately absent, and asserted absent by tests/unit/test_no_database_access.py:

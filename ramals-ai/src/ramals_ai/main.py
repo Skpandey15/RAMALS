@@ -37,6 +37,7 @@ from ramals_ai.gateway.routes import (
     registry_from_pins,
     unbuildable_pointers,
 )
+from ramals_ai.mcp.client import RamalsMcpReadClient, build_read_client
 from ramals_ai.prompting.register import default_prompt_register
 from ramals_ai.prompting.templates import PromptRegister
 from ramals_ai.security.workload_identity import build_verifier
@@ -131,13 +132,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # service shares one set of budgets.
     app.state.gateway = gateway
     app.state.prompts = prompts
+    # Present only where configured (RAMALS_AI_MCP_ENABLED), the same "absent means safely off, not
+    # a startup failure" shape as durable_adapter above. One client shared by every interaction: it
+    # holds no per-interaction state itself (McpWorkloadTokenProvider's own cache is what makes
+    # sharing it safe), so only DIAGNOSTIC and ADAPTATION -- the two agent types MCP-3 grants a
+    # capability to -- are given it; TUTOR and ASSESSMENT never receive it at all.
+    mcp_client: RamalsMcpReadClient | None = (
+        build_read_client(resolved) if resolved.mcp_enabled else None
+    )
+    app.state.mcp_client = mcp_client
     app.state.agents = {
-        "diagnostic": DiagnosticAgent(gateway, prompts=prompts),
+        "diagnostic": DiagnosticAgent(gateway, prompts=prompts, mcp_client=mcp_client),
         "diagnostic_assessment": DiagnosticAssessmentAgent(gateway, prompts=prompts),
         "tutor": TutorAgent(gateway, prompts=prompts),
         "assessment": AssessmentAgent(gateway, prompts=prompts),
         "assessment_evaluation": AssessmentEvaluationAgent(gateway, prompts=prompts),
-        "adaptation": AdaptationAgent(gateway, prompts=prompts),
+        "adaptation": AdaptationAgent(gateway, prompts=prompts, mcp_client=mcp_client),
     }
     return app
 

@@ -98,6 +98,43 @@ class Settings(BaseSettings):
     expected_workload_client_id: str = "ramals-core-workload"
     jwks_cache_seconds: int = Field(default=300, gt=0, le=3600)
 
+    # --- MCP-3: outgoing Java MCP client (M2-ADR-031) --------------------------------------------
+    # The reverse direction from workload_auth_enabled above: here ramals-ai is the *caller*,
+    # authenticating to Java's MCP transport as ramals-ai-workload, audience ramals-mcp -- a
+    # dedicated identity, never M1-ADR-003's own ramals-core-workload/aud=ramals-ai (that credential
+    # authenticates Java calling *this* service, the opposite direction; this process never holds
+    # its secret). Off by default: with mcp_enabled=false the deterministic/AI service still starts
+    # and serves every existing path, and only an actual MCP-read call fails, clearly, at invocation
+    # time -- the same "absent means safely off, not a startup failure" discipline ai_enabled/
+    # durable_execution_enabled already hold this service to.
+    mcp_enabled: bool = False
+    mcp_base_url: str = ""
+    """Java MCP server base URL, e.g. http://learning-platform:8080 -- the /mcp path is joined by
+    the client, never duplicated in this setting."""
+    mcp_workload_token_url: str = ""
+    """The Keycloak client-credentials token endpoint -- explicit, not derived from oidc_issuer,
+    mirroring WorkloadTokenProvider's own RAMALS_AI_WORKLOAD_TOKEN_URL convention on the Java
+    side."""
+    mcp_workload_client_id: str = "ramals-ai-workload"
+    mcp_workload_client_secret: str | None = Field(default=None, repr=False)
+    mcp_workload_audience: str = "ramals-mcp"
+
+    @model_validator(mode="after")
+    def _require_mcp_config_when_enabled(self) -> Settings:
+        """An MCP client with nowhere to call, authenticate, or connect is a misconfiguration, not a
+        degraded mode -- discovering it on the first learner-facing MCP read would surface as an
+        opaque connection error long after deployment."""
+        if self.mcp_enabled and not (
+            self.mcp_base_url.strip()
+            and self.mcp_workload_token_url.strip()
+            and self.mcp_workload_client_secret
+        ):
+            raise ValueError(
+                "RAMALS_AI_MCP_ENABLED requires RAMALS_AI_MCP_BASE_URL, "
+                "RAMALS_AI_MCP_WORKLOAD_TOKEN_URL, and RAMALS_AI_MCP_WORKLOAD_CLIENT_SECRET"
+            )
+        return self
+
     @model_validator(mode="after")
     def _reject_live_route_without_credential(self) -> Settings:
         """A live model route with no credential is a misconfiguration, not a degraded mode.
