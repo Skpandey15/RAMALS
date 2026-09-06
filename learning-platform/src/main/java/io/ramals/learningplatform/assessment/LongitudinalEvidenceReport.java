@@ -77,10 +77,12 @@ public record LongitudinalEvidenceReport(
       String policyVersion) {
   }
 
-  /** The fixed evidentiary boundary: the earliest persisted G3 snapshot for this pair with {@code
-   * supporting_count + contradictory_count > 0}. {@code evidenceStrength} is worded "baseline
-   * evidence strength" -- never "as first established", which would imply the misconception itself
-   * was established. */
+  /** The fixed evidentiary boundary: the deterministically selected first eligible G3 snapshot for
+   * this pair ({@code supporting_count + contradictory_count > 0}) under the repository's governed
+   * {@code created_at ASC, id ASC} ordering -- a governed deterministic evidentiary anchor, never a
+   * claim that this snapshot was causally/temporally first among any same-instant eligible peers
+   * (M2-ADR-030 §C). {@code evidenceStrength} is worded "baseline evidence strength" -- never "as
+   * first established", which would imply the misconception itself was established. */
   public record Baseline(
       UUID confidenceSnapshotId, DiagnosticConfidenceBand evidenceStrength, Instant computedAt) {
   }

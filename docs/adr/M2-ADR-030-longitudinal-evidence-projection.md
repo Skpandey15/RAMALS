@@ -36,14 +36,34 @@ ontology (M2-ADR-026) and none is introduced here.
 
 ### C. Baseline
 
-The baseline for `(learner_id, misconception_id)` is the **earliest** persisted
-`core.misconception_confidence_observation` row for that pair where
-`supporting_count + contradictory_count > 0`. This is a fixed evidentiary boundary only -- its own
-direction is irrelevant to every later-evidence state H7 reports. `S=1,C=0`, `S=0,C=1`, and `S=1,C=1`
-are all equally valid baselines; a row with `supporting_count = 0 AND contradictory_count = 0`
-(`INSUFFICIENT_EVIDENCE`, by construction only `INCONCLUSIVE` evidence) is never baseline-eligible, no
-directional content to fix a boundary around. Once selected, a baseline is permanent for that pair --
-never re-chosen as later snapshots accumulate.
+**The baseline is the deterministically selected first eligible persisted `core.
+misconception_confidence_observation` row for `(learner_id, misconception_id)`, under the repository's
+governed ordering convention `created_at ASC, id ASC`, restricted to rows where `supporting_count +
+contradictory_count > 0`.** This wording is deliberate and must not be loosened to "the earliest"
+stated as a causal/temporal fact:
+
+- `created_at` is fixed for the whole PostgreSQL transaction that wrote it -- two snapshots written by
+  the same submission always share an identical value, so it alone cannot order them.
+- `id` (UuidV7, via `UuidV7.generate()`) draws its own tiebreak bits from `SecureRandom` on every call,
+  with no monotonic counter -- two ids generated within the same millisecond have comparison order
+  uncorrelated with call order (verified directly against the implementation; see §I).
+- Therefore `ORDER BY created_at ASC, id ASC` **cannot prove which eligible snapshot was truly
+  generated first** whenever two snapshots share both a timestamp and a millisecond. It is a
+  **governed deterministic evidentiary anchor** -- the same query, run again, always selects the exact
+  same row -- **never a claim of causal or generation-first ordering**.
+- Because baseline selection fixes `E_baseline` (§E), and therefore `E_post`, this ordering choice is
+  not merely a presentation concern the way §I's detail-list ordering is: it is load-bearing for which
+  row anchors the boundary. It remains sound precisely because H7 needs *a* fixed, reproducible anchor,
+  not *the* causally-first one -- every state `LongitudinalEvidencePolicyV1` produces is computed from
+  the anchor's own permanent provenance set onward, and is itself order-independent (§F), so no H7
+  outcome ever depends on which of two same-instant eligible snapshots the tiebreak happened to prefer.
+
+This is a fixed evidentiary boundary only -- its own direction is irrelevant to every later-evidence
+state H7 reports. `S=1,C=0`, `S=0,C=1`, and `S=1,C=1` are all equally valid baselines; a row with
+`supporting_count = 0 AND contradictory_count = 0` (`INSUFFICIENT_EVIDENCE`, by construction only
+`INCONCLUSIVE` evidence) is never baseline-eligible, no directional content to fix a boundary around.
+Once selected, a baseline is permanent for that pair -- never re-chosen as later snapshots accumulate,
+and never re-selected merely because a same-instant tie could in principle have gone the other way.
 
 Selected by, per `(learner_id, misconception_id)`:
 ```sql
@@ -129,13 +149,15 @@ call, with no monotonic counter. Two calls within the same millisecond have unco
 order relative to call order. Combined with Postgres's `CURRENT_TIMESTAMP` being fixed for the whole
 transaction (so every evidence row written by one submission shares one `created_at`), this means:
 
-`ORDER BY created_at ASC, id ASC` (used for the detail endpoint's presentation of post-baseline
-evidence) is a **deterministic presentation ordering** -- reusing this codebase's own established
-tiebreak convention (`AssessmentRepository.findMostRecentCompletedAttempt`, `AdminAuditQueryRepository`,
-H6's `findLatestForLearner`) -- but it is **not** a causal or generation-order guarantee when both
-`created_at` and the underlying millisecond tie, which is the common case for evidence rows from one
-attempt. No H7 V1 outcome depends on evidence sequence. No recurrence/regression/reversal inference is
-ever derived from order.
+`ORDER BY created_at ASC, id ASC` (used both for baseline selection, §C, and for the detail endpoint's
+presentation of post-baseline evidence) is a **deterministic ordering** -- reusing this codebase's own
+established tiebreak convention (`AssessmentRepository.findMostRecentCompletedAttempt`,
+`AdminAuditQueryRepository`, H6's `findLatestForLearner`) -- but it is **not** a causal or
+generation-order guarantee when both `created_at` and the underlying millisecond tie, which is the
+common case for evidence rows from one attempt. This applies identically to both uses: §C's baseline
+anchor is a governed deterministic evidentiary anchor, not a causal-first claim, exactly as the
+detail-list presentation order is not a causal claim. No H7 V1 outcome depends on evidence sequence.
+No recurrence/regression/reversal inference is ever derived from order.
 
 ### J. Persistence
 
@@ -180,7 +202,13 @@ state into an H6 report is a separate, later, separately reviewed decision.
   question wearing the same band vocabulary would silently overload meaning.
 - Treating `created_at ASC, id ASC` as proof of generation order -- rejected (§I): `UuidV7.generate()`
   draws its tiebreak bits from `SecureRandom`, with no monotonic counter; same-millisecond order is
-  uncorrelated with call order.
+  uncorrelated with call order. This applies equally to baseline selection (§C, caught on review of
+  PR #258): describing the selected row as "the earliest" G3 snapshot in a causal/temporal sense would
+  overclaim what the ordering can prove whenever two eligible snapshots share both a timestamp and a
+  millisecond. §C's baseline is instead defined as the deterministically selected first eligible
+  snapshot under this governed ordering -- a fixed, reproducible anchor, never a causal-first claim,
+  with every downstream H7 classification remaining order-independent regardless of which same-instant
+  row the tiebreak happened to prefer.
 - Persisting H7 events -- rejected (§J): no reproducibility gap exists that computing on read does not
   already close, and it would manufacture a second, redundant source of truth for something fully
   derivable from G2/G3.

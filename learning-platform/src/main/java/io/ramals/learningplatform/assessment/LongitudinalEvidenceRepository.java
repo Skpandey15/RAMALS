@@ -33,15 +33,23 @@ public class LongitudinalEvidenceRepository {
   }
 
   /**
-   * The earliest persisted {@code core.misconception_confidence_observation} row, per misconception,
-   * for every misconception this learner has at least one directional ({@code supporting_count +
-   * contradictory_count > 0}) snapshot for -- H7's own baseline-selection query (M2-ADR-030 §3). A
-   * misconception whose only snapshots are {@code INSUFFICIENT_EVIDENCE} (both counts zero) is
-   * correctly absent from this result -- no directional content to fix a boundary around. {@code
-   * ORDER BY misconception_id, created_at ASC, id ASC}: ascending, not H6/G3's own {@code DESC}
-   * "latest first" convention, since H7 wants the earliest -- but the same {@code id} (UuidV7)
-   * deterministic tiebreak, since {@code created_at} is fixed for an entire transaction in PostgreSQL
-   * and so cannot alone distinguish two snapshots written by the same submission.
+   * The deterministically selected baseline row, per misconception, for every misconception this
+   * learner has at least one directional ({@code supporting_count + contradictory_count > 0}) snapshot
+   * for -- H7's own baseline-selection query (M2-ADR-030 §C). A misconception whose only snapshots are
+   * {@code INSUFFICIENT_EVIDENCE} (both counts zero) is correctly absent from this result -- no
+   * directional content to fix a boundary around.
+   *
+   * <p><b>{@code ORDER BY misconception_id, created_at ASC, id ASC} selects a governed deterministic
+   * evidentiary anchor, never a claim of causal/generation-first ordering.</b> Ascending, not H6/G3's
+   * own {@code DESC} "latest first" convention, since H7 wants the first-under-this-ordering row -- but
+   * the same {@code id} (UuidV7) deterministic tiebreak, since {@code created_at} is fixed for an
+   * entire transaction in PostgreSQL and so cannot alone distinguish two snapshots written by the same
+   * submission. {@code id}'s own tiebreak bits are drawn from {@code SecureRandom} on every call
+   * ({@link io.ramals.learningplatform.observability.UuidV7#generate}), with no monotonic counter, so
+   * this ordering cannot prove which of two same-instant eligible snapshots was truly generated first
+   * -- it only guarantees the same row is selected on every repeated read. Every downstream H7
+   * classification is order-independent once this anchor is fixed, so this does not weaken H7's own
+   * semantics (M2-ADR-030 §C, corrected on review of PR #258).
    */
   public List<MisconceptionConfidenceObservation> findEarliestBaselineSnapshotsForLearner(
       UUID learnerId) {

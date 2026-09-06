@@ -15,7 +15,9 @@ public enum LongitudinalDataStatus {
    * nothing to classify. Never manufactured as a synthetic {@link LongitudinalEvidenceState}. */
   NO_BASELINE,
 
-  /** The earliest such eligible snapshot exists and is fixed as this pair's permanent baseline;
-   * {@link LongitudinalEvidenceState} classifies the evidence recorded after it. */
+  /** A deterministically selected first eligible snapshot (under the repository's governed {@code
+   * created_at ASC, id ASC} ordering -- a fixed anchor, never a causal/generation-first claim) exists
+   * and is fixed as this pair's permanent baseline; {@link LongitudinalEvidenceState} classifies the
+   * evidence recorded after it. */
   HAS_BASELINE
 }

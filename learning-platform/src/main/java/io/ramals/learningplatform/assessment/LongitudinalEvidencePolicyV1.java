@@ -33,8 +33,20 @@ public class LongitudinalEvidencePolicyV1 {
 
   public static final String POLICY_VERSION = "LONGITUDINAL_EVIDENCE_V1";
 
+  /**
+   * @throws IllegalArgumentException if any count is negative -- a post-baseline evidence count is a
+   *     cardinality (M2-ADR-030 §E: the size of a set difference), never a signed delta in the
+   *     arithmetic sense, so a negative value can only indicate a caller defect upstream, never a
+   *     legitimate input this policy should silently accept or reinterpret.
+   */
   public LongitudinalEvidenceState classify(
       int supportingDelta, int contradictoryDelta, int inconclusiveDelta) {
+    if (supportingDelta < 0 || contradictoryDelta < 0 || inconclusiveDelta < 0) {
+      throw new IllegalArgumentException(
+          "Post-baseline evidence counts cannot be negative: supportingDelta=" + supportingDelta
+              + ", contradictoryDelta=" + contradictoryDelta
+              + ", inconclusiveDelta=" + inconclusiveDelta);
+    }
     if (supportingDelta == 0 && contradictoryDelta == 0 && inconclusiveDelta == 0) {
       return LongitudinalEvidenceState.NO_LATER_EVIDENCE;
     }

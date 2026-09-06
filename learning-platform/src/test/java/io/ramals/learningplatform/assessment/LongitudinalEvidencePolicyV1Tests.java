@@ -1,6 +1,7 @@
 package io.ramals.learningplatform.assessment;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +52,30 @@ class LongitudinalEvidencePolicyV1Tests {
    * from a support-only baseline and, separately, a contradiction-only baseline) is definitionally the
    * same call.
    */
+  @Test
+  void negativeSupportingDeltaIsRejected() {
+    assertThatThrownBy(() -> policy.classify(-1, 0, 0))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void negativeContradictoryDeltaIsRejected() {
+    assertThatThrownBy(() -> policy.classify(0, -1, 0))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void negativeInconclusiveDeltaIsRejected() {
+    assertThatThrownBy(() -> policy.classify(0, 0, -1))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void allNegativeCountsAreRejected() {
+    assertThatThrownBy(() -> policy.classify(-3, -2, -1))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
   @Test
   void classificationNeverDependsOnBaselineDirectionByConstruction() {
     LongitudinalEvidenceState fromWhatWouldFollowAContradictionOnlyBaseline = policy.classify(1, 0, 0);
