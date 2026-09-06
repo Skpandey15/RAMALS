@@ -276,9 +276,7 @@ class RamalsMcpReadClient:
         # neighbors that share a prefix (e.g. the delegated-context validator's own "MALFORMED" vs.
         # the authorization layer's "MALFORMED_REQUEST") -- a substring check would misclassify one
         # as the other.
-        tokens = {
-            block.text for block in result.content if isinstance(block, types.TextContent)
-        }
+        tokens = {block.text for block in result.content if isinstance(block, types.TextContent)}
         if tokens & _MISSING_REASONS:
             return McpErrorCode.MCP_DELEGATED_CONTEXT_MISSING
         if tokens & _REJECTED_REASONS:
