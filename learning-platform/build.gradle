@@ -41,6 +41,24 @@ dependencies {
   runtimeOnly 'org.flywaydb:flyway-database-postgresql'
   runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 
+  // MCP-1 (M2-ADR-031): the official MCP Java SDK core, plus its Jackson 3 JSON binding (matching
+  // this project's own tools.jackson:jackson-databind:3.1.4, already managed by the Spring Boot
+  // BOM -- no version conflict, confirmed via dependencyInsight before pinning). No Spring AI
+  // artifact of any kind is added: io.modelcontextprotocol.server.transport.
+  // HttpServletStreamableServerTransportProvider (inspected directly via javap against the resolved
+  // jar) is a plain jakarta.servlet.http.HttpServlet shipped inside mcp-core itself -- it needs no
+  // Spring MVC RouterFunction and no org.springframework.ai transport module at all, only an
+  // ordinary ServletRegistrationBean, exactly like any other servlet this application registers.
+  implementation 'io.modelcontextprotocol.sdk:mcp-core:2.0.1'
+  implementation 'io.modelcontextprotocol.sdk:mcp-json-jackson3:2.0.1'
+  // Nimbus JOSE+JWT (M2-ADR-031): RAMALS production code (the delegated-context signer/validator)
+  // imports com.nimbusds classes directly to mint and verify the new ramals-mcp-audienced token, so
+  // it is declared explicitly here rather than relied upon transitively through
+  // spring-security-oauth2-jose. Pinned to the exact version the Spring Boot 4.1.0 BOM already
+  // resolves (confirmed via dependencyInsight) -- this changes no resolved version, only makes an
+  // already-present dependency an explicit, reviewed one.
+  implementation 'com.nimbusds:nimbus-jose-jwt:10.9'
+
   testImplementation 'org.springframework.boot:spring-boot-starter-test'
   testImplementation 'org.springframework.boot:spring-boot-webmvc-test'
   testImplementation 'org.springframework.security:spring-security-test'
