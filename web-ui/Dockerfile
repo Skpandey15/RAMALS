@@ -43,7 +43,7 @@ RUN grep -rq "$VITE_KEYCLOAK_URL" dist/assets/*.js \
 FROM nginxinc/nginx-unprivileged:alpine@sha256:334d92979f15aaecd5dd50af5105e1230e2bb70765d45b1e2f964e7c5eda81c3
 # The base image runs as uid 101. Root is needed to patch packages and is dropped immediately after.
 USER root
-RUN apk upgrade --no-cache libcrypto3 libssl3 libexpat
+RUN apk upgrade --no-cache libcrypto3 libssl3 libexpat libuuid
 USER 101
 COPY infrastructure/docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
