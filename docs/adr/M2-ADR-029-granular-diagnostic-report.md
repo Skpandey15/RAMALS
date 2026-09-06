@@ -34,6 +34,16 @@ governed facts; no model reinterprets evidence or invents a conclusion.
    of this attempt." A misconception that attempt did not touch is absent, even when the learner has
    older evidence for it from a different attempt.
 
+   Its own candidate set is a **G2 question**, answered from `core.misconception_evidence_observation`
+   joined to that exact attempt's own `core.assessment_response` rows — never derived by starting from
+   `core.misconception_confidence_observation` and asking which misconceptions have a snapshot for
+   this attempt. Starting from G3 would silently conflate "no G3 snapshot yet" with "no G2 evidence at
+   all," collapsing two distinct states (§H) into one. A candidate that this attempt evidenced but
+   that has no matching G3 snapshot is still a finding, reported `NOT_ASSESSED`, with its evidence
+   counts read as this exact attempt's own contribution (`core.misconception_evidence_observation`
+   scoped to this attempt's own responses) — never the learner's wider evidence total across other
+   attempts, which belongs only to the Current Domain report.
+
 A true **Historical/As-Of Learner Diagnostic State** report — the latest snapshot for every
 misconception as it stood at some past attempt's own completion boundary — is explicitly deferred.
 It would require selecting, per misconception, the latest snapshot with `created_at` at or before a
@@ -47,6 +57,17 @@ misconception_confidence_observation`/`_evidence` (confidence and its exact prov
 misconception`/`core.diagnostic_node`/`core.learning_objective` (ontology projection), and `ledger.
 mastery_snapshot` via the existing `MasteryRepository.latestMasteryMap` (mastery context). It composes
 nothing else.
+
+**Mastery context is scoped to the Current Domain report only.** The Current Domain Diagnostic
+Report may expose current mastery context, read fresh alongside the current diagnostic findings.
+The Attempt Diagnostic Report exposes exact-attempt diagnostic findings only — it never calls
+`MasteryRepository` at all, and its `mastery` field is always empty. This is deliberate, not an
+oversight: mastery is *today's* authoritative learner-state classification, and silently attaching
+it to a report scoped to one specific, possibly old, attempt would misrepresent an old diagnostic
+finding as if it came bundled with a contemporaneous mastery reading. H6 V1 does not claim, and does
+not attempt to reconstruct, mastery as it stood at any past attempt's own completion — that is exactly
+the same class of problem §B's deferred historical/as-of report would need to solve, and is out of
+scope here for the same reason.
 
 ### D. H5 hypothesis findings are out of scope for V1
 
@@ -133,6 +154,17 @@ this exact class of problem is already solved elsewhere in the codebase without 
   scoping only ever proves what one submission itself produced, never the learner's complete state at
   that moment (evidence from other, unrelated attempts is not "as of" anything with respect to a
   single `attempt_id`). Conflating the two would silently misrepresent an incomplete view as complete.
+- **Deriving the Attempt report's candidate set from `core.misconception_confidence_observation`
+  rows whose `attempt_id` matches, rather than from G2 evidence.** Rejected (caught on review of PR
+  #257) — this silently equates "no G3 snapshot for this attempt" with "no G2 evidence from this
+  attempt," which are the distinct states §H requires kept apart. The candidate set is answered from
+  `core.misconception_evidence_observation` joined to this attempt's own responses; G3 snapshots are
+  consulted only afterward, to decide which of those candidates are `ASSESSED` versus `NOT_ASSESSED`.
+- **Attaching current mastery context to the Attempt report, the same way the Current Domain report
+  does.** Rejected (caught on review of PR #257) — an Attempt report is exact-attempt diagnostic
+  findings only; silently bundling *today's* mastery reading with a possibly old attempt's own
+  findings would misrepresent the two as contemporaneous. Mastery context is exposed only by the
+  Current Domain report.
 - **Enumerating every authored misconception per domain, evidenced or not.** Rejected — that is
   content/coverage's own concern; a diagnostic report about one learner's evidence should not carry
   rows about misconceptions that learner has never touched.

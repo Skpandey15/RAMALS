@@ -23,6 +23,11 @@ import java.util.UUID;
  * A true historical/as-of-attempt learner-state report -- the latest snapshot for every
  * misconception as it stood at some past attempt's own completion -- is explicitly deferred, not
  * implemented here.
+ *
+ * @param mastery current mastery context. Populated only for {@link ReportMode#CURRENT_DOMAIN};
+ *     always empty for {@link ReportMode#ATTEMPT}, which is exact-attempt diagnostic findings only
+ *     and never silently combines an older attempt's own findings with today's mastery state. H6 V1
+ *     does not claim or reconstruct mastery as it stood at any past attempt's own completion.
  */
 public record DiagnosticReport(
     ReportMode mode,

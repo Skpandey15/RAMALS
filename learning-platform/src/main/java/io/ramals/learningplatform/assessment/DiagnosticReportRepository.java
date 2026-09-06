@@ -125,6 +125,54 @@ public class DiagnosticReportRepository {
         prepend(learnerId, MisconceptionEvidenceCaptureService.POLICY, misconceptionIds));
   }
 
+  /**
+   * Every misconception {@code MISCONCEPTION_EVIDENCE_V1} evidence produced by exactly this
+   * attempt's own responses -- the Attempt Diagnostic Report's own candidate set (M2-ADR-029 §B).
+   * Deliberately independent of whether a G3 snapshot exists for any of them yet: this is a G2-only
+   * question ("did this attempt produce evidence"), never answered by starting from {@code
+   * core.misconception_confidence_observation} instead, which would silently conflate "no snapshot"
+   * with "no evidence" (the gap this method exists to close). The same join {@code
+   * MisconceptionConfidenceRepository.distinctMisconceptionIdsForAttempt} already uses against
+   * {@code core.assessment_response}, read here directly rather than through that class, since this
+   * is a report-layer concern, not a G3 one.
+   */
+  public List<UUID> findMisconceptionIdsWithEvidenceForAttempt(UUID attemptId) {
+    if (attemptId == null) {
+      return List.of();
+    }
+    return jdbcTemplate.query("""
+        SELECT DISTINCT o.misconception_id
+        FROM core.misconception_evidence_observation o
+        JOIN core.assessment_response r ON r.id = o.response_id
+        WHERE r.attempt_id = ? AND o.policy_version = ?
+        """, (result, row) -> result.getObject("misconception_id", UUID.class),
+        attemptId, MisconceptionEvidenceCaptureService.POLICY);
+  }
+
+  /** The live evidence counts for a batch of misconceptions, scoped to exactly one attempt's own
+   * responses -- never the learner's wider evidence across other attempts. Used for a Attempt
+   * Diagnostic Report finding that has no G3 snapshot yet ({@code confidenceState = NOT_ASSESSED}):
+   * its counts must be this attempt's own exact contribution, not {@link #findEvidenceCounts}'s
+   * learner-wide total. */
+  public List<EvidenceCountRow> findEvidenceCountsForAttempt(
+      UUID attemptId, Collection<UUID> misconceptionIds) {
+    if (misconceptionIds.isEmpty()) {
+      return List.of();
+    }
+    return jdbcTemplate.query(
+        "SELECT o.misconception_id, o.outcome, count(*) AS row_count "
+            + "FROM core.misconception_evidence_observation o "
+            + "JOIN core.assessment_response r ON r.id = o.response_id "
+            + "WHERE r.attempt_id = ? AND o.policy_version = ? "
+            + "AND o.misconception_id IN (" + placeholders(misconceptionIds.size()) + ") "
+            + "GROUP BY o.misconception_id, o.outcome",
+        (result, row) -> new EvidenceCountRow(
+            result.getObject("misconception_id", UUID.class),
+            MisconceptionEvidenceOutcome.valueOf(result.getString("outcome")),
+            result.getInt("row_count")),
+        prepend(attemptId, MisconceptionEvidenceCaptureService.POLICY, misconceptionIds));
+  }
+
   private static String placeholders(int count) {
     return String.join(",", java.util.Collections.nCopies(count, "?"));
   }

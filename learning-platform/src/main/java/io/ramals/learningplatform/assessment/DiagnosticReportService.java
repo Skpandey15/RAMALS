@@ -38,17 +38,25 @@ import org.springframework.transaction.annotation.Transactional;
  * to {@link DiagnosticConfidenceCalculatorV1} (a finding with no persisted G3 snapshot is reported as
  * {@link ConfidenceState#NOT_ASSESSED}, verbatim, not synthesized).
  *
- * <p>Two report identities, assembled by the same shared logic below but scoped differently:
- * {@link #currentDomainReport}/{@link #currentDomainReportForLearner} (every misconception with
- * evidence in one domain, each at its own latest state) and {@link #attemptReport}/
- * {@link #attemptReportForLearner} (only the misconceptions one exact attempt produced evidence
- * for, at that attempt's own persisted snapshot -- never substituted with today's latest).
+ * <p>Two report identities, assembled by similar but distinct logic below, since their candidate
+ * sets and their relationship to mastery are genuinely different, not merely differently scoped:
+ *
+ * <ul>
+ *   <li>{@link #currentDomainReport}/{@link #currentDomainReportForLearner} -- every misconception
+ *       with evidence in one domain, each at its own latest G3 state (or {@code NOT_ASSESSED} if
+ *       none exists), plus current mastery context.
+ *   <li>{@link #attemptReport}/{@link #attemptReportForLearner} -- only the misconceptions one exact
+ *       attempt's own responses produced G2 evidence for (never derived from which misconceptions
+ *       have a G3 snapshot, which would silently conflate "no snapshot" with "no evidence"), each
+ *       {@code ASSESSED} from that attempt's own persisted snapshot when one exists or {@code
+ *       NOT_ASSESSED} with that attempt's own exact evidence counts when none does -- and carrying
+ *       no mastery at all: an Attempt Diagnostic Report is exact-attempt diagnostic findings only,
+ *       never silently combined with today's mastery state, and H6 V1 does not reconstruct mastery
+ *       as it stood at that attempt's own completion.
+ * </ul>
  *
  * <p>Read-only throughout ({@code @Transactional(readOnly = true)}); writes nothing, ever. Query
- * count is batched and roughly constant in the number of findings, not proportional to it (see the
- * private helpers below): one query for the candidate misconception set, one or two for ontology
- * ancestry, one for confidence snapshots, at most one for live evidence counts, one for provenance,
- * one for mastery.
+ * count is batched and roughly constant in the number of findings, not proportional to it.
  */
 @Service
 public class DiagnosticReportService {
@@ -195,39 +203,52 @@ public class DiagnosticReportService {
   // -------------------------------------------------------------------------------------------
 
   private DiagnosticReport buildAttemptReport(AssessmentAttempt attempt) {
-    List<MisconceptionConfidenceObservation> snapshots =
-        confidenceRepository.findAllForAttempt(attempt.id());
-    UUID curriculumVersionId =
-        assessmentRepository.findCurriculumVersionId(attempt.assessmentVersionId()).orElse(null);
-    List<MasteryMapEntry> mastery = latestMasteryMap(attempt.learnerId(), curriculumVersionId);
-
-    if (snapshots.isEmpty()) {
+    // The candidate set is a G2 question -- every misconception THIS attempt's own responses
+    // produced MISCONCEPTION_EVIDENCE_V1 evidence for -- never derived from
+    // core.misconception_confidence_observation, which would silently conflate "no G3 snapshot yet"
+    // with "no G2 evidence at all" (M2-ADR-029 §B/§H).
+    List<UUID> candidateIds = reportRepository.findMisconceptionIdsWithEvidenceForAttempt(attempt.id());
+    if (candidateIds.isEmpty()) {
       return new DiagnosticReport(
           ReportMode.ATTEMPT, attempt.learnerId(), null, attempt.id(), Instant.now(),
-          DiagnosticDataStatus.NO_EVIDENCE, List.of(), mastery);
+          DiagnosticDataStatus.NO_EVIDENCE, List.of(), List.of());
     }
 
-    List<UUID> misconceptionIds = snapshots.stream()
-        .map(MisconceptionConfidenceObservation::misconceptionId).toList();
     Map<UUID, MisconceptionContextRow> misconceptionById = index(
-        reportRepository.findMisconceptionContext(misconceptionIds), MisconceptionContextRow::id);
+        reportRepository.findMisconceptionContext(candidateIds), MisconceptionContextRow::id);
     AncestryResolution ancestry = resolveAncestry(misconceptionById.values());
 
-    Map<UUID, MisconceptionConfidenceObservation> snapshotByMisconceptionId =
-        index(snapshots, MisconceptionConfidenceObservation::misconceptionId);
+    // A candidate is ASSESSED iff this exact attempt also wrote a confidence snapshot for it (G3
+    // recomputes every misconception it evidenced, in the same transaction -- M2-ADR-028 §4 -- so
+    // this is the normal case; a candidate here with no matching snapshot is NOT_ASSESSED, e.g.
+    // evidence captured before G3 existed, or a defect, never silently promoted to a computed band).
+    Map<UUID, MisconceptionConfidenceObservation> snapshotByMisconceptionId = index(
+        confidenceRepository.findAllForAttempt(attempt.id()),
+        MisconceptionConfidenceObservation::misconceptionId);
+
+    List<UUID> notAssessedIds = candidateIds.stream()
+        .filter(id -> !snapshotByMisconceptionId.containsKey(id))
+        .toList();
+    // Exact-attempt counts, never the learner's wider evidence across other attempts (M2-ADR-029 §B).
+    Map<UUID, EvidenceSummary> liveCountsByMisconceptionId = groupEvidenceCounts(
+        reportRepository.findEvidenceCountsForAttempt(attempt.id(), notAssessedIds));
+
     Map<UUID, List<UUID>> provenanceBySnapshotId = groupProvenance(
         confidenceRepository.findProvenanceForSnapshots(
-            snapshots.stream().map(MisconceptionConfidenceObservation::id).toList()));
+            snapshotIdsOf(candidateIds, snapshotByMisconceptionId)));
 
-    List<MisconceptionFinding> findings = misconceptionIds.stream()
+    List<MisconceptionFinding> findings = candidateIds.stream()
         .map(id -> buildFinding(
             misconceptionById.get(id), ancestry, snapshotByMisconceptionId.get(id),
-            null, provenanceBySnapshotId))
+            liveCountsByMisconceptionId.get(id), provenanceBySnapshotId))
         .toList();
 
+    // No mastery: an Attempt Diagnostic Report is exact-attempt diagnostic findings only (M2-ADR-029
+    // §Mastery) -- it never combines an older attempt's own findings with today's mastery state, and
+    // H6 V1 does not attempt to reconstruct mastery as it stood at this attempt's own completion.
     return new DiagnosticReport(
         ReportMode.ATTEMPT, attempt.learnerId(), null, attempt.id(), Instant.now(),
-        DiagnosticDataStatus.HAS_EVIDENCE, findings, mastery);
+        DiagnosticDataStatus.HAS_EVIDENCE, findings, List.of());
   }
 
   // -------------------------------------------------------------------------------------------

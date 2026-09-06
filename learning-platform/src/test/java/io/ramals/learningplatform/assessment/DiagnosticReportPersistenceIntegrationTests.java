@@ -113,6 +113,22 @@ class DiagnosticReportPersistenceIntegrationTests {
         .cleanDisabled(true)
         .load()
         .migrate();
+
+    // ASSESSMENT_V2 is seeded DRAFT -- every fixture in this suite submits against it directly, but
+    // AssessmentRepository.findPublishedDiagnostic("KAFKA") (which DiagnosticReportService's own
+    // Current Domain Report resolution uses, matching DiagnosticService.createAttempt's own
+    // production path) only ever resolves a PUBLISHED version, and would otherwise resolve the
+    // older v1 instead -- a different curriculum_version_id than the one real mastery recompute
+    // writes against for these fixtures. Same precedent as
+    // DiagnosticConfidencePersistenceIntegrationTests's own @BeforeAll step.
+    try (Connection connection = DriverManager.getConnection(databaseUrl, MIGRATION_USER, MIGRATION_PASSWORD);
+        Statement statement = connection.createStatement()) {
+      statement.execute("""
+          UPDATE core.assessment_version
+          SET status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP
+          WHERE id = '01900000-0000-7000-8000-000000000403'
+          """);
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -204,7 +220,70 @@ class DiagnosticReportPersistenceIntegrationTests {
   }
 
   @Test
-  void anEarlierAttemptReportRemainsStableAfterALaterAttemptAddsEvidence() {
+  void attemptWithG2EvidenceButNoG3SnapshotIsReportedAsNotAssessedWithExactAttemptCounts() {
+    wire();
+    UUID misconceptionId = newPublishedMisconceptionTargetingObjective("attempt-not-assessed fixture");
+    mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
+    Learner learner = learners.provisionForSubject("report-attempt-not-assessed");
+    UUID attemptId = freshAttempt(learner.id());
+    // Raw response + direct G2 capture only, bypassing the full submission flow so G3 never
+    // recomputes a snapshot for this attempt at all -- the candidate must still be discovered
+    // (G2-first, not G3-first) and reported NOT_ASSESSED, never absent and never NO_EVIDENCE.
+    insertResponse(attemptId, ACKS_MCQ_A1, "A", false);
+    captureService.captureEvidence(learner.id(), attemptId, ACKS_MCQ_A1);
+
+    DiagnosticReport report = reportService.attemptReportForLearner(learner.id(), attemptId.toString());
+
+    assertThat(report.diagnosticDataStatus()).isEqualTo(DiagnosticReport.DiagnosticDataStatus.HAS_EVIDENCE);
+    MisconceptionFinding finding = onlyFindingFor(report, misconceptionId);
+    assertThat(finding.confidenceState()).isEqualTo(ConfidenceState.NOT_ASSESSED);
+    assertThat(finding.confidence()).isNull();
+    // Exact-attempt counts (1 supporting from this one response) -- never the learner's wider
+    // evidence total, which this fixture never produces any of anyway (a single, isolated response).
+    assertThat(finding.evidenceSummary().supportingCount()).isEqualTo(1);
+    assertThat(finding.evidenceSummary().contradictoryCount()).isZero();
+    assertThat(finding.evidenceSummary().inconclusiveCount()).isZero();
+  }
+
+  @Test
+  void attemptReportNeverIncludesCurrentMasteryEvenWhenRealMasteryDataExists() {
+    wire();
+    UUID misconceptionId = newPublishedMisconceptionTargetingObjective("attempt-no-mastery fixture");
+    mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
+    Learner learner = learners.provisionForSubject("report-attempt-no-mastery");
+    UUID attemptId = freshAttempt(learner.id());
+    // The real submission flow -- DiagnosticSubmissionService.score()'s own recomputeMastery step --
+    // writes a REAL mastery_snapshot row for this learner's ACKS skill as a side effect of scoring
+    // this same response, exactly as it would for any ordinary submission. No fixture seeding is
+    // used, so this proves exclusion against genuine mastery data, not merely an absence of any.
+    submit(learner.subject(), attemptId, oneResponse(ACKS_MCQ_A1, "A"));
+    assertThat(reportService.currentDomainReportForLearner(learner.id(), "KAFKA").mastery()).isNotEmpty();
+
+    DiagnosticReport attemptReport = reportService.attemptReportForLearner(learner.id(), attemptId.toString());
+
+    assertThat(attemptReport.misconceptionFindings()).isNotEmpty();
+    assertThat(attemptReport.mastery()).isEmpty();
+  }
+
+  @Test
+  void currentDomainReportStillIncludesCurrentMastery() {
+    wire();
+    UUID misconceptionId = newPublishedMisconceptionTargetingObjective("domain-mastery fixture");
+    mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
+    Learner learner = learners.provisionForSubject("report-domain-mastery");
+    UUID attemptId = freshAttempt(learner.id());
+    // Same real recompute-as-a-side-effect-of-scoring as above -- no manual mastery fixture.
+    submit(learner.subject(), attemptId, oneResponse(ACKS_MCQ_A1, "A"));
+
+    DiagnosticReport report = reportService.currentDomainReportForLearner(learner.id(), "KAFKA");
+
+    assertThat(report.mastery()).isNotEmpty();
+    assertThat(report.mastery())
+        .anySatisfy(entry -> assertThat(entry.skillCode()).isEqualTo("KAFKA_PRODUCER_ACKS"));
+  }
+
+  @Test
+  void anEarlierAttemptReportRemainsStableAfterALaterAttemptChangesEvidenceAndMastery() {
     wire();
     UUID misconceptionId = newPublishedMisconceptionTargetingObjective("attempt-stability fixture");
     mapAndPublish(ACKS_MCQ_A1, "A", misconceptionId);
@@ -216,13 +295,25 @@ class DiagnosticReportPersistenceIntegrationTests {
     DiagnosticReport reportBefore = reportService.attemptReportForLearner(learner.id(), attemptOne.toString());
     int supportingBefore = onlyFindingFor(reportBefore, misconceptionId).evidenceSummary().supportingCount();
     assertThat(supportingBefore).isEqualTo(1);
+    assertThat(reportBefore.mastery()).isEmpty();
 
+    // ACKS_MCQ_A1 and ACKS_MCQ_I2 share the same skill, so this second, later submission also
+    // triggers a REAL mastery recompute for it -- real, changing mastery data, no fixture seeding.
     UUID attemptTwo = freshAttempt(learner.id());
     submit(learner.subject(), attemptTwo, oneResponse(ACKS_MCQ_I2, "A"));
+    assertThat(reportService.currentDomainReportForLearner(learner.id(), "KAFKA").mastery()).isNotEmpty();
 
     DiagnosticReport reportAfter = reportService.attemptReportForLearner(learner.id(), attemptOne.toString());
-    assertThat(onlyFindingFor(reportAfter, misconceptionId).evidenceSummary().supportingCount())
-        .isEqualTo(supportingBefore);
+    // The complete diagnostic payload is stable -- not just the one count checked before.
+    assertThat(reportAfter.mode()).isEqualTo(reportBefore.mode());
+    assertThat(reportAfter.learnerId()).isEqualTo(reportBefore.learnerId());
+    assertThat(reportAfter.domainCode()).isEqualTo(reportBefore.domainCode());
+    assertThat(reportAfter.attemptId()).isEqualTo(reportBefore.attemptId());
+    assertThat(reportAfter.diagnosticDataStatus()).isEqualTo(reportBefore.diagnosticDataStatus());
+    assertThat(reportAfter.misconceptionFindings()).isEqualTo(reportBefore.misconceptionFindings());
+    // Never acquires today's mastery state, even though real (and by now changed) mastery data
+    // exists for this learner.
+    assertThat(reportAfter.mastery()).isEmpty();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -572,6 +663,7 @@ class DiagnosticReportPersistenceIntegrationTests {
   private void completeAttempt(UUID attemptId) {
     runtimeJdbc.update("UPDATE core.assessment_attempt SET status = 'COMPLETED' WHERE id = ?", attemptId);
   }
+
 
   private UUID insertResponse(UUID attemptId, UUID itemVersionId, String selectedOption, boolean isCorrect) {
     UUID responseId = UUID.randomUUID();
