@@ -11,6 +11,7 @@ import io.ramals.learningplatform.assessment.EmptyItemPoolException;
 import io.ramals.learningplatform.assessment.InvalidAttemptStateException;
 import io.ramals.learningplatform.assessment.InvalidIdempotencyKeyException;
 import io.ramals.learningplatform.assessment.InvalidSubmissionException;
+import io.ramals.learningplatform.assessment.MisconceptionNotFoundException;
 import io.ramals.learningplatform.assessment.UnknownAssessmentItemException;
 import io.ramals.learningplatform.curriculum.CurriculumNotFoundException;
 import io.ramals.learningplatform.learner.LearnerGoalNotSetException;
@@ -140,6 +141,17 @@ public class ApiExceptionHandler {
         "Attempt not found",
         "ATTEMPT_NOT_FOUND",
         "The requested assessment attempt does not exist.",
+        request);
+  }
+
+  @ExceptionHandler(MisconceptionNotFoundException.class)
+  ResponseEntity<ApiProblem> handleMisconceptionNotFound(
+      MisconceptionNotFoundException exception, HttpServletRequest request) {
+    return problem(
+        HttpStatus.NOT_FOUND,
+        "Misconception not found",
+        "MISCONCEPTION_NOT_FOUND",
+        "The requested misconception does not exist.",
         request);
   }
 
