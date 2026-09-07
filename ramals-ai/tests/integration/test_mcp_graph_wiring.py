@@ -1,8 +1,9 @@
-"""MCP-3 review round 2, Blocker 1: proves the production HTTP entry point Java actually calls --
-``POST /internal/v1/diagnostic/propose`` and ``/internal/v1/adaptation/propose``, exactly as
-``main.py`` wires them -- extracts the delegated learner-context credential from the real inbound
-request, builds a trusted ``McpExecutionContext`` from it, and threads a live, interaction-scoped
-MCP-3 ``ToolRegistry`` all the way into the real ``GraphRun`` the request triggers.
+"""MCP-3 review round 2, Blocker 1 (and MCP-3.2's own extension to diagnostic-assessment): proves
+the production HTTP entry points Java actually calls -- ``POST /internal/v1/diagnostic/propose``,
+``/internal/v1/adaptation/propose``, and ``/internal/v1/diagnostic-assessment/propose`` -- extract
+the delegated learner-context credential from the real inbound request, build a trusted
+``McpExecutionContext`` from it, and thread a live, interaction-scoped MCP-3 ``ToolRegistry``
+all the way into the real ``GraphRun`` the request triggers.
 
 This is the end-to-end proof the review explicitly distinguished from a unit test that only calls
 ``build_mcp_tool_registry()`` in isolation: a real HTTP request, shaped the way Java's own call
@@ -14,6 +15,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -24,6 +26,7 @@ from ramals_ai.adaptation import agent as adaptation_agent_module
 from ramals_ai.config.settings import Environment, Settings
 from ramals_ai.contracts.generated import AgentType
 from ramals_ai.diagnostic import agent as diagnostic_agent_module
+from ramals_ai.diagnostic_assessment import agent as diagnostic_assessment_agent_module
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.base import ProviderRequest, ProviderResponse
 from ramals_ai.gateway.providers.fake import FakeProvider
@@ -39,6 +42,7 @@ from ramals_ai.security.workload_identity import (
 
 DIAGNOSTIC_PATH = "/internal/v1/diagnostic/propose"
 ADAPTATION_PATH = "/internal/v1/adaptation/propose"
+DIAGNOSTIC_ASSESSMENT_PATH = "/internal/v1/diagnostic-assessment/propose"
 
 DELEGATED_CONTEXT_TOKEN = "test-delegated-context-jwt-not-real"  # noqa: S105 - test fixture
 
@@ -57,6 +61,21 @@ ADAPTATION_OUTPUT = json.dumps(
         "skillCode": "KAFKA_PARTITION",
         "recommendedAction": "PRACTICE",
         "rationale": "Practice the skill before advancing.",
+    }
+)
+
+DIAGNOSTIC_ASSESSMENT_OUTPUT = json.dumps(
+    {
+        "diagnoses": [
+            {
+                "skillCode": "offset-management",
+                "classification": "WEAK",
+                "reason": "Repeated incorrect answers involving committed offsets.",
+                "evidenceIds": ["e-1", "e-2"],
+            }
+        ],
+        "recommendedNextSkills": ["offset-management"],
+        "confidence": 0.83,
     }
 )
 
@@ -111,6 +130,7 @@ def _reset_capture() -> Iterator[None]:
 def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     monkeypatch.setattr(diagnostic_agent_module, "GraphRun", _CapturingGraphRun)
     monkeypatch.setattr(adaptation_agent_module, "GraphRun", _CapturingGraphRun)
+    monkeypatch.setattr(diagnostic_assessment_agent_module, "GraphRun", _CapturingGraphRun)
     application = create_app(
         Settings(
             environment=Environment.TEST,
@@ -126,12 +146,16 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     # main.py gives every agent the *same* shared LLMGateway instance (by design -- one set of
     # budgets for the whole process), so overriding a shared gateway's adapter in place would
     # clobber whichever agent's own scripted response is set second. Each agent gets its own fresh
-    # gateway here instead, so a diagnostic-shaped and an adaptation-shaped response can coexist.
+    # gateway here instead, so a diagnostic-shaped, an adaptation-shaped, and a
+    # diagnostic-assessment-shaped response can all coexist.
     application.state.agents["diagnostic"]._gateway = LLMGateway(
         _ScriptedProvider(DIAGNOSTIC_OUTPUT)
     )
     application.state.agents["adaptation"]._gateway = LLMGateway(
         _ScriptedProvider(ADAPTATION_OUTPUT)
+    )
+    application.state.agents["diagnostic_assessment"]._gateway = LLMGateway(
+        _ScriptedProvider(DIAGNOSTIC_ASSESSMENT_OUTPUT)
     )
     return application
 
@@ -168,6 +192,109 @@ def envelope() -> dict[str, Any]:
         "constraints": {"interactionClass": "INTERACTIVE_AI", "deadlineMs": 8000},
         "requestedCapability": "EXPLAIN",
     }
+
+
+DIAGNOSTIC_ASSESSMENT_AUTH = {
+    **AUTH,
+    "X-RAMALS-Dispatch-Fence": "1",
+    "X-RAMALS-Request-Digest": "a" * 64,
+}
+
+
+def diagnostic_assessment_body(*, interaction_id: str | None = None) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    return {
+        "contractVersion": "1.0",
+        "interactionId": interaction_id or str(uuid.uuid7()),
+        "requestId": str(uuid.uuid4()),
+        "constraints": {"interactionClass": "INTERACTIVE_AI", "deadlineMs": 8000},
+        "groundedContext": {
+            "contractVersion": "1.0",
+            "contextId": "ctx-mcp-graph-wiring-1",
+            "learnerRef": "opaque-learner",
+            "asOf": now.isoformat(),
+            "expiresAt": (now + timedelta(minutes=10)).isoformat(),
+            "retrievalPolicyVersion": "POLICY_V1",
+            "items": [
+                {
+                    "evidenceId": "e-1",
+                    "sourceType": "MASTERY",
+                    "sourceVersion": "v1",
+                    "authority": "AUTHORITATIVE_FACT",
+                    "factType": "MASTERY_SCORE",
+                    "value": "0.2100",
+                    "observedAt": now.isoformat(),
+                },
+                {
+                    "evidenceId": "e-2",
+                    "sourceType": "LEARNER_EVIDENCE",
+                    "sourceVersion": "v1",
+                    "authority": "AUTHORITATIVE_FACT",
+                    "factType": "ATTEMPT_OUTCOME",
+                    "value": "INCORRECT",
+                    "observedAt": now.isoformat(),
+                },
+            ],
+        },
+    }
+
+
+def test_diagnostic_assessment_propose_threads_a_live_registry_from_a_real_http_request(
+    client: TestClient,
+) -> None:
+    """The real Java diagnostic outbound path (MCP-3.1's ``RamalsAiDiagnosticAssessmentClient`` ->
+    ``/internal/v1/diagnostic-assessment/propose``) now produces a non-empty, correctly-scoped
+    registry inside the actual ``GraphRun`` the request triggers -- the wiring MCP-3.2 completes."""
+    response = client.post(
+        DIAGNOSTIC_ASSESSMENT_PATH,
+        json=diagnostic_assessment_body(),
+        headers={**DIAGNOSTIC_ASSESSMENT_AUTH, DELEGATED_CONTEXT_HEADER: DELEGATED_CONTEXT_TOKEN},
+    )
+
+    assert response.status_code == 200
+    assert _CapturingGraphRun.call_count == 1
+    registry = _CapturingGraphRun.captured_registry
+    assert registry is not None
+    assert registry.allowed(AgentType.DIAGNOSTIC) == DIAGNOSTIC_AGENT_CAPABILITIES
+    assert "mastery.current" not in registry.allowed(AgentType.DIAGNOSTIC)
+
+
+def test_diagnostic_assessment_propose_degrades_to_no_registry_when_the_header_is_absent(
+    client: TestClient,
+) -> None:
+    """Backward compatibility: a caller that never attaches the delegated-context header still
+    gets its existing, non-MCP diagnostic-assessment behavior -- never a failure."""
+    response = client.post(
+        DIAGNOSTIC_ASSESSMENT_PATH,
+        json=diagnostic_assessment_body(),
+        headers=DIAGNOSTIC_ASSESSMENT_AUTH,
+    )
+
+    assert response.status_code == 200
+    assert _CapturingGraphRun.captured_registry is None
+
+
+def test_diagnostic_assessment_propose_builds_no_registry_when_mcp_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With ``RAMALS_AI_MCP_ENABLED`` off (the default), the header is simply ignored."""
+    monkeypatch.setattr(diagnostic_assessment_agent_module, "GraphRun", _CapturingGraphRun)
+    application = create_app(Settings(environment=Environment.TEST))
+    application.state.workload_verifier = _AcceptingVerifier()
+    application.state.agents["diagnostic_assessment"]._gateway = LLMGateway(
+        _ScriptedProvider(DIAGNOSTIC_ASSESSMENT_OUTPUT)
+    )
+    unconfigured_client = TestClient(application)
+
+    response = unconfigured_client.post(
+        DIAGNOSTIC_ASSESSMENT_PATH,
+        json=diagnostic_assessment_body(),
+        headers={**DIAGNOSTIC_ASSESSMENT_AUTH, DELEGATED_CONTEXT_HEADER: DELEGATED_CONTEXT_TOKEN},
+    )
+
+    assert response.status_code == 200
+    assert application.state.mcp_client is None
+    assert _CapturingGraphRun.captured_registry is None
 
 
 def test_diagnostic_propose_threads_a_live_registry_from_a_real_http_request(

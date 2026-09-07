@@ -124,7 +124,9 @@ def build_internal_router() -> APIRouter:
     ) -> AIProposalEnvelope | JSONResponse:
         agent: DiagnosticAgent = request.app.state.agents["diagnostic"]
         deadline = Deadline.in_ms(envelope.constraints.deadlineMs)
-        mcp_context = _mcp_execution_context(request, envelope, deadline)
+        mcp_context = _mcp_execution_context(
+            request, interaction_id=envelope.interactionId, deadline=deadline
+        )
         return _execute(
             lambda: agent.propose(envelope, deadline=deadline, mcp_execution_context=mcp_context)
         )
@@ -170,6 +172,9 @@ def build_internal_router() -> APIRouter:
                 "The supplied grounded context was refused.",
             )
         deadline = Deadline.in_ms(payload.constraints.deadlineMs)
+        mcp_context = _mcp_execution_context(
+            request, interaction_id=payload.interactionId, deadline=deadline
+        )
         return _execute(
             lambda: agent.propose(
                 context,
@@ -179,6 +184,7 @@ def build_internal_router() -> APIRouter:
                 interaction_class=payload.constraints.interactionClass,
                 dispatch_fence=dispatch_fence,
                 request_digest=request_digest,
+                mcp_execution_context=mcp_context,
             )
         )
 
@@ -237,7 +243,9 @@ def build_internal_router() -> APIRouter:
     ) -> AIProposalEnvelope | JSONResponse:
         agent: AdaptationAgent = request.app.state.agents["adaptation"]
         deadline = Deadline.in_ms(envelope.constraints.deadlineMs)
-        mcp_context = _mcp_execution_context(request, envelope, deadline)
+        mcp_context = _mcp_execution_context(
+            request, interaction_id=envelope.interactionId, deadline=deadline
+        )
         return _execute(
             lambda: agent.propose(envelope, deadline=deadline, mcp_execution_context=mcp_context)
         )
@@ -246,18 +254,23 @@ def build_internal_router() -> APIRouter:
 
 
 def _mcp_execution_context(
-    request: Request, envelope: AIRequestEnvelope, deadline: Deadline
+    request: Request, *, interaction_id: str, deadline: Deadline
 ) -> McpExecutionContext | None:
     """The interaction-scoped MCP-3 execution context for this call, or ``None``.
 
+    Shared by every MCP-capable endpoint (``diagnostic``, ``diagnostic-assessment``,
+    ``adaptation``) rather than each building its own -- ``interaction_id`` is taken as a plain
+    parameter, not a specific envelope type, precisely so one function serves endpoints whose
+    request bodies are otherwise unrelated types (``AIRequestEnvelope`` vs
+    ``DiagnosticAssessmentRequest``).
+
     ``None`` whenever either half of what MCP-3 needs is absent: no shared read client (this
     process has ``RAMALS_AI_MCP_ENABLED`` off), or no delegated learner-context credential on this
-    specific request. The second case is expected to be the normal one until Java's own call sites
-    (``RamalsAiDiagnosticClient``/``RamalsAiAdaptationClient``-equivalent) are changed to mint and
-    attach one -- a Java-side change this PR deliberately does not make, per MCP-3's own scope. A
-    request with no delegated context is not an error here: the agent proposes with no MCP
-    capability available, exactly its existing behavior, rather than the whole proposal failing
-    over a credential Java has not started sending yet.
+    specific request -- expected whenever Java's own outbound call for this interaction did not
+    attach one (MCP-3.1 wired the adaptation and diagnostic-assessment call sites; other callers
+    may still send none). A request with no delegated context is not an error here: the agent
+    proposes with no MCP capability available, exactly its existing behavior, rather than the whole
+    proposal failing over a credential this specific call did not carry.
 
     Read directly off ``request.headers`` rather than a declared FastAPI ``Header(...)`` parameter,
     so this stays a plain, optional enrichment of the existing envelope-based endpoints rather than
@@ -270,7 +283,7 @@ def _mcp_execution_context(
         return None
     return McpExecutionContext(
         delegated_context_token=token,
-        interaction_id=envelope.interactionId,
+        interaction_id=interaction_id,
         deadline=deadline,
     )
 

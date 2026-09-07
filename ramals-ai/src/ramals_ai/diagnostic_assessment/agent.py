@@ -32,7 +32,11 @@ from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.gateway import GatewayExecutionPolicy, LLMGateway
 from ramals_ai.graph.runtime import GraphRun
 from ramals_ai.graph.state import AgentState
+from ramals_ai.graph.tools import ToolRegistry
 from ramals_ai.grounding.contracts import ContextAuthority, GroundedContext, SourceType
+from ramals_ai.mcp.client import RamalsMcpReadClient
+from ramals_ai.mcp.context import McpExecutionContext
+from ramals_ai.mcp.tools import DIAGNOSTIC_AGENT_CAPABILITIES, build_mcp_tool_registry
 from ramals_ai.prompting.templates import PromptRegister, PromptTemplateId
 
 REQUIRED_SOURCES: frozenset[SourceType] = frozenset(
@@ -65,10 +69,19 @@ class DiagnosticAssessmentAgent:
         *,
         route: ModelRoute = ModelRoute.DIAGNOSTIC_DEFAULT,
         prompts: PromptRegister | None = None,
+        mcp_client: RamalsMcpReadClient | None = None,
     ) -> None:
+        """Builds the agent.
+
+        ``mcp_client`` is the process-shared MCP-3 read client (absent when MCP is not configured).
+        See ``DiagnosticAgent``'s own constructor docstring -- the same shape, the same reason: it
+        carries no per-interaction state itself, so sharing it across every ``propose`` call is
+        safe; what is per-interaction is the ``McpExecutionContext`` a caller supplies to each call.
+        """
         self._gateway = gateway
         self._route = route
         self._prompts = prompts
+        self._mcp_client = mcp_client
 
     def propose(
         self,
@@ -80,6 +93,7 @@ class DiagnosticAssessmentAgent:
         interaction_class: InteractionClass = InteractionClass.INTERACTIVE_AI,
         dispatch_fence: int | None = None,
         request_digest: str | None = None,
+        mcp_execution_context: McpExecutionContext | None = None,
     ) -> AIProposalEnvelope:
         """Runs one bounded graph execution over the supplied context.
 
@@ -101,6 +115,7 @@ class DiagnosticAssessmentAgent:
                 permitted_evidence_ids,
                 permitted_skill_codes=permitted_skill_codes,
             ),
+            registry=self._mcp_registry(mcp_execution_context),
         )
         built = run.build_prompt(
             route=self._route,
@@ -126,6 +141,28 @@ class DiagnosticAssessmentAgent:
             execution_policy=GatewayExecutionPolicy.SINGLE_SUBMISSION_FAIL_CLOSED,
         )
         return self._to_envelope(run.run(state, route=self._route))
+
+    def _mcp_registry(self, context: McpExecutionContext | None) -> ToolRegistry | None:
+        """A fresh, interaction-scoped registry granting exactly this agent's MCP-3 reads, or
+        ``None`` (``GraphRun`` then falls back to its own empty registry -- exactly today's
+        existing, no-tools behavior). See ``DiagnosticAgent._mcp_registry`` for the full reasoning;
+        identical except this agent reads through ``AgentType.DIAGNOSTIC`` as ``DiagnosticAgent``
+        also does -- both report that agent type, and each registry is built fresh per call, so the
+        two never share or leak into one another.
+
+        Reuses ``DIAGNOSTIC_AGENT_CAPABILITIES`` rather than a second,
+        diagnostic-assessment-specific constant: Java's own
+        ``AiDelegatedCapabilityPolicy.DIAGNOSTIC_ASSESSMENT_CAPABILITIES`` (MCP-3.1) delegates
+        exactly this same four-capability set, and a second Python-side allowlist naming the same
+        four capabilities would be a second copy of one fact, not a distinct one.
+        """
+        if self._mcp_client is None or context is None:
+            return None
+        return build_mcp_tool_registry(
+            self._mcp_client,
+            context,
+            allowlists={AgentType.DIAGNOSTIC: DIAGNOSTIC_AGENT_CAPABILITIES},
+        )
 
     def _to_envelope(self, state: AgentState) -> AIProposalEnvelope:
         """Assembles the envelope, carrying provenance v2 through unchanged.
