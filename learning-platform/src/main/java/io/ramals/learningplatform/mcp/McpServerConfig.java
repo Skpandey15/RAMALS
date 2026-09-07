@@ -7,10 +7,12 @@ import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.server.transport.HttpServletStreamableServerTransportProvider;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextIssuer;
 import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextSigningKeys;
 import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextValidator;
 import io.ramals.learningplatform.mcp.authorization.McpCapabilityAuthorization;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -81,14 +83,50 @@ public class McpServerConfig {
   /**
    * Registered and harmless without configuration, exactly like {@code
    * EnvironmentResultEncryptionKeyProvider}: with no delegated-context key configured, every method
-   * on this bean throws on first call rather than the platform starting with a default key. Nothing
-   * calls it yet -- MCP-1 wires no {@code DelegatedLearnerContextIssuer} or {@code
-   * DelegatedLearnerContextValidator} bean, since no learner-scoped capability exists to use them --
-   * so an unconfigured or disabled deployment never sees this bean's validation at all.
+   * on this bean throws on first call rather than the platform starting with a default key.
+   * {@link #delegatedLearnerContextValidator} (MCP-2) and {@link #delegatedLearnerContextIssuer}
+   * (MCP-3.1) are this bean's only two callers, and neither is affected by an unconfigured key at
+   * startup: the validator's own {@link DelegatedLearnerContextSigningKeys#allSigningKeys()} call
+   * never throws for an empty key map, and the issuer bean method checks for a configured active key
+   * itself before ever calling into this class.
    */
   @Bean
   DelegatedLearnerContextSigningKeys delegatedLearnerContextSigningKeys(McpProperties properties) {
     return new DelegatedLearnerContextSigningKeys(properties.getDelegatedContext());
+  }
+
+  /**
+   * MCP-3.1: the outbound Java→ramals-ai side's counterpart to {@link #delegatedLearnerContextValidator}
+   * above -- mints rather than verifies, but is issued from the exact same {@link
+   * McpProperties.DelegatedContext} configuration and the exact same signing key material, never a
+   * second key or a second token format.
+   *
+   * <p>Registers no bean at all (returns {@code null}, which Spring simply does not publish) when no
+   * delegated-context signing key is configured yet -- {@code ramals.mcp.enabled=true} alone is not
+   * enough. Unlike {@link #delegatedLearnerContextValidator}, which stays harmlessly unconfigured
+   * because {@link DelegatedLearnerContextSigningKeys#allSigningKeys()} never throws for an empty
+   * key map, {@link DelegatedLearnerContextIssuer}'s constructor needs one concrete active key
+   * eagerly, at construction time -- calling {@link DelegatedLearnerContextSigningKeys#activeKeyId()}
+   * here unconditionally would fail application startup the moment MCP is enabled but not yet fully
+   * configured, which is exactly the failure mode this codebase's "absent means safely off, not a
+   * startup failure" discipline (see {@code AiClientConfiguration}, {@code McpProperties}) forbids.
+   * {@link DelegatedAiContextMinter} already treats a missing bean here as "mint nothing" -- never a
+   * broader or default token.
+   */
+  @Bean
+  DelegatedLearnerContextIssuer delegatedLearnerContextIssuer(
+      McpProperties properties, DelegatedLearnerContextSigningKeys signingKeys) {
+    McpProperties.DelegatedContext delegatedContext = properties.getDelegatedContext();
+    if (delegatedContext.getActiveKeyId() == null || delegatedContext.getActiveKeyId().isBlank()) {
+      return null;
+    }
+    return new DelegatedLearnerContextIssuer(
+        delegatedContext.getIssuer(),
+        delegatedContext.getAudience(),
+        Duration.ofSeconds(delegatedContext.getTtlSeconds()),
+        signingKeys.activeKeyId(),
+        signingKeys.activeSigningKey(),
+        Clock.systemUTC());
   }
 
   @Bean

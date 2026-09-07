@@ -1,7 +1,9 @@
 package io.ramals.learningplatform.ai;
 
+import io.ramals.learningplatform.mcp.auth.DelegatedLearnerContextIssuer;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,6 +51,24 @@ public class AiClientConfiguration {
   @Bean
   public AiCallGuard aiCallGuard() {
     return new AiCallGuard(FAILURE_THRESHOLD, OPEN_DURATION, MAX_CONCURRENT_CALLS, Instant::now);
+  }
+
+  /**
+   * MCP-3.1 (M2-ADR-031): mints the delegated learner-context credential the diagnostic assessment
+   * and adaptation clients attach to their outbound calls.
+   *
+   * <p>{@code issuer} is {@link Optional} because {@code McpServerConfig} -- where the real {@link
+   * DelegatedLearnerContextIssuer} bean lives -- exists only while {@code ramals.mcp.enabled=true}
+   * and only once a delegated-context signing key is actually configured; with either absent, Spring
+   * simply has no bean of that type to offer, and this bean still constructs, always returning
+   * {@link DelegatedAiExecutionContext#NONE} from every {@link DelegatedAiContextMinter#mint} call --
+   * the same "unconfigured means absent, not a startup failure" discipline every other AI-plane bean
+   * in this class already holds to.
+   */
+  @Bean
+  public DelegatedAiContextMinter delegatedAiContextMinter(
+      Optional<DelegatedLearnerContextIssuer> issuer) {
+    return new DelegatedAiContextMinter(issuer);
   }
 
   /**

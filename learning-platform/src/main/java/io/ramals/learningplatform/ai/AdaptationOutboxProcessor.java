@@ -5,6 +5,7 @@ import io.ramals.learningplatform.ai.contract.Constraints;
 import io.ramals.learningplatform.ai.contract.InteractionClass;
 import io.ramals.learningplatform.ai.contract.LearnerRef;
 import io.ramals.learningplatform.ai.contract.LearningContext;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.execution.AgentWorkProcessor;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
 import io.ramals.learningplatform.execution.AiExecutionRecoveryPort;
@@ -25,14 +26,20 @@ public class AdaptationOutboxProcessor implements AgentWorkProcessor {
   private final AdaptationService adaptation;
   private final AiExecutionRecorder executions;
   private final AiExecutionRecoveryPort recovery;
+  private final CurriculumService curriculumService;
+  private final DelegatedAiContextMinter delegatedContextMinter;
 
   public AdaptationOutboxProcessor(
       AdaptationService adaptation,
       AiExecutionRecorder executions,
-      AiExecutionRecoveryPort recovery) {
+      AiExecutionRecoveryPort recovery,
+      CurriculumService curriculumService,
+      DelegatedAiContextMinter delegatedContextMinter) {
     this.adaptation = adaptation;
     this.executions = executions;
     this.recovery = recovery;
+    this.curriculumService = curriculumService;
+    this.delegatedContextMinter = delegatedContextMinter;
   }
 
   @Override
@@ -54,12 +61,21 @@ public class AdaptationOutboxProcessor implements AgentWorkProcessor {
       QualificationFault.pause(
           QualificationFault.Window.ADAPTATION_AFTER_COMMISSION, null, request.requestId());
 
+      DelegatedAiExecutionContext delegatedContext = delegatedContextMinter.mint(
+          work.interactionId(),
+          work.learnerId().toString(),
+          () -> curriculumService.domainCodeForSkill(work.skillId())
+              .orElseThrow(() -> new IllegalStateException(
+                  "no domain resolvable for skill " + work.skillId())),
+          AiDelegatedCapabilityPolicy.ADAPTATION_CAPABILITIES);
+
       Instant started = Instant.now();
       try {
         var outcome = adaptation.compareRequired(
             request,
             new RecommendationDecision(work.recommendedAction(), work.reasonCode()),
-            DEADLINE_MS);
+            DEADLINE_MS,
+            delegatedContext);
         executions.recordSuccess(request, outcome.proposal(), started, Instant.now());
       } catch (RuntimeException failure) {
         // A provider failure must settle the commissioned execution before the dispatcher decides

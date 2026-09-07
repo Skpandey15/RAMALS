@@ -26,8 +26,18 @@ public class AdaptationService {
       AiRequestEnvelope request,
       RecommendationDecision deterministicDecision,
       long deadlineMillis) {
+    return compare(request, deterministicDecision, deadlineMillis, DelegatedAiExecutionContext.NONE);
+  }
+
+  /** Same comparison, additionally carrying MCP-3.1's delegated learner-context credential
+   * (M2-ADR-031) on the outbound call -- never part of {@code request} itself. */
+  public Outcome compare(
+      AiRequestEnvelope request,
+      RecommendationDecision deterministicDecision,
+      long deadlineMillis,
+      DelegatedAiExecutionContext delegatedContext) {
     try {
-      return compareRequired(request, deterministicDecision, deadlineMillis);
+      return compareRequired(request, deterministicDecision, deadlineMillis, delegatedContext);
     } catch (AiUnavailableException failure) {
       return new Outcome(deterministicDecision, null, false);
     }
@@ -38,8 +48,19 @@ public class AdaptationService {
       AiRequestEnvelope request,
       RecommendationDecision deterministicDecision,
       long deadlineMillis) {
+    return compareRequired(
+        request, deterministicDecision, deadlineMillis, DelegatedAiExecutionContext.NONE);
+  }
+
+  /** Same as {@link #compareRequired(AiRequestEnvelope, RecommendationDecision, long)}, additionally
+   * carrying MCP-3.1's delegated learner-context credential on the outbound call. */
+  public Outcome compareRequired(
+      AiRequestEnvelope request,
+      RecommendationDecision deterministicDecision,
+      long deadlineMillis,
+      DelegatedAiExecutionContext delegatedContext) {
     AiProposalEnvelope proposal =
-        adaptationPort.requestAdaptationProposal(request, deadlineMillis);
+        adaptationPort.requestAdaptationProposal(request, deadlineMillis, delegatedContext);
     AdaptationProposalGate.Result compared = gate.compare(
         deterministicDecision,
         new AdaptationProposalGate.Proposal(
