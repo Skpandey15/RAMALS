@@ -1,0 +1,21 @@
+{
+  "contractVersion": "1.0",
+  "proposalType": "DIAGNOSTIC_PROBE_CANDIDATE",
+  "proposalId": "prop-3f2a9c10",
+  "requestId": "req-8b1d4e77",
+  "agentRunId": "run-c4e21a90",
+  "interactionId": "int-0a9f7b21",
+  "domain": "KAFKA",
+  "targetMisconceptionId": "01900000-0000-7000-8000-0000000000a1",
+  "targetNode": {
+    "kind": "CONCEPT",
+    "id": "01900000-0000-7000-8000-0000000000b1"
+  },
+  "probeIntent": "DISCRIMINATE_BETWEEN_EVIDENCE_STATES",
+  "candidateProbeRef": null,
+  "evidenceRefs": [
+    "mev-11110000",
+    "mev-22220000"
+  ],
+  "rationale": "Governed evidence for this misconception shows one supporting and one inconclusive observation with no later evidence since the baseline. One additional discriminating observation on this concept would help narrow the remaining evidentiary ambiguity."
+}
