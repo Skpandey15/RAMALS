@@ -18,6 +18,15 @@ import org.springframework.web.client.RestClientException;
  * <p>Follows the adaptation client exactly, including the refusal to run inside a database
  * transaction: an LLM call holding a connection open across a twelve-second deadline is the failure
  * M1-ADR-001 exists to prevent, and a second client is a second place to reintroduce it.
+ *
+ * <p><b>MCP-3.1:</b> this is the real Java-side "diagnostic" outbound client (no client calls the
+ * plain {@code /internal/v1/diagnostic/propose} endpoint), so it attaches the delegated
+ * learner-context credential (M2-ADR-031) when one is minted. That credential is transport-ready
+ * here but not yet end-to-end operational: {@code ramals-ai}'s {@code
+ * /internal/v1/diagnostic-assessment/propose} handler does not yet extract the header or grant an
+ * MCP tool registry (MCP-3's own Python-side wiring was deliberately scoped to {@code
+ * /internal/v1/diagnostic/propose} and {@code /internal/v1/adaptation/propose} only) -- a
+ * separately-scoped Python follow-up is required before this path's MCP capability is usable.
  */
 public class RamalsAiDiagnosticAssessmentClient implements DiagnosticAssessmentPort {
 

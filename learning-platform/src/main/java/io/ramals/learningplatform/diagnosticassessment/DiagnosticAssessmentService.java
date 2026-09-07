@@ -92,8 +92,20 @@ public class DiagnosticAssessmentService {
         DelegatedAiContextMinter.disabled());
   }
 
-  /** Production wiring: MCP-3.1's delegated learner-context credential (M2-ADR-031) is minted per
-   * request and attached to the outbound diagnostic assessment call. */
+  /**
+   * Production wiring: MCP-3.1's delegated learner-context credential (M2-ADR-031) is minted per
+   * request and attached to the outbound diagnostic assessment call.
+   *
+   * <p><b>Transport-ready, not yet end-to-end operational.</b> The header this call site attaches
+   * reaches {@code ramals-ai}'s {@code /internal/v1/diagnostic-assessment/propose} endpoint, but
+   * that endpoint does not yet extract {@code X-Ramals-Delegated-Context}, build an {@code
+   * McpExecutionContext}, or grant {@code DiagnosticAssessmentAgent} an MCP tool registry -- MCP-3
+   * deliberately scoped its own Python-side wiring to {@code /internal/v1/diagnostic/propose} and
+   * {@code /internal/v1/adaptation/propose} only. Java correctly mints and sends the credential;
+   * nothing on the Python side consumes it yet. A separately-scoped Python follow-up is required
+   * before diagnostic-assessment MCP capability is actually usable -- do not read this constructor
+   * as evidence that it already is.
+   */
   public DiagnosticAssessmentService(
       GroundingRetrievalService grounding,
       DiagnosticAssessmentPort agent,
