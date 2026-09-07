@@ -46,4 +46,9 @@ public class CurriculumService {
   public boolean hasPublishedCurriculum(UUID domainId) {
     return repository.hasPublishedCurriculum(domainId);
   }
+
+  /** The domain a skill structurally belongs to. Empty when the skill id is unknown. */
+  public Optional<String> domainCodeForSkill(UUID skillId) {
+    return repository.findDomainCodeForSkill(skillId);
+  }
 }

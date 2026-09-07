@@ -2,6 +2,7 @@ package io.ramals.learningplatform.ai;
 
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.AiRequestEnvelope;
+import io.ramals.learningplatform.mcp.McpDelegatedContextTransportExtractor;
 import io.ramals.learningplatform.observability.CorrelationContext;
 import io.ramals.learningplatform.observability.CorrelationHeaders;
 import org.slf4j.Logger;
@@ -30,6 +31,12 @@ public class RamalsAiAdaptationClient implements AdaptationPort {
   @Override
   public AiProposalEnvelope requestAdaptationProposal(
       AiRequestEnvelope request, long deadlineMillis) {
+    return requestAdaptationProposal(request, deadlineMillis, DelegatedAiExecutionContext.NONE);
+  }
+
+  @Override
+  public AiProposalEnvelope requestAdaptationProposal(
+      AiRequestEnvelope request, long deadlineMillis, DelegatedAiExecutionContext delegatedContext) {
     if (TransactionSynchronizationManager.isActualTransactionActive()) {
       throw new IllegalStateException("An AI call must not run inside a database transaction.");
     }
@@ -47,6 +54,13 @@ public class RamalsAiAdaptationClient implements AdaptationPort {
                 // Workload identity per M1-ADR-003, never the learner's token.
                 .header("Authorization", "Bearer " + tokenProvider.accessToken())
                 .header(CorrelationHeaders.INTERACTION_ID, CorrelationContext.currentInteractionId())
+                // MCP-3.1 (M2-ADR-031): a distinct, independent credential answering a distinct
+                // question ("which learner/domain/capabilities may this interaction use through
+                // MCP", not "who is calling ramals-ai") -- attached only when actually minted, never
+                // in place of the workload Authorization header above, never merged with it.
+                .headers(headers -> delegatedContext.token().ifPresent(
+                    token -> headers.add(
+                        McpDelegatedContextTransportExtractor.HEADER_NAME, token)))
                 .body(request)
                 .retrieve()
                 .body(AiProposalEnvelope.class);

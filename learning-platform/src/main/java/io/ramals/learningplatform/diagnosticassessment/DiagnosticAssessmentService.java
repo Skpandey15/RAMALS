@@ -1,5 +1,8 @@
 package io.ramals.learningplatform.diagnosticassessment;
 
+import io.ramals.learningplatform.ai.AiDelegatedCapabilityPolicy;
+import io.ramals.learningplatform.ai.DelegatedAiContextMinter;
+import io.ramals.learningplatform.ai.DelegatedAiExecutionContext;
 import io.ramals.learningplatform.ai.DiagnosticAssessmentPort;
 import io.ramals.learningplatform.ai.AiUnavailableException;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
@@ -17,6 +20,7 @@ import io.ramals.learningplatform.grounding.ProposalGateResult;
 import io.ramals.learningplatform.grounding.ProposalType;
 import io.ramals.learningplatform.execution.AiExecutionCommission;
 import io.ramals.learningplatform.execution.AiExecutionDispatchClaim;
+import io.ramals.learningplatform.curriculum.CurriculumService;
 import io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder;
 import io.ramals.learningplatform.execution.DiagnosticCommissionContext;
 import io.ramals.learningplatform.observability.CorrelationContext;
@@ -69,7 +73,14 @@ public class DiagnosticAssessmentService {
   private final DiagnosticAssessmentExecutionRecorder executions;
   private final DiagnosticOutcomeWriter outcomes;
   private final Clock clock;
+  private final CurriculumService curriculumService;
+  private final DelegatedAiContextMinter delegatedContextMinter;
 
+  /**
+   * Preserved for every existing caller/test with no MCP-3.1 delegation to offer: {@code
+   * curriculumService} is never dereferenced and no delegated context is ever minted, because
+   * {@link DelegatedAiContextMinter#disabled()} short-circuits before either is touched.
+   */
   public DiagnosticAssessmentService(
       GroundingRetrievalService grounding,
       DiagnosticAssessmentPort agent,
@@ -77,12 +88,29 @@ public class DiagnosticAssessmentService {
       DiagnosticAssessmentExecutionRecorder executions,
       DiagnosticOutcomeWriter outcomes,
       Clock clock) {
+    this(grounding, agent, gate, executions, outcomes, clock, null,
+        DelegatedAiContextMinter.disabled());
+  }
+
+  /** Production wiring: MCP-3.1's delegated learner-context credential (M2-ADR-031) is minted per
+   * request and attached to the outbound diagnostic assessment call. */
+  public DiagnosticAssessmentService(
+      GroundingRetrievalService grounding,
+      DiagnosticAssessmentPort agent,
+      DiagnosticAssessmentProposalGate gate,
+      DiagnosticAssessmentExecutionRecorder executions,
+      DiagnosticOutcomeWriter outcomes,
+      Clock clock,
+      CurriculumService curriculumService,
+      DelegatedAiContextMinter delegatedContextMinter) {
     this.grounding = grounding;
     this.agent = agent;
     this.gate = gate;
     this.executions = executions;
     this.outcomes = outcomes;
     this.clock = clock;
+    this.curriculumService = curriculumService;
+    this.delegatedContextMinter = delegatedContextMinter;
   }
 
   /** The decision, and the identity needed to find everything behind it. */
@@ -157,6 +185,12 @@ public class DiagnosticAssessmentService {
           "This diagnostic assessment request lost provider-dispatch ownership.");
     }
 
+    DelegatedAiExecutionContext delegatedContext = delegatedContextMinter.mint(
+        interactionId,
+        context.learnerRef(),
+        () -> curriculumService.graph(curriculumVersionId).domainCode(),
+        AiDelegatedCapabilityPolicy.DIAGNOSTIC_ASSESSMENT_CAPABILITIES);
+
     Instant startedAt = clock.instant();
     AiProposalEnvelope envelope;
     try {
@@ -164,7 +198,8 @@ public class DiagnosticAssessmentService {
           agent.requestDiagnosticAssessment(
               request,
               new DiagnosticDispatchAuthorization(dispatch.fence(), dispatch.requestDigest()),
-              DEADLINE_MS);
+              DEADLINE_MS,
+              delegatedContext);
     } catch (AiUnavailableException failure) {
       executions.recordIndeterminate(request, INDETERMINATE, startedAt, clock.instant());
       throw new AiUnavailableException(

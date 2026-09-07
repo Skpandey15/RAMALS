@@ -3,6 +3,7 @@ package io.ramals.learningplatform.ai;
 import io.ramals.learningplatform.ai.contract.AiProposalEnvelope;
 import io.ramals.learningplatform.ai.contract.DiagnosticAssessmentRequest;
 import io.ramals.learningplatform.ai.contract.DiagnosticDispatchAuthorization;
+import io.ramals.learningplatform.mcp.McpDelegatedContextTransportExtractor;
 import io.ramals.learningplatform.observability.CorrelationContext;
 import io.ramals.learningplatform.observability.CorrelationHeaders;
 import org.slf4j.Logger;
@@ -44,6 +45,16 @@ public class RamalsAiDiagnosticAssessmentClient implements DiagnosticAssessmentP
       DiagnosticAssessmentRequest request,
       DiagnosticDispatchAuthorization authorization,
       long deadlineMillis) {
+    return requestDiagnosticAssessment(
+        request, authorization, deadlineMillis, DelegatedAiExecutionContext.NONE);
+  }
+
+  @Override
+  public AiProposalEnvelope requestDiagnosticAssessment(
+      DiagnosticAssessmentRequest request,
+      DiagnosticDispatchAuthorization authorization,
+      long deadlineMillis,
+      DelegatedAiExecutionContext delegatedContext) {
     if (TransactionSynchronizationManager.isActualTransactionActive()) {
       throw new IllegalStateException("An AI call must not run inside a database transaction.");
     }
@@ -69,6 +80,11 @@ public class RamalsAiDiagnosticAssessmentClient implements DiagnosticAssessmentP
                                  CorrelationContext.currentInteractionId())
                             .header(DISPATCH_FENCE_HEADER, Long.toString(authorization.fence()))
                             .header(REQUEST_DIGEST_HEADER, authorization.requestDigest())
+                            // MCP-3.1 (M2-ADR-031): a distinct, independent credential -- see
+                            // RamalsAiAdaptationClient's own comment for the full reasoning.
+                            .headers(headers -> delegatedContext.token().ifPresent(
+                                token -> headers.add(
+                                    McpDelegatedContextTransportExtractor.HEADER_NAME, token)))
                             .body(request)
                             .retrieve()
                             .body(AiProposalEnvelope.class);

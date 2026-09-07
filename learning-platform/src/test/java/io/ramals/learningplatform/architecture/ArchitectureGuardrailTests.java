@@ -186,6 +186,34 @@ class ArchitectureGuardrailTests {
       .because("application/domain services must not depend on MVC implementation types");
 
   @ArchTest
+  static final ArchRule onlyDelegatedContextAuthOwnsJwtSigning = noClasses()
+      .that().resideOutsideOfPackage(BASE + ".mcp.auth..")
+      .should().dependOnClassesThat().resideInAPackage("com.nimbusds..")
+      .because("MCP-3.1 (M2-ADR-031): JWT construction and signing for the delegated "
+          + "learner-context credential stays inside mcp.auth -- an AI client never signs one "
+          + "itself, it only asks DelegatedAiContextMinter, which itself only calls "
+          + "DelegatedLearnerContextIssuer");
+
+  @ArchTest
+  static final ArchRule aiCannotResolveDelegatedContextSigningKeysDirectly = noClasses()
+      .that().resideInAnyPackage(BASE + ".ai..")
+      .should().dependOnClassesThat()
+          .haveFullyQualifiedName(BASE + ".mcp.auth.DelegatedLearnerContextSigningKeys")
+      .because("MCP-3.1: an AI client or its minting service asks DelegatedAiContextMinter for a "
+          + "token; it never resolves or touches signing key material itself");
+
+  @ArchTest
+  static final ArchRule delegatedContextMinterIsTheOnlyAiCallerOfTheIssuer = noClasses()
+      .that().resideInAnyPackage(BASE + ".ai..")
+      .and().doNotHaveFullyQualifiedName(BASE + ".ai.DelegatedAiContextMinter")
+      .and().doNotHaveFullyQualifiedName(BASE + ".ai.AiClientConfiguration")
+      .should().dependOnClassesThat()
+          .haveFullyQualifiedName(BASE + ".mcp.auth.DelegatedLearnerContextIssuer")
+      .because("MCP-3.1: every JWT signing decision stays behind DelegatedAiContextMinter's own "
+          + "fail-closed-to-absent policy -- AiClientConfiguration only wires the issuer bean "
+          + "through, it does not call it, and no other AI-plane class calls the issuer directly");
+
+  @ArchTest
   static final ArchRule majorModulesAreAcyclic = slices()
       .matching(BASE
           + ".(curriculum|assessment|evidence|mastery|recommendation|learner|learning|ai|diagnosis)..")

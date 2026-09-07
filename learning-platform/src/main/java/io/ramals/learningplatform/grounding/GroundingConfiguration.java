@@ -62,9 +62,12 @@ public class GroundingConfiguration {
           io.ramals.learningplatform.ai.DiagnosticAssessmentPort agent,
           io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentProposalGate gate,
           io.ramals.learningplatform.execution.DiagnosticAssessmentExecutionRecorder executions,
-          io.ramals.learningplatform.diagnosticassessment.DiagnosticOutcomeWriter outcomes) {
+          io.ramals.learningplatform.diagnosticassessment.DiagnosticOutcomeWriter outcomes,
+          io.ramals.learningplatform.curriculum.CurriculumService curriculumService,
+          io.ramals.learningplatform.ai.DelegatedAiContextMinter delegatedContextMinter) {
     return new io.ramals.learningplatform.diagnosticassessment.DiagnosticAssessmentService(
-        retrieval, agent, gate, executions, outcomes, Clock.systemUTC());
+        retrieval, agent, gate, executions, outcomes, Clock.systemUTC(), curriculumService,
+        delegatedContextMinter);
   }
 
   @Bean

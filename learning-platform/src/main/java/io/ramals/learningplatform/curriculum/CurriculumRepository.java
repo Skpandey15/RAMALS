@@ -128,6 +128,21 @@ public class CurriculumRepository {
             result.getString("version_code")), skillCode).stream().findFirst();
   }
 
+  /**
+   * The domain a skill structurally belongs to, by the skill's own id -- not filtered by curriculum
+   * publication state, because this answers "which domain owns this skill", not "what may currently
+   * be taught". Used for authorization scoping (MCP-3.1's delegated learner-context domain scope),
+   * never for content retrieval, which is why no published/retired status filter belongs here.
+   */
+  public Optional<String> findDomainCodeForSkill(UUID skillId) {
+    return jdbcTemplate.query("""
+        SELECT d.code AS domain_code
+          FROM core.skill s
+          JOIN core.learning_domain d ON d.id = s.domain_id
+         WHERE s.id = ?
+        """, (result, row) -> result.getString("domain_code"), skillId).stream().findFirst();
+  }
+
   public boolean hasPublishedCurriculum(UUID domainId) {
     Integer count = jdbcTemplate.queryForObject("""
         SELECT count(*) FROM core.curriculum_version
