@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -128,15 +129,18 @@ class DiagnosticProbeProposalDecisionPersistenceIntegrationTests {
         "rv1");
   }
 
-  private void setUp() {
+  @BeforeEach
+  void wireRepository() {
+    // No per-test reset: @BeforeAll drops and re-migrates the schema, so the table starts empty,
+    // and every method below writes a distinct proposal_id. The runtime role cannot DELETE from a
+    // ledger table anyway (V002 grants it SELECT, INSERT only; the append-only trigger enforces the
+    // rest), which is the property theTableIsAppendOnly proves.
     runtimeJdbc = jdbc(RUNTIME_USER, RUNTIME_PASSWORD);
     repository = new JdbcDiagnosticProbeProposalDecisionRepository(runtimeJdbc);
-    runtimeJdbc.update("DELETE FROM ledger.diagnostic_probe_proposal_decision");
   }
 
   @Test
   void aDecisionIsWrittenWithItsCorrelationIdentity() {
-    setUp();
     repository.append(decision("prop-write", true));
 
     var recorded = repository.findByProposalId("prop-write");
@@ -160,7 +164,6 @@ class DiagnosticProbeProposalDecisionPersistenceIntegrationTests {
 
   @Test
   void reRecordingTheSameProposalUnderTheSamePolicyCollapsesToOneRow() {
-    setUp();
     repository.append(decision("prop-idem", false));
     repository.append(decision("prop-idem", false));
 
@@ -173,7 +176,6 @@ class DiagnosticProbeProposalDecisionPersistenceIntegrationTests {
 
   @Test
   void theTableIsAppendOnly() {
-    setUp();
     repository.append(decision("prop-immutable", true));
 
     assertThatThrownBy(
@@ -192,7 +194,6 @@ class DiagnosticProbeProposalDecisionPersistenceIntegrationTests {
 
   @Test
   void theAcceptedFlagMustAgreeWithTheReasonCodes() {
-    setUp();
     // accepted = true but reasons != ["ACCEPTED"] violates ck_diagnostic_probe_proposal_decision_accepted.
     DiagnosticProbeProposalDecision inconsistent =
         new DiagnosticProbeProposalDecision(

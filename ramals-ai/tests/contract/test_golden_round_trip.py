@@ -36,6 +36,18 @@ ASSESSMENT_EVALUATION_FIXTURES = {
     "assessment-evaluation-proposal-v1-duplicate-evidence.invalid.json",
 }
 
+# M2-ADR-032 step 2: the advisory diagnostic-probe proposal contract. The Python reasoning that
+# produces one is a later, separately reviewed PR (ADR §23 step 3), so there is no generated model
+# to round-trip yet -- these fixtures are exercised against the JSON Schema only, the same way the
+# assessment-evaluation pair above is covered outside ROUND_TRIP_CASES.
+DIAGNOSTIC_PROBE_PROPOSAL_SCHEMA = (
+    GOLDEN.parent / "mvp2" / "diagnostic-probe-proposal.v1.schema.json"
+)
+DIAGNOSTIC_PROBE_PROPOSAL_FIXTURES = {
+    "diagnostic-probe-proposal-v1.json",
+    "diagnostic-probe-proposal-v1-forbidden-confidence.invalid.json",
+}
+
 ROUND_TRIP_CASES: list[tuple[str, type[BaseModel]]] = [
     ("request-tutor-minimal.json", AIRequestEnvelope),
     ("request-tutor-full.json", AIRequestEnvelope),
@@ -69,8 +81,37 @@ def test_fixture_round_trips(fixture: str, model: type[BaseModel]) -> None:
 def test_every_golden_fixture_is_exercised() -> None:
     """A fixture the Python side never loads could pin a shape only Java sees."""
     present = sorted(p.name for p in GOLDEN.glob("*.json"))
-    covered = sorted({fixture for fixture, _ in ROUND_TRIP_CASES} | ASSESSMENT_EVALUATION_FIXTURES)
+    covered = sorted(
+        {fixture for fixture, _ in ROUND_TRIP_CASES}
+        | ASSESSMENT_EVALUATION_FIXTURES
+        | DIAGNOSTIC_PROBE_PROPOSAL_FIXTURES
+    )
     assert present == covered
+
+
+def test_diagnostic_probe_proposal_valid_fixture_matches_schema() -> None:
+    """M2-ADR-032 22: the valid fixture conforms to the frozen v1 wire contract."""
+    payload = load("diagnostic-probe-proposal-v1.json")
+    schema = json.loads(DIAGNOSTIC_PROBE_PROPOSAL_SCHEMA.read_text(encoding="utf-8"))
+
+    Draft202012Validator(schema).validate(payload)
+
+    assert payload["proposalType"] == "DIAGNOSTIC_PROBE_CANDIDATE"
+    assert payload["contractVersion"] == "1.0"
+    assert "confidence" not in payload
+
+
+def test_diagnostic_probe_proposal_forbidden_confidence_fixture_fails_schema() -> None:
+    """M2-ADR-032 3/22: a bare confidence field is not representable on this proposal type."""
+    payload = load("diagnostic-probe-proposal-v1-forbidden-confidence.invalid.json")
+    schema = json.loads(DIAGNOSTIC_PROBE_PROPOSAL_SCHEMA.read_text(encoding="utf-8"))
+
+    errors = list(Draft202012Validator(schema).iter_errors(payload))
+    assert errors
+    assert any(
+        "confidence" in str(error.message) or "additional" in str(error.message).lower()
+        for error in errors
+    )
 
 
 def test_assessment_evaluation_optional_evidence_fixture_matches_schema_and_model() -> None:
