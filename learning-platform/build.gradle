@@ -69,7 +69,14 @@ dependencies {
 }
 
 tasks.withType(Test).configureEach {
-  jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED'
+  // JUnit Pioneer's @SetEnvironmentVariable mutates the live environment map reflectively. On a
+  // modular JDK that needs java.lang (ProcessEnvironment), java.util (the UnmodifiableMap wrapper
+  // getenv() returns) and java.lang.reflect all opened; opening only java.lang leaves
+  // QualificationFaultTests' env-driven cases failing with InaccessibleObjectException on CI.
+  jvmArgs(
+      '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
+      '--add-opens', 'java.base/java.util=ALL-UNNAMED',
+      '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED')
 }
 
 tasks.named('test') {
