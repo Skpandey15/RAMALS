@@ -141,7 +141,11 @@ class GoldenContractRoundTripTests {
         "problem-deadline-exceeded.json", "grounded-context-v1.json",
         "request-assessment-evaluation.json",
         "assessment-evaluation-proposal-v1-optional-evidence.json",
-        "assessment-evaluation-proposal-v1-duplicate-evidence.invalid.json");
+        "assessment-evaluation-proposal-v1-duplicate-evidence.invalid.json",
+        // M2-ADR-032 step 2: exercised by DiagnosticProbeProposalContractTests -- the valid fixture
+        // round-trips through DiagnosticProbeProposal.parse, the forbidden-field fixture is refused.
+        "diagnostic-probe-proposal-v1.json",
+        "diagnostic-probe-proposal-v1-forbidden-confidence.invalid.json");
 
     try (var entries = Files.list(goldenDirectory())) {
       List<String> present = entries.map(path -> path.getFileName().toString())

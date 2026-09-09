@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramals.io/contracts/mvp2/diagnostic-probe-proposal.v1.schema.json",
+  "title": "RAMALS MVP-2 DiagnosticProbeProposal v1 (M2-ADR-032)",
+  "description": "An advisory, non-authoritative recommendation for ONE next diagnostic evidence-acquisition probe. It asserts nothing about the learner: it names an unresolved evidentiary ambiguity in governed H6/H7 evidence and a bounded next observation that would help discriminate it. It is never a diagnosis, a classification, a ranking of misconceptions, a confidence value, or an instruction to run anything. Java's deterministic, versioned, fail-closed gate (DiagnosticProbeProposalGate) independently decides whether it has any effect; probe eligibility and execution remain with DIAGNOSTIC_SELECTION_V1-V5, untouched. Its own contract version, independent of diagnostic-proposal.v1.schema.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "proposalType",
+    "proposalId",
+    "requestId",
+    "agentRunId",
+    "interactionId",
+    "domain",
+    "targetMisconceptionId",
+    "targetNode",
+    "probeIntent",
+    "evidenceRefs",
+    "rationale"
+  ],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "proposalType": {
+      "const": "DIAGNOSTIC_PROBE_CANDIDATE",
+      "description": "Explicit discriminator (M2-ADR-032 22). Distinguishes this evidence-acquisition recommendation from the skill-classification DiagnosticAssessmentProposal; one field never means two verdict shapes."
+    },
+    "proposalId": { "$ref": "#/$defs/id" },
+    "requestId": { "$ref": "#/$defs/id" },
+    "agentRunId": { "$ref": "#/$defs/id" },
+    "interactionId": {
+      "$ref": "#/$defs/id",
+      "description": "Echoed for cross-check only. Java binds the authoritative interaction from its own context and rejects a mismatch; a value here can never select or override the interaction (M2-ADR-032 4.3)."
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The domain the recommendation concerns. Cross-checked against the interaction's authorized domain; never widens scope (M2-ADR-032 4.4, 21)."
+    },
+    "targetMisconceptionId": {
+      "$ref": "#/$defs/uuid",
+      "description": "An existing, already-authored, PUBLISHED core.misconception id (M2-ADR-026 4). Must be a member of the misconception id set actually exposed to this interaction (M_allowed) and is independently re-validated by Java (M2-ADR-032 12). The AI may never name or infer a misconception that does not already exist."
+    },
+    "targetNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "description": "The single ontology entity the target misconception is attached to, per M2-ADR-026's DB-enforced exclusive arc. Must exactly match the misconception's real target (kind and id); it is not chosen freely.",
+      "properties": {
+        "kind": { "enum": ["LEARNING_OBJECTIVE", "CONCEPT", "SUB_CONCEPT"] },
+        "id": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "probeIntent": {
+      "enum": [
+        "COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE",
+        "DISCRIMINATE_BETWEEN_EVIDENCE_STATES"
+      ],
+      "description": "A bounded, closed set of advisory intents. Versioned with this contract. Neither value asserts a diagnosis, a probability, or that a probe is eligible to run."
+    },
+    "candidateProbeRef": {
+      "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }],
+      "description": "Optional. A specific authored probe/assessment object the agent believes would serve the intent. If present it must be a member of the probe-reference set authorized for this interaction; naming it is never itself authorization to run it (M2-ADR-032 13). Eligibility is decided only by deterministic Java selection policy, which this contract does not touch."
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" },
+      "description": "E_proposed: governed evidence/provenance identifiers the recommendation cites. Java enforces E_proposed subset of E_allowed - the exact set supplied to this interaction - independently of the prompt (M2-ADR-032 11). A reference outside E_allowed is rejected outright."
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "Bounded natural language stating why additional evidence would be diagnostically useful. Matches Diagnosis.reason's 1000-character bound. Must not contain probability/percentage language, comparative 'more/less likely' between misconceptions, or resolution terminology (VERIFIED/CONFIRMED/RESOLVED/CURED/RECURRENCE/REGRESSION/REVERSAL/ROOT_CAUSE) - Java rejects it lexically and deterministically (M2-ADR-032 8, 9; M2-ADR-030 G)."
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    }
+  }
+}

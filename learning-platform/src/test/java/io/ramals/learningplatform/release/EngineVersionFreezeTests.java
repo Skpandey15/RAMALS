@@ -37,6 +37,11 @@ import io.ramals.learningplatform.assessmentevaluation.AssessmentEvaluationPropo
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DeterministicCheck;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationRubricScorePolicy;
+import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposal;
+import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalContext;
+import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalGate;
+import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalGateResult;
+import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeTargetPort;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DimensionResult;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceCoverage;
@@ -142,6 +147,8 @@ class EngineVersionFreezeTests {
     put(EvaluationProposalGate.POLICY_VERSION, EngineVersionFreezeTests::evaluationProposalGate);
     put(EvaluationRubricScorePolicy.POLICY_VERSION, EngineVersionFreezeTests::evaluationRubricScore);
     put(LearningWorkflowPolicy.POLICY_VERSION, EngineVersionFreezeTests::learningWorkflowPolicy);
+    put(DiagnosticProbeProposalGate.POLICY_VERSION,
+        EngineVersionFreezeTests::diagnosticProbeProposalGate);
   }};
 
   /**
@@ -195,7 +202,11 @@ class EngineVersionFreezeTests {
       Map.entry("PROPOSAL_GROUNDING_V1", "6578ca9a115acb2c2e9e7b11a872a94aa55614a0b321702a11cf63ba3c154a9a"),
       Map.entry("EVALUATION_GATE_V1", "d0587299051f708dea7aa6d29e439b46f903d24b98d53c28dfc74a48bd00c0a3"),
       Map.entry("EVALUATION_SCORE_POLICY_V1", "b22b8a28e18da7a702816f894e027fe1acb470ea1b7c352adbaae5cd9d3a1a6a"),
-      Map.entry("WORKFLOW_POLICY_V1", "7842607b4cad8420bab8aceabe300eaa6236deb59cd5c6954df736c8d24ad1e9"));
+      Map.entry("WORKFLOW_POLICY_V1", "7842607b4cad8420bab8aceabe300eaa6236deb59cd5c6954df736c8d24ad1e9"),
+      // Minted with M2-ADR-032 step 2, when the advisory diagnostic-probe proposal gate was first
+      // frozen. Nothing has been written under it yet, which is the only time an entry here may be
+      // added rather than a new version identifier minted.
+      Map.entry("DIAGNOSTIC_PROBE_PROPOSAL_GATE_V1", "e2f5deba999701c158dee079e4a18d14bcd766c3db861200617969145913d11e"));
 
   @Test
   void everyVersionedEngineHasAFrozenVector() throws IOException {
@@ -963,6 +974,181 @@ class EngineVersionFreezeTests {
       }
     }
     return out.toString();
+  }
+
+  /**
+   * DIAGNOSTIC_PROBE_PROPOSAL_GATE_V1 (M2-ADR-032 step 2) over a fixed set of proposals and one
+   * fixed authoritative context: an accepted objective-arc case and an accepted concept-arc case,
+   * then one case per rejection reason -- domain and interaction mismatch, out-of-scope and
+   * not-found and not-published targets, both arc-mismatch shapes, an evidence reference outside the
+   * allowed set, an unauthorized candidate probe reference, an interaction delegated nothing, a
+   * rationale using forbidden probability/resolution terminology, an unsupported contract version,
+   * an incomplete context, and a null proposal. A change to any check, the terminology list, the
+   * reason mapping, or the sort order moves this hash.
+   */
+  private static String diagnosticProbeProposalGate() {
+    DiagnosticProbeProposalGate gate = new DiagnosticProbeProposalGate();
+
+    UUID mcObjective = UUID.fromString("01900000-0000-7000-8000-0000000000d1");
+    UUID mcConcept = UUID.fromString("01900000-0000-7000-8000-0000000000d2");
+    UUID mcUnpublished = UUID.fromString("01900000-0000-7000-8000-0000000000d3");
+    UUID mcMissing = UUID.fromString("01900000-0000-7000-8000-0000000000d9");
+    UUID objectiveId = UUID.fromString("01900000-0000-7000-8000-0000000000f1");
+    UUID conceptNodeId = UUID.fromString("01900000-0000-7000-8000-0000000000f2");
+    UUID unpublishedObjectiveId = UUID.fromString("01900000-0000-7000-8000-0000000000f3");
+    UUID otherId = UUID.fromString("01900000-0000-7000-8000-0000000000f9");
+    UUID probeAuthorized = UUID.fromString("01900000-0000-7000-8000-0000000000e1");
+    UUID probeUnauthorized = UUID.fromString("01900000-0000-7000-8000-0000000000e9");
+    UUID learnerId = UUID.fromString("01900000-0000-7000-8000-0000000000c1");
+
+    DiagnosticProbeTargetPort port = new DiagnosticProbeTargetPort() {
+      @Override
+      public Optional<DiagnosticProbeTargetPort.ResolvedMisconception> findMisconception(UUID id) {
+        if (mcObjective.equals(id)) {
+          return Optional.of(
+              new ResolvedMisconception(id, true, objectiveId, null));
+        }
+        if (mcConcept.equals(id)) {
+          return Optional.of(new ResolvedMisconception(id, true, null, conceptNodeId));
+        }
+        if (mcUnpublished.equals(id)) {
+          return Optional.of(
+              new ResolvedMisconception(id, false, unpublishedObjectiveId, null));
+        }
+        return Optional.empty();
+      }
+
+      @Override
+      public Optional<DiagnosticProbeProposal.TargetNode.Kind> findDiagnosticNodeKind(UUID id) {
+        return conceptNodeId.equals(id)
+            ? Optional.of(DiagnosticProbeProposal.TargetNode.Kind.CONCEPT)
+            : Optional.empty();
+      }
+    };
+
+    DiagnosticProbeProposalContext base = new DiagnosticProbeProposalContext(
+        learnerId,
+        "int-freeze-1",
+        "KAFKA",
+        Set.of(mcObjective, mcConcept, mcUnpublished),
+        Set.of("ev-1", "ev-2", "ev-3"),
+        Set.of(probeAuthorized),
+        Set.of("diagnostics.current-domain-report"));
+    DiagnosticProbeProposalContext noCapabilities = new DiagnosticProbeProposalContext(
+        learnerId, "int-freeze-1", "KAFKA", Set.of(mcObjective), Set.of("ev-1"), Set.of(), Set.of());
+    DiagnosticProbeProposalContext incomplete = new DiagnosticProbeProposalContext(
+        learnerId, "int-freeze-1", null, Set.of(mcObjective), Set.of("ev-1"), Set.of(),
+        Set.of("diagnostics.current-domain-report"));
+
+    String okRationale =
+        "One additional discriminating observation on this target would help narrow the remaining "
+            + "evidentiary ambiguity the governed projections already show.";
+
+    record Case(String label, DiagnosticProbeProposal proposal, DiagnosticProbeProposalContext ctx) {}
+    List<Case> cases = List.of(
+        new Case("accept-objective-arc", probe("1.0", "int-freeze-1", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1", "ev-2"), okRationale), base),
+        new Case("accept-concept-arc", probe("1.0", "int-freeze-1", "KAFKA", mcConcept,
+            DiagnosticProbeProposal.TargetNode.Kind.CONCEPT, conceptNodeId,
+            DiagnosticProbeProposal.ProbeIntent.DISCRIMINATE_BETWEEN_EVIDENCE_STATES, probeAuthorized,
+            List.of("ev-3"), okRationale), base),
+        new Case("domain-mismatch", probe("1.0", "int-freeze-1", "KUBERNETES", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"), okRationale), base),
+        new Case("interaction-mismatch", probe("1.0", "int-other", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"), okRationale), base),
+        new Case("out-of-scope-and-not-found", probe("1.0", "int-freeze-1", "KAFKA", mcMissing,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"), okRationale), base),
+        new Case("not-published", probe("1.0", "int-freeze-1", "KAFKA", mcUnpublished,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, unpublishedObjectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"), okRationale), base),
+        new Case("arc-mismatch-id", probe("1.0", "int-freeze-1", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, otherId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"), okRationale), base),
+        new Case("arc-mismatch-kind", probe("1.0", "int-freeze-1", "KAFKA", mcConcept,
+            DiagnosticProbeProposal.TargetNode.Kind.SUB_CONCEPT, conceptNodeId,
+            DiagnosticProbeProposal.ProbeIntent.DISCRIMINATE_BETWEEN_EVIDENCE_STATES, null,
+            List.of("ev-1"), okRationale), base),
+        new Case("evidence-not-in-context", probe("1.0", "int-freeze-1", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1", "ev-99"), okRationale), base),
+        new Case("candidate-probe-not-authorized", probe("1.0", "int-freeze-1", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE,
+            probeUnauthorized, List.of("ev-1"), okRationale), base),
+        new Case("capability-out-of-scope", probe("1.0", "int-freeze-1", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"), okRationale), noCapabilities),
+        new Case("rationale-forbidden", probe("1.0", "int-freeze-1", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"),
+            "The learner probably has this misconception and it is now resolved with 90% probability."),
+            base),
+        new Case("contract-version-unsupported", probe("9.9", "int-freeze-1", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"), okRationale), base),
+        new Case("incomplete-context", probe("1.0", "int-freeze-1", "KAFKA", mcObjective,
+            DiagnosticProbeProposal.TargetNode.Kind.LEARNING_OBJECTIVE, objectiveId,
+            DiagnosticProbeProposal.ProbeIntent.COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE, null,
+            List.of("ev-1"), okRationale), incomplete),
+        new Case("null-proposal", null, base));
+
+    StringBuilder out = new StringBuilder();
+    for (Case one : cases) {
+      DiagnosticProbeProposalGateResult result = gate.evaluate(one.proposal(), one.ctx(), port);
+      out.append(one.label())
+          .append('|').append(result.accepted())
+          .append('|').append(result.reasons())
+          .append('|').append(new TreeSet<>(result.referencedEvidenceRefs()))
+          .append('|').append(result.policyVersion())
+          .append('\n');
+    }
+    // Determinism: the identical inputs re-evaluated produce the identical result.
+    DiagnosticProbeProposalGateResult first = gate.evaluate(cases.get(0).proposal(), base, port);
+    DiagnosticProbeProposalGateResult again = gate.evaluate(cases.get(0).proposal(), base, port);
+    out.append("deterministic|")
+        .append(first.accepted() == again.accepted() && first.reasons().equals(again.reasons()))
+        .append('\n');
+    return out.toString();
+  }
+
+  private static DiagnosticProbeProposal probe(
+      String contractVersion,
+      String interactionId,
+      String domain,
+      UUID misconceptionId,
+      DiagnosticProbeProposal.TargetNode.Kind nodeKind,
+      UUID nodeId,
+      DiagnosticProbeProposal.ProbeIntent intent,
+      UUID candidateProbeRef,
+      List<String> evidenceRefs,
+      String rationale) {
+    return new DiagnosticProbeProposal(
+        contractVersion,
+        "prop-freeze",
+        "req-freeze",
+        "run-freeze",
+        interactionId,
+        domain,
+        misconceptionId,
+        new DiagnosticProbeProposal.TargetNode(nodeKind, nodeId),
+        intent,
+        candidateProbeRef,
+        evidenceRefs,
+        rationale);
   }
 
   private static String learningWorkflowPolicy() {

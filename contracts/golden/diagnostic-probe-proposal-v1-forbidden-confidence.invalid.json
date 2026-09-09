@@ -1,0 +1,18 @@
+{
+  "contractVersion": "1.0",
+  "proposalType": "DIAGNOSTIC_PROBE_CANDIDATE",
+  "proposalId": "prop-bad0001",
+  "requestId": "req-bad0001",
+  "agentRunId": "run-bad0001",
+  "interactionId": "int-bad0001",
+  "domain": "KAFKA",
+  "targetMisconceptionId": "01900000-0000-7000-8000-0000000000a1",
+  "targetNode": {
+    "kind": "CONCEPT",
+    "id": "01900000-0000-7000-8000-0000000000b1"
+  },
+  "probeIntent": "COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE",
+  "evidenceRefs": ["mev-11110000"],
+  "rationale": "Additional evidence would be useful here.",
+  "confidence": 0.92
+}
