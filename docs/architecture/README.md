@@ -11,3 +11,4 @@ Implementation-facing architecture records. The frozen AR-0 source documents rem
 | [observability-runbook.md](observability-runbook.md) | Operating procedures for the observability surface |
 | [mvp1-agent-integration-contract.md](mvp1-agent-integration-contract.md) | MVP-1 seven-question analysis and the gaps carried into MVP-2 |
 | [mvp2-t01-contract-freeze.md](mvp2-t01-contract-freeze.md) | Accepted MVP-2 ownership, integration answers, state boundaries, and frozen contracts |
+| [target-intelligence-loop.md](target-intelligence-loop.md) | The repository-native north-star map: every stage of the long-term intelligence loop marked `IMPLEMENTED` / `DESIGNED` / `DEFERRED` and `NOW` / `NEXT` / `LATER`, with its owning ADR, module, or migration |
