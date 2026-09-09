@@ -79,11 +79,16 @@ Four shortcuts are worth naming now, because each has an obvious, tempting, wron
   read in two directions and are stored once, directed) keep their direction; types that are
   symmetric by meaning (`CO_OCCURS_WITH`, `CONTRASTS_WITH`) are stored once under an explicit,
   documented canonical ordering of the two misconception ids, never twice.
-- **`MISCONCEPTION_PREREQUISITE_LINK`** — an edge from a published misconception to an existing
-  curriculum prerequisite target (a `core.skill` / `core.learning_objective` already reachable
-  through `core.skill_prerequisite`), meaning *"this misconception is commonly rooted in an
-  unsecured prerequisite."* It is an authored diagnostic hint, never a computed causal claim and
-  never read by any code as fact.
+- **`MISCONCEPTION_PREREQUISITE_LINK`** — an edge from a published misconception to a `core.skill`
+  that is a **curriculum prerequisite of the skill owning the misconception's target node**, as
+  `core.skill_prerequisite` (`V003`) already asserts that prerequisite edge (skill‑to‑skill; the
+  link never targets a `core.learning_objective`, since `skill_prerequisite` has no objective
+  endpoint). It means *"this misconception is commonly rooted in that unsecured prerequisite
+  skill."* The authoring/validation rule is that, at publish time, a `core.skill_prerequisite` row
+  must exist relating the misconception's owning skill to the referenced prerequisite skill for the
+  relevant curriculum version; the edge stores the prerequisite `skill_id` directly and does not
+  re‑derive the traversal at read time. It is an authored diagnostic hint, never a computed causal
+  claim and never read by any code as fact.
 
 Both edge kinds are hand-authored content with a `DRAFT` → `PUBLISHED` lifecycle, immutable once
 published — the same discipline `core.diagnostic_probe_relationship` (`V054`) and `core.misconception`
@@ -154,13 +159,17 @@ M2-ADR-026 §8 governance-rule pattern, applied here in turn).
 
 ### 7. Integrity is enforced at the database boundary
 
-Typed foreign keys to `core.misconception(id)` (and, for `MISCONCEPTION_PREREQUISITE_LINK`, to the
-existing curriculum target tables); `DRAFT`/`PUBLISHED` with an immutable-once-published trigger; the
-published-endpoint-only rule enforced by a trigger lookup (the pattern `V055` §8a and `V057`'s
-`core.protect_diagnostic_node` already established for facts no plain `CHECK` can express);
-`SPECIALISES` acyclicity in PostgreSQL; self-edges rejected; `MISCONCEPTION_RELATED` uniqueness on
-`(misconception_a_id, misconception_b_id, relationship_type)` under the canonical ordering of §1, so
-the schema permits two different typed relationships between the same pair but never a duplicate.
+Typed foreign keys to `core.misconception(id)`, and for `MISCONCEPTION_PREREQUISITE_LINK` a plain
+foreign key to `core.skill(id)` for the referenced prerequisite skill (never to
+`core.learning_objective`); a trigger lookup asserts, at publish time, that a matching
+`core.skill_prerequisite` row exists between the misconception's owning skill and the referenced
+prerequisite skill for the curriculum version in scope — the same `EXISTS`-shaped validation
+`V055` §8a and `V057`'s `core.protect_diagnostic_node` already use for facts no plain `CHECK` can
+express. `DRAFT`/`PUBLISHED` with an immutable-once-published trigger; the published-endpoint-only
+rule; `SPECIALISES` acyclicity in PostgreSQL; self-edges rejected; `MISCONCEPTION_RELATED`
+uniqueness on `(misconception_a_id, misconception_b_id, relationship_type)` under the canonical
+ordering of §1, so the schema permits two different typed relationships between the same pair but
+never a duplicate.
 
 ## Alternatives rejected
 

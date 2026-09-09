@@ -3,8 +3,9 @@
 - **Status:** Proposed
 - **Date:** 2026-09-08
 - **Decides:** the design constraints binding a future deterministic information-gain diagnostic
-  probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` composed strictly after frozen `V5`, and a
-  named, versioned, frozen `INFORMATION_GAIN_V1` construct — including how diagnostic-hypothesis
+  probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` that supersedes only `V5`'s final
+  candidate-tiebreak step (§2), and a named, versioned, frozen `INFORMATION_GAIN_V1` construct —
+  including how diagnostic-hypothesis
   uncertainty is represented, how expected information gain is computed and ranked deterministically,
   why the authoritative selection is never an LLM's, and that this ADR authorizes design only, not
   implementation.
@@ -89,25 +90,37 @@ updated hypothesis confidence               (recomputed deterministically from t
 Every arrow except "new evidence" is a deterministic, reproducible, versioned computation from
 already-authoritative inputs. No arrow is an LLM call.
 
-### 2. `DIAGNOSTIC_SELECTION_V6` composes after frozen `V5` — never a rewrite
+### 2. `DIAGNOSTIC_SELECTION_V6` supersedes only `V5`'s final candidate tiebreak — never a rewrite
 
-- Composition becomes `V3 → V4 → V5 → V6 → frozen V2`, mirroring exactly how `V3`/`V4`/`V5` already
-  wrap `V2` (M2-ADR-025 §1). `V6` is a wrapper adjustment over `V2`'s two existing inputs (the
-  per-skill signal map and the candidate pool), never a replacement selection algorithm, and never a
-  change to `V1`–`V5` code, to the composition order among `V1`–`V5`, to
-  `MAX_HYPOTHESIS_PROBES_PER_PACKET`, or to the shape of `core.diagnostic_probe_relationship` /
-  `core.diagnostic_probe_provenance`.
+- The wrapper chain stays `V3 → V4 → V5 → frozen V2`, mirroring exactly how `V3`/`V4`/`V5` already
+  wrap `V2` (M2-ADR-025 §1). `V6` is not a fourth wrapper stacked after `V5`; it is a governed
+  replacement of a single deterministic step *inside* `V5`'s candidate handling (the tiebreak that
+  picks one eligible candidate — see the next bullet). `V6` is never a replacement selection
+  algorithm, and never a change to `V1`–`V4` code, to `MAX_HYPOTHESIS_PROBES_PER_PACKET`, or to the
+  shape of `core.diagnostic_probe_relationship` / `core.diagnostic_probe_provenance`.
 - `V6` acts only when a bounded, well-formed hypothesis set with a computed posterior exists for the
-  attempt being created; otherwise it degrades to no adjustment — the same "degrades to no
-  adjustment, never breaks attempt creation" guarantee M2-ADR-025 §2 gives `V5`.
-- **Precedence.** `V6` runs after `V5`, so on a shared skill `V6`'s reason/priority win — by the same
-  "composition order is the frozen rule, tested explicitly" mechanism M2-ADR-025 §5 uses for `V4`
-  versus `V5`. The implementation design PR must state and test this precedence explicitly and
-  justify its direction (the information-gain-optimal probe is the more specific evidence-seeking
-  action; if the design concludes the reverse ordering is correct it must say so and compose
-  accordingly) — the ordering is a frozen decision, never an accident of which wrapper runs last.
-- **Quota.** `V6` selects at most one probe per packet, enforced structurally the way M2-ADR-025
-  §3/§6 enforces `V5`'s — by restricting `V2`'s input pool, not by counting probes served.
+  attempt being created; otherwise it degrades to no adjustment and `V5` behaves exactly as
+  M2-ADR-025 already froze it — the same "degrades to no adjustment, never breaks attempt creation"
+  guarantee M2-ADR-025 §2 gives `V5`.
+- **`V6` supersedes exactly one `V5` step, not the composition order.** `V5` today does two things
+  (M2-ADR-025 §2/§3): (a) it *resolves* which related-probe candidates are eligible for the trigger
+  miss, through `ProbeRelationshipService` — trigger eligibility, the fixed relationship-type
+  priority order, ambiguity handling, and provenance; then (b) it *picks one* of those eligible
+  candidates by a deterministic tiebreak ("first miss by `presentation_order`", "first relationship
+  type by fixed priority") and restricts `V2`'s pool to it. Because step (b) collapses the pool to a
+  single item, a `V6` that merely "runs after `V5`" would receive a degenerate one-probe pool and
+  have nothing to rank. `V6` therefore **replaces step (b)'s deterministic tiebreak** with an
+  information-gain ranking over the *same* eligible-candidate set step (a) produced, when `V6` is
+  active — and only step (b). Step (a), the quota, and the provenance model are untouched; `V5`'s
+  own code path still resolves the candidates, and `V1`–`V4` are entirely unaffected. This is
+  precisely the supersession M2-ADR-025's own revisit trigger authorized ("supersedes §2/§6's
+  'first eligible, quota one' default — a new decision, not an extension smuggled into this ADR"),
+  scoped here to the tiebreak alone.
+- **Quota unchanged.** `V6` still selects **at most one** probe per packet and still restricts
+  `V2`'s input pool to that one item — `MAX_HYPOTHESIS_PROBES_PER_PACKET` and its structural
+  enforcement (M2-ADR-025 §3/§6) are frozen and carried forward verbatim. `V6` changes *which*
+  eligible candidate becomes that one item, from "first by fixed priority" to "highest expected
+  information gain"; it never widens the packet to more than one probe.
 
 ### 3. `INFORMATION_GAIN_V1` — a named, versioned, frozen, deterministic construct
 
@@ -122,15 +135,29 @@ already-authoritative inputs. No arrow is an LLM call.
   distance; evidence volume and corroborating-versus-contradictory counts (the same input family
   M2-ADR-023 §2 already enumerates); and the candidate probe pool with each probe's possible
   *deterministically scoreable* outcomes.
-- **Output:** a deterministic real-valued expected-information-gain score per candidate probe, and a
+- **A deterministic outcome model is part of the freeze — an expectation needs one, and it may not
+  be learned.** An *expected*-information-gain score requires, for each candidate probe, the
+  relationship between the probe's possible deterministically-scoreable outcomes and each
+  hypothesis. `INFORMATION_GAIN_V1` MUST define that outcome model as a **fixed deterministic
+  function of already-authoritative inputs**, frozen with the rest of the construct — for example
+  built from `HypothesisEvidenceOutcome`'s existing three-valued mapping (M2-ADR-024 §3: an
+  incorrect scoreable response is `SUPPORTING`, a correct one `CONTRADICTORY`, a non-scoreable one
+  `INCONCLUSIVE`) combined with the current posterior — with **no learned, fitted, or tuned
+  probabilities**. If the design PR cannot express a defensible deterministic outcome model, it MUST
+  NOT use an expectation form: the output then becomes a **non-expectation deterministic
+  discrimination score** — a bounded rubric over authoritative quantities such as posterior spread,
+  relationship-type specificity, and evidence volume. "Expected information gain" wording is
+  permitted only when the outcome model behind it is itself deterministic and frozen.
+- **Output:** a deterministic real-valued score per candidate probe (an expected-information-gain
+  value under the frozen outcome model above, or the non-expectation discrimination score), and a
   total order over candidates with ties broken by an explicit, documented, deterministic key — never
   by SQL row order (the discipline M2-ADR-024 §5 and M2-ADR-025 §4 already enforce). The score is
   evidence-acquisition value only. It is never a diagnosis, never a learner-facing number, never
   mastery, and never root-cause truth.
 - The design PR chooses and freezes the concrete method — entropy reduction over the hypothesis
-  posterior, expected KL divergence, expected posterior-variance reduction, or a bounded
-  deterministic scoring rubric. The brief's constraint is adopted verbatim: *do not over-engineer
-  this into an ML system prematurely.*
+  posterior under the frozen outcome model, expected KL divergence, expected posterior-variance
+  reduction, or a bounded deterministic scoring rubric. The brief's constraint is adopted verbatim:
+  *do not over-engineer this into an ML system prematurely.*
 
 ### 4. Hypothesis uncertainty / posterior representation
 
