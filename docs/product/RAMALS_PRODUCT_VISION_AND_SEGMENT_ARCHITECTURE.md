@@ -104,6 +104,16 @@ Segment-specific behavior must not weaken the core RAMALS invariant:
 
 > Agents recommend; deterministic services decide.
 
+**Roadmap layers on this substrate (direction, not current capability).** Beyond the capabilities
+above, the long-term architecture adds — each governed by its own ADR and tracked stage by stage in
+[target-intelligence-loop.md](../architecture/target-intelligence-loop.md): an explicit
+**misconception relationship graph** alongside the prerequisite graph (M2-ADR-026, M2-ADR-033);
+**information-gain diagnostic probe selection** as a deterministic, versioned policy (M2-ADR-034);
+a governed **intervention → reassessment → outcome → effectiveness** dataset (M2-ADR-035, deferred);
+**production-simulation evidence** feeding the common evidence model (M2-ADR-036, deferred); and
+**privacy-governed organizational capability aggregation** (M2-ADR-037, deferred). None of these
+changes the invariant above: agents recommend; deterministic services decide.
+
 ## 5. Learner segment and age-assurance taxonomy
 
 When a persisted segment discriminator becomes necessary, use the controlled concept:
@@ -228,3 +238,41 @@ M1-PROF-01 is the first product-segment implementation of this vision.
 It remains scoped to professional learners. This document does not add school, college, guardian or minor implementation requirements to that milestone. It clarifies only that implementations should avoid choices that unnecessarily make future segment expansion impossible.
 
 The immediate implementation objective remains a secure, production-grade professional learner flow and a complete professional learning loop.
+
+## 12. Strategic positioning and the long-term intelligence direction
+
+RAMALS is **not** primarily an LMS, an LXP, an AI tutor, a course-recommendation system, or a
+generic assessment platform. Such capabilities may exist as features; they are not the product
+identity.
+
+The direction RAMALS is evolving toward is:
+
+> An evidence-driven diagnostic intelligence platform that continuously determines what a learner
+> actually knows, identifies why a knowledge or capability gap exists, and selects the next best
+> action required to achieve and retain mastery.
+
+This is a statement of direction. Capabilities that are still deferred — see
+[target-intelligence-loop.md](../architecture/target-intelligence-loop.md) for the
+`IMPLEMENTED` / `DESIGNED` / `DEFERRED` status of every stage — must not be described to learners,
+buyers, or partners as if they exist today.
+
+### 12.1 The long-term data and knowledge assets
+
+The defensible long-term assets are not the LLM. They are the governed, versioned, auditable
+knowledge and evidence structures the platform accumulates, each at its own maturity:
+
+- Concept / Skill Graph + Prerequisite Graph + Misconception Graph
+- Immutable evidence history
+- Versioned diagnostic policies
+- The deterministic mastery model and the retention model
+- Intervention history and intervention outcomes
+- Production-simulation evidence
+
+The longitudinal chain these assets record — and the reason it is valuable — is:
+
+Situation / Question → Learner Response / Action → Evidence → Diagnostic Hypothesis →
+Misconception / Root Cause → Intervention → Reassessment → Outcome
+
+Every link is captured with provenance, policy/engine version, and `interactionId` / `traceId` /
+`spanId` correlation, so any conclusion the platform reaches remains reproducible and auditable.
+This does not change the core invariant: agents recommend; deterministic services decide.
