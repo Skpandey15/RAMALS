@@ -162,7 +162,7 @@ class DiagnosticProbeEvalGovernanceContractTests {
         "DIAGNOSTIC_PROBE_AGENT_V1",
         "eval-run",
         "DIAGNOSTIC_PROBE_CANDIDATE",
-        "DIAGNOSTIC_PROBE_PROMPT_V1",
+        "DIAGNOSTIC_PROBE_PROMPT_V2",
         "diagnostic-default",
         "ci-fake",
         "ci-fake-deterministic-v1",

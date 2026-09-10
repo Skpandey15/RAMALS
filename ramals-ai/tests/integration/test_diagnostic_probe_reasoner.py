@@ -247,7 +247,9 @@ def test_a_valid_recommendation_is_returned_as_a_non_authoritative_proposal() ->
     assert proposal.trustLevel is TrustLevel.NON_AUTHORITATIVE
     assert proposal.agentType.value == "DIAGNOSTIC"
     assert proposal.promptTemplateId == "DIAGNOSTIC_PROBE_CANDIDATE"
-    assert proposal.promptVersion == "DIAGNOSTIC_PROBE_PROMPT_V1"
+    # DIAGNOSTIC_PROBE_PROMPT_V2 (M2-ADR-032 step 4): prompt-injection hardening; V1 stays a
+    # registered rollback target and the proposal contract is unchanged.
+    assert proposal.promptVersion == "DIAGNOSTIC_PROBE_PROMPT_V2"
     assert proposal.reasonCodes is None
     # both governed reads happened, scoped to the request's domain
     assert client.calls == [

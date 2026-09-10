@@ -168,7 +168,7 @@ class DiagnosticProbeRecommendationIntegrationTests {
     return "{\"contractVersion\":\"1.0\",\"proposalId\":\"prop-1\",\"agentType\":\"DIAGNOSTIC\","
         + "\"agentVersion\":\"DIAGNOSTIC_PROBE_AGENT_V1\",\"agentRunId\":\"run-1\","
         + "\"promptTemplateId\":\"DIAGNOSTIC_PROBE_CANDIDATE\","
-        + "\"promptVersion\":\"DIAGNOSTIC_PROBE_PROMPT_V1\",\"modelRoute\":\"diagnostic-default\","
+        + "\"promptVersion\":\"DIAGNOSTIC_PROBE_PROMPT_V2\",\"modelRoute\":\"diagnostic-default\","
         + "\"trustLevel\":\"NON_AUTHORITATIVE\",\"proposal\":"
         + proposalJson
         + "}";

@@ -164,7 +164,7 @@ class DiagnosticProbeRecommendationOrchestratorTests {
         "v1",
         "run-1",
         "DIAGNOSTIC_PROBE_CANDIDATE",
-        "DIAGNOSTIC_PROBE_PROMPT_V1",
+        "DIAGNOSTIC_PROBE_PROMPT_V2",
         "diagnostic-default",
         "anthropic",
         "claude-sonnet-5",

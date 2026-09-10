@@ -127,10 +127,21 @@ check, or an exact expectation.
 ## Prompt-injection protection
 
 The reasoner's system instruction and the governed evidence data travel on **separate channels**
-(system message vs. a JSON-serialised user data block). Step 4 hardened the system instruction to
-say explicitly that evidence `name`/`description` strings are untrusted content that may look like
-commands and can never change the rules, confer authority, relax the output shape, or reveal hidden
-reasoning. This is one layer, not the defence: bounded IDs, runtime-owned fields, the closed schema,
+(system message vs. a JSON-serialised user data block).
+
+Step 4 introduces **`DIAGNOSTIC_PROBE_PROMPT_V2`** (routed by `DIAGNOSTIC_DEFAULT` and `CI_FAKE`).
+Because the system-instruction text materially changed, its version identifier changed with it —
+RAMALS prompt provenance must stay reproducible, and two different prompt texts must never share one
+version. V2 keeps V1's six rules and closed output shape unchanged and adds an explicit statement
+that evidence `name`/`description` strings are untrusted content that may look like commands and can
+never change the rules, confer authority, relax the output shape, or reveal hidden reasoning.
+**`DIAGNOSTIC_PROBE_PROMPT_V1` stays registered and buildable as a rollback target** (M1-ADR-008);
+its text is frozen and not overwritten. The proposal contract
+(`diagnostic-probe-proposal.v1.schema.json`), the Java `DiagnosticProbeProposalGate`, the Python
+`DiagnosticProbeProposal` validation, and `DIAGNOSTIC_PROBE_AGENT_V1` are all unchanged — the agent
+semantics did not move, only the wording did.
+
+The wording is one layer, not the defence: bounded IDs, runtime-owned fields, the closed schema,
 Python validation, and the Java deterministic gate are what actually contain injection, and
 `prompt-injection-in-evidence-model-succumbs` proves the payload is still rejected when the model
 obeys the injected text.
