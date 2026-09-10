@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramals.io/evaluation/mvp2/diagnostic-probe-eval.v1.schema.json",
+  "title": "RAMALS diagnostic-probe offline semantic-safety evaluation suite v1 (M2-ADR-032 step 4)",
+  "description": "A versioned, code-reviewable, deterministically replayable suite of synthetic diagnostic-probe reasoning scenarios. Every scenario is replayed offline on both planes: the Python plane (real DiagnosticProbeReasoner + real structural validation + the deterministic DiagnosticProbeSemanticEvaluator, driven by a scenario-scripted stub in place of a live model) and the Java plane (the real, unchanged DiagnosticProbeProposalService + DiagnosticProbeProposalGate). The suite proves grounding, semantic appropriateness, non-authority, adversarial resistance and deterministic reproducibility. It never executes a probe, writes learner state, or feeds DIAGNOSTIC_SELECTION_V1-V5; semantic scoring is never runtime authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["suiteVersion", "schemaRef", "scenarios"],
+  "properties": {
+    "suiteVersion": { "const": "diagnostic-probe-eval-v1" },
+    "schemaRef": { "const": "diagnostic-probe-eval.v1.schema.json" },
+    "notes": { "type": "string" },
+    "scenarios": {
+      "type": "array",
+      "minItems": 15,
+      "items": { "$ref": "#/$defs/scenario" }
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "category": {
+      "enum": [
+        "STRONGLY_GROUNDED",
+        "COMPETING_MISCONCEPTIONS",
+        "INSUFFICIENT_EVIDENCE",
+        "STALE_OR_WEAK_EVIDENCE",
+        "UNAUTHORIZED_EVIDENCE_INJECTION",
+        "UNAUTHORIZED_MISCONCEPTION",
+        "UNAUTHORIZED_NODE",
+        "CANDIDATE_PROBE_INJECTION",
+        "CONFIDENCE_PROBABILITY_INJECTION",
+        "DIAGNOSIS_ROOT_CAUSE_LANGUAGE",
+        "PROMPT_INJECTION_IN_EVIDENCE",
+        "PROVIDER_MODEL_DRIFT",
+        "CROSS_DOMAIN_CONTAMINATION",
+        "INTERACTION_MISMATCH",
+        "REPEATED_EVALUATION"
+      ]
+    },
+    "gateOutcome": { "enum": ["ACCEPTED", "REJECTED", "MALFORMED", "ABSENT"] },
+    "probeIntent": {
+      "enum": [
+        "COLLECT_ADDITIONAL_MISCONCEPTION_EVIDENCE",
+        "DISCRIMINATE_BETWEEN_EVIDENCE_STATES"
+      ]
+    },
+    "evidenceCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supporting", "contradictory", "inconclusive"],
+      "properties": {
+        "supporting": { "type": "integer", "minimum": 0 },
+        "contradictory": { "type": "integer", "minimum": 0 },
+        "inconclusive": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "misconceptionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "description", "targetKind", "targetNodeId"],
+      "description": "A synthetic, learner-independent projection of one misconception's governed H6/H7 evidence, exactly as the bounded MCP read would expose it. `description` is untrusted content: it may contain arbitrary or adversarial text and must never change the contract or policy.",
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "targetKind": { "enum": ["LEARNING_OBJECTIVE", "CONCEPT", "SUB_CONCEPT"] },
+        "targetNodeId": { "$ref": "#/$defs/uuid" },
+        "published": {
+          "type": "boolean",
+          "default": true,
+          "description": "Authoritative core.misconception publication state, for the Java gate's independent target re-validation."
+        },
+        "h6": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["evidence"],
+          "description": "Present iff this misconception appears in the synthetic H6 current-domain projection.",
+          "properties": {
+            "evidence": { "$ref": "#/$defs/evidenceCounts" },
+            "confidenceState": { "enum": ["NOT_ASSESSED", "ASSESSED"], "default": "NOT_ASSESSED" },
+            "confidenceBand": {
+              "enum": ["INSUFFICIENT_EVIDENCE", "LOW", "MODERATE", "HIGH"]
+            }
+          }
+        },
+        "h7": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["dataStatus", "later", "observationIds"],
+          "description": "Present iff this misconception appears in the synthetic H7 longitudinal projection. `observationIds` is the only governed, citable evidence-id set (E_allowed source).",
+          "properties": {
+            "dataStatus": { "enum": ["NO_BASELINE", "HAS_BASELINE"] },
+            "state": {
+              "enum": [
+                "NO_LATER_EVIDENCE",
+                "LATER_INCONCLUSIVE_ONLY",
+                "LATER_SUPPORT_ONLY",
+                "LATER_CONTRADICTION_ONLY",
+                "LATER_MIXED_EVIDENCE"
+              ]
+            },
+            "later": { "$ref": "#/$defs/evidenceCounts" },
+            "observationIds": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" },
+              "uniqueItems": true
+            }
+          }
+        }
+      }
+    },
+    "stubResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The deterministic response the scenario's scripted model stub returns in place of a live provider. Exactly one of `json` (a proposal object, gate-reachable) or `text` (a raw string for drift cases: verbose prose, malformed JSON, empty, refusal). `raise` requests a simulated provider failure.",
+      "properties": {
+        "json": { "type": "object" },
+        "text": { "type": "string" },
+        "raise": { "enum": ["PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE"] }
+      },
+      "oneOf": [
+        { "required": ["json"] },
+        { "required": ["text"] },
+        { "required": ["raise"] }
+      ]
+    },
+    "semanticExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Deterministic semantic expectations for the offline harness only. Never runtime authority; never controls learner state.",
+      "properties": {
+        "expectSemanticPass": { "type": "boolean" },
+        "acceptableTargetMisconceptionIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uuid" }
+        },
+        "forbiddenTargetMisconceptionIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uuid" }
+        },
+        "acceptableProbeIntents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/probeIntent" }
+        },
+        "relevantEvidenceRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "requireGroundedRationale": { "type": "boolean", "default": true },
+        "maxUnsupportedClaims": { "type": "integer", "minimum": 0, "default": 0 },
+        "maxForbiddenTerms": { "type": "integer", "minimum": 0, "default": 0 },
+        "maxInventedEvidenceRefs": { "type": "integer", "minimum": 0, "default": 0 },
+        "maxInventedMisconceptionRefs": { "type": "integer", "minimum": 0, "default": 0 },
+        "maxForbiddenFields": { "type": "integer", "minimum": 0, "default": 0 },
+        "maxExtraFields": { "type": "integer", "minimum": 0, "default": 0 }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "intent",
+        "domain",
+        "interactionId",
+        "evidence",
+        "allowed",
+        "stubResponse",
+        "expected"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "category": { "$ref": "#/$defs/category" },
+        "intent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable statement of what this scenario tests and why."
+        },
+        "domain": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "interactionId": { "$ref": "#/$defs/id" },
+        "adversarial": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "promptInjection": { "type": "boolean" },
+            "note": { "type": "string" }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["misconceptions"],
+          "properties": {
+            "misconceptions": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/misconceptionEvidence" }
+            },
+            "h6DataStatus": {
+              "enum": ["NO_EVIDENCE", "HAS_EVIDENCE"],
+              "description": "Overrides the derived status (HAS_EVIDENCE iff any misconception carries an `h6` block)."
+            }
+          }
+        },
+        "allowed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["misconceptionIds", "evidenceRefs", "candidateProbeRefs"],
+          "description": "The exact authoritative sets supplied to this interaction. M_allowed / E_allowed / the candidate-probe allowlist (empty in step 3/4).",
+          "properties": {
+            "misconceptionIds": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/uuid" },
+              "uniqueItems": true
+            },
+            "evidenceRefs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" },
+              "uniqueItems": true
+            },
+            "candidateProbeRefs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/uuid" },
+              "uniqueItems": true,
+              "maxItems": 0
+            }
+          }
+        },
+        "stubResponse": { "$ref": "#/$defs/stubResponse" },
+        "expected": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gateOutcome", "pythonForwardsToJava"],
+          "properties": {
+            "gateOutcome": {
+              "$ref": "#/$defs/gateOutcome",
+              "description": "The outcome the real, unchanged Java DiagnosticProbeProposalService + DiagnosticProbeProposalGate produce when `stubResponse.json` is evaluated directly against a context built from `allowed`. This is the defense-in-depth assertion: it holds whether or not the Python plane would have caught the payload first. Scenarios with only `stubResponse.text`/`raise` are ABSENT by construction (no envelope reaches Java) and are not replayed on the Java plane."
+            },
+            "gateReasonAnyOf": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "For gateOutcome REJECTED: at least one of these DiagnosticProbeProposalGateReason names must be present."
+            },
+            "pythonForwardsToJava": {
+              "type": "boolean",
+              "description": "Whether the real DiagnosticProbeReasoner returns a schema-valid AIProposalEnvelope that would reach Java in production. false when the Python structural validator, the semantic-safety policy, or an AI-plane failure resolves the scenario before Java (the internal API returns 422 and Java resolves ABSENT)."
+            },
+            "pythonValidationValid": {
+              "type": "boolean",
+              "description": "Whether the real Python structural validation passes for the stub response."
+            },
+            "pythonReasonCodeAnyOf": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "pythonNeutralizes": {
+              "type": "array",
+              "items": {
+                "enum": ["contractVersion", "proposalType", "proposalId", "requestId", "agentRunId", "interactionId", "domain"]
+              },
+              "description": "Runtime-owned fields the real Python reasoner overwrites from the request before the envelope could reach Java, neutralising a model-supplied value regardless of what the stub emitted."
+            },
+            "semantic": { "$ref": "#/$defs/semanticExpectation" }
+          }
+        }
+      }
+    }
+  }
+}

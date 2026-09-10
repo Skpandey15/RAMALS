@@ -16,6 +16,20 @@ from ramals_ai.evaluation.baseline import (
     compare,
     load_baselines,
 )
+from ramals_ai.evaluation.diagnostic_probe import (
+    SUITE_PATH,
+    DiagnosticProbeSemanticEvaluator,
+    Scenario,
+    ScenarioResult,
+    SemanticMetrics,
+    Suite,
+    SuiteResult,
+    categories_covered,
+    load_suite,
+    run_scenario,
+    run_suite,
+    scenario_ids,
+)
 from ramals_ai.evaluation.harness import (
     UNMEASURED,
     Case,
@@ -28,6 +42,18 @@ from ramals_ai.evaluation.harness import (
 )
 
 __all__ = [
+    "SUITE_PATH",
+    "DiagnosticProbeSemanticEvaluator",
+    "Scenario",
+    "ScenarioResult",
+    "SemanticMetrics",
+    "Suite",
+    "SuiteResult",
+    "categories_covered",
+    "load_suite",
+    "run_scenario",
+    "run_suite",
+    "scenario_ids",
     "REGRESSION_LIMIT",
     "UNMEASURED",
     "Approval",

@@ -194,6 +194,12 @@ governanceTest.configure {
   inputs.dir(rootProject.file('contracts'))
       .withPropertyName('aiContract')
       .withPathSensitivity(PathSensitivity.RELATIVE)
+  // M2-ADR-032 step 4: DiagnosticProbeEvalGovernanceContractTests replays the versioned
+  // diagnostic-probe evaluation suite through the deterministic gate. Declared so an edit to a
+  // scenario re-runs the governance task rather than reusing a stale result.
+  inputs.dir(rootProject.file('evaluation'))
+      .withPropertyName('evaluationSuites')
+      .withPathSensitivity(PathSensitivity.RELATIVE)
   inputs.dir(rootProject.file('docs/adr'))
       .withPropertyName('adrs')
       .withPathSensitivity(PathSensitivity.RELATIVE)
