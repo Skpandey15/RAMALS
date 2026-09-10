@@ -174,6 +174,29 @@ public class AiClientConfiguration {
   }
 
   @Bean
+  public DiagnosticProbePort diagnosticProbePort(
+      @Value("${ramals.ai.base-url:}") String baseUrl,
+      WorkloadToken identity, AiCallGuard guard) {
+    if (!configured(baseUrl, identity)) {
+      // The same unconfigured behaviour every other agent gets: a deployment without an AI plane
+      // must start and serve, and refuse the call it cannot make rather than fail at wiring time.
+      // The orchestrator turns this into ABSENT and the deterministic diagnostic path is unaffected.
+      return (request, deadlineMillis) -> {
+        throw new AiUnavailableException("AI_NOT_CONFIGURED",
+            "Diagnostic-probe recommendation is not enabled in this environment.",
+            FailureOrigin.CALLER);
+      };
+    }
+
+    DeadlineAwareClientHttpRequestFactory requestFactory = configuredRequestFactory();
+    RestClient restClient = RestClient.builder()
+        .baseUrl(baseUrl)
+        .requestFactory(requestFactory)
+        .build();
+    return new RamalsAiDiagnosticProbeClient(restClient, guard, identity);
+  }
+
+  @Bean
   public AssessmentPort assessmentPort(
       @Value("${ramals.ai.base-url:}") String baseUrl,
       WorkloadToken identity, AiCallGuard guard) {

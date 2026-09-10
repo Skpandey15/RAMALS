@@ -16,6 +16,7 @@ from ramals_ai.assessment import prompt as assessment_prompt
 from ramals_ai.assessment_evaluation import prompt as assessment_evaluation_prompt
 from ramals_ai.diagnostic import prompt as diagnostic_prompt
 from ramals_ai.diagnostic_assessment import prompt as diagnostic_assessment_prompt
+from ramals_ai.diagnostic_probe import prompt as diagnostic_probe_prompt
 from ramals_ai.prompting.templates import PromptRegister, PromptTemplateId, register_of
 from ramals_ai.tutor import prompt as tutor_prompt
 
@@ -23,6 +24,7 @@ _DECLARING_MODULES = (
     tutor_prompt,
     diagnostic_prompt,
     diagnostic_assessment_prompt,
+    diagnostic_probe_prompt,
     assessment_prompt,
     assessment_evaluation_prompt,
     adaptation_prompt,

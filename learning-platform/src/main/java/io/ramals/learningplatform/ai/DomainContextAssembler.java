@@ -5,6 +5,7 @@ import io.ramals.learningplatform.ai.contract.DomainType;
 import io.ramals.learningplatform.ai.contract.GoalType;
 import io.ramals.learningplatform.ai.contract.LearningGoalContext;
 import io.ramals.learningplatform.curriculum.CurriculumService;
+import io.ramals.learningplatform.curriculum.PublishedDomainContext;
 import io.ramals.learningplatform.learner.LearnerGoal;
 import java.util.Optional;
 import java.util.UUID;
@@ -46,6 +47,24 @@ public class DomainContextAssembler {
   public Optional<DomainContext> forSkill(String skillCode) {
     return curriculumService.publishedSkillContext(skillCode)
         .map(context -> new DomainContext(context.domainCode(),
+            DomainType.valueOf(context.domainType()), context.curriculumVersion()));
+  }
+
+  /**
+   * Builds the domain context from a domain code directly, for a caller whose subject is a domain
+   * rather than a skill -- the diagnostic-probe recommendation path (M2-ADR-032 step 3), whose
+   * H6/H7 evidence is domain-scoped.
+   *
+   * <p>Same authoritative resolution as {@link #forSkill(String)}: the domain type and curriculum
+   * version come from {@code core.learning_domain} / {@code core.curriculum_version}, never from a
+   * literal and never from an AI payload.
+   *
+   * @return empty when the domain code is unknown, so a caller cannot send a request about a domain
+   *     that does not exist
+   */
+  public Optional<DomainContext> forDomain(String domainCode) {
+    return curriculumService.publishedDomainContext(domainCode)
+        .map((PublishedDomainContext context) -> new DomainContext(context.domainCode(),
             DomainType.valueOf(context.domainType()), context.curriculumVersion()));
   }
 

@@ -238,6 +238,51 @@ paths:
         '503': { $ref: '#/components/responses/AiUnavailable' }
         '504': { $ref: '#/components/responses/DeadlineExceeded' }
 
+  /internal/v1/diagnostic-probe/propose:
+    post:
+      operationId: diagnosticProbePropose
+      tags: [agents]
+      summary: Recommend one next diagnostic-probe candidate
+      description: >
+        M2-ADR-032 step 3. Distinct from /internal/v1/diagnostic/propose (free-form next-probe
+        fields) and /internal/v1/diagnostic-assessment/propose (skill classification with a
+        confidence). This operation reads bounded, governed H6/H7 evidence through the existing
+        MCP-3 read capabilities -- using the interaction's own delegated learner-context credential,
+        carried on the X-Ramals-Delegated-Context header exactly as /internal/v1/diagnostic/propose
+        and /internal/v1/adaptation/propose already use it -- and returns a single advisory
+        DiagnosticProbeProposal (contracts/mvp2/diagnostic-probe-proposal.v1.schema.json) inside the
+        shared AIProposalEnvelope. It asserts nothing about the learner: no diagnosis, no
+        classification, no misconception ranking, no confidence or probability, no instruction to
+        run anything.
+
+        Spring remains the authority. DiagnosticProbeProposalGate independently re-validates every
+        reference against the exact M_allowed / E_allowed sets it exposed and decides -- on its own,
+        deterministically, fail-closed -- whether the recommendation has any effect. Probe
+        eligibility and execution stay with DIAGNOSTIC_SELECTION_V1-V5, untouched. An unavailable
+        AI plane, an MCP read failure, or a response that cannot be validated is returned so that
+        Spring resolves it to ABSENT with the deterministic diagnostic path unchanged.
+
+        Reuses AIRequestEnvelope and AIProposalEnvelope unchanged; it introduces no new schema.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIRequestEnvelope'
+      responses:
+        '200':
+          description: A diagnostic-probe recommendation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProposalEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableProposal' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+        '504': { $ref: '#/components/responses/DeadlineExceeded' }
+
   /internal/v1/assessment-evaluation/propose:
     post:
       operationId: assessmentEvaluationPropose

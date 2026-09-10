@@ -43,6 +43,16 @@ public class CurriculumService {
         ? Optional.empty() : repository.findPublishedSkillContext(skillCode);
   }
 
+  /**
+   * The authoritative domain facts for a domain code, for a caller that holds a domain rather than
+   * a skill (the diagnostic-probe recommendation path, whose H6/H7 evidence is domain-scoped).
+   * Empty when the code is null, blank, or unknown.
+   */
+  public Optional<PublishedDomainContext> publishedDomainContext(String domainCode) {
+    return domainCode == null || domainCode.isBlank()
+        ? Optional.empty() : repository.findPublishedDomainContext(domainCode);
+  }
+
   public boolean hasPublishedCurriculum(UUID domainId) {
     return repository.hasPublishedCurriculum(domainId);
   }
