@@ -41,3 +41,16 @@ reported as unmeasured, never as a pass.
 Bump `datasetVersion`, and do not land the change alongside a prompt, model-route or agent change.
 M1-ADR-009 requires the separation; the reason is that a prompt regression landed beside a dataset
 edit produces a green run and a baseline shift that reads as a dataset improvement.
+
+## MVP-2 suites
+
+```text
+evaluation/mvp2/
+```
+
+* `mvp2-diagnostic-golden.v1.json` — M2-T10 diagnostic-assessment golden thresholds.
+* `diagnostic-probe-eval.v1.json` (+ `.schema.json`, `README-diagnostic-probe-eval.md`) — the
+  M2-ADR-032 step 4 semantic-safety suite for the advisory diagnostic-probe boundary. Replayed on
+  both planes (Python reasoner + Java deterministic gate) with a scenario-scripted stub, so it runs
+  in CI with no live provider. Semantic scoring in that suite is offline-only and never runtime
+  authority.
