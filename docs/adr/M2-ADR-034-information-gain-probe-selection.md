@@ -266,11 +266,13 @@ already governed here or elsewhere (the M2-ADR-026 §8 governance-rule pattern).
 - The hypothesis posterior is a separate stream; a PR merging it into mastery, G2, G3, H5, or H7 is
   a defect against §4.
 - **(Amendment 1)** `HYPOTHESIS_UNCERTAINTY_V1` must ship with an `EngineVersionFreezeTests` frozen
-  vector reproducing [Amendment 1 §J](#j-golden-vectors)'s eight golden vectors before any consumer
-  exists. Its Step-1 implementation is **inert**: no `DIAGNOSTIC_SELECTION_V1`–`V5` code, no runtime
-  selector, no migration, and no contract change. A PR that wires it into selection, changes a band
-  weight, the normalization procedure, the evidence boundary, or the canonical ordering without
-  minting `HYPOTHESIS_UNCERTAINTY_V2` is a defect against Amendment 1.
+  vector, plus tests reproducing [Amendment 1 §J](#j-golden-vectors)'s eleven golden vectors and
+  [§Q](#q-input-validation-and-context-isolation-fail-closed)'s validation reason codes, before any
+  consumer exists. Its Step-1 implementation is **inert**: no `DIAGNOSTIC_SELECTION_V1`–`V5` code, no
+  runtime selector, no migration, and no contract change. A PR that wires it into selection, changes
+  a band weight, the normalization procedure, the residual rule, the evidence boundary, the
+  de-duplication identity, or the canonical ordering without minting `HYPOTHESIS_UNCERTAINTY_V2` is a
+  defect against Amendment 1.
 - **(Amendment 1)** `HYPOTHESIS_UNCERTAINTY_V1` takes **no** misconception-relationship-graph
   (M2-ADR-033) input and **no** H7 longitudinal input; a PR adding either is a defect against
   Amendment 1 §F/§G.
@@ -489,37 +491,50 @@ equal, so the order is total. No `HashSet` / `HashMap` / SQL row order can influ
 
 ### J. Golden vectors
 
-Eight normative vectors. Synthetic hypotheses `Ha, Hb, Hc` are given in §H canonical order
-(all `ROOT_CAUSE_PROBE`, ascending `targetObjectiveId`). Evidence is written `(s, c, i)` =
-`(supportingCount, contradictoryCount, inconclusiveCount)` for that hypothesis's tuple **in this
-interaction**. Expected output lists `hypothesis -> band / participates / normalizedValue`.
+Eleven normative vectors — the implementation oracle. Synthetic hypotheses `Ha, Hb, Hc` are given in
+§H canonical order (all `ROOT_CAUSE_PROBE`, ascending `targetObjectiveId`). Unless a row says
+otherwise, per-candidate evidence is written `(s, c, i)` =
+`(supportingCount, contradictoryCount, inconclusiveCount)` — the **de-duplicated** counts for that
+hypothesis's tuple **in this one interaction** (§R), already classified by `HypothesisEvidenceOutcome`
+and passed to `DiagnosticConfidenceCalculatorV1.compute(...)` verbatim. Expected output lists
+`hypothesis -> band / participates / normalizedValue`. Every vector is independent of live DB, wall
+clock, randomness, LLM, and any external service.
 
 | # | Case | Input | Expected `status` | Expected per-candidate output |
 |---|---|---|---|---|
-| 1 | Single candidate | `Ha (3,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 1.0000` |
-| 2 | Two equal candidates | `Ha (2,0,0)`, `Hb (2,0,0)` | `APPLICABLE` | `Ha -> MODERATE / true / 0.5000`; `Hb -> MODERATE / true / 0.5000` |
-| 3 | `HIGH` vs `LOW` | `Ha (4,0,0)`, `Hb (1,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 0.7500`; `Hb -> LOW / true / 0.2500` |
-| 4 | `HIGH` vs `INSUFFICIENT_EVIDENCE` | `Ha (5,0,0)`, `Hb (0,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 1.0000`; `Hb -> INSUFFICIENT_EVIDENCE / false / null` |
-| 5 | All `INSUFFICIENT_EVIDENCE` | `Ha (0,0,0)`, `Hb (0,0,0)`, `Hc (0,0,0)` | `INSUFFICIENT_EVIDENCE` | each -> `INSUFFICIENT_EVIDENCE / false / null` |
-| 6 | All `INCONCLUSIVE` evidence | `Ha (0,0,4)`, `Hb (0,0,2)` | `INSUFFICIENT_EVIDENCE` | each -> `INSUFFICIENT_EVIDENCE / false / null` (identical to #5 — `INCONCLUSIVE` never participates; the count is echoed for audit and changes nothing) |
-| 7 | Rounding / residual, 3 candidates | `Ha (3,0,0)`, `Hb (3,0,0)`, `Hc (1,0,0)` | `APPLICABLE` | weights `3,3,1`; `total 7`; `exact` `0.428571…, 0.428571…, 0.142857…`; `floor4` `0.4285, 0.4285, 0.1428`; `allocated 0.9998`; `deficit 0.0002` (`D=2`); remainders `0.00007143, 0.00007143, 0.00005714` -> +`0.0001` to `Ha, Hb` (tie broken by canonical order) -> `Ha -> HIGH / true / 0.4286`; `Hb -> HIGH / true / 0.4286`; `Hc -> LOW / true / 0.1428` (sum `1.0000`) |
-| 8 | Input order permuted, identical output | #7's candidates supplied in any order (e.g. `Hc, Hb, Ha`) | `APPLICABLE` | byte-identical to #7, candidates emitted in §H canonical order `Ha, Hb, Hc` |
+| 1 | No candidate | `candidates = []` | `NOT_APPLICABLE` | `candidates = []` (no distribution, not an empty-object ambiguity) |
+| 2 | Single candidate | `Ha (3,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 1.0000` |
+| 3 | Two equal candidates | `Ha (2,0,0)`, `Hb (2,0,0)` | `APPLICABLE` | `Ha -> MODERATE / true / 0.5000`; `Hb -> MODERATE / true / 0.5000` |
+| 4 | `HIGH` vs `LOW` | `Ha (4,0,0)`, `Hb (1,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 0.7500`; `Hb -> LOW / true / 0.2500` |
+| 5 | `HIGH` vs `INSUFFICIENT_EVIDENCE` | `Ha (5,0,0)`, `Hb (0,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 1.0000`; `Hb -> INSUFFICIENT_EVIDENCE / false / null` (**not** `0.9xxx / 0.0xxx`) |
+| 6 | All `INSUFFICIENT_EVIDENCE` | `Ha (0,0,0)`, `Hb (0,0,0)`, `Hc (0,0,0)` | `INSUFFICIENT_EVIDENCE` | each -> `INSUFFICIENT_EVIDENCE / false / null` |
+| 7 | All `INCONCLUSIVE` evidence | `Ha (0,0,4)`, `Hb (0,0,2)` | `INSUFFICIENT_EVIDENCE` | each -> `INSUFFICIENT_EVIDENCE / false / null` (identical to #6 — `INCONCLUSIVE` never participates; the count is echoed for audit and changes nothing) |
+| 8 | Rounding / residual, 3 candidates | `Ha (3,0,0)`, `Hb (3,0,0)`, `Hc (1,0,0)` | `APPLICABLE` | weights `3,3,1`; `total 7`; `exact` `0.428571…, 0.428571…, 0.142857…`; `floor4` `0.4285, 0.4285, 0.1428`; `allocated 0.9998`; `deficit 0.0002` (`D=2`); remainders `0.00007143, 0.00007143, 0.00005714` -> +`0.0001` to `Ha, Hb` (tie broken by canonical order) -> `Ha -> HIGH / true / 0.4286`; `Hb -> HIGH / true / 0.4286`; `Hc -> LOW / true / 0.1428` (sum `1.0000`) |
+| 9 | Input order permuted, identical output | #8's candidates and each candidate's evidence list supplied in any order (e.g. `Hc, Hb, Ha`) | `APPLICABLE` | byte-identical to #8, candidates emitted in §H canonical order `Ha, Hb, Hc` |
+| 10 | Duplicate evidence de-duplicated (§R) | `Ha` raw observation list `[obs-1: SUPPORTING, obs-2: SUPPORTING, obs-1: SUPPORTING]` (one governed observation id reaching the assembler twice) | `APPLICABLE` | de-dup by observation id -> distinct set `{obs-1, obs-2}` -> `(s,c,i) = (2,0,0)` -> `Ha -> MODERATE / true / 1.0000`. (Without §R de-dup the count would be `s=3` -> `HIGH` — a wrong band; the vector pins the de-dup.) |
+| 11 | Mixed sufficient / insufficient, 3 candidates | `Ha (4,0,0)`, `Hb (1,0,0)`, `Hc (0,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 0.7500`; `Hb -> LOW / true / 0.2500`; `Hc -> INSUFFICIENT_EVIDENCE / false / null` (distribution is over `{Ha, Hb}` only; `Hc` is represented but unscored) |
 
-Worked answers for the four decision cases §K.4 enumerates:
+Worked answers for the decision cases §K.4 enumerates:
 
-- **Case A** (no candidate has directional evidence in the interaction) — identical to vectors 5/6:
-  `status = INSUFFICIENT_EVIDENCE`, no distribution.
-- **Case B** (some candidates have directional evidence, some do not) — identical to vector 4:
-  `status = APPLICABLE`; distribution over the evidenced subset; the others `null`.
-- **Case C** (all evidence `INCONCLUSIVE`) — identical to vector 6: `status = INSUFFICIENT_EVIDENCE`
+- **Case A — no candidate hypotheses** — vector 1: `status = NOT_APPLICABLE`, `candidates = []`, no
+  distribution.
+- **Case B — candidates exist but none has participating (directional) evidence** — vectors 6/7:
+  `status = INSUFFICIENT_EVIDENCE`, every candidate `participates = false` / `normalizedValue =
+  null`, no distribution. Not a uniform prior — V1 manufactures no belief from absent evidence.
+- **Case C — all evidence `INCONCLUSIVE`** — vector 7: identical to Case B
   (`INCONCLUSIVE` contributes to neither count, per frozen `DiagnosticConfidenceCalculatorV1`).
-- **Case D** (every candidate strongly contradicted, e.g. `Ha (1,3,0)`, `Hb (0,2,0)`) — both bands
+- **Case D — some candidates have sufficient evidence, others do not** — vectors 5 and 11:
+  `status = APPLICABLE`; the distribution is normalized **over the participating subset only**; a
+  non-participating candidate is **represented but unscored** (`participates = false`,
+  `normalizedValue = null`) — it receives neither zero mass nor prior mass, and it does not make the
+  whole result insufficient.
+- **Case E — every candidate strongly contradicted** (e.g. `Ha (1,3,0)`, `Hb (0,2,0)`) — both bands
   resolve to `LOW` (neither `s > 3c` nor `s - c >= 3`), both participate with weight `1`, so
   `status = APPLICABLE` with a **uniform** `0.5000 / 0.5000` distribution. **V1 expresses relative
   remaining plausibility among weakly-supported hypotheses; it does not model "all hypotheses
   refuted" as a distinct state.** The per-candidate `band` field (all `LOW`) carries that signal to
   a consumer. An absolute-refutation state would require a tuned "how contradicted is refuted"
-  threshold this construct deliberately does not introduce — see Revisit triggers.
+  threshold this construct deliberately does not introduce — see §P.
 
 ### K. Output contract
 
@@ -542,9 +557,13 @@ CandidateUncertainty:
 3. `INSUFFICIENT_EVIDENCE` returns every candidate with `participates = false`,
    `normalizedValue = null`.
 4. The status of each of these cases is fixed by this amendment, not left to implementation
-   judgement: **A** no participating candidate -> `INSUFFICIENT_EVIDENCE`; **B** mixed ->
-   `APPLICABLE` over the participating subset; **C** all `INCONCLUSIVE` -> `INSUFFICIENT_EVIDENCE`;
-   **D** all contradicted-to-`LOW` -> `APPLICABLE`, uniform (§J).
+   judgement (§J worked answers): **A** no candidate hypotheses -> `NOT_APPLICABLE`; **B** candidates
+   exist but none has directional evidence -> `INSUFFICIENT_EVIDENCE`; **C** all `INCONCLUSIVE` ->
+   `INSUFFICIENT_EVIDENCE`; **D** some candidates sufficient, some not -> `APPLICABLE` over the
+   participating subset, non-participating candidates represented-but-unscored (`null`, never zero
+   mass and never prior mass); **E** every candidate contradicted-to-`LOW` -> `APPLICABLE`, uniform
+   over the participating set. A non-participating candidate never causes the whole result to be
+   insufficient — only *zero* participating candidates does that.
 
 ### L. Invariants (implementation test obligations)
 
@@ -617,8 +636,9 @@ governed evidence of one interaction.
 - **New `## Amendment 1`** section (this one): §A name/nature, §B reuse analysis, §C weight mapping
   with rejected alternatives, §D status model, §E candidate-set authority, §F evidence boundary,
   §G graph boundary, §H canonical ordering, §I decimal contract + largest-remainder residual, §J
-  eight golden vectors + the four decision cases, §K output contract, §L invariants, §M staged
-  plan, §N AI boundary, §O this summary, §P a revisit trigger.
+  eleven golden vectors + the five decision cases, §K output contract, §L invariants, §M staged
+  plan, §N AI boundary, §O this summary, §P a revisit trigger, §Q input validation + context
+  isolation (fail closed), §R evidence identity + de-duplication.
 - **No change** to §1, §2, §5, §6, §7, or Alternatives rejected.
 - **Companion doc edits (same PR):** `docs/adr/M2-ADR-register.md` row and note updated to reflect
   the ratified Step-1 construct; `docs/architecture/target-intelligence-loop.md` stage 7 updated to
@@ -628,6 +648,52 @@ governed evidence of one interaction.
 ### P. Revisit trigger added by this amendment
 
 - If a concrete requirement emerges to distinguish *"every candidate hypothesis is actively
-  refuted"* from *"relative plausibility among weak hypotheses"* (§J Case D), that needs an
+  refuted"* from *"relative plausibility among weak hypotheses"* (§J Case E), that needs an
   absolute-threshold decision — a `HYPOTHESIS_UNCERTAINTY_V2` or a companion construct with its own
   ADR step, not a silent change to V1's weights or status model.
+
+### Q. Input validation and context isolation (fail closed)
+
+`HYPOTHESIS_UNCERTAINTY_V1`'s `calculate(...)` is a pure function of an already-assembled
+`HypothesisUncertaintyContext`. It performs **deterministic input validation** and **never repairs
+malformed authoritative diagnostic data** (M2-ADR-023 §2; the M2-ADR-032 fail-closed discipline).
+Each check raises a stable typed reason; none is silently normalized. A *valid empty state*
+(`NOT_APPLICABLE` / `INSUFFICIENT_EVIDENCE`, §D) is categorically distinct from an *invalid context*.
+
+Validated, with the reason code the Step-1 implementation must use:
+
+| Condition | Reason code | Behaviour |
+|---|---|---|
+| The same hypothesis identity (§H key) appears twice in the candidate set | `DUPLICATE_HYPOTHESIS` | reject |
+| An evidence input references a hypothesis not in the candidate set | `EVIDENCE_FOR_UNKNOWN_HYPOTHESIS` | reject |
+| A negative `supportingCount` / `contradictoryCount` / `inconclusiveCount` | `NEGATIVE_EVIDENCE_COUNT` | reject (also enforced by `DiagnosticConfidenceInputs`' own constructor) |
+| A context `interactionId` that does not match the interaction a candidate's evidence was drawn from | `EVIDENCE_INTERACTION_MISMATCH` | reject |
+| Two candidates whose objectives resolve to **different curriculum domains** | `CROSS_DOMAIN_CANDIDATE_SET` | reject |
+| An evidence observation whose owning domain differs from its hypothesis tuple's domain | `CROSS_DOMAIN_EVIDENCE` | reject |
+| A repeated governed observation id within one hypothesis tuple's evidence list (see §R) | `DUPLICATE_EVIDENCE_OBSERVATION` | reject |
+| An empty / null hypothesis identity field required by the §H order | `MALFORMED_HYPOTHESIS_IDENTITY` | reject |
+
+**Context isolation is normative, not advisory.** `HYPOTHESIS_UNCERTAINTY_V1` may never combine a
+Kafka-domain hypothesis with unrelated-domain evidence, and — because V1 is interaction-bound (§F) —
+may never combine evidence from two diagnostic interactions. The candidate set and every evidence
+observation in one `calculate(...)` call belong to **one learner, one diagnostic interaction, one
+curriculum domain**; the assembler establishes that boundary and the calculator re-checks it and
+fails closed. A hypothesis's domain is resolved from its objectives' authoritative curriculum
+context, never inferred.
+
+### R. Evidence identity and de-duplication
+
+The authoritative identity of a governed evidence observation is its **observation id** — the
+primary key of the persisted row the diagnostic-evidence pipeline writes, the same identity H5's
+`DiagnosticConfidenceService` already counts "distinct evidence observations" by. It is **not** the
+`(hypothesis, outcome)` pair and **not** the probe item id.
+
+The assembler reduces each hypothesis tuple's evidence, for this interaction, to the **set of
+distinct observation ids**, then classifies each once via `HypothesisEvidenceOutcome` into the
+`(supportingCount, contradictoryCount, inconclusiveCount)` triple the calculator consumes. One
+observation reaching the assembler through more than one projection (e.g. an H5 read *and* a
+probe-provenance read) is **deterministically de-duplicated by observation id** and influences a
+hypothesis exactly once (golden vector 10). Counting it twice because it arrived through two
+projections is a defect. The calculator does no de-duplication of its own, but §Q's
+`DUPLICATE_EVIDENCE_OBSERVATION` check rejects a context whose evidence list still carries a
+repeated observation id, so a mis-assembled context fails closed rather than double-counting.
