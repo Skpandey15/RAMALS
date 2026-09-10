@@ -35,6 +35,7 @@ from ramals_ai.diagnostic_assessment.agent import (
     REQUIRED_SOURCES,
     DiagnosticAssessmentAgent,
 )
+from ramals_ai.diagnostic_probe.reasoner import DiagnosticProbeReasoner
 from ramals_ai.gateway.budget import Deadline
 from ramals_ai.gateway.errors import GatewayError, GatewayErrorCode
 from ramals_ai.graph.limits import CeilingExceeded
@@ -186,6 +187,27 @@ def build_internal_router() -> APIRouter:
                 request_digest=request_digest,
                 mcp_execution_context=mcp_context,
             )
+        )
+
+    @router.post("/diagnostic-probe/propose", response_model=AIProposalEnvelope)
+    def diagnostic_probe_propose(
+        request: Request, envelope: AIRequestEnvelope
+    ) -> AIProposalEnvelope | JSONResponse:
+        """M2-ADR-032 step 3. Reads bounded H6/H7 through MCP-3 and recommends one next
+        diagnostic-probe candidate; Java's deterministic gate decides whether it has any effect.
+
+        Same shape as ``diagnostic_propose``: the delegated learner-context credential rides the
+        ``X-Ramals-Delegated-Context`` header, and its absence (or MCP being off) simply means the
+        reasoner has no governed evidence to read and returns an envelope Java resolves to
+        ``ABSENT``.
+        """
+        agent: DiagnosticProbeReasoner = request.app.state.agents["diagnostic_probe"]
+        deadline = Deadline.in_ms(envelope.constraints.deadlineMs)
+        mcp_context = _mcp_execution_context(
+            request, interaction_id=envelope.interactionId, deadline=deadline
+        )
+        return _execute(
+            lambda: agent.propose(envelope, deadline=deadline, mcp_execution_context=mcp_context)
         )
 
     @router.post("/tutor/respond", response_model=AIProposalEnvelope)

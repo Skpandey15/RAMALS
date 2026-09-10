@@ -25,6 +25,7 @@ from ramals_ai.assessment_evaluation.agent import AssessmentEvaluationAgent
 from ramals_ai.config.settings import ConfigurationError, ModelRoute, Settings, get_settings
 from ramals_ai.diagnostic.agent import DiagnosticAgent
 from ramals_ai.diagnostic_assessment.agent import DiagnosticAssessmentAgent
+from ramals_ai.diagnostic_probe.reasoner import DiagnosticProbeReasoner
 from ramals_ai.gateway.errors import GatewayError
 from ramals_ai.gateway.gateway import LLMGateway
 from ramals_ai.gateway.providers.anthropic_batches_adapter import AnthropicBatchesProvider
@@ -147,6 +148,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.agents = {
         "diagnostic": DiagnosticAgent(gateway, prompts=prompts, mcp_client=mcp_client),
         "diagnostic_assessment": DiagnosticAssessmentAgent(
+            gateway, prompts=prompts, mcp_client=mcp_client
+        ),
+        # M2-ADR-032 step 3: reads bounded H6/H7 through the same shared MCP-3 client (it reports
+        # AgentType.DIAGNOSTIC and builds no state of its own, so sharing the client leaks nothing),
+        # and returns a recommendation the deterministic Java gate decides on. Consumed by nothing.
+        "diagnostic_probe": DiagnosticProbeReasoner(
             gateway, prompts=prompts, mcp_client=mcp_client
         ),
         "tutor": TutorAgent(gateway, prompts=prompts),

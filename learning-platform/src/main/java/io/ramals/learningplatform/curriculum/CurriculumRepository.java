@@ -129,6 +129,29 @@ public class CurriculumRepository {
   }
 
   /**
+   * The authoritative domain facts for a domain code: its persisted type and the most recently
+   * published curriculum version (null when none is published). The domain-scoped sibling of
+   * {@link #findPublishedSkillContext(String)} -- same columns, resolved from {@code
+   * core.learning_domain} by {@code d.code} instead of from a skill.
+   *
+   * @return empty when the domain code is unknown, so a caller cannot send an AI request about a
+   *     domain that does not exist
+   */
+  public Optional<PublishedDomainContext> findPublishedDomainContext(String domainCode) {
+    return jdbcTemplate.query("""
+        SELECT d.code AS domain_code, d.domain_type,
+               (SELECT cv.version_code
+                  FROM core.curriculum_version cv
+                 WHERE cv.domain_id = d.id AND cv.status = 'PUBLISHED'
+                 ORDER BY cv.published_at DESC LIMIT 1) AS version_code
+          FROM core.learning_domain d
+         WHERE d.code = ?
+        """, (result, row) -> new PublishedDomainContext(
+            result.getString("domain_code"), result.getString("domain_type"),
+            result.getString("version_code")), domainCode).stream().findFirst();
+  }
+
+  /**
    * The domain a skill structurally belongs to, by the skill's own id -- not filtered by curriculum
    * publication state, because this answers "which domain owns this skill", not "what may currently
    * be taught". Used for authorization scoping (MCP-3.1's delegated learner-context domain scope),
