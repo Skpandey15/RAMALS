@@ -60,6 +60,28 @@ controlled JDBC connections/transactions reproduce the exact sequence Amendment 
 assert both halves: the live decision's own exposure read correctly excludes the concurrent,
 not-yet-committed attempt's item; a later `created_at`-bounded replay query wrongly includes it.
 
+## Why source-attempt identity also fails to be reconstructable (a second, independent defect)
+
+`AssessmentRepository.findMostRecentCompletedAttempt(learnerId, assessmentVersionId)` — the query
+that chooses `V6`'s source attempt (Amendment 3 §C) — is:
+
+```sql
+... WHERE learner_id = ? AND assessment_version_id = ? AND status = 'COMPLETED'
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+```
+
+This is a **"most recent as of when the query runs"** lookup, not a fact fixed once at decision
+time. Re-running it later, after the same learner has completed a further attempt under the same
+assessment version, returns that later attempt instead — a different, and wrong, answer for a
+historical replay. This defect is **independent of the §B MVCC/concurrency defect**: it requires no
+concurrent transaction at all, only ordinary sequential learner activity between the original
+decision and a later replay. It was found during review of an earlier Amendment 4 draft, which had
+incorrectly classified "the source attempt's own id" as reconstructable (on the unrelated, true fact
+that `core.assessment_attempt` rows are never deleted) without checking whether the id could be
+*rediscovered* — it cannot. See the ADR's own §F "Source attempt identity" for the frozen rule this
+finding produced, and §EE's review-round-corrections entry for the exact wording fixed.
+
 ## Existing provenance capabilities
 
 `core.diagnostic_probe_provenance` (`V055__hypothesis_driven_probe_selection.sql`):
@@ -97,6 +119,9 @@ working set" from a fresh `resolve()` call at replay time cannot reproduce a his
 
 Nothing in the current schema records, at decision time:
 
+- **which source attempt `V6` actually used** — `sourceAttemptId` itself, including the
+  `NO_SOURCE_ATTEMPT` case, where the fact "no eligible source attempt existed at decision time" is
+  itself the thing that must survive, not be silently re-derived later;
 - which relationship-authorized hypotheses `V6` admitted into its bounded, de-duplicated,
   actionable working set (Amendment 3 §E–§H);
 - which candidate probes survived destination-eligibility (exposure) filtering for each of those
@@ -118,10 +143,13 @@ not a queryable, immutable, FK-consistent database record — it cannot serve as
 
 ## Final recommended boundary
 
-Persist the exact `V6`-actionable hypothesis working set and its surviving candidate probes as they
-existed at the original destination-attempt decision — full five-field `DiagnosticHypothesis`
-identity per hypothesis, `probeItemVersionId` per candidate — scoped to the destination attempt,
-written atomically in the same `DiagnosticService.createAttempt` transaction, whenever
+Persist, on one header row per `V6`-policy attempt: **which source attempt `V6` used**
+(`sourceAttemptId`, authoritative decision-time provenance, `NULL` iff `NO_SOURCE_ATTEMPT`, never
+rediscovered by re-running `findMostRecentCompletedAttempt(...)` at replay time) together with the
+exact `V6`-actionable hypothesis working set and its surviving candidate probes as they existed at
+the original destination-attempt decision — full five-field `DiagnosticHypothesis` identity per
+hypothesis, `probeItemVersionId` per candidate — scoped to the destination attempt, written
+atomically in the same `DiagnosticService.createAttempt` transaction, whenever
 `selection_policy_version = DIAGNOSTIC_SELECTION_V6`, regardless of final outcome. See the ADR's
-own §G–§L for the full freeze and conceptual schema; no migration is created by this discovery
+own §F–§L for the full freeze and conceptual schema; no migration is created by this discovery
 report or by Amendment 4 itself.

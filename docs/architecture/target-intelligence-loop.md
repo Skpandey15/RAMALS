@@ -164,9 +164,15 @@ persist selected packet / diagnostic probe provenance
   (already exact today, for whichever probe is actually chosen -- Amendment 4 §S)
 
 AUDIT/REPLAY (Amendment 4 -- design only, no code/migration authorized yet):
-persisted V6 decision-time working-set snapshot
-  (actionable hypotheses + surviving candidate probes, as they existed at decision time --
-   never re-derived from created_at, never re-queries current exposure or new curriculum content)
+persisted V6 decision-time snapshot: WHICH source attempt was used (sourceAttemptId, or NULL
+  for NO_SOURCE_ATTEMPT) + actionable hypotheses + surviving candidate probes, as they existed
+  at decision time -- source identity never re-derived via findMostRecentCompletedAttempt(...)
+  (that lookup is itself time-sensitive), working set never re-derived from created_at, never
+  re-queries current exposure or new curriculum content
+    |
+    v
+load WHAT that identified source attempt contained (immutable assessment_response /
+  diagnostic_probe_provenance, read via the persisted sourceAttemptId only)
     |
     v
 frozen HYPOTHESIS_UNCERTAINTY_V1  (recomputed from the persisted snapshot)

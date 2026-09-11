@@ -23,8 +23,10 @@
   corrects Amendment 3 §V's replay/reproducibility conclusion, which a `DIAGNOSTIC_SELECTION_V6`
   implementation-review round found does not hold under concurrent PostgreSQL transactions (§V's own
   ratified text is left historically intact, not rewritten); freezes that exact historical replay
-  requires persisting `V6`'s decision-time actionable-hypothesis/candidate-probe working set, not
-  reconstructing it from `created_at`; and freezes the resulting persisted-provenance design. Still
+  requires persisting `V6`'s decision-time source-attempt identity, actionable-hypothesis, and
+  candidate-probe working set — never reconstructing any of them from `created_at` or from
+  re-running a time-sensitive "most recent completed attempt" lookup; and freezes the resulting
+  persisted-provenance design. Still
   authorizes **no** `DIAGNOSTIC_SELECTION_V6` code, migration, or runtime change — Amendment 4 is
   itself design-only, same as Amendments 1–3 were before their own implementation steps.
 - **Date:** 2026-09-08
@@ -2302,22 +2304,30 @@ coupling on its own terms; Amendment 4 does not pre-authorize it.
 
 ### D. Governing principle (the central Amendment-4 decision)
 
-> **If a `V6` selection input depends on transient decision-time database visibility, and that
-> visibility cannot later be reconstructed exactly, the relevant authoritative decision input must
-> be persisted at decision time.**
+> **If a `V6` selection input depends on transient decision-time database state — whether *which
+> rows were visible* (MVCC visibility, §B) or *which row a time-sensitive query would return* (e.g.
+> "the most recent completed attempt," §F) — and that state cannot later be reconstructed exactly,
+> the relevant authoritative decision input must be persisted at decision time.**
 
 Replay reconstructs from **persisted authoritative decision inputs**, never by attempting to
-resurrect an old PostgreSQL MVCC snapshot through a timestamp, sequence, or internal identifier.
-This is the corrected replacement for §V's "reconstructable ... with no migration" claim.
+resurrect an old PostgreSQL MVCC snapshot through a timestamp, sequence, or internal identifier, and
+never by re-running a "most recent"/"latest" style query that can legitimately return a different
+answer once more time has passed and more data exists. This is the corrected replacement for §V's
+"reconstructable ... with no migration" claim.
 
 ### E. Category A — inputs that stay reconstructable, unpersisted
 
-Verified against this repository's actual immutability guarantees, not assumed:
+Verified against this repository's actual immutability guarantees, not assumed. **Every item below
+reconstructs the *content* of an already-identified source attempt — never the identity of *which*
+attempt that was.** See §F for why that identity is a separate, Category B fact.
 
-- **The source attempt's own id.** `core.assessment_attempt` rows are never deleted (every FK
-  referencing it is `ON DELETE RESTRICT`), so the id itself is permanent regardless of any later
-  status transition.
-- **The source attempt's ordered misses.** `findIncorrectItemVersionIdsInPresentationOrder` joins
+- **A known source attempt's own row.** Once `sourceAttemptId` is known, `core.assessment_attempt`
+  rows are never deleted (every FK referencing one is `ON DELETE RESTRICT`), so the row it names is
+  permanent regardless of any later status transition — it cannot disappear or be reassigned to a
+  different learner or assessment version out from under a past decision. **This says nothing about
+  how replay learns which id to use in the first place** — that is not reconstruction, it is lookup
+  of an already-persisted fact (§F).
+- **That known source attempt's ordered misses.** `findIncorrectItemVersionIdsInPresentationOrder` joins
   `core.assessment_attempt_item` (write-once; `trg_assessment_attempt_touch_updated_at` aside,
   nothing updates or deletes a row here — V045's own comment: "Written once at attempt creation and
   immutable thereafter") to `core.assessment_response` (immutable — `core.protect_assessment_response`
@@ -2342,19 +2352,63 @@ None of the above needs duplicating into a new table. Persisting any of it would
 "arbitrary derived state when recomputation is safe" this repository's own principle (cited in the
 implementation-review discovery) warns against.
 
+**The source attempt's *contents* are reconstructable only after the exact historical source
+attempt has been identified. The *identity* of that source attempt is not reconstructed by
+replay: it is persisted in the replay-input header as authoritative decision-time provenance
+(§F).** Treating "the row is permanent once you know its id" as though it meant "the id itself can
+be rediscovered later" is exactly the conflation this section corrects — the two are different
+claims, and only the first one is true of `sourceAttemptId`.
+
 ### F. Category B — decision-time visibility-dependent inputs (must be persisted)
 
-Exactly two things a `V6` decision computes are **not** safely reconstructable later, for two
-independent reasons that must both be closed:
+Three things a `V6` decision depends on are **not** safely reconstructable later:
 
-1. **The `V6`-actionable hypothesis working set** — which relationship-authorized hypotheses survive
+1. **Which source attempt the decision actually used** (`sourceAttemptId` itself) — the most
+   fundamental of the three, since the other two are only meaningful once the source attempt is
+   known. See "Source attempt identity" immediately below.
+2. **The `V6`-actionable hypothesis working set** — which relationship-authorized hypotheses survive
    the de-duplication and destination-eligibility (exposure) filter, up to `MAX_AUTHORIZED_HYPOTHESES_V6`.
-2. **The surviving candidate-probe set** for that working set, after destination-eligibility
+3. **The surviving candidate-probe set** for that working set, after destination-eligibility
    (exposure) filtering.
 
-Both depend on `ProbeRelationshipService.resolve(...)`'s exposure check at the exact moment the
-original decision ran. Re-running that same walk at a later time can diverge from the original for
-**two independent reasons**, either alone sufficient to require persistence:
+#### Source attempt identity
+
+`V6`'s source attempt is chosen using semantics equivalent to
+`repository.findMostRecentCompletedAttempt(learnerId, assessmentVersionId)` — the *immediately
+preceding completed* attempt for the same assessment version (Amendment 3 §C). **This lookup is
+itself time-sensitive: which attempt is "most recent" changes as more attempts complete.**
+
+```
+Attempt A completes
+        |
+        v
+Destination attempt B is created; V6 uses A as its source
+        |
+        v
+Attempt C completes later (same learner, same assessment version)
+        |
+        v
+Historical replay of B: re-running findMostRecentCompletedAttempt(...) now returns C, not A
+```
+
+Re-running the same lookup at replay time can therefore return a **different** attempt than the one
+the original decision actually used. This is a defect independent of, and additional to, the two
+exposure-related reasons below — it requires no concurrency at all, only ordinary, sequential,
+later learner activity.
+
+> **Frozen rule: `sourceAttemptId` is authoritative decision-time provenance and MUST be persisted
+> in the `V6` replay-input snapshot header.** For `NO_SOURCE_ATTEMPT`, the persisted `NULL` is
+> itself the authoritative fact, not an absence of one (§J). **Historical replay MUST NOT invoke
+> `findMostRecentCompletedAttempt(...)`, or any equivalent "latest completed attempt" discovery, to
+> determine the historical source attempt** — it reads the persisted `sourceAttemptId` from the
+> snapshot header and uses exactly that value, including when that value is `NULL` (§O).
+
+#### Working set and candidate-probe set
+
+Both of these depend on `ProbeRelationshipService.resolve(...)`'s exposure check at the exact
+moment the original decision ran, made against the source attempt the decision used. Re-running
+that same walk at a later time — even given the *correct* `sourceAttemptId` — can diverge from the
+original for **two further, independent reasons**, either alone sufficient to require persistence:
 
 - **§B's MVCC defect** — a concurrent attempt's commit timing can make yesterday's live decision and
   today's re-derivation disagree about which items were exposed, in either direction, with no way to
@@ -2369,14 +2423,15 @@ original decision ran. Re-running that same walk at a later time can diverge fro
 
 ### G. Preferred persisted replay boundary
 
-**Persist the exact `V6`-actionable working set and its surviving candidate probes as they existed
-at the original destination-attempt decision — not the learner's entire exposure history, and not a
-snapshot of "everything published so far."**
+**Persist which source attempt the decision used, and the exact `V6`-actionable working set and its
+surviving candidate probes as they existed at the original destination-attempt decision — not the
+learner's entire exposure history, and not a snapshot of "everything published so far."**
 
 ```
 destination attempt
     |
-source attempt
+source attempt              (sourceAttemptId persisted in the header, §F -- an identity fact,
+                              never re-derived at replay; NULL iff NO_SOURCE_ATTEMPT)
     |
 V6 actionable hypothesis 1  (full DiagnosticHypothesis identity -- §H)
     |-- candidate probe A   (probeItemVersionId -- §I)
@@ -2386,12 +2441,15 @@ V6 actionable hypothesis 2
     |-- candidate probe C
 ```
 
-This is the smallest boundary that closes both defects in §F, because both defects are properties of
-*this exact computation's output*, not of the learner's exposure history at large. Persisting every
-exposed item across the learner's history would be strictly larger, would still need updating on
-every future attempt (defeating "smallest necessary"), and would not by itself capture *which
-hypotheses/candidates the exposure filter actually admitted* — the working set is the fact that
-matters, not the raw exposure set it was filtered against.
+This is the smallest boundary that closes all three §F defects. The working set and candidate-probe
+set are properties of *this exact computation's output*, not of the learner's exposure history at
+large — persisting every exposed item across the learner's history would be strictly larger, would
+still need updating on every future attempt (defeating "smallest necessary"), and would not by
+itself capture *which* hypotheses/candidates the exposure filter actually admitted. The source
+attempt's identity is a single scalar fact (one id, or `NULL`) sitting alongside it on the same
+header row — not a separate, larger structure, and not optional: without it, the working set and
+candidate-probe set would themselves be ambiguous about which source attempt they were derived
+from.
 
 ### H. Exact hypothesis identity (no collapsing)
 
@@ -2415,14 +2473,21 @@ Amendment 3 §F).
 
 ### I. Exact candidate-probe identity
 
-Every persisted candidate-probe row must bind, at minimum:
+Every persisted candidate probe must be bound, at minimum, to:
 
 ```
-destinationAttemptId
-sourceAttemptId
-full DiagnosticHypothesis identity (§H) of the owning hypothesis
-probeItemVersionId
+destinationAttemptId    (on the header row it belongs to -- sec L)
+sourceAttemptId          (on the same header row -- sec F/L; authoritative, may be NULL)
+full DiagnosticHypothesis identity (sec H) of the owning hypothesis  (on the candidate row itself)
+probeItemVersionId                                                    (on the candidate row itself)
 ```
+
+`destinationAttemptId` and `sourceAttemptId` need not be repeated on every candidate row — §L's
+schema carries both once, on the header row, and each candidate row references it by FK. What
+matters is that every candidate is unambiguously traceable to exactly one `(destinationAttemptId,
+sourceAttemptId)` pair, however the columns are physically arranged; the implementation PR is free
+to denormalize this onto the candidate rows themselves if that is more convenient, provided the
+values still originate from the one persisted header, never from a fresh lookup.
 
 **Storage/admission ordinal: audit-only, never authoritative.** An admission ordinal (which
 enumeration pass admitted this hypothesis, or its position among a hypothesis's own candidates) may
@@ -2495,6 +2560,11 @@ core.diagnostic_selection_replay_input          (conceptual name -- not final)
   id                          UUID PK
   destination_attempt_id      UUID  NOT NULL UNIQUE FK -> core.assessment_attempt(id)
   source_attempt_id           UUID  NULL     FK -> core.assessment_attempt(id)
+    -- Authoritative decision-time provenance (sec F) -- WHICH attempt V6 actually used, fixed at
+    -- the moment of decision. NULL if and only if NO_SOURCE_ATTEMPT (sec J). Never re-derived by
+    -- re-running findMostRecentCompletedAttempt(...) at replay time (sec O) -- that lookup is
+    -- itself time-sensitive and can return a different (later) attempt than the one originally
+    -- used. Not a cache of a value replay could otherwise compute; the only record of it.
   snapshot_contract_version   VARCHAR        NOT NULL  -- "DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1"
   relationship_authorized_count INTEGER      NOT NULL
   actionable_hypothesis_count INTEGER        NOT NULL
@@ -2574,7 +2644,11 @@ verify selection_policy_version == DIAGNOSTIC_SELECTION_V6
 load the persisted replay-input snapshot for this destination attempt
   (absence => pre-Amendment-4 attempt; exact replay not guaranteed -- sec X; stop here)
         |
-load immutable source-attempt evidence (sec E) using the snapshot's own sourceAttemptId
+read the snapshot's own persisted sourceAttemptId -- never re-derived (sec F)
+        |
+if sourceAttemptId is NULL: reproduce NO_SOURCE_ATTEMPT directly; do not search for a source
+        |
+otherwise: load immutable evidence (sec E) for exactly that sourceAttemptId
         |
 rebuild the Step-1 context from the snapshot's persisted actionable hypotheses (sec H)
         |
@@ -2600,6 +2674,15 @@ any AI/graph source, as authoritative input to the historical candidate set. The
 *is* the authoritative candidate set for replay; live discovery of any kind is out of scope for a
 replay read.
 
+**Replay must never invoke `findMostRecentCompletedAttempt(...)`, or any equivalent "most recent" /
+"latest completed attempt" discovery query, to determine the historical source attempt.** That
+lookup is exactly the time-sensitive query §F's "Source attempt identity" describes — a later
+learner attempt completing between the original decision and a replay changes what it returns.
+Replay determines the source attempt **solely** by reading the snapshot's own persisted
+`sourceAttemptId`, including reproducing `NO_SOURCE_ATTEMPT` unchanged when that value is `NULL` —
+never by rediscovering a source attempt the original decision did not use, and never by treating a
+later-available source attempt as though it had been available at decision time.
+
 ### P. Curriculum growth is not replay input
 
 Confirmed (§E): `core.diagnostic_probe_relationship` rows are immutable once `PUBLISHED`, but new
@@ -2612,10 +2695,13 @@ invariant: exact reproduction of a past decision, never a re-optimization disgui
 ### Q. Step-1 evidence needs no duplication
 
 `core.diagnostic_probe_provenance` and `core.assessment_response` are both immutable (§E) and are
-already scoped to `source_attempt_id`, which the persisted snapshot records. Replay reads them
-directly through the existing repositories using that id — nothing about a source attempt's own
-governed evidence is subject to the §B/§F defects, because a source attempt must already be
-`COMPLETED` (fixed, immutable) before it is eligible as a `V6` source at all.
+already scoped to `source_attempt_id`. Once — and only once — that id is known (from the persisted
+snapshot's own `sourceAttemptId`, §F, never from a fresh `findMostRecentCompletedAttempt(...)`
+lookup), replay reads these tables directly through the existing repositories using exactly that
+id. Nothing about a *known* source attempt's own governed evidence is subject to the §B/§F defects,
+because a source attempt must already be `COMPLETED` (fixed, immutable) before it is eligible as a
+`V6` source at all — the defect this amendment closes is entirely about *which* id to use, never
+about the content once the id is fixed.
 
 ### R. Engine-version compatibility for replay
 
@@ -2774,6 +2860,8 @@ Amendments 1–3 already froze, unchanged and unwidened here.
 | A4-6 | Idempotent retry with the same `Idempotency-Key` | Exactly one destination attempt, exactly one snapshot header row, no duplicate hypothesis/candidate rows, no recomputation — the existing idempotency short-circuit prevents `V6` from running a second time at all |
 | A4-7 | Snapshot persistence fails (e.g. a constraint violation) | The entire attempt-creation transaction fails closed — no attempt, no packet, no provenance, no partial snapshot; nothing is left half-recorded |
 | A4-8 | Replay is attempted against a pre-Amendment-4 `V6` attempt | No snapshot header row exists; replay must report "exact replay not available for this attempt" and must never fabricate one from `created_at` or any other timestamp |
+| A4-9 | Later source attempt must not change replay: attempt A completes; destination attempt B is created and `V6` uses A as its source; attempt C (same learner, same assessment version) completes later; B is replayed | The snapshot's persisted `sourceAttemptId` names A; replay loads A and reproduces Step-1 evidence from A only; replay does **not** invoke `findMostRecentCompletedAttempt(...)` or any equivalent discovery; C is irrelevant to the replay regardless of when it completed; the original decision remains exactly reproducible |
+| A4-10 | `NO_SOURCE_ATTEMPT` must not be overwritten by a later source: destination attempt B originally had no eligible source attempt (`sourceAttemptId = NULL` persisted); a source attempt later becomes available (e.g. an attempt completes after B was created); B is replayed | Replay reproduces `NO_SOURCE_ATTEMPT` unchanged, exactly as the original decision found it; the persisted `NULL` is authoritative and is never replaced by a source attempt that exists now but did not exist, or was not eligible, at B's own decision time |
 
 ### CC. Performance
 
@@ -2831,8 +2919,47 @@ persisted boundary is the *working set*, not the exposure set it was filtered fr
   fabrication (§X).
 - Freezes that `DIAGNOSTIC_SELECTION_V6`'s own policy identifier does **not** change (§Y).
 - Reaffirms privacy/security and AI-boundary constraints on the new persisted data (§Z–§AA).
-- Adds eight normative golden scenarios, `A4-1` through `A4-8` (§BB).
+- Adds ten normative golden scenarios, `A4-1` through `A4-10` (§BB).
 - Adds five revisit triggers specific to this amendment (§DD, this section's predecessor).
+- **Review-round corrections (same PR, before merge — this amendment's own draft edited directly,
+  not superseded, since it had not yet been ratified — the same discipline Amendment 3's own §CC
+  already used for its pre-merge review-round fixes):**
+  - **§E corrected — a normative contradiction is fixed.** The earlier draft of this amendment's own
+    Category A listed "the source attempt's own id" as reconstructable and unpersisted, on the
+    reasoning that `core.assessment_attempt` rows are never deleted. That reasoning proves only that
+    a *known* attempt's row content is permanent — it does not prove that *which* attempt was used
+    can be rediscovered later, and directly contradicted §F/§G/§I/§L's own (correct) requirement
+    that `sourceAttemptId` be persisted. §E now states explicitly that it reconstructs content only,
+    never identity, with a boundary statement pointing to §F.
+  - **§F expanded** with a third, explicit Category B item — "which source attempt the decision
+    actually used" — including the time-sensitivity example (`findMostRecentCompletedAttempt(...)`
+    can return a different, later attempt at replay time than the one the original decision used)
+    and the frozen rule that `sourceAttemptId` is authoritative decision-time provenance, persisted
+    unconditionally (including as `NULL` for `NO_SOURCE_ATTEMPT`).
+  - **§G's opening statement and closing paragraph corrected** to name source-attempt identity as
+    part of the persisted boundary, not only the working set/candidate-probe set; its diagram
+    annotated accordingly.
+  - **§I clarified**: `destinationAttemptId`/`sourceAttemptId` are carried once, on the header row
+    (§L), not necessarily repeated per candidate row — reconciling §I's prose with §L's own schema.
+  - **§L's `source_attempt_id` column commentary expanded** to state explicitly that it is
+    authoritative decision-time provenance, never re-derived, and never a cache of a value replay
+    could otherwise compute.
+  - **§O (replay algorithm) strengthened** with an explicit branch on the persisted `sourceAttemptId`
+    (including the `NULL` case) and an explicit, standalone prohibition on replay ever invoking
+    `findMostRecentCompletedAttempt(...)` or any equivalent "latest completed attempt" discovery.
+  - **§D's governing-principle statement broadened**, in place, to name explicitly the two kinds of
+    non-reconstructable decision-time state this amendment now covers — MVCC visibility (§B) and a
+    time-sensitive "most recent" query result (§F) — rather than only the former.
+  - **§Q clarified** to state the id-vs-content distinction explicitly, rather than only implying it.
+  - **§BB expanded** with two new golden scenarios, `A4-9` (a later-completing attempt must not
+    change a replay whose source was already fixed) and `A4-10` (`NO_SOURCE_ATTEMPT` must not be
+    overwritten by a source attempt that becomes available only after the original decision).
+  - None of these corrections reopen §B–§C, §E's own remaining bullets, §H, §J, §K, §M–§R, §T–§AA, or
+    golden scenarios `A4-1`–`A4-8`: every other Amendment 4 decision (`created_at`'s insufficiency,
+    every rejected alternative, persisted hypothesis/candidate identity, compute-on-read scores, the
+    unconditional snapshot header, atomicity, the unchanged policy identifier,
+    `findLearnerExposedLogicalItemIdsBefore`'s removal, best-effort pre-snapshot replay) stands
+    exactly as first drafted.
 - **Authorizes no code and no migration.** The implementation PR that follows ratification creates
   the schema in §L, wires persistence into `DiagnosticService.createAttempt`, removes
   `findLearnerExposedLogicalItemIdsBefore` and its superseded tests, and must not merge PR #277 until
