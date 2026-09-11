@@ -1975,6 +1975,44 @@ assessment version a given `V6` decision is scoped to.
 Given these, and using `destinationExposureCutoff` (not current exposure state) for every exposure
 read, a `V6` decision is fully and exactly reconstructable without persisting the score itself.
 
+> **Post-merge correction flagged — 2026-09-11 (implementation-review finding, not yet a ratified
+> amendment).** This section's own "Verdict: YES, ... fully and exactly reconstructable ... with no
+> migration" is **not correct under concurrent PostgreSQL transactions**, and this note records that
+> defect rather than silently rewriting the ratified text above (M2-ADR-034's own discipline: an
+> amendment, once ratified, is corrected by a new dated amendment, never edited in place).
+>
+> `created_at` is stamped at `INSERT` (transaction-statement) time, not at commit time. Under
+> PostgreSQL's default `READ COMMITTED` isolation (RAMALS configures no isolation override anywhere;
+> this is confirmed, not assumed), row visibility is decided by *commit order*, not by which
+> `created_at` value a row happens to carry. §V's own "residual, narrow, pre-existing caveat"
+> paragraph above considered a concurrent cross-version attempt interleaving with the destination
+> attempt's own `created_at` and concluded it "does not affect the cutoff-bounded reconstruction's
+> correctness" — that conclusion is wrong. Concretely: nothing in this codebase serializes attempt
+> creation for one learner across different `assessment_version_id`s (`uq_assessment_attempt_one_active`
+> is scoped per version; no advisory lock exists anywhere in the codebase). If a concurrent attempt's
+> `INSERT` fixes an earlier `created_at` but does not *commit* until after the destination decision's
+> own live exposure read, the live decision correctly never sees it (ordinary `READ COMMITTED`
+> isolation, exactly as this section claims) — but a later replay using `created_at <
+> destinationExposureCutoff` **will** wrongly include it, since `created_at` carries no commit-order
+> information. Executable proof: `AssessmentItemLineagePersistenceIntegrationTests
+> #concurrentUncommittedAttemptCreatesADestinationExposureCutoffReplayDivergence`, run against a real
+> PostgreSQL 18.1 instance.
+>
+> **Governance disposition.** Exact replay cannot be restored by further refining the `created_at`
+> query — the defect is that no timestamp column can encode commit-visibility order at all. The
+> leading candidate fix is persisting sufficient immutable decision-time inputs (the actionable
+> hypothesis working set and candidate-probe set actually computed, keyed to the destination
+> attempt) so replay consumes a persisted snapshot rather than re-deriving exposure from `created_at`
+> at all. That fix requires a schema migration, which directly contradicts this section's own
+> ratified "no new column, no new table, no migration" verdict — so it is **not implemented by this
+> note or by the PR that added it**. **A new M2-ADR-034 amendment (Amendment 4) is required to
+> correct §V and authorize the persistence-based fix before `DIAGNOSTIC_SELECTION_V6` may honestly
+> claim exact historical replay.** Until that amendment is ratified,
+> `AssessmentRepository#findLearnerExposedLogicalItemIdsBefore` remains available for its real,
+> narrower value (correct reconstruction in the common, non-concurrent-interleaving case) but must
+> not be described or relied upon as an exact MVCC-safe replay of a `V6` decision — see that method's
+> own corrected javadoc.
+
 ### W. M2-ADR-032 isolation (reaffirmed)
 
 ```
@@ -2102,6 +2140,11 @@ not implemented here — no test exists yet, since no `V6` code exists yet.
 | V6-B | A relationship-authorized hypothesis `H2` resolves `CANDIDATES_AVAILABLE`, but every one of `H2`'s own candidate probes is excluded by destination-attempt eligibility (e.g. all already exposed) | `H2` is relationship-authorized but **not actionable** (§H) — it does not enter `HypothesisUncertaintyContext.candidates()` at all, and never influences `H1`/`H3`'s normalized values |
 | V6-C | More relationship-authorized *and* actionable hypotheses are discovered than `MAX_AUTHORIZED_HYPOTHESES_V6` (§E) | Only the first `MAX_AUTHORIZED_HYPOTHESES_V6` unique actionable hypotheses, in frozen enumeration order (miss `presentation_order` then `RELATIONSHIP_TYPE_PRIORITY`), enter the working set; later ones are not admitted and do not affect the decision (§E) — this is a computation bound, not an eligibility judgment about the ones excluded |
 | V6-D | A historical `V6` decision is replayed after the learner has taken further attempts that expose additional items | The replay uses the exposure state **as of the original decision's `destinationExposureCutoff`** (§V), not the learner's current exposure state — candidate set and selected probe are identical to the original decision |
+
+> **V6-12 / V6-D correction — 2026-09-11.** Both scenarios above assume §V's `destinationExposureCutoff`
+> mechanism achieves exact reconstruction. It does not, under concurrent transactions — see the
+> post-merge correction note at the end of §V. Until Amendment 4 corrects §V, V6-12/V6-D are frozen
+> *targets*, not properties the current `created_at`-bounded mechanism actually guarantees.
 
 ### CC. ADR diff summary (this amendment)
 

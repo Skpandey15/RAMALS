@@ -129,6 +129,14 @@ exactly (Amendment 3 §K/§L/§M/§O/§P) -- never confused with a genuine valid
 (§N), which fails attempt creation closed instead
 ```
 
+**Historical-replay caveat (2026-09-11, post-implementation-review finding).** `destinationExposureCutoff`
+(§V) correctly governs *live* selection — the diagram above is accurate for that path. Amendment 3
+§V's own claim that this also makes *historical replay* exactly reconstructable is disproven under
+concurrent PostgreSQL transactions (`created_at` orders row-creation time, not commit order); see the
+correction note in `docs/adr/M2-ADR-034-information-gain-probe-selection.md` §V and
+`AssessmentItemLineagePersistenceIntegrationTests#concurrentUncommittedAttemptCreatesADestinationExposureCutoffReplayDivergence`
+for the executable proof. A new ADR amendment is required before exact replay may be claimed.
+
 `HYPOTHESIS_DISCRIMINATION_V1` is a non-expectation deterministic discrimination score (total
 variation distance), never *expected information gain* — RAMALS has no outcome-probability model to
 support that computation, and Amendment 2 explicitly rejected it after analysis (historical

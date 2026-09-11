@@ -257,20 +257,38 @@ public class AssessmentRepository {
   }
 
   /**
-   * M2-ADR-034 Amendment 3 §V: the same logical-item exposure identity {@link
-   * #findLearnerExposedLogicalItemIds} resolves, restricted to attempts whose own {@code created_at}
-   * is strictly before {@code destinationExposureCutoff} -- the destination attempt's own {@code
-   * created_at}, fixed by {@link #insertAttempt} before any {@code DIAGNOSTIC_SELECTION_V6} decision
-   * runs.
+   * A {@code created_at}-bounded historical exposure query: the same logical-item exposure identity
+   * {@link #findLearnerExposedLogicalItemIds} resolves, restricted to attempts whose own {@code
+   * created_at} is strictly before {@code destinationExposureCutoff}.
    *
-   * <p><b>Not called by live selection.</b> At the moment a {@code DIAGNOSTIC_SELECTION_V6} decision
-   * is actually made, the destination attempt's own items do not exist in {@code
-   * core.assessment_attempt_item} yet, and no later attempt has been created yet either -- so {@link
-   * #findLearnerExposedLogicalItemIds}'s unbounded read and this cutoff-bounded read agree exactly
-   * at that moment. This method exists so a historical {@code V6} decision can be replayed later --
-   * after the destination attempt has been completed, or the learner has taken further attempts --
-   * and still see exactly the exposure state the original decision saw, per Amendment 3 §V's frozen
-   * {@code destinationExposureCutoff} rule.
+   * <p><b>Governance note (post-merge correction to M2-ADR-034 Amendment 3 §V) -- this is NOT an
+   * exact reconstruction of the original PostgreSQL MVCC visibility a {@code
+   * DIAGNOSTIC_SELECTION_V6} decision saw, despite Amendment 3 §V's ratified "Verdict: YES, ...
+   * fully and exactly reconstructable ... with no migration."</b> {@code created_at} is stamped at
+   * {@code INSERT} (transaction-statement) time, not at commit time, and PostgreSQL's default {@code
+   * READ COMMITTED} isolation means a row's visibility is decided by commit order, not by which
+   * timestamp value it happens to carry. Concretely: nothing in this codebase serializes attempt
+   * creation for one learner across different {@code assessment_version_id}s (only {@code
+   * uq_assessment_attempt_one_active}, scoped per version, and no advisory lock anywhere) -- see
+   * {@code AssessmentItemLineagePersistenceIntegrationTests
+   * #concurrentUncommittedAttemptCreatesADestinationExposureCutoffReplayDivergence} for an
+   * executable proof. If a concurrent attempt's {@code INSERT} starts (fixing an earlier {@code
+   * created_at}) before this decision's own live exposure read, but does not <em>commit</em> until
+   * afterward, the live decision correctly never sees it (ordinary {@code READ COMMITTED} isolation,
+   * exactly as Amendment 3 §V claims) -- but a later replay using this method's {@code created_at <
+   * cutoff} predicate WILL include it, because {@code created_at} carries no commit-order
+   * information at all. Replay and the original decision can therefore diverge under an entirely
+   * ordinary interleaving Amendment 3 §V's own "residual, narrow, pre-existing caveat" paragraph
+   * considered and incorrectly dismissed as not affecting correctness.
+   *
+   * <p>This method is retained for its real, narrower value -- reconstructing exposure state
+   * correctly in the (common) case where no such concurrent cross-version attempt creation
+   * interleaves with the destination decision -- but callers must not treat its result as a proven
+   * exact replay of a {@code DIAGNOSTIC_SELECTION_V6} decision's original visibility until M2-ADR-034
+   * is amended to correct §V (a persisted decision-time snapshot, not further {@code created_at}
+   * refinement, is the leading candidate fix; that change is deliberately not made here because it
+   * would contradict Amendment 3 §V's own ratified "no migration" verdict without a new amendment
+   * ratifying the correction first).
    */
   public Set<UUID> findLearnerExposedLogicalItemIdsBefore(UUID learnerId, Instant destinationExposureCutoff) {
     return Set.copyOf(jdbcTemplate.query("""
