@@ -77,6 +77,14 @@ tasks.withType(Test).configureEach {
       '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
       '--add-opens', 'java.base/java.util=ALL-UNNAMED',
       '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED')
+  // Gradle's forked test-worker default heap is too small for this module: `test` alone runs
+  // ~250 classes -- many @SpringBootTest -- in one forked JVM (maxParallelForks = 1, no forkEvery,
+  // so Spring's context cache accumulates every distinct ApplicationContext for the whole task
+  // without ever restarting). CI additionally attaches an observability javaagent on top of that.
+  // M2-ADR-034 step 1 (PR #273) hit "OutOfMemoryError: Java heap space" in CI's `clean check` for
+  // exactly this reason -- an already-marginal budget, not a defect in the tests added. Explicit
+  // headroom, not a workaround for any one test.
+  maxHeapSize = '3g'
 }
 
 tasks.named('test') {
