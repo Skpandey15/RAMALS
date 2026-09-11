@@ -18,6 +18,15 @@
   multi-hypothesis enumeration (ratified, not assumed — Amendment 2 §H's own theorem makes it
   mathematically necessary), activation and fallback rules, and twelve normative behavioral
   scenarios. Still authorizes **no** `DIAGNOSTIC_SELECTION_V6` code, migration, or runtime change.
+  **Amended a fourth time — 2026-09-11** — see
+  [Amendment 4](#amendment-4--diagnostic_selection_v6-replayprovenance-correction-2026-09-11):
+  corrects Amendment 3 §V's replay/reproducibility conclusion, which a `DIAGNOSTIC_SELECTION_V6`
+  implementation-review round found does not hold under concurrent PostgreSQL transactions (§V's own
+  ratified text is left historically intact, not rewritten); freezes that exact historical replay
+  requires persisting `V6`'s decision-time actionable-hypothesis/candidate-probe working set, not
+  reconstructing it from `created_at`; and freezes the resulting persisted-provenance design. Still
+  authorizes **no** `DIAGNOSTIC_SELECTION_V6` code, migration, or runtime change — Amendment 4 is
+  itself design-only, same as Amendments 1–3 were before their own implementation steps.
 - **Date:** 2026-09-08
 - **Decides:** the design constraints binding a future deterministic information-gain diagnostic
   probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` that supersedes only `V5`'s final
@@ -2171,3 +2180,661 @@ not implemented here — no test exists yet, since no `V6` code exists yet.
 - If the exposure/no-repeat model is ever scoped per-assessment-version rather than per-learner
   (closing §V's narrow cross-domain-concurrency caveat), that is its own decision affecting
   `V1`–`V5` equally, not specific to `V6` and not implied by this amendment.
+
+## Amendment 4 — `DIAGNOSTIC_SELECTION_V6` replay/provenance correction (2026-09-11)
+
+**Status of this amendment: Proposed.** It corrects Amendment 3 §V's replay/reproducibility
+conclusion and freezes the persisted-provenance design needed to make exact historical replay
+actually true. **It authorizes no code and no migration** — the implementation PR that follows
+ratification is where the schema in §L below is actually created.
+
+### A. What this amendment corrects, and what it does not
+
+Amendment 3 §V is **not rewritten**. It remains, verbatim, the historical record of what was
+ratified on 2026-09-11 — including its now-incorrect "Verdict: YES, ... fully and exactly
+reconstructable ... with no migration" conclusion. Rewriting a ratified amendment as though its
+error never existed would make the ADR's own history untrustworthy; that is precisely the
+discipline "No change to Amendment 1 or Amendment 2 in any way" (Amendment 2's own diff summary)
+already commits this document to. Amendment 4 instead **prospectively supersedes** exactly the
+following clauses of §V, and nothing else in Amendments 1–3:
+
+- the frozen mechanism `destinationExposureCutoff = the destination attempt's own
+  core.assessment_attempt.created_at value` **as an exact-replay boundary** (superseded by §G below;
+  the underlying frozen *requirement* — replay must reflect exposure as of decision time, never
+  exposure state current at replay time — is not superseded, only the *mechanism* that was claimed
+  to satisfy it);
+- the "Verdict: YES, exposure state ... is reconstructable from already-persisted data, with no
+  migration" conclusion (superseded — see §B–§C: it is not reconstructable from `created_at` alone,
+  under concurrency);
+- the "residual, narrow, pre-existing caveat" paragraph's conclusion that a concurrent,
+  differently-versioned attempt "does not affect the cutoff-bounded reconstruction's correctness"
+  (superseded — it does; see §B);
+- the "Frozen replay inputs" list's claim that the `V6`-actionable working set and candidate-probe
+  set are "reconstructable deterministically by re-running the same ... walk" against
+  `destinationExposureCutoff` (superseded by §F–§G: re-running the walk, at any later time, against
+  any exposure boundary expressed only as a timestamp, cannot reproduce the original decision);
+- the closing claim that "a `V6` decision is fully and exactly reconstructable without persisting
+  the score itself" (the "without persisting the score" clause is **not** superseded — Amendment 4
+  agrees no score should be persisted, see §U — but "fully ... reconstructable" without persisting
+  *anything else either* is superseded by §F–§G).
+
+**Not touched by this amendment:** Amendment 1's and Amendment 2's own frozen mathematics, golden
+vectors, decimal contracts, and validation reason codes; Amendment 3's activation/fallback/
+enumeration/bound rules (§E–§P), which govern *live* `V6` selection and remain exactly as ratified;
+`DIAGNOSTIC_SELECTION_V1`–`V5`; `HYPOTHESIS_UNCERTAINTY_V1`; `HYPOTHESIS_DISCRIMINATION_V1`; the
+`DIAGNOSTIC_SELECTION_V6` policy identifier itself (see §Y — this amendment does not mint a
+successor). **Live `V6` selection was never derived from `created_at`-bounded reconstruction and is
+unaffected by anything in this amendment.**
+
+### B. The concurrency defect, frozen as an architectural fact
+
+This is expected PostgreSQL `READ COMMITTED` behavior, not an implementation bug to be patched
+inside the query — it is a structural property of MVCC that no refinement of a timestamp predicate
+can escape.
+
+```
+Transaction A                              Transaction B
+--------------                             --------------
+INSERT attempt A (created_at = t0)
+  -- uncommitted --
+                                            INSERT destination attempt B (created_at = t1, t1 > t0)
+                                            B's own live exposure read
+                                              (findLearnerExposedLogicalItemIds)
+                                              runs now, on a separate snapshot --
+                                              A is uncommitted, so A's items
+                                              are correctly invisible to B
+COMMIT (after B's live read already ran)
+
+-- time passes --
+
+Historical replay of B, using
+  created_at < B.created_at (= t1):
+  A.created_at = t0, and t0 < t1,
+  so A now qualifies -- A's items
+  are now committed and visible
+  -> replay WRONGLY includes A's items
+```
+
+Therefore: **the original decision-time exposure set (what B's live read actually saw) is not equal
+to the later `created_at`-bounded reconstruction (what a replay query returns).** `created_at`
+orders *row-creation statement time*; it carries zero information about *commit order*, and commit
+order — not creation order — is what determines what a `READ COMMITTED` transaction can see. This
+divergence requires no clock skew, no adversarial timing, and no rare race: it is the ordinary,
+correct behavior of any two transactions where the one with the numerically smaller `created_at`
+happens to commit second. Nothing in this codebase prevents that ordering — see
+`docs/adr/M2-ADR-034-amendment-4-replay-provenance-discovery.md` for the exact invariants checked.
+
+**Executable proof (M2-ADR-034 Step 3 implementation review, PR #277):**
+`AssessmentItemLineagePersistenceIntegrationTests
+#concurrentUncommittedAttemptCreatesADestinationExposureCutoffReplayDivergence`, run against a real
+PostgreSQL 18.1 instance (this repository's own CI image), reproduces exactly the sequence above and
+asserts both halves: the live read excludes A; the cutoff-bounded replay wrongly includes it.
+
+### C. Why no timestamp, sequence, or UUID ordering can solve this
+
+Amendment 4 explicitly rejects every one of the following as a sufficient exact-replay exposure
+boundary, and requires that no future `V6`-family implementation reach for one of these as a
+"simpler fix" without first re-litigating this section:
+
+| Candidate boundary | Why it fails |
+|---|---|
+| `assessment_attempt.created_at` | §B: creation-statement time, not commit-visibility time. |
+| `assessment_attempt.updated_at` | Strictly worse — mutated by `trg_assessment_attempt_touch_updated_at` on every status transition (e.g. completion), so it does not even consistently mean "when this attempt was created," let alone "when it became visible." |
+| Application wall-clock timestamp (`Instant.now()` captured in Java) | Same class of defect as `created_at`, plus additional non-monotonicity from clock adjustments, GC pauses, and multi-instance clock skew across however many application instances are running. |
+| `SELECT CURRENT_TIMESTAMP` read separately at decision time | Still a statement-time value from inside the *deciding* transaction, not a record of *other* transactions' commit order relative to it — does not change the analysis in §B at all, only where the timestamp is captured. |
+| A `BIGSERIAL`/sequence column | PostgreSQL sequence values are allocated at statement-execution time, before commit, exactly like `created_at` — a transaction can allocate a lower sequence value and commit *after* a transaction that allocated a higher one. Sequences do not encode commit order either; this is documented PostgreSQL behavior, not an oversight specific to this schema. |
+| UUID ordering (including `UuidV7.generate()`, already used throughout this schema) | A time-ordered UUID embeds a generation timestamp captured at allocation time, in the generating process — the identical failure mode as `created_at`, one layer further from the database. An unordered UUIDv4 carries no time signal at all. |
+| "Attempt insertion order inferred from timestamps" (any of the above, combined) | Restates the same defect; combining several statement-time signals does not manufacture a commit-order signal none of them individually carries. |
+
+**None of these records the original transaction's visibility snapshot**, because none of them is
+*computed from* transaction commit order — they are all computed from statement-execution order,
+which concurrency structurally decouples from commit order.
+
+**PostgreSQL internal MVCC identifiers (`xmin`/`xmax`/`txid`) are also rejected as a durable
+application-level provenance mechanism**, for reasons independent of whether they could technically
+solve §B: they are 32-bit values that wrap around and are periodically recycled by `VACUUM`
+(`FREEZE`), they are not portable across a `pg_dump`/restore or a future database migration, and
+depending on them would couple this repository's application-level reproducibility guarantee to a
+PostgreSQL storage-engine implementation detail this codebase relies on nowhere else. **RAMALS must
+not make exact educational decision replay depend on ephemeral or internal MVCC metadata.** If a
+future, separate ADR ever proposes such coupling for a different purpose, it must justify that
+coupling on its own terms; Amendment 4 does not pre-authorize it.
+
+### D. Governing principle (the central Amendment-4 decision)
+
+> **If a `V6` selection input depends on transient decision-time database visibility, and that
+> visibility cannot later be reconstructed exactly, the relevant authoritative decision input must
+> be persisted at decision time.**
+
+Replay reconstructs from **persisted authoritative decision inputs**, never by attempting to
+resurrect an old PostgreSQL MVCC snapshot through a timestamp, sequence, or internal identifier.
+This is the corrected replacement for §V's "reconstructable ... with no migration" claim.
+
+### E. Category A — inputs that stay reconstructable, unpersisted
+
+Verified against this repository's actual immutability guarantees, not assumed:
+
+- **The source attempt's own id.** `core.assessment_attempt` rows are never deleted (every FK
+  referencing it is `ON DELETE RESTRICT`), so the id itself is permanent regardless of any later
+  status transition.
+- **The source attempt's ordered misses.** `findIncorrectItemVersionIdsInPresentationOrder` joins
+  `core.assessment_attempt_item` (write-once; `trg_assessment_attempt_touch_updated_at` aside,
+  nothing updates or deletes a row here — V045's own comment: "Written once at attempt creation and
+  immutable thereafter") to `core.assessment_response` (immutable — `core.protect_assessment_response`
+  rejects `UPDATE`/`DELETE` unconditionally). The source attempt is `COMPLETED` before it can be used
+  as a `V6` source at all, so both joined tables are already fixed by the time any `V6` decision
+  reads them.
+- **The source interaction's governed probe evidence.** `core.diagnostic_probe_provenance` is
+  immutable (`trg_probe_provenance_guard` rejects `UPDATE`/`DELETE` unconditionally), and it is
+  scoped to `source_attempt_id`, joined to the same immutable `assessment_response`.
+- **Published relationship rows' own content**, once published. `core.diagnostic_probe_relationship`
+  cannot be updated or deleted once `status = 'PUBLISHED'` (`trg_probe_relationship_immutable`) — a
+  row a `V6` decision resolved against cannot later change or disappear. **This is necessary but not
+  sufficient** — see §F: new rows can still be *published* later, changing what a fresh `resolve()`
+  call finds, without changing any row a past decision actually used.
+- **`HYPOTHESIS_UNCERTAINTY_V1` / `HYPOTHESIS_DISCRIMINATION_V1`'s own engine-version identifiers**
+  — frozen, hashed by `EngineVersionFreezeTests` (see §R for what this does and does not guarantee
+  across an engine-version change).
+- **`DIAGNOSTIC_SELECTION_V6`'s own selection-policy identifier**, written once, immutably, to
+  `assessment_attempt.selection_policy` at `insertAttempt` time.
+
+None of the above needs duplicating into a new table. Persisting any of it would be exactly the
+"arbitrary derived state when recomputation is safe" this repository's own principle (cited in the
+implementation-review discovery) warns against.
+
+### F. Category B — decision-time visibility-dependent inputs (must be persisted)
+
+Exactly two things a `V6` decision computes are **not** safely reconstructable later, for two
+independent reasons that must both be closed:
+
+1. **The `V6`-actionable hypothesis working set** — which relationship-authorized hypotheses survive
+   the de-duplication and destination-eligibility (exposure) filter, up to `MAX_AUTHORIZED_HYPOTHESES_V6`.
+2. **The surviving candidate-probe set** for that working set, after destination-eligibility
+   (exposure) filtering.
+
+Both depend on `ProbeRelationshipService.resolve(...)`'s exposure check at the exact moment the
+original decision ran. Re-running that same walk at a later time can diverge from the original for
+**two independent reasons**, either alone sufficient to require persistence:
+
+- **§B's MVCC defect** — a concurrent attempt's commit timing can make yesterday's live decision and
+  today's re-derivation disagree about which items were exposed, in either direction, with no way to
+  recover which was true at decision time from `created_at` alone.
+- **Curriculum growth.** `core.diagnostic_probe_relationship` rows are immutable once published
+  (§E), but **new rows can be published after a `V6` decision runs.** A `resolve()` call made today
+  can find a hypothesis or candidate a `resolve()` call made at the original decision time
+  structurally could not have found, because it did not exist yet. Re-deriving "the working set"
+  from current data therefore does not even reproduce a *correct* historical snapshot in the
+  no-concurrency case — it can silently widen it. **Replay must reproduce what `V6` considered
+  then, never what `V6` would consider now** (§P).
+
+### G. Preferred persisted replay boundary
+
+**Persist the exact `V6`-actionable working set and its surviving candidate probes as they existed
+at the original destination-attempt decision — not the learner's entire exposure history, and not a
+snapshot of "everything published so far."**
+
+```
+destination attempt
+    |
+source attempt
+    |
+V6 actionable hypothesis 1  (full DiagnosticHypothesis identity -- §H)
+    |-- candidate probe A   (probeItemVersionId -- §I)
+    |-- candidate probe B
+    |
+V6 actionable hypothesis 2
+    |-- candidate probe C
+```
+
+This is the smallest boundary that closes both defects in §F, because both defects are properties of
+*this exact computation's output*, not of the learner's exposure history at large. Persisting every
+exposed item across the learner's history would be strictly larger, would still need updating on
+every future attempt (defeating "smallest necessary"), and would not by itself capture *which
+hypotheses/candidates the exposure filter actually admitted* — the working set is the fact that
+matters, not the raw exposure set it was filtered against.
+
+### H. Exact hypothesis identity (no collapsing)
+
+Every persisted hypothesis row must carry the complete, frozen `DiagnosticHypothesis` identity —
+the same five fields Amendment 1's canonical order and `V6`'s own exact-identity de-duplication
+already require:
+
+```
+triggerItemVersionId
+triggerObjectiveId
+relationshipType
+targetObjectiveId
+authorizingRelationshipId
+```
+
+**Never** collapse to `(targetObjectiveId, relationshipType)` or any other partial key, and never
+semantically de-duplicate two persisted rows that differ in any of the five fields. Doing either
+would silently change what "the same hypothesis" means between live selection and replay, breaking
+compatibility with Amendment 1's canonical order and `V6`'s own dedup semantics (M2-ADR-034
+Amendment 3 §F).
+
+### I. Exact candidate-probe identity
+
+Every persisted candidate-probe row must bind, at minimum:
+
+```
+destinationAttemptId
+sourceAttemptId
+full DiagnosticHypothesis identity (§H) of the owning hypothesis
+probeItemVersionId
+```
+
+**Storage/admission ordinal: audit-only, never authoritative.** An admission ordinal (which
+enumeration pass admitted this hypothesis, or its position among a hypothesis's own candidates) may
+be persisted for audit legibility, but `HYPOTHESIS_DISCRIMINATION_V1`'s own frozen `RANKING_ORDER`
+(score `DESC` → hypothesis canonical order → probe UUID) is already independent of input-list order
+— proven by this repository's own existing "permuting the candidate list does not change the
+result" tests for both Step 1 and Step 2. Persisted order carrying authority over final selection
+would be a **new** selection semantic Amendment 4 does not introduce and explicitly forbids;
+replay must re-derive the ranking from `RANKING_ORDER` applied to the persisted (unordered) set, not
+from row-storage order.
+
+**`scoreable`: persist it, marked always-true-today.** Every real candidate reaching a `V6` working
+set is scoreable by construction (`ProbeRelationshipRepository.itemsForObjective` returns only
+verified, scoreable items) — the same finding Amendment 2's own discovery report already made for
+Step 2's `CandidateProbe.scoreable`. Persisting the flag costs one boolean column and protects a
+future implementation change to that invariant from silently corrupting historical replay without
+being noticed; it is not expected to ever read `false` for a real row.
+
+### J. Snapshot scope — when it must exist
+
+**Whenever `selection_policy_version = DIAGNOSTIC_SELECTION_V6`, exactly one snapshot header row
+must be persisted for that attempt — regardless of the final outcome.** `V6`'s own `select()` method
+already runs unconditionally for every `DIAGNOSTIC_SELECTION_V6` attempt (it is what decides `NO_SOURCE_ATTEMPT`, `NO_ACTIONABLE_HYPOTHESES`, and every other fallback in the first place), so this
+adds no new evaluation path — it persists the result of a computation that already happens:
+
+- no source attempt → header row, `sourceAttemptId = NULL`, zero hypothesis/candidate rows;
+- source attempt exists, zero relationship-authorized hypotheses → header row, zero hypothesis/
+  candidate rows;
+- relationship-authorized but zero actionable (all excluded by exposure) → header row, zero rows;
+- the single-candidate-total optimization, every Step-1/Step-2 fallback, and genuine activation →
+  header row plus exactly the hypothesis/candidate rows the working set actually contained.
+
+**Why not only when `V6` activates:** replay must reproduce *why* `V6` did not activate, not only
+the cases where it did — an audit or dispute that asks "why was the learner not shown a
+discrimination-ranked probe here" needs the same working set a "why was probe X chosen" audit needs.
+
+**Distinguishing "`V6` evaluated an empty set" from "no snapshot exists (pre-Amendment-4 data)":**
+the header row's mere *existence*, keyed uniquely to `destinationAttemptId`, is the signal. A
+pre-Amendment-4 `V6` attempt has no header row at all; every post-Amendment-4 `V6` attempt has
+exactly one, even when its own hypothesis/candidate rows are empty. This is why a versioned header
+(§K), not merely populated child rows, is required.
+
+### K. Snapshot contract identifier and versioning
+
+A dedicated contract-version identifier, distinct from `DIAGNOSTIC_SELECTION_V6` (the *selection
+policy*) and from `HYPOTHESIS_UNCERTAINTY_V1`/`HYPOTHESIS_DISCRIMINATION_V1` (the *engines*), is
+required so schema evolution, audit interpretation, and "is exact replay guaranteed for this
+attempt" can each be reasoned about independently:
+
+```
+DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1
+```
+
+(repository-native form and exact hosting class/constant name to be fixed by the implementation PR,
+following the existing `SELECTION_POLICY_VERSION` / `ENGINE_VERSION` / `POLICY_VERSION` constant
+convention — not by inventing a new one). This identifier must **never** be conflated with or embed
+into `HYPOTHESIS_UNCERTAINTY_V1`/`HYPOTHESIS_DISCRIMINATION_V1`'s own frozen strings — it versions
+the *snapshot contract*, not either engine's mathematics, which Amendment 4 does not touch.
+
+### L. Logical schema (design only — no migration in this PR)
+
+Two tables are sufficient; a hypothesis row is not modeled separately from its candidate-probe rows
+because a `V6`-actionable hypothesis has, by its own definition (Amendment 3 §H), at least one
+surviving candidate — so no hypothesis-only row would ever exist, and merging costs only mild,
+bounded repetition of five identity columns across at most `MAX_AUTHORIZED_HYPOTHESES_V6 = 4`
+hypotheses' worth of candidates.
+
+```
+core.diagnostic_selection_replay_input          (conceptual name -- not final)
+  id                          UUID PK
+  destination_attempt_id      UUID  NOT NULL UNIQUE FK -> core.assessment_attempt(id)
+  source_attempt_id           UUID  NULL     FK -> core.assessment_attempt(id)
+  snapshot_contract_version   VARCHAR        NOT NULL  -- "DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1"
+  relationship_authorized_count INTEGER      NOT NULL
+  actionable_hypothesis_count INTEGER        NOT NULL
+  candidate_probe_count       INTEGER        NOT NULL
+  participating_hypothesis_count INTEGER     NOT NULL
+  step1_status                VARCHAR        NULL
+  step2_status                VARCHAR        NULL
+  activated                   BOOLEAN        NOT NULL
+  fallback_reason             VARCHAR        NULL   -- one of V6FallbackReason; audit value, see §T
+  created_at                  TIMESTAMPTZ    NOT NULL DEFAULT CURRENT_TIMESTAMP
+  CHECK (activated = (fallback_reason IS NULL))
+
+core.diagnostic_selection_replay_candidate_probe   (conceptual name -- not final)
+  id                          UUID PK
+  replay_input_id             UUID  NOT NULL FK -> core.diagnostic_selection_replay_input(id)
+  admission_ordinal           INTEGER NOT NULL   -- audit only, never authoritative (sec I)
+  probe_item_version_id       UUID  NOT NULL FK -> core.assessment_item_version(id)
+  scoreable                   BOOLEAN NOT NULL   -- always true today (sec I)
+  trigger_item_version_id     UUID  NOT NULL FK -> core.assessment_item_version(id)
+  trigger_objective_id        UUID  NOT NULL FK -> core.learning_objective(id)
+  relationship_type           VARCHAR NOT NULL
+  target_objective_id         UUID  NOT NULL FK -> core.learning_objective(id)
+  authorizing_relationship_id UUID  NULL  FK -> core.diagnostic_probe_relationship(id)
+  -- same composite-FK consistency discipline core.diagnostic_probe_provenance already holds
+  -- itself to: (probe_item_version_id, target_objective_id) and
+  -- (trigger_item_version_id, trigger_objective_id) each FK into
+  -- core.assessment_item_objective(item_version_id, objective_id).
+```
+
+Both tables: append-only (no `UPDATE`/`DELETE` path — enforced the same way
+`trg_probe_provenance_guard` enforces it for `core.diagnostic_probe_provenance`), destination-attempt
+scoped, FK-backed at every reference, normalized (not an opaque JSON blob — this repository's own
+convention, seen throughout `core.diagnostic_probe_provenance` and every other audit table, is
+relational rows with composite FKs, not JSON columns, for exactly this kind of governed audit
+record), and written only while the destination attempt is `IN_PROGRESS` (mirroring
+`trg_probe_provenance_guard`'s own check). **The implementation PR fixes final table/column names
+against whatever this repository's Flyway numbering is at that time; nothing here is final.**
+
+### M. Atomicity
+
+```
+destination attempt creation
+  +
+V6 replay-input snapshot persistence
+  +
+selected assessment packet
+  +
+diagnostic probe provenance (when a probe is actually chosen)
+```
+
+must occur inside the same, already-existing `DiagnosticService.createAttempt` `@Transactional`
+method — no new transaction boundary, no async write, no eventual-consistency window. If snapshot
+persistence fails for any reason, the whole attempt-creation transaction fails closed: **no
+`DIAGNOSTIC_SELECTION_V6` attempt may exist whose replay-input snapshot is missing or partial**,
+since this amendment defines the snapshot as the authoritative replay record — a `V6` attempt
+without one would silently fall back to the pre-Amendment-4, non-exact disposition (§X), which must
+never happen for an attempt created after this amendment's implementation ships.
+
+### N. Idempotency
+
+`createAttempt`'s existing idempotency (`uq_assessment_attempt_idempotency`,
+`findByIdempotency`/`findActiveAttempt` short-circuiting before `selectForm` ever runs) already
+guarantees `selectDiagnosticSelectionV6Form` — and therefore snapshot persistence — executes **at
+most once** per attempt actually inserted. The snapshot header's own `UNIQUE(destination_attempt_id)`
+constraint is defense-in-depth on top of that, not the primary mechanism. A repeated
+`Idempotency-Key` request must not, and structurally cannot, recompute the snapshot, overwrite it,
+append duplicate rows, or change the candidate set — it returns the existing attempt without
+re-invoking `V6` at all, exactly as it does today for every other selector.
+
+### O. Replay algorithm
+
+```
+load destination attempt
+        |
+verify selection_policy_version == DIAGNOSTIC_SELECTION_V6
+        |
+load the persisted replay-input snapshot for this destination attempt
+  (absence => pre-Amendment-4 attempt; exact replay not guaranteed -- sec X; stop here)
+        |
+load immutable source-attempt evidence (sec E) using the snapshot's own sourceAttemptId
+        |
+rebuild the Step-1 context from the snapshot's persisted actionable hypotheses (sec H)
+        |
+run frozen HYPOTHESIS_UNCERTAINTY_V1 (never reimplemented -- sec R for version compatibility)
+        |
+rebuild the Step-2 candidate set from the snapshot's persisted candidate probes (sec I)
+        |
+run frozen HYPOTHESIS_DISCRIMINATION_V1
+        |
+apply the frozen V6 activation/fallback/ranking rules (Amendment 3, unchanged)
+        |
+compare the recomputed activation/fallback outcome against the snapshot's own persisted
+  activated/fallback_reason (sec T) -- an integrity check, not the source of truth
+        |
+reproduce the original selected probe (already exactly recorded today by the existing,
+  unmodified core.diagnostic_probe_provenance row, when one was written -- sec S)
+```
+
+**Replay must never** query `findLearnerExposedLogicalItemIds` (current, unbounded),
+`findLearnerExposedLogicalItemIdsBefore` (created_at-bounded — see §W for its disposition), the
+destination version's current `unseenPool`, any newly published curriculum/relationship content, or
+any AI/graph source, as authoritative input to the historical candidate set. The persisted snapshot
+*is* the authoritative candidate set for replay; live discovery of any kind is out of scope for a
+replay read.
+
+### P. Curriculum growth is not replay input
+
+Confirmed (§E): `core.diagnostic_probe_relationship` rows are immutable once `PUBLISHED`, but new
+rows can be published after any given `V6` decision. **Replay must reproduce what `V6` considered
+then, not what `V6` would consider now** — the persisted candidate set (§G) is authoritative
+regardless of what has been published since, even if a newly published relationship would, if
+re-resolved today, surface an objectively better candidate. This is a deliberate, frozen replay
+invariant: exact reproduction of a past decision, never a re-optimization disguised as a replay.
+
+### Q. Step-1 evidence needs no duplication
+
+`core.diagnostic_probe_provenance` and `core.assessment_response` are both immutable (§E) and are
+already scoped to `source_attempt_id`, which the persisted snapshot records. Replay reads them
+directly through the existing repositories using that id — nothing about a source attempt's own
+governed evidence is subject to the §B/§F defects, because a source attempt must already be
+`COMPLETED` (fixed, immutable) before it is eligible as a `V6` source at all.
+
+### R. Engine-version compatibility for replay
+
+Replay against a historical snapshot runs the engines' **current** implementation of
+`HYPOTHESIS_UNCERTAINTY_V1` and `HYPOTHESIS_DISCRIMINATION_V1` — not a preserved historical binary —
+and relies on `EngineVersionFreezeTests`' own frozen-behavior-vector contract to guarantee that
+"current `HYPOTHESIS_UNCERTAINTY_V1`" and "`HYPOTHESIS_UNCERTAINTY_V1` as it behaved at the original
+decision time" are the same function, for as long as that identifier is never assigned to changed
+behavior (this repository's own absolute rule: a behavior change mints a new identifier,
+`..._V2`, and leaves the old one — and every historical record computed under it — untouched). This
+is answer **B** of the two posed in review: replay depends on the frozen engine-version *contract*
+holding (verified continuously by `EngineVersionFreezeTests`), not on preserving and re-executing a
+historically pinned old implementation binary. If `HYPOTHESIS_UNCERTAINTY_V1` or
+`HYPOTHESIS_DISCRIMINATION_V1` is ever superseded by a `_V2`, replay of a snapshot recorded under the
+`_V1` identifiers must continue to invoke the `_V1` engines specifically (both remain in the
+codebase, exactly as `DIAGNOSTIC_SCORING_V1`/`V2` and `EVIDENCE_CONFIDENCE_V1`/`V2` already coexist
+today) — this is a direct consequence of the existing engine-versioning discipline, not a new rule
+Amendment 4 invents.
+
+### S. Decision replay vs. selected-probe verification (the `V5`-fallback finding)
+
+Amendment 4's discovery work surfaced an important, non-obvious finding that narrows what actually
+needs to change:
+
+**Selected-probe verification is already solved, unconditionally, today.** Whenever a probe is
+actually placed in a packet — whether `V6` itself activated and chose it, or `V6` fell back and
+`V5`'s own `resolveHypothesisProbeSelection` chose it — the existing, unmodified
+`core.diagnostic_probe_provenance` row already records the complete `DiagnosticHypothesis` identity
+(via its five existing columns) and the chosen `item_version_id`, written atomically in the same
+transaction, immutable from the moment it is written (`trg_probe_provenance_guard`). This record is
+**not** subject to the §B/§F defects, because it is a direct write of what was actually decided and
+persisted at decision time — never a later re-derivation from a timestamp. No change is needed here.
+This closes the concern that a `V5`-fallback probe selection (which itself resolves against the same
+exposure-dependent `ProbeRelationshipService.resolve` calls, and has carried the identical §B
+exposure-timing property since M2-ADR-025, well before `V6` existed) might be unreplayable — it
+already is not.
+
+**Decision replay — reproducing *why* `V6` activated or fell back, and what Step 1/Step 2 actually
+scored — is the real gap**, and is exactly what §F–§O close. The two concerns are therefore
+frozen as distinct:
+
+```
+decision replay            -> needs the new persisted working-set snapshot (this amendment)
+selected-probe verification -> already exact today, via existing diagnostic_probe_provenance
+```
+
+### T. Fallback reason: persisted as an audit value, not as sole authority
+
+`activated` and `fallback_reason` (§L) are persisted, but replay must **always recompute** the
+activation/fallback outcome from the persisted working set by re-running frozen Step 1/Step 2/the
+frozen activation rules (§O) — never simply trust the persisted value as an oracle. The persisted
+value exists so replay can **compare** recomputed-vs-recorded as an integrity check: a mismatch
+signals either a corrupted snapshot or (across an engine-version boundary — §R) a genuine
+behavior drift, either of which is a defect worth surfacing, not silently accepting. Today's
+telemetry (`BusinessEventLogger`) records the same value only in logs, which are not a database of
+record and are not queryable, immutable, or FK-consistent — persisting it here is the first
+authoritative record of this fact, not a duplicate of one that already existed.
+
+### U. The discrimination score remains unpersisted
+
+Amendment 3's original preference — compute-on-read, never persist the score itself — is **not**
+superseded. Nothing in the §F analysis requires the score: replay recomputes it deterministically
+from the persisted working set (§G) via the same frozen `HYPOTHESIS_DISCRIMINATION_V1` call live
+selection makes. Persisting inputs and recomputing outputs remains strictly preferable to persisting
+outputs, per this repository's own stated principle, wherever recomputation is safe — and once the
+working set itself is persisted, recomputing the score from it *is* safe (§F's defects are about the
+working set's own construction, not about Step 2's own already-pure, already-frozen math).
+
+### V. Migration requirement
+
+**Does exact MVCC-safe `V6` replay require a schema migration? YES.**
+
+This explicitly supersedes Amendment 3 §V's "no new column, no new table, no migration" verdict —
+**for the historical-replay guarantee only.** To be unambiguous: **no migration was ever required
+for live `V6` selection itself**, which reads current, real-time state exactly as `V1`–`V5` always
+have and remains completely unaffected by this amendment. The migration this amendment requires
+exists solely to make *replay* — an audit/reproducibility capability, not a live-selection
+capability — actually exact, which Amendment 3 incorrectly believed it could achieve for free.
+
+### W. Disposition of `findLearnerExposedLogicalItemIdsBefore`
+
+**Remove it, in the implementation PR that follows this amendment's ratification.** It has no
+production caller today (only its own test references it), and its sole original purpose — backing
+exact `V6` replay — is fully superseded by §G's persisted snapshot. Retaining an unused,
+non-authoritative method whose javadoc must permanently carry a "do not treat this as exact"
+disclaimer (added during PR #277's review) is exactly the kind of misleading dead architecture that
+invites a future caller to reach for it anyway, mistaking its plausible name for a guarantee it does
+not provide. Its own test class's now-superseded cutoff test and its new concurrency-proof test
+(added in PR #277) should be removed alongside it once the persisted-snapshot replay path has its
+own tests covering the same ground (§28).
+
+### X. Backward compatibility — the temporal boundary, stated honestly
+
+`V6` attempts created **before** replay-input-snapshot persistence activates cannot be retroactively
+made exactly replayable — the original transaction's MVCC visibility no longer exists anywhere to
+recover, and Amendment 4 forbids fabricating a synthetic snapshot from `created_at` (that would just
+reintroduce §B's own defect under a new name). This boundary is frozen explicitly, not left
+implicit:
+
+- **`DIAGNOSTIC_SELECTION_V6` attempts created before this amendment's implementation activates
+  replay-input persistence:** best-effort audit only (whatever `diagnostic_probe_provenance` and
+  ordinary logs already captured); **exact replay is not guaranteed and must never be represented as
+  guaranteed.**
+- **`DIAGNOSTIC_SELECTION_V6` attempts created after `DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1`
+  activates:** exact replay is guaranteed, per §G–§O.
+
+The mechanism for telling these apart at replay time is the snapshot header row's own *presence*
+(§J), never a date comparison against when the feature "should" have been active.
+
+### Y. Why this stays `DIAGNOSTIC_SELECTION_V6`, not a new policy version
+
+**Decision: do not mint `DIAGNOSTIC_SELECTION_V6_1` or any successor selection-policy identifier.**
+`V6`'s own live selection algorithm — activation conditions, enumeration, bound, ranking, fallback —
+is completely unchanged by this amendment; only audit/provenance persistence *around* an unchanged
+decision is added. This repository's own established minting discipline (seen throughout: a new
+identifier is minted exactly when *decision-producing behavior* changes — e.g.
+`DIAGNOSTIC_SCORING_V1`→`V2` when `FILL_BLANK` scoring was added, `DIAGNOSTIC_SELECTION_V4`→`V5`
+when the hypothesis-driven probe selector was introduced) ties a policy-version bump to a behavior
+change a learner's outcome could actually differ under. A learner's selected probe is bit-for-bit
+identical whether or not this amendment's snapshot is persisted alongside it. Minting `V6_1` here
+would misrepresent an audit-capability change as a selection-behavior change, and would force
+`DiagnosticService`'s dispatch chain to carry two live policy identifiers for a distinction that
+carries no decision-time meaning. The snapshot's own independent contract identifier
+(`DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1`, §K) already carries the "is exact replay guaranteed for
+this attempt" fact, fully decoupled from the selection-policy identifier — exactly mirroring how
+`HYPOTHESIS_UNCERTAINTY_V1`/`HYPOTHESIS_DISCRIMINATION_V1` already carry their own engine-version
+identifiers independent of whichever `DIAGNOSTIC_SELECTION_Vn` calls them.
+
+### Z. Security/privacy
+
+The persisted snapshot carries only technical decision provenance already present in this codebase's
+existing candidate/hypothesis vocabulary: item-version ids, objective ids, relationship types, and
+attempt ids. It must **never** carry raw learner free-text answers, LLM prompts or outputs, or any
+sensitive profile data — none of which `V6`'s own inputs contain today, so this is a constraint on
+the implementation PR's schema discipline, not a new capability this amendment introduces. Existing
+tenant/learner isolation (every row FK-scoped to an attempt, which is FK-scoped to a learner) is
+preserved unchanged.
+
+### AA. AI boundary (reaffirmed)
+
+`V6`'s persisted replay inputs capture only deterministic Java-governed candidate authority —
+exactly the same `ProbeRelationshipService`/H4b resolution `V5` and live `V6` already use. An LLM,
+MCP, an M2-ADR-032 advisory proposal, and the M2-ADR-033 misconception graph have, and retain, zero
+authority over what is persisted or over how replay reconstructs a decision — the same boundary
+Amendments 1–3 already froze, unchanged and unwidened here.
+
+### BB. Normative golden scenarios (design-level; frozen expected behavior for the implementation PR)
+
+| # | Scenario | Frozen expected behavior |
+|---|---|---|
+| A4-1 | Ordinary exact replay: decision snapshot persisted, later learner attempts occur, replay runs | Replay uses the persisted snapshot, not current exposure — identical candidate set, identical decision (activation/fallback and, where one was chosen, identical selected probe per `diagnostic_probe_provenance`) |
+| A4-2 | Concurrent uncommitted earlier-created attempt (the §B scenario) | The destination attempt's own snapshot is built from its own live exposure read, which correctly excludes the concurrent attempt's items regardless of when the concurrent attempt later commits or what `created_at` it carries — replay of the destination attempt is unaffected by the concurrent attempt at any later point |
+| A4-3 | A new probe candidate is published after the destination decision | Replay uses the persisted, original candidate set; the newly published item is never considered, even though a live `resolve()` call today would find it |
+| A4-4 | The learner is later exposed to more items (further attempts) | Replay ignores current exposure entirely — it never queries exposure at all, live or cutoff-bounded; it reads only the persisted snapshot |
+| A4-5 | The original decision fell back (e.g. `STEP1_INSUFFICIENT_EVIDENCE`, `ALL_SCORES_ZERO`) | Replay recomputes the same fallback reason from the persisted working set and reproduces the same final selected probe (via `V5`'s already-exact `diagnostic_probe_provenance` record, §S) — not a different, "currently correct" fallback |
+| A4-6 | Idempotent retry with the same `Idempotency-Key` | Exactly one destination attempt, exactly one snapshot header row, no duplicate hypothesis/candidate rows, no recomputation — the existing idempotency short-circuit prevents `V6` from running a second time at all |
+| A4-7 | Snapshot persistence fails (e.g. a constraint violation) | The entire attempt-creation transaction fails closed — no attempt, no packet, no provenance, no partial snapshot; nothing is left half-recorded |
+| A4-8 | Replay is attempted against a pre-Amendment-4 `V6` attempt | No snapshot header row exists; replay must report "exact replay not available for this attempt" and must never fabricate one from `created_at` or any other timestamp |
+
+### CC. Performance
+
+`MAX_AUTHORIZED_HYPOTHESES_V6 = 4` (unchanged) bounds the snapshot to at most 4 hypotheses' worth of
+candidate-probe rows per attempt; candidate probes per hypothesis are themselves bounded by
+curriculum content and are typically small (single digits). Worst case is on the order of a few
+dozen rows per `V6` attempt — negligible next to the `assessment_attempt_item`/`assessment_response`
+rows every attempt already writes. No full learner-exposure-history copy is needed, because the
+persisted boundary is the *working set*, not the exposure set it was filtered from (§G).
+
+### DD. Revisit triggers added by this amendment
+
+- If `V7` or any successor selection algorithm is introduced, whether it reuses
+  `DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1`'s shape or needs its own contract version is a decision
+  for that algorithm's own ADR, not assumed here.
+- If RAMALS ever deliberately chooses a stronger transaction isolation level (e.g. `SERIALIZABLE`)
+  for attempt creation, or introduces learner-level attempt serialization (an advisory lock or
+  equivalent), re-examine whether §B's defect is closed at the source — this amendment's persisted
+  snapshot would then become defense-in-depth rather than the sole guarantee, and that is itself a
+  decision worth recording, not a silent simplification.
+- If a new candidate-authority source (beyond `ProbeRelationshipService`/H4b resolution) is ever
+  introduced, its interaction with the persisted working-set boundary needs its own review.
+- If `core.diagnostic_probe_relationship`'s immutability-once-published guarantee is ever relaxed
+  (e.g. a future "retract" or "supersede" lifecycle state), §E's Category-A classification of
+  published relationship rows must be re-examined — this amendment's design assumes today's
+  guarantee holds.
+- If the persisted snapshot's own contract ever needs a breaking change, mint
+  `DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V2` and leave `_V1` — and every snapshot already recorded
+  under it — untouched, exactly the discipline `EngineVersionFreezeTests` already holds every other
+  frozen identifier to.
+- If RAMALS becomes multi-tenant with sharded storage, re-examine whether the FK-backed, single-schema
+  design in §L still holds, or needs tenant-scoping this amendment does not anticipate.
+
+### EE. ADR diff summary (this amendment)
+
+- **New top-level section**, appended after Amendment 3 — Amendment 3's own text is unchanged (§A).
+- Corrects the specific §V clauses enumerated in §A; introduces no change to Amendments 1–2 or to
+  Amendment 3's own activation/fallback/enumeration/bound rules (§E–§P there).
+- Freezes the concurrency defect as an architectural fact (§B), backed by an executable proof already
+  merged in PR #277.
+- Rejects every timestamp/sequence/UUID-ordering alternative, and internal MVCC-identifier coupling,
+  as insufficient (§C).
+- Freezes the governing principle (§D), the Category A/B input split (§E–§F), the persisted replay
+  boundary (§G), exact hypothesis/candidate identity (§H–§I), snapshot scope (§J), a dedicated
+  snapshot contract identifier (§K), a conceptual (non-final) logical schema (§L), atomicity (§M),
+  idempotency (§N), the replay algorithm (§O), the curriculum-growth non-goal (§P), Step-1 evidence
+  reuse (§Q), engine-version replay compatibility (§R), the decision-replay-vs-selected-probe-
+  verification finding (§S), fallback-reason persistence as an audit value (§T), and the
+  unpersisted-score decision retained (§U).
+- Answers the migration question explicitly: **YES**, for exact replay only; **NO** migration was
+  ever needed for live selection (§V).
+- Freezes disposition of `findLearnerExposedLogicalItemIdsBefore`: **remove**, in the implementation
+  PR (§W).
+- Freezes the pre-/post-Amendment-4 replay guarantee boundary honestly, with no retroactive
+  fabrication (§X).
+- Freezes that `DIAGNOSTIC_SELECTION_V6`'s own policy identifier does **not** change (§Y).
+- Reaffirms privacy/security and AI-boundary constraints on the new persisted data (§Z–§AA).
+- Adds eight normative golden scenarios, `A4-1` through `A4-8` (§BB).
+- Adds five revisit triggers specific to this amendment (§DD, this section's predecessor).
+- **Authorizes no code and no migration.** The implementation PR that follows ratification creates
+  the schema in §L, wires persistence into `DiagnosticService.createAttempt`, removes
+  `findLearnerExposedLogicalItemIdsBefore` and its superseded tests, and must not merge PR #277 until
+  this amendment is ratified — PR #277 remains open, carrying the corrected (non-exact-replay-
+  claiming) documentation from its own review round, until this amendment's implementation lands.
