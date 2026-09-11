@@ -18,6 +18,7 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceRepository;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceService;
 import io.ramals.learningplatform.assessment.MisconceptionEvidenceCaptureService;
@@ -27,6 +28,10 @@ import io.ramals.learningplatform.assessment.ProbeProvenanceRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipService;
 import io.ramals.learningplatform.assessment.SubmissionResult;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContextAssembler;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyRepository;
 import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
 import io.ramals.learningplatform.curriculum.CurriculumRepository;
 import io.ramals.learningplatform.curriculum.CurriculumService;
@@ -190,7 +195,13 @@ class MvpZeroValidationTests {
         new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
         curriculumService,
         new ProbeRelationshipService(new ProbeRelationshipRepository(jdbc), assessments),
-        new ProbeProvenanceRepository(jdbc));
+        new ProbeProvenanceRepository(jdbc),
+        new HypothesisDiscriminationDiagnosticSelector(assessments,
+            new ProbeRelationshipService(new ProbeRelationshipRepository(jdbc), assessments),
+            new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(jdbc)),
+            new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
+            new HypothesisDiscriminationCalculatorV1(
+                new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
     submissions = new DiagnosticSubmissionService(assessments, learnerService, new DiagnosticScorerV2(),
         new EvidenceService(evidence), masteryService, recommendationService,
         new DiagnosticConfidenceService(new ProbeProvenanceRepository(jdbc),

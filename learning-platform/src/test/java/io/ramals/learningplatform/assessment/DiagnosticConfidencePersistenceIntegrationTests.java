@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContextAssembler;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyRepository;
 import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
 import io.ramals.learningplatform.curriculum.CurriculumRepository;
 import io.ramals.learningplatform.curriculum.CurriculumService;
@@ -728,7 +732,12 @@ class DiagnosticConfidencePersistenceIntegrationTests {
       diagnostics = new DiagnosticService(assessments, learnerService,
           new DiagnosticFormSelector(new DiagnosticFormProperties()),
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
-          curriculumService, probeRelationshipService, probeProvenanceRepository);
+          curriculumService, probeRelationshipService, probeProvenanceRepository,
+          new HypothesisDiscriminationDiagnosticSelector(assessments, probeRelationshipService,
+              new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
+              new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
+              new HypothesisDiscriminationCalculatorV1(
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
 
       EvidenceRepository evidenceRepository = new EvidenceRepository(runtimeJdbc);
       EvidenceService evidenceService = new EvidenceService(evidenceRepository);

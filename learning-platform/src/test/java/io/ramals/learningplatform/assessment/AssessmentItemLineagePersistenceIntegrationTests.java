@@ -192,6 +192,57 @@ class AssessmentItemLineagePersistenceIntegrationTests {
   }
 
   // -------------------------------------------------------------------------------------------
+  // M2-ADR-034 Amendment 3 §V: destinationExposureCutoff -- historical replay must see exposure
+  // state as of the original decision, not exposure state current at replay time.
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void exposureCutoffExcludesAttemptsCreatedAtOrAfterTheCutoff() {
+    wire();
+    UUID draftVersion = freshDraftVersion("lineage-cutoff-probe");
+    UUID earlyItem = insertItem(draftVersion, "PROBE_EARLY", "SINGLE_CHOICE", 1,
+        "[{\"id\":\"A\",\"text\":\"a\"},{\"id\":\"B\",\"text\":\"b\"}]", "{\"correct\":[\"A\"]}");
+    UUID lateItem = insertItem(draftVersion, "PROBE_LATE", "SINGLE_CHOICE", 2,
+        "[{\"id\":\"A\",\"text\":\"a\"},{\"id\":\"B\",\"text\":\"b\"}]", "{\"correct\":[\"A\"]}");
+    UUID earlyLogical = UUID.randomUUID();
+    UUID lateLogical = UUID.randomUUID();
+    lineage(earlyItem, earlyLogical);
+    lineage(lateItem, lateLogical);
+
+    Learner learner = learners.provisionForSubject("lineage-cutoff");
+
+    // An attempt genuinely before the destination attempt's own creation -- this is what a V6
+    // decision made "as of" the cutoff below must see.
+    UUID earlyAttempt = insertAttempt(learner.id(), draftVersion);
+    presentItem(earlyAttempt, earlyItem, 1);
+    completeAttempt(earlyAttempt);
+    setCreatedAt(earlyAttempt, Instant.parse("2026-01-01T00:00:00Z"));
+
+    // destinationExposureCutoff: the destination attempt's own created_at, fixed the moment it was
+    // inserted -- before any V6 decision runs.
+    Instant destinationExposureCutoff = Instant.parse("2026-01-02T00:00:00Z");
+
+    // A later attempt -- taken by the learner *after* the destination attempt's own decision point,
+    // simulating a replay run once further history exists. Its item must never appear in a
+    // cutoff-bounded read, even though it is real, persisted exposure history by the time replay
+    // actually runs.
+    UUID laterAttempt = insertAttempt(learner.id(), draftVersion);
+    presentItem(laterAttempt, lateItem, 1);
+    completeAttempt(laterAttempt);
+    setCreatedAt(laterAttempt, Instant.parse("2026-01-03T00:00:00Z"));
+
+    Set<UUID> asOfCutoff =
+        assessments.findLearnerExposedLogicalItemIdsBefore(learner.id(), destinationExposureCutoff);
+    Set<UUID> currentUnbounded = assessments.findLearnerExposedLogicalItemIds(learner.id());
+
+    // The cutoff-bounded read reconstructs exactly what the original decision saw...
+    assertThat(asOfCutoff).containsExactly(earlyLogical);
+    // ...even though the learner's real, current exposure history (read without a cutoff, as a
+    // caller running long after the fact would otherwise do) now also includes the later attempt.
+    assertThat(currentUnbounded).containsExactlyInAnyOrder(earlyLogical, lateLogical);
+  }
+
+  // -------------------------------------------------------------------------------------------
   // helpers
   // -------------------------------------------------------------------------------------------
 
@@ -242,6 +293,14 @@ class AssessmentItemLineagePersistenceIntegrationTests {
   private void completeAttempt(UUID attemptId) {
     runtimeJdbc.update(
         "UPDATE core.assessment_attempt SET status = 'COMPLETED' WHERE id = ?", attemptId);
+  }
+
+  /** Test-only: forces a specific {@code created_at} so exposure-cutoff ordering is deterministic,
+   * rather than depending on wall-clock insertion order. */
+  private void setCreatedAt(UUID attemptId, Instant createdAt) {
+    runtimeJdbc.update(
+        "UPDATE core.assessment_attempt SET created_at = ? WHERE id = ?",
+        java.sql.Timestamp.from(createdAt), attemptId);
   }
 
   private void presentItem(UUID attemptId, UUID itemVersionId, int presentationOrder) {

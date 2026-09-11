@@ -27,9 +27,11 @@ import org.junit.jupiter.api.Test;
  * <ul>
  *   <li>{@code HypothesisDiscriminationCalculatorV1} is pure: no database, no AI/MCP/orchestration,
  *       no write service of any kind, no selector (§S/§T).
- *   <li>It is inert: nothing in {@code DIAGNOSTIC_SELECTION_V1}-{@code V5} (and no {@code V6},
- *       which does not exist) depends on the {@code hypothesisdiscrimination} package, and the
- *       package depends on no selector (§O).
+ *   <li>It is inert: nothing in {@code DIAGNOSTIC_SELECTION_V1}-{@code V5} depends on the {@code
+ *       hypothesisdiscrimination} package directly, and the package depends on no selector (§O).
+ *       {@code DIAGNOSTIC_SELECTION_V6} (M2-ADR-034 Amendment 3) is the sole, deliberate exception --
+ *       {@code HypothesisDiscriminationDiagnosticSelector} alone calls
+ *       {@code HYPOTHESIS_DISCRIMINATION_V1} verbatim; V1-V5 stay exactly as inert as before.
  *   <li>It takes no M2-ADR-033 misconception-graph input, and no M2-ADR-032 advisory-proposal
  *       input (§E/§S: an accepted proposal never enters this package's candidate set).
  *   <li>No production code anywhere defines an {@code INFORMATION_GAIN_V1} identifier -- the sole
@@ -149,8 +151,10 @@ class HypothesisDiscriminationArchitectureGuardrailTests {
         .haveFullyQualifiedName(BASE + ".assessment.ProbeRelationshipService")
         .because(
             "Amendment 2 §O: Step 2 is inert -- it computes a score, it does not decide or execute "
-                + "the next probe, and no DIAGNOSTIC_SELECTION_V1-V5 code (nor V6, which does not "
-                + "exist) is touched")
+                + "the next probe, and no DIAGNOSTIC_SELECTION_V1-V5 code is touched. "
+                + "HypothesisDiscriminationDiagnosticSelector (DIAGNOSTIC_SELECTION_V6, Amendment 3) "
+                + "is deliberately not in this list -- it is the one authorized orchestrator that "
+                + "reads this package")
         .check(classes);
   }
 
@@ -179,8 +183,12 @@ class HypothesisDiscriminationArchitectureGuardrailTests {
   }
 
   @Test
-  @DisplayName("no DIAGNOSTIC_SELECTION selector depends on the hypothesis-discrimination package")
+  @DisplayName("no DIAGNOSTIC_SELECTION_V1-V5 selector depends on the hypothesis-discrimination package")
   void selectorsDoNotDependOnHypothesisDiscrimination() {
+    // HypothesisDiscriminationDiagnosticSelector (DIAGNOSTIC_SELECTION_V6, M2-ADR-034 Amendment 3)
+    // is deliberately absent from this list -- it is the one authorized orchestrator that reads
+    // HYPOTHESIS_DISCRIMINATION_V1; see DiagnosticSelectionV6ArchitectureGuardrailTests for its own
+    // isolation guarantees.
     noClasses()
         .that()
         .haveSimpleName("DiagnosticService")
@@ -204,8 +212,9 @@ class HypothesisDiscriminationArchitectureGuardrailTests {
         .dependOnClassesThat()
         .resideInAPackage(PACKAGE)
         .because(
-            "the deliberate 'X': no selection engine reads HYPOTHESIS_DISCRIMINATION_V1 in this "
-                + "milestone (Amendment 2 §O) -- V6 is design-only and not implemented")
+            "Amendment 2 §O: no DIAGNOSTIC_SELECTION_V1-V5 engine reads HYPOTHESIS_DISCRIMINATION_V1 "
+                + "directly -- only DIAGNOSTIC_SELECTION_V6's own orchestrator does, and V1-V5 stay "
+                + "exactly as they were before Amendment 3")
         .check(classes);
   }
 

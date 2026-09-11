@@ -1,4 +1,4 @@
-# M2-ADR-034: Diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `HYPOTHESIS_DISCRIMINATION_V1`, formerly proposed as "`INFORMATION_GAIN_V1`") — Steps 1–2 implemented and inert, Step 3 design-only
+# M2-ADR-034: Diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `HYPOTHESIS_DISCRIMINATION_V1`, formerly proposed as "`INFORMATION_GAIN_V1`") — Steps 1–3 implemented
 
 - **Status:** Proposed. **Amended — 2026-09-10** — see
   [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10): ratifies the deterministic
@@ -10,14 +10,16 @@
   information gain undefensible from existing RAMALS semantics (no outcome-probability model
   exists or may be invented), and freezes instead a non-expectation deterministic construct named
   **`HYPOTHESIS_DISCRIMINATION_V1`** — its complete mathematics and golden vectors — authorizing its
-  inert implementation as **Step 2** (implemented 2026-09-11). `DIAGNOSTIC_SELECTION_V6` (Step 3)
-  remains design-only. **Amended a third time — 2026-09-11** — see
-  [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11): freezes
-  the runtime semantics a `DIAGNOSTIC_SELECTION_V6` implementation must satisfy — which interaction
-  supplies Step-1 evidence, the two independent V5 "collapses" and which one V6 replaces, bounded
-  multi-hypothesis enumeration (ratified, not assumed — Amendment 2 §H's own theorem makes it
+  inert implementation as **Step 2** (implemented 2026-09-11). **Amended a third time — 2026-09-11**
+  — see [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11):
+  freezes the runtime semantics a `DIAGNOSTIC_SELECTION_V6` implementation must satisfy — which
+  interaction supplies Step-1 evidence, the two independent V5 "collapses" and which one V6 replaces,
+  bounded multi-hypothesis enumeration (ratified, not assumed — Amendment 2 §H's own theorem makes it
   mathematically necessary), activation and fallback rules, and twelve normative behavioral
-  scenarios. Still authorizes **no** `DIAGNOSTIC_SELECTION_V6` code, migration, or runtime change.
+  scenarios. Amendment 3's own text authorized no `DIAGNOSTIC_SELECTION_V6` code, migration, or
+  runtime change at ratification. **Step 3 implemented — 2026-09-11** — `DIAGNOSTIC_SELECTION_V6`
+  has since been implemented, in a separate PR, exactly to Amendment 3's frozen runtime semantics —
+  no migration, and Amendment 1–3's own frozen mathematics/text are unchanged.
 - **Date:** 2026-09-08
 - **Decides:** the design constraints binding a future deterministic information-gain diagnostic
   probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` that supersedes only `V5`'s final
@@ -50,9 +52,10 @@
   [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11) freezes
   the runtime semantics **Step 3** (`DIAGNOSTIC_SELECTION_V6`) must satisfy once implemented — which
   interaction supplies Step-1 evidence, bounded multi-hypothesis enumeration, activation, and
-  fallback — but **authorizes no implementation of it**. Together the three amendments still
-  authorize **no** `DIAGNOSTIC_SELECTION_V6` code, **no** migration, **no** contract change, and
-  **no** `SelectionReason` value. `V6` is not implemented.
+  fallback — but its own text **authorized no implementation of it** at ratification.
+  **`DIAGNOSTIC_SELECTION_V6` has since been implemented (2026-09-11)**, in a separate PR, exactly
+  to Amendment 3's frozen runtime semantics: no migration, no contract change, and no
+  `SelectionReason` value were needed.
   `DIAGNOSTIC_SELECTION_V1`–`V5`, their composition order, `MAX_HYPOTHESIS_PROBES_PER_PACKET`,
   `core.diagnostic_probe_relationship` / `core.diagnostic_probe_provenance`, and every existing
   frozen calculator are untouched; each of Amendments 1–2 adds exactly one new frozen vector to
@@ -697,8 +700,12 @@ the band, hence the weight, unchanged — monotonic non-decreasing only).
 > `HYPOTHESIS_DISCRIMINATION_V1`, not `INFORMATION_GAIN_V1` — see
 > [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11). Step 2 is **implemented
 > (2026-09-11), inert**; it stays out of this Step-1 amendment's authorization above, which remains
-> scoped to Step 1 only. Step 3 (`DIAGNOSTIC_SELECTION_V6`) remains design-only, unaffected by this
-> row.
+> scoped to Step 1 only.
+>
+> **Amended 2026-09-11 (Amendment 3, plus implementation):** Step 3's runtime semantics are frozen
+> by [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11), and
+> `DIAGNOSTIC_SELECTION_V6` is now **implemented (2026-09-11)**, exactly to that frozen
+> specification, in a separate PR.
 
 After Step 1:
 

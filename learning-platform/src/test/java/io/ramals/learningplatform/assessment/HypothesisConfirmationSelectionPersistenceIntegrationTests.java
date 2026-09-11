@@ -2,6 +2,10 @@ package io.ramals.learningplatform.assessment;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContextAssembler;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyRepository;
 import io.ramals.learningplatform.curriculum.CurriculumGraphValidator;
 import io.ramals.learningplatform.curriculum.CurriculumRepository;
 import io.ramals.learningplatform.curriculum.CurriculumService;
@@ -265,7 +269,13 @@ class HypothesisConfirmationSelectionPersistenceIntegrationTests {
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
           curriculumService,
           new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
-          new ProbeProvenanceRepository(runtimeJdbc));
+          new ProbeProvenanceRepository(runtimeJdbc),
+          new HypothesisDiscriminationDiagnosticSelector(assessments,
+              new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+              new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
+              new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
+              new HypothesisDiscriminationCalculatorV1(
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
     }
   }
 

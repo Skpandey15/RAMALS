@@ -19,6 +19,7 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceRepository;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceService;
 import io.ramals.learningplatform.assessment.MisconceptionEvidenceCaptureService;
@@ -27,6 +28,10 @@ import io.ramals.learningplatform.assessment.MisconceptionOptionMappingRepositor
 import io.ramals.learningplatform.assessment.ProbeProvenanceRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipService;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContextAssembler;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyRepository;
 import io.ramals.learningplatform.curriculum.MasteryDifficultyBand;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceRepository;
@@ -305,7 +310,13 @@ class MasteryCoveragePersistenceIntegrationTests {
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
           new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()),
           new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
-          new ProbeProvenanceRepository(runtimeJdbc));
+          new ProbeProvenanceRepository(runtimeJdbc),
+          new HypothesisDiscriminationDiagnosticSelector(assessments,
+              new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+              new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
+              new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
+              new HypothesisDiscriminationCalculatorV1(
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
       RecommendationService recommendationService = new RecommendationService(
           new RecommendationPolicy(), new RecommendationRepository(runtimeJdbc), learnerService);
       submissions = new DiagnosticSubmissionService(

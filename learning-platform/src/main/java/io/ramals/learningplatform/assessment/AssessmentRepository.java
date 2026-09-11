@@ -256,6 +256,33 @@ public class AssessmentRepository {
         """, (result, row) -> result.getObject("logical_item_id", UUID.class), learnerId));
   }
 
+  /**
+   * M2-ADR-034 Amendment 3 §V: the same logical-item exposure identity {@link
+   * #findLearnerExposedLogicalItemIds} resolves, restricted to attempts whose own {@code created_at}
+   * is strictly before {@code destinationExposureCutoff} -- the destination attempt's own {@code
+   * created_at}, fixed by {@link #insertAttempt} before any {@code DIAGNOSTIC_SELECTION_V6} decision
+   * runs.
+   *
+   * <p><b>Not called by live selection.</b> At the moment a {@code DIAGNOSTIC_SELECTION_V6} decision
+   * is actually made, the destination attempt's own items do not exist in {@code
+   * core.assessment_attempt_item} yet, and no later attempt has been created yet either -- so {@link
+   * #findLearnerExposedLogicalItemIds}'s unbounded read and this cutoff-bounded read agree exactly
+   * at that moment. This method exists so a historical {@code V6} decision can be replayed later --
+   * after the destination attempt has been completed, or the learner has taken further attempts --
+   * and still see exactly the exposure state the original decision saw, per Amendment 3 §V's frozen
+   * {@code destinationExposureCutoff} rule.
+   */
+  public Set<UUID> findLearnerExposedLogicalItemIdsBefore(UUID learnerId, Instant destinationExposureCutoff) {
+    return Set.copyOf(jdbcTemplate.query("""
+        SELECT DISTINCT lin.logical_item_id
+        FROM core.assessment_attempt_item ai
+        JOIN core.assessment_attempt a ON a.id = ai.attempt_id
+        JOIN core.assessment_item_lineage lin ON lin.item_version_id = ai.item_version_id
+        WHERE a.learner_id = ? AND a.created_at < ?
+        """, (result, row) -> result.getObject("logical_item_id", UUID.class),
+        learnerId, OffsetDateTime.ofInstant(destinationExposureCutoff, ZoneOffset.UTC)));
+  }
+
   /** Transitions an in-progress attempt to COMPLETED. Returns true if this call finalized it. */
   public boolean completeAttempt(UUID attemptId) {
     return jdbcTemplate.update("""
