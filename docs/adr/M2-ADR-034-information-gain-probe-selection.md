@@ -11,7 +11,13 @@
   exists or may be invented), and freezes instead a non-expectation deterministic construct named
   **`HYPOTHESIS_DISCRIMINATION_V1`** — its complete mathematics and golden vectors — authorizing its
   inert implementation as **Step 2** (implemented 2026-09-11). `DIAGNOSTIC_SELECTION_V6` (Step 3)
-  remains design-only.
+  remains design-only. **Amended a third time — 2026-09-11** — see
+  [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11): freezes
+  the runtime semantics a `DIAGNOSTIC_SELECTION_V6` implementation must satisfy — which interaction
+  supplies Step-1 evidence, the two independent V5 "collapses" and which one V6 replaces, bounded
+  multi-hypothesis enumeration (ratified, not assumed — Amendment 2 §H's own theorem makes it
+  mathematically necessary), activation and fallback rules, and twelve normative behavioral
+  scenarios. Still authorizes **no** `DIAGNOSTIC_SELECTION_V6` code, migration, or runtime change.
 - **Date:** 2026-09-08
 - **Decides:** the design constraints binding a future deterministic information-gain diagnostic
   probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` that supersedes only `V5`'s final
@@ -40,14 +46,18 @@
   implemented). [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11) additionally
   authorizes implementation of the **inert `HYPOTHESIS_DISCRIMINATION_V1` scoring construct only**
   (§3 as frozen there; **Step 2**, implemented) — the identifier this ADR's §3 originally anticipated as
-  `INFORMATION_GAIN_V1`; Amendment 2 explains why that name does not survive analysis. Together the
-  two amendments still authorize **no** `DIAGNOSTIC_SELECTION_V6` code, **no** migration, **no**
-  contract change, and **no** `SelectionReason` value. `V6` is not implemented.
+  `INFORMATION_GAIN_V1`; Amendment 2 explains why that name does not survive analysis.
+  [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11) freezes
+  the runtime semantics **Step 3** (`DIAGNOSTIC_SELECTION_V6`) must satisfy once implemented — which
+  interaction supplies Step-1 evidence, bounded multi-hypothesis enumeration, activation, and
+  fallback — but **authorizes no implementation of it**. Together the three amendments still
+  authorize **no** `DIAGNOSTIC_SELECTION_V6` code, **no** migration, **no** contract change, and
+  **no** `SelectionReason` value. `V6` is not implemented.
   `DIAGNOSTIC_SELECTION_V1`–`V5`, their composition order, `MAX_HYPOTHESIS_PROBES_PER_PACKET`,
   `core.diagnostic_probe_relationship` / `core.diagnostic_probe_provenance`, and every existing
-  frozen calculator are untouched; each amendment adds exactly one new frozen vector to
-  `EngineVersionFreezeTests` and changes no existing one, and no runtime selector consumes either
-  construct.
+  frozen calculator are untouched; each of Amendments 1–2 adds exactly one new frozen vector to
+  `EngineVersionFreezeTests` and changes no existing one, Amendment 3 adds none (it authorizes no
+  code), and no runtime selector consumes either construct.
 
 ## Context
 
@@ -157,6 +167,16 @@ already-authoritative inputs. No arrow is an LLM call.
   enforcement (M2-ADR-025 §3/§6) are frozen and carried forward verbatim. `V6` changes *which*
   eligible candidate becomes that one item, from "first by fixed priority" to "highest expected
   information gain"; it never widens the packet to more than one probe.
+
+> **Amended 2026-09-11 (Amendment 3) — two clauses above are corrected/superseded, precisely.**
+> (1) "`V6` acts only when a bounded, well-formed hypothesis set with a computed posterior exists" —
+> [Amendment 3 §J](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11) now
+> defines this exactly (6 numbered conditions, including a mathematically-derived requirement of at
+> least two participating hypotheses). (2) the bullet above treats "step (b)" as one undifferentiated
+> tiebreak — Amendment 3 §D splits this into two independent collapses (hypothesis collapse and
+> probe collapse) and Amendment 3 §E/§H freeze which one `V6` may widen and how. Every other clause
+> above (composition order, no `V1`–`V4` change, quota unchanged, never more than one probe) remains
+> binding, unamended.
 
 ### 3. `INFORMATION_GAIN_V1` — a named, versioned, frozen, deterministic construct
 
@@ -1251,3 +1271,903 @@ This is intentional for V1, not an oversight to be patched with an ad hoc weight
 the above would require an authored or calibrated psychometric input — new authoritative data this
 amendment does not have and may not invent (M2-ADR-023 §2) — and its own explicit ADR decision, never
 a silent addition inside `HYPOTHESIS_DISCRIMINATION_V1`'s existing frozen formula.
+
+
+## Amendment 3 — `DIAGNOSTIC_SELECTION_V6` runtime-semantics freeze (2026-09-11)
+
+**Docs-only. Authorizes no code.** This amendment does not implement `DIAGNOSTIC_SELECTION_V6`, does
+not modify `DiagnosticService`, does not modify any selector, `ProbeRelationshipService`,
+`HypothesisUncertaintyCalculatorV1`, or `HypothesisDiscriminationCalculatorV1`, and adds no migration,
+API, or `SelectionReason` value. Its sole purpose is to freeze the runtime semantics the
+`docs/adr/M2-ADR-034-step3-v6-discovery-report.md` discovery report found unspecified, so that a
+future, separately reviewed implementation PR has no algorithmic choice left to invent. Amendments 1
+and 2 are unchanged; this amendment supersedes only the specific §2 clauses named in §CC below.
+
+### A. What this amendment corrects in the discovery report
+
+The discovery report's first draft over-concluded that Step 1 "necessarily sees zero evidence" at
+V6 selection time, and that V6 is therefore unconditionally inert. That is too strong. The newly
+created *destination* attempt indeed has zero responses at selection time — but
+`HypothesisUncertaintyContextAssembler.assemble(UUID interactionId, List<DiagnosticHypothesis>
+candidates)` and `HypothesisUncertaintyRepository.findPerInteractionEvidence` both accept *any*
+attempt id as `interactionId`, and `DiagnosticService.resolveHypothesisProbeSelection` already reads
+from `repository.findMostRecentCompletedAttempt(...)` — the *immediately preceding completed source
+attempt* — which may itself carry governed probe-response evidence (if it was itself a
+hypothesis-driven attempt whose own probe was answered). M2-ADR-034 as merged does not say which of
+these two attempts supplies Step-1 evidence for a V6 decision. That silence is a governance gap, not
+proof of permanent inertness — §C below closes it.
+
+### B. Governing question this amendment exists to answer
+
+> Which interaction supplies `HYPOTHESIS_UNCERTAINTY_V1` evidence when `DIAGNOSTIC_SELECTION_V6`
+> is deciding a probe for a *new* attempt, and does the current V5 walk even produce more than one
+> candidate hypothesis to discriminate between?
+
+Two separate, previously-conflated questions follow from this, corresponding to the two independent
+collapses V5 performs today (§D):
+
+- **Decision 1 (§C):** which interaction's evidence does Step 1 read?
+- **Decision 2 (§E):** does V6 keep V5's existing single-hypothesis collapse, or does it enumerate a
+  bounded multi-hypothesis set?
+
+### C. Decision 1 — the source interaction is authoritative for Step-1 evidence
+
+**Frozen:**
+
+```
+sourceInteractionId =
+    the immediately preceding completed assessment attempt,
+    selected by the existing V5 source-attempt rule
+    (repository.findMostRecentCompletedAttempt(learnerId, assessmentVersionId))
+```
+
+`HYPOTHESIS_UNCERTAINTY_V1` for a V6 decision is computed with `HypothesisUncertaintyContext
+.interactionId() = sourceInteractionId` — **never** the id of the destination attempt being created.
+This is not a silent substitution: it is the one interaction this rule names, and no other attempt
+may be substituted for it (not the destination attempt, not any older completed attempt, not an
+aggregate across several attempts).
+
+**Rationale** (each independently sufficient, together decisive):
+
+- It is a single interaction — no cross-attempt aggregation of the kind Amendment 1 §F already
+  forbids ("no cross-attempt H5") is introduced. The evidence read is exactly what
+  `HypothesisUncertaintyRepository.findPerInteractionEvidence` already reads for one `attempt_id`,
+  unmodified.
+- It is the interaction that already exists and already contains governed responses (if any) —
+  the destination attempt, by construction, has none yet (its own packet is selected, in this exact
+  method call, before any of its items are presented).
+- It temporally aligns evidence with hypothesis authorization: `DiagnosticHypothesis` candidates for
+  this round are themselves derived from misses *within* the source attempt (`repository
+  .findIncorrectItemVersionIdsInPresentationOrder(sourceAttempt.id())`) — using that same attempt's
+  id as the evidence scope keeps the hypothesis-authorization boundary and the evidence-observation
+  boundary as the *same* interaction, rather than splitting them across two attempts for no
+  documented reason.
+- It requires no H5/H7-style cross-attempt aggregation machinery to be built or reasoned about.
+
+**What this does NOT do:** it does not relax Amendment 1 §F's "per-interaction only" freeze — it
+answers *which* one interaction, using a rule (the existing V5 source-attempt selection) that already
+exists and is already frozen by M2-ADR-025. It does not widen Step 1's own contract in any way; Step 1
+still receives one `interactionId` and computes over it exactly as before.
+
+### D. The two independent V5 collapses (discovery correction)
+
+`DiagnosticService.resolveHypothesisProbeSelection` performs two collapses that Amendment 2 §2's
+original text described together, under one label ("step (b)'s deterministic tiebreak"), but which
+must be analyzed and frozen separately:
+
+```
+previous completed attempt misses (presentation_order)
+        |
+        v
+  [ COLLAPSE A -- hypothesis collapse ]
+  for each miss, for each RELATIONSHIP_TYPE_PRIORITY entry:
+    probeRelationshipService.resolve(...)
+    return at the FIRST CANDIDATES_AVAILABLE hit
+        |
+        v
+  exactly one DiagnosticHypothesis
+        |
+        v
+  [ COLLAPSE B -- probe collapse ]
+  ProbeResolution.candidates()  (a bounded, ordered List<ProbeCandidateItem>)
+        |
+        v
+  .get(0)  -- first item, no ranking
+        |
+        v
+  one selected probe
+```
+
+- **Collapse A** discards every other miss and every other relationship type the instant one
+  resolves. No bounded multi-hypothesis list is ever materialized.
+- **Collapse B** discards every other candidate item within the *one* hypothesis Collapse A kept,
+  by taking the first element of an already-ordered list — a real, bounded list exists here before
+  the collapse.
+
+This distinction matters because Amendment 2's `HYPOTHESIS_DISCRIMINATION_V1` computes separability
+**across a hypothesis distribution**. If V6 leaves Collapse A untouched and only replaces Collapse B,
+the candidate hypothesis set handed to Step 1 always has exactly one member — and Amendment 2 §H
+already proves, as frozen mathematics, that **a sole participating hypothesis normalizes to exactly
+`1.0000` in every reachable world, so every candidate probe targeting it scores exactly `0.0000`,
+unconditionally**. Fixing Decision 1 alone does not change this: a one-element candidate set is
+provably inert regardless of which interaction supplies its evidence. Therefore Decision 1 and
+Decision 2 are **jointly necessary** — neither alone makes V6 capable of doing anything.
+
+### E. Decision 2 — bounded multi-hypothesis enumeration is ratified (not assumed)
+
+**This is a real policy expansion, and Amendment 2's own §H theorem is why it cannot be left
+unratified.** Preserving Collapse A exactly as it stands today (Mode 1: keep V5's
+first-actionable-hypothesis policy, only replace Collapse B) is **mathematically certain**, not
+merely likely, to leave `HYPOTHESIS_DISCRIMINATION_V1` permanently at `0.0000` for every candidate,
+by direct, provable consequence of Amendment 2 §H. Ratifying Mode 1 would freeze a V6 that behaves
+identically to V5 in every case, forever — which is not an acceptable outcome for a Step-3
+authorization whose entire purpose is to let discrimination scoring influence selection.
+
+**Frozen: Mode 2.** `DIAGNOSTIC_SELECTION_V6`'s hypothesis discovery walks the **same existing
+deterministic authority** (`ProbeRelationshipService.resolve`) across **every** (miss, relationship
+type) pair — it does not stop at the first hit — and considers every `DiagnosticHypothesis` whose
+resolution outcome is `CANDIDATES_AVAILABLE` for admission into a bounded **authorized hypothesis
+set**, subject to two further gates this amendment freezes precisely: de-duplication (§F), a hard
+cardinality bound (below), and — critically — actionability (§H/§I): a hypothesis is a member of the
+*relationship-authorized* set the instant `resolve` returns `CANDIDATES_AVAILABLE`, but it enters
+`DIAGNOSTIC_SELECTION_V6`'s own **working set** (the set that actually reaches
+`HYPOTHESIS_UNCERTAINTY_V1`/`HYPOTHESIS_DISCRIMINATION_V1`) only if it clears §H's actionability
+test too. §H defines that test in full; this section defines only the walk and the cardinality
+bound.
+
+```
+for each miss in findIncorrectItemVersionIdsInPresentationOrder(sourceAttempt.id()), in order:
+  for each type in HypothesisDrivenProbeDiagnosticSelector.RELATIONSHIP_TYPE_PRIORITY, in order:
+    resolution = probeRelationshipService.resolve(miss, type, learnerId)
+    if resolution.outcome() != CANDIDATES_AVAILABLE:
+      continue
+    if resolution.hypothesis() already admitted (§F de-duplication):
+      continue                              -- a duplicate never consumes a working-set slot
+    eligibleProbes = resolution.candidates() (destination-eligibility-filtered per §H)
+    if eligibleProbes is empty:
+      continue                              -- relationship-authorized but not actionable; never
+                                                consumes a working-set slot either (§H)
+    admit resolution.hypothesis(), with eligibleProbes, into the V6 working set
+    if |V6 working set| == MAX_AUTHORIZED_HYPOTHESES_V6:
+      stop walking -- the bound is reached
+```
+
+No new authority is introduced — this is the identical, already-governed `ProbeRelationshipService
+.resolve` call V5 already makes, called across the full (miss × type) domain instead of stopping
+early. This satisfies the candidate-authority constraint verbatim: "enumerate more results from the
+same existing deterministic authority, not introduce a new hypothesis-generation authority." Only an
+*actionable* hypothesis — one that survives §H's test — ever consumes a bound slot; a
+relationship-authorized-but-non-actionable or duplicate hypothesis is inspected and discarded
+without narrowing the budget available to hypotheses walked later.
+
+**A real, explicit bound is frozen — not derived from mutable configuration.** An earlier draft of
+this amendment bounded the set by `(misses in the source attempt) × |RELATIONSHIP_TYPE_PRIORITY|`
+and cited the *default* adaptive-packet configuration
+(`singleChoiceTarget(5) + fillBlankTarget(2) = 7`) as if it were a governing ceiling. That was wrong:
+`AdaptiveDiagnosticFormProperties`'s target sizes are ordinary mutable `@ConfigurationProperties`
+fields with setters and no frozen maximum — a future configuration change could raise them with no
+ADR review at all, silently moving Amendment 3's own bound. **Frozen instead:**
+
+```
+MAX_AUTHORIZED_HYPOTHESES_V6 = 4
+```
+
+**Derivation (not an invented number):**
+
+1. *Current diagnostic packet quotas.* `MAX_HYPOTHESIS_PROBES_PER_PACKET = 1` (frozen, M2-ADR-025
+   §6) already caps the *externally visible* effect of this whole feature area to exactly one probe,
+   regardless of how many hypotheses are considered internally — the bound here governs internal
+   computation, not the packet.
+2. *Historical/configuration expectations.* Adaptive packet item-count properties
+   (`singleChoiceTarget`/`fillBlankTarget`) are mutable configuration, explicitly rejected above as a
+   basis for an ADR-level bound. The **only** compile-time-fixed cardinality anywhere in this exact
+   feature area is `HypothesisDrivenProbeDiagnosticSelector.RELATIONSHIP_TYPE_PRIORITY.size() == 4`
+   (a `List.of(...)`, four relationship-type semantics, never a fifth without a new ADR).
+3. *Step-2 complexity.* Amendment 2 §T already bounds `HYPOTHESIS_DISCRIMINATION_V1`'s own cost to
+   `2P` calls into Step 1 per candidate probe, each `O(H log H)` — cheap at any realistic `H`; raw
+   CPU cost is not the binding constraint on this bound.
+4. *Worst-case `H x P`.* With `H <= MAX_AUTHORIZED_HYPOTHESES_V6 = 4` and `P` bounded, as it already
+   is under Amendment 2, by however many verified/scoreable/unseen items exist for one target
+   objective (small and curriculum-bounded, not newly bounded by this amendment), worst-case Step-2
+   cost is a small constant multiple (at most 4x) of a quantity Amendment 2 already accepts as
+   trivial.
+5. *Smallest operationally sufficient bound.* `4` is the smallest bound that does not depend on any
+   mutable configuration and is not an arbitrarily chosen ceiling — it is exactly the cardinality of
+   the one frozen enumeration this walk is already built from. This is deliberately conservative,
+   matching M2-ADR-025 §6's own "conservative on purpose" ethos for this exact feature area. If
+   operational experience later shows 4 is insufficient, that is a new, explicit, separately
+   reviewed decision (minting a versioned successor constant, e.g.
+   `MAX_AUTHORIZED_HYPOTHESES_V6_2`, or a distinctly named policy) — never a silent constant bump.
+
+**Critical framing, stated precisely:** this is **not** a statement that hypotheses beyond the
+`MAX_AUTHORIZED_HYPOTHESES_V6`-th admitted one are ineligible, unauthorized, or wrong. It is a
+computation/governance bound on the size of `DIAGNOSTIC_SELECTION_V6`'s own working set — every
+hypothesis `ProbeRelationshipService.resolve` authorizes remains exactly as authorized as it is
+today; this amendment only limits how many of them one `V6` decision considers at once. Once the
+bound is reached, the walk **stops admitting additional hypotheses** to the working set (it does not
+need to keep walking for admission purposes, though nothing forbids continuing to walk purely for
+observability/logging); relationship authority itself, `V5`'s own fallback semantics, and every
+other selector are completely unaffected.
+
+**Determinism.** Admission order is exactly the enumeration order already frozen: source attempt
+`presentation_order`, then `RELATIONSHIP_TYPE_PRIORITY` index. De-duplication (§F) is checked
+**before** a candidate consumes a working-set slot — a duplicate never counts twice against
+`MAX_AUTHORIZED_HYPOTHESES_V6`, and a non-actionable relationship-authorized hypothesis (§H) never
+consumes a slot at all.
+
+### F. Hypothesis de-duplication
+
+The same `DiagnosticHypothesis` identity may be reachable from more than one (miss, type) pair (e.g.
+two different misses independently resolving to the same target objective under the same
+relationship type). **Frozen:** de-duplication is by exact `DiagnosticHypothesis` record equality
+(`triggerItemVersionId, triggerObjectiveId, relationshipType, targetObjectiveId,
+authorizingRelationshipId` — all five fields), the same identity Amendment 1 §H's canonical order
+already keys on. A repeat is admitted once. **No fuzzy, semantic, or embedding-based
+deduplication; no graph-based collapsing of "related" hypotheses into one.** Two hypotheses that
+differ in even one field (e.g. two different relationship types both landing on the same target
+objective) are distinct members of the set.
+
+**Ordering relative to §E's bound and §H's actionability test, frozen precisely:** for a given
+`(miss, type)` walk step, de-duplication is checked **first** (a repeat of an already-admitted
+identity is discarded immediately, consuming no working-set slot and requiring no actionability
+re-check), then §H's actionability test runs, and only a hypothesis that is both novel and
+actionable ever consumes one of the `MAX_AUTHORIZED_HYPOTHESES_V6` slots §E freezes. A duplicate
+never consumes a slot, whether or not it would have been actionable.
+
+### G. Hypothesis ordering — three distinct orders, not one
+
+This amendment distinguishes three orders that must not be conflated:
+
+1. **Enumeration order** (governs admission into, and de-duplication within, the authorized
+   hypothesis set): `presentation_order` of the triggering miss, then `RELATIONSHIP_TYPE_PRIORITY`
+   index of the relationship type — exactly the order Collapse A already walks in today. This order
+   determines nothing about the final `HypothesisUncertaintyContext`/`HypothesisUncertaintyResult`
+   output shape; it only determines which hypothesis is admitted first when duplicates are found
+   walking two different (miss, type) pairs to the same identity (§F) — the first-walked instance's
+   provenance fields are kept.
+2. **Uncertainty canonical output order** (governs `HypothesisUncertaintyResult.candidates()` and
+   every downstream Step-1/Step-2 emission): Amendment 1 §H's frozen five-key comparator
+   (`RELATIONSHIP_TYPE_PRIORITY` index → `targetObjectiveId` → `authorizingRelationshipId` (nulls
+   first) → `triggerObjectiveId` → `triggerItemVersionId`) — **unchanged, reused verbatim**. This is
+   *not* the same key sequence as enumeration order (enumeration is keyed by *miss* presentation
+   order first; canonical order is keyed by *relationship type priority* first) — they will usually
+   disagree, and that is expected and correct: enumeration decides *which* hypotheses get in, §H
+   decides how they are *presented*.
+3. **Discrimination tie-break order** (Amendment 2 §K, unchanged, reused verbatim): score
+   descending → hypothesis canonical order (item 2 above) ascending → `probeItemVersionId` ascending.
+
+**No UUID-random or database-row order governs any of the three.** Nothing in this amendment
+replaces §H's canonical order with a raw UUID sort; enumeration order and canonical order remain
+two deliberately different, both-deterministic sequences serving different purposes.
+
+### H. Decision 3 — probe enumeration, and the relationship-authorized / actionable hypothesis distinction
+
+**Frozen: YES**, for a hypothesis under consideration, V6 evaluates the *entire*
+`ProbeResolution.candidates()` list — not `.get(0)` — filtered by nothing beyond what
+`ProbeRelationshipResolver`/`ProbeRelationshipService` already compute (verified/scoreable/published
+item state) **and** the same destination-attempt eligibility V5 already applies today (§I). **No new
+eligibility rule is introduced or invented** — this only stops discarding the tail of an
+already-bounded, already-filtered list.
+
+**Two distinct terms, frozen precisely, and never conflated:**
+
+- **Relationship-authorized hypothesis**: any `DiagnosticHypothesis` for which
+  `ProbeRelationshipService.resolve(...)` returns `CANDIDATES_AVAILABLE`. This is a statement about
+  curriculum authority alone (a `PUBLISHED` relationship or curriculum-native relation exists) and
+  says nothing about whether the destination attempt currently being created can actually act on it.
+- **`V6`-actionable hypothesis**: a relationship-authorized hypothesis for which **at least one** of
+  its own `ProbeResolution.candidates()` items survives every existing destination-attempt
+  eligibility rule (§I) — chiefly, the destination attempt's own `unseenPool`/exposure state. Only
+  actionable hypotheses enter `DIAGNOSTIC_SELECTION_V6`'s working set; only working-set members ever
+  reach `HYPOTHESIS_UNCERTAINTY_V1` or `HYPOTHESIS_DISCRIMINATION_V1` for a given `V6` decision.
+
+**Why this distinction is required, not cosmetic:** if a relationship-authorized-but-non-actionable
+hypothesis (call it `H2`) were nonetheless admitted to `HypothesisUncertaintyContext.candidates()`,
+it could carry directional evidence from the source interaction and consume a real share of the
+normalized uncertainty mass in Amendment 1's own distribution — measurably shifting the normalized
+values of `H1`/`H3` (hypotheses `V6` genuinely *can* act on) even though `V6` can never select any
+action for `H2` itself, since none of its candidates survived destination eligibility. Admitting a
+hypothesis `V6` cannot act on to influence a decision about hypotheses it can act on would be an
+unintended, undocumented coupling between curriculum authority and destination-attempt state. This
+amendment closes that gap: **a hypothesis that clears relationship authorization but has zero
+surviving destination candidates is never placed into `V6`'s Step-1 candidate set at all** — not
+merely excluded from Step 2's candidate-probe list, excluded from Step 1's own input entirely.
+
+**This does not narrow relationship-authorization itself.** `ProbeRelationshipResolver`/
+`ProbeRelationshipService` are untouched; `H2` is exactly as relationship-authorized after this
+amendment as before it. "Actionable" is a `V6`-local, Step-3-scoped filter on which
+relationship-authorized hypotheses `V6`'s own working set admits for *this* decision — it makes no
+claim about `H2`'s domain truth, and a later decision (a different destination attempt, different
+exposure state) could find `H2` actionable when this one did not.
+
+**Frozen order** (restated from §E/§F, gathered here for reference):
+
+```
+resolve relationship-authorized hypothesis (ProbeRelationshipService.resolve)
+        |
+        v
+exact-identity de-duplication (§F) -- a duplicate consumes no slot, skips the rest
+        |
+        v
+derive eligibleProbes = resolution.candidates() (destination eligibility applied, §I)
+        |
+        v
+eligibleProbes empty?  --yes-->  relationship-authorized only; NOT admitted to the V6 working set;
+        |                        consumes no MAX_AUTHORIZED_HYPOTHESES_V6 slot
+        no
+        v
+admit hypothesis + eligibleProbes to the V6 working set; consume one bound slot (§E)
+```
+
+Each surviving `ProbeCandidateItem` for an admitted, actionable hypothesis becomes exactly one
+`CandidateProbe(probeItemVersionId, hypothesis, scoreable)`.
+
+### I. Candidate-eligibility preservation
+
+V6 may not widen or narrow existing V5 candidate eligibility, except for the one explicit change
+this amendment authorizes (Collapse B no longer discards candidates 2..N of an actionable
+hypothesis' own list, and Collapse A no longer discards relationship-authorized hypotheses beyond
+the first — subject to §E's cardinality bound and §H's actionability filter). Everything else about
+eligibility is preserved verbatim:
+
+- relationship validity (`PUBLISHED` rows only, per M2-ADR-024 §1);
+- verification/publication state and scoreability (`ProbeRelationshipRepository.itemsForObjective`'s
+  own "every verified, scoreable item" filter, unchanged);
+- learner exposure / no-repeat exclusion (`exposedLogicalItemIds`, unchanged — §V freezes the exact
+  as-of-selection semantics this exclusion must use for replay);
+- same-domain scoping (enforced independently by both `ProbeRelationshipResolver`'s own objective
+  resolution and by `HypothesisUncertaintyCalculatorV1`'s own `CROSS_DOMAIN_CANDIDATE_SET`
+  validation);
+- curriculum/assessment-version scoping (`assessmentVersionId` threaded through unchanged);
+- ambiguity behavior (`AMBIGUOUS_TARGET_OBJECTIVE` still yields no hypothesis, exactly as today —
+  Amendment 3 does not touch `ProbeRelationshipResolver` at all);
+- trigger eligibility (`TriggerItemHasNoObjectiveException` /
+  `TriggerItemHasAmbiguousObjectiveException` still `break` out of that miss's inner loop to the
+  next miss, unchanged).
+
+**Frozen:** if a `ProbeResolution`'s candidate item is **not** present in the destination attempt's
+own `unseenPool` (the same check `skillCodeOfItem` already performs today), that candidate is
+excluded when computing `eligibleProbes` (§H) exactly as V5 excludes it from consideration today —
+**it is never silently reintroduced** just because V6's enumeration is broader. If excluding it
+leaves the hypothesis with zero surviving candidates, the hypothesis itself is excluded from the
+working set per §H — it is never retained in `HypothesisUncertaintyContext.candidates()` merely
+because it was relationship-authorized.
+
+### J. Activation rule — frozen, with mathematical justification
+
+**Frozen:** `DIAGNOSTIC_SELECTION_V6` overrides `V5`'s own first-eligible tiebreak with a
+discrimination-ranked choice only when **all** of the following hold for the attempt being created:
+
+1. a valid immediately preceding completed source interaction exists (§C);
+2. the `V6`-actionable hypothesis set (§H) is not empty;
+3. the governed candidate-probe set across that working set (§H) is not empty;
+4. `HYPOTHESIS_UNCERTAINTY_V1.calculate(...)` returns `status = APPLICABLE`;
+5. **at least two hypotheses participate** in that Step-1 result (`participates = true` on ≥2
+   candidates);
+6. `HYPOTHESIS_DISCRIMINATION_V1.calculate(...)` returns `status = SCORABLE`; **and**
+7. the resulting maximum discrimination score across the working set is strictly greater than
+   `0.0000`.
+
+If **any** condition fails, `V6` makes **no** discrimination-driven choice for this attempt: `V5`'s
+existing selection (Collapse A's first-actionable hypothesis under today's `resolve` order, Collapse
+B's `resolution.candidates().get(0)`) is used exactly as it is today, unchanged.
+
+**Condition 5 is required, not optional, and is derived directly from Amendment 2 §H's own frozen
+proof, not chosen for convenience:** a sole participating hypothesis normalizes to `1.0000` in
+*every* reachable world (§H), so **every** candidate probe targeting it scores exactly `0.0000` —
+with fewer than two participants, discrimination is not merely unlikely to help, it is
+mathematically certain to be a no-op. Requiring ≥2 participants is the only way to avoid computing a
+result that Amendment 2's own math already guarantees is `0.0000`, and makes the ADR's own original
+wording — "a bounded, well-formed hypothesis set... exists" — precise.
+
+**Condition 7 is stated as its own numbered condition, not folded silently into "SCORABLE," because
+`SCORABLE` and "carries genuine separating power" are different facts.** `HYPOTHESIS_DISCRIMINATION_V1
+.status() == SCORABLE` means only that Step 2 *computed* a score for every candidate — it says
+nothing about whether any of those scores is non-zero. **`maxScore == 0.0000` is not a Step-2
+failure, an invalid result, or evidence of a malformed context** — it is a perfectly valid `SCORABLE`
+result that happens to carry no separating power for this particular working set (see the
+mathematical note below for exactly when this occurs). Condition 7 exists precisely to distinguish
+"Step 2 ran successfully and found nothing to prefer" from "Step 2 found a genuine preference" —
+**Step 3 declining to override `V5` on a `SCORABLE`-but-all-zero result is a deliberate `V6` policy
+choice (§K), never a rejection of Step 2's output.**
+
+**A sharper mathematical consequence, offered as supporting analysis (not a new rule to ratify, and
+not a claim about candidate *counts*):** condition 5 alone does not guarantee a *particular*
+candidate probe scores above `0.0000`, and **the number of eligible candidate probes — for one
+hypothesis or across the whole working set — never by itself determines any candidate's score.**
+Because `(1,0)` and `(0,1)` both map to `LOW` under `DiagnosticConfidenceCalculatorV1`'s own frozen
+thresholds, a probe whose *target hypothesis currently has zero prior directional evidence* always
+produces identical `World-S`/`World-C` distributions (every other hypothesis's weight is invariant
+between the two worlds, and the target's own weight is identically `1` in both) — so **that specific
+probe scores exactly `0.0000`, independent of how many other hypotheses participate and independent
+of how many candidate probes exist for it or for any other hypothesis.** Conversely, a hypothesis
+with only **one** surviving eligible candidate probe, sitting inside a working set where ≥2
+hypotheses participate, is not thereby guaranteed a `0.0000` score either: if that one candidate's
+*target hypothesis already carries at least one prior directional observation* (a re-probe, not a
+first-time probe), and the two possible next observations would move it into different confidence
+bands, its score can be strictly positive. **Non-zero discrimination is reachable only for a
+candidate probe that re-probes an already-evidenced hypothesis** — never determined by how many
+candidates happen to exist. This is a direct, provable consequence of the already-frozen Step 1 and
+Step 2 mathematics — this amendment changes neither formula, it only names the consequence so a
+future implementer does not mistake "few candidates" or "condition 5 satisfied" for "discrimination
+is guaranteed trivial" in either direction. §P applies this specifically to the case where the
+*whole working set* has exactly one eligible candidate.
+
+### K. Zero-score semantics
+
+**Frozen:**
+
+```
+maxScore > 0.0000   -> use Step-2 ranking (Amendment 2 §K, verbatim) to choose the probe
+maxScore == 0.0000  -> preserve the existing V5 selection exactly (Collapse A's first-actionable
+                       hypothesis, Collapse B's resolution.candidates().get(0))
+```
+
+No canonical-order or `probeItemVersionId` tie-break is used to break a universal `0.0000` tie into a
+V6-driven choice that differs from what V5 would already have chosen — doing so would be a real
+behavior change with zero underlying diagnostic signal, and is explicitly rejected. This is condition
+7 of §J failing, not an error: **`maxScore == 0.0000` never means Step 2's result is invalid; it
+means Step 3 declines to override `V5` because the (valid) result carries no separating power.**
+
+**Does this conflict with Amendment 2's frozen ranking contract? No.** Amendment 2 §K freezes how to
+rank a *valid, already-computed* `HYPOTHESIS_DISCRIMINATION_V1` result when it is used — it does not,
+and was never asked to, mandate that every `SCORABLE` result must be *acted on*. Step 3 (this
+amendment) makes a Step-3-level decision — whether discrimination-driven selection activates at all
+— that is orthogonal to, and does not mutate, Step 2's own frozen scoring or ranking. `§K`'s ranking
+remains exactly what it always was: the correct way to rank a Step-2 result that carries genuine
+separating power. This amendment adds nothing to, and removes nothing from, that ranking; it only
+decides when a Step-3 consumer is permitted to *use* it.
+
+**Distinguishing the all-zero case from a genuine positive-score tie, precisely:** if `maxScore ==
+0.0000`, §K's fallback applies and Amendment 2 §K's ranking is never consulted at all (there is
+nothing to rank into a decision — every candidate is equally uninformative). If `maxScore > 0.0000`
+and **more than one** candidate shares that maximum, Amendment 2 §K's frozen canonical tie-break
+(hypothesis canonical order ASC, then `probeItemVersionId` ASC) resolves it exactly as already
+frozen — this is condition 7 having *passed*, with an ordinary tie among genuinely informative
+scores, not the all-zero fallback case. The two situations must never be conflated: one is "nothing
+to choose between" (fallback to `V5`), the other is "several equally good choices" (Step-2's own
+frozen tie-break decides).
+
+### L. `NOT_APPLICABLE` semantics (Step 1)
+
+**Frozen:** if `HYPOTHESIS_UNCERTAINTY_V1.status == NOT_APPLICABLE` (empty `V6`-actionable hypothesis
+working set — activation condition 2 already failed), V6 performs no discrimination override and
+preserves exact V5 selection behavior. This is never a failure of attempt creation; it is the same
+"degrades to no adjustment" outcome M2-ADR-025 §2 already guarantees for V5 itself.
+
+### M. `INSUFFICIENT_EVIDENCE` semantics (Step 1)
+
+**Frozen:** if `HYPOTHESIS_UNCERTAINTY_V1.status == INSUFFICIENT_EVIDENCE` (every actionable
+hypothesis in the working set lacks directional evidence in the source interaction — the common
+case for a freshly authorized set per §J's mathematical note), no distribution is fabricated, no
+Step-2 scoring is attempted (activation condition 4 fails), and V5 behavior is preserved exactly. No
+uniform or synthetic uncertainty is ever substituted, consistent with Amendment 1 §D/§G's own
+discipline.
+
+### N. Validation / internal-failure semantics — expected outcomes vs. corruption
+
+**Frozen distinction:**
+
+- **Expected control outcomes** — no source interaction, an empty `V6`-actionable hypothesis working
+  set (including every relationship-authorized hypothesis turning out non-actionable), an empty
+  candidate-probe set, `NOT_APPLICABLE`/`INSUFFICIENT_EVIDENCE` (Step 1), fewer than two
+  participants, `NOT_APPLICABLE` (Step 2), and every candidate scoring `0.0000` (`maxScore ==
+  0.0000`) — are normal, frequent results of a correctly-functioning system and always resolve to
+  "preserve exact V5 selection," never an error. `maxScore == 0.0000` in particular is never treated
+  as invalid (§J/§K) — it is a valid `SCORABLE` result that carries no separating power.
+- **Invariant/corruption validation failures** — `HypothesisUncertaintyValidationException` /
+  `HypothesisDiscriminationValidationException` of any reason code (`BASE_RESULT_MISMATCH`,
+  `DUPLICATE_EVIDENCE_OBSERVATION`, any `CROSS_DOMAIN_*` code, `MALFORMED_*`,
+  `DUPLICATE_CANDIDATE_PROBE`, `PROBE_FOR_UNKNOWN_HYPOTHESIS`) indicate a context was assembled
+  incorrectly — a defect in the code that builds `HypothesisUncertaintyContext`/
+  `HypothesisDiscriminationContext` for V6, not a legitimate diagnostic state. **Frozen: these fail
+  the attempt-creation transaction closed** (propagate the exception; do not catch-and-fall-back to
+  V5). Silently masking a validation exception by falling back to V5 would hide a real integrity
+  defect in whatever assembles V6's inputs, exactly the outcome Amendment 1 §Q's and Amendment 2
+  §N's own fail-closed disciplines exist to prevent from being papered over. This is consistent with
+  existing RAMALS governance: nowhere in this codebase does a caller catch a
+  `*ValidationException` from a frozen calculator and silently substitute a different result: Step 1
+  and Step 2 are designed to make a malformed caller-assembled context visibly break the caller, not
+  quietly degrade.
+
+### O. Empty hypothesis / candidate semantics
+
+**Frozen:** no relationship-authorized hypotheses resolve at all → the `V6`-actionable working set is
+empty → V5 unchanged (activation condition 2 fails). Relationship-authorized hypotheses exist but
+none is actionable (§H — every one's own candidates are excluded by destination eligibility), or an
+actionable hypothesis exists but the working set's combined candidate-probe set is otherwise empty →
+V5 unchanged (activation condition 2 or 3 fails, as applicable). No synthetic candidate or synthetic
+hypothesis is ever manufactured to satisfy activation; no LLM, MCP, or any other fallback authority
+is ever consulted to produce one.
+
+### P. One-candidate-probe semantics — corrected
+
+**An earlier draft of this section made a mathematically incorrect claim and is corrected here.**
+It asserted that a single governed candidate probe across the whole working set must score
+`0.0000`, citing Amendment 2 §H. That citation was wrong: **Amendment 2 §H proves `0.0000` for a
+sole *participating hypothesis* — it says nothing about the *count of candidate probes*.** With two
+or more participating hypotheses, a single eligible probe that happens to re-probe an
+already-evidenced hypothesis can legitimately receive a strictly positive discrimination score (§J's
+sharper mathematical note). **Amendment 3 makes no claim, and never did intend to claim, what
+discrimination score any specific probe would receive merely from a candidate count.**
+
+**What is actually true, and is what this section freezes:** if the working set's combined candidate
+set (across every actionable hypothesis) contains **exactly one** governed candidate probe, that
+probe is the only possible action `V6` could ever select — no ranking can change the outcome,
+because there is nothing else to rank it against. **Frozen policy (unchanged from the earlier
+draft): `DIAGNOSTIC_SELECTION_V6` selects that sole eligible probe directly and does not invoke
+`HYPOTHESIS_UNCERTAINTY_V1`/`HYPOTHESIS_DISCRIMINATION_V1` for it.** The corrected rationale:
+
+> There is only one eligible action, therefore scoring cannot affect the selected probe. Skipping
+> Step 1/Step 2 in this case is an optimization and a semantic simplification — selecting the one
+> available action is exactly what a ranking over a one-element set would produce regardless of its
+> score — never a mathematical assertion that the probe's discrimination score must be zero.
+
+**A structural note, offered for completeness, not as a new rule:** because §H requires every
+actionable hypothesis to contribute at least one of its own surviving candidates to the working set,
+a combined candidate-probe count of exactly one forces the actionable-hypothesis count to also be at
+most one — which already independently fails §J's condition 5 (`≥2` participating hypotheses). This
+section's policy and §J's activation gate therefore agree on the outcome (`V5`'s exact selection is
+used) for this specific case, via two independently correct reasons — this section's "nothing to
+rank" optimization, and §J's "fewer than two participants" gate — **neither of which is "the score
+must be `0.0000`."** Calling the calculators anyway "for audit" is explicitly rejected as an
+alternative here, to keep §J as the single, consistent gate for every other case.
+
+### Q. Final ranking when V6 is genuinely active
+
+**Frozen:** Amendment 2 §K's ranking, reused verbatim: `score DESC → hypothesis canonical order ASC
+(Amendment 1 §H) → probeItemVersionId ASC`. **No additional term is ever added** — not difficulty,
+not a misconception-graph weight, not a relationship-type bonus, not an AI-supplied confidence, not
+a mastery multiplier, not a psychometric parameter of any kind (Amendment 2 §W's own documented V1
+limitation).
+
+### R. `RELATIONSHIP_TYPE_PRIORITY` is order/governance only, never a score
+
+**Frozen, for clarity:** `RELATIONSHIP_TYPE_PRIORITY` participates in exactly two places under this
+amendment — (1) the enumeration order that decides which (miss, type) pairs are walked and in what
+sequence (§E), and (2) as one term inside `DiagnosticHypothesis`'s own canonical order (Amendment 1
+§H, unchanged). **It is never converted into a numeric weight, bonus, or score contribution
+anywhere in this amendment, in Step 1, or in Step 2.** A relationship type appearing earlier in the
+priority list confers no discrimination-score advantage; its only effect is which hypothesis is
+admitted first when a de-duplication tie must be broken (§F) and how results are ordered for
+presentation (§G).
+
+### S. `DIAGNOSTIC_SELECTION_V6` version identifier
+
+**Frozen:** when `DIAGNOSTIC_SELECTION_V6` is eventually implemented, it mints its own
+`SELECTION_POLICY_VERSION = "DIAGNOSTIC_SELECTION_V6"` string constant, following the exact
+precedent every one of `V1`–`V5` already set, recorded on `core.assessment_version
+.selection_policy_version` / `core.assessment_attempt.selection_policy_version` exactly as V5's
+value is today. `V1`–`V5` are not mutated into `V6` behavior; `V6` is a new, separately selectable
+policy value through the existing selection-policy mechanism `DiagnosticService.selectForm` already
+dispatches on. This freezes the *decision* that a distinct identifier is required (Amendment-3
+Decision 5 from the discovery report); it does not itself add the constant, since no code changes
+under this amendment.
+
+### T. `V6`'s relationship to `V5` — additive composition, not a rewrite
+
+```
+V3 prerequisite cap (adjustForPrerequisites)
+        |
+        v
+V4 regression handling (adjustForRegressions)
+        |
+        v
+V5 deterministic hypothesis/candidate authority
+   (ProbeRelationshipResolver / ProbeRelationshipService -- UNCHANGED, reused verbatim)
+        |
+        v
+V6 discrimination override IF §J's activation conditions are satisfied
+   (chooses which already-authorized Selection to hand to V5's own adjustForHypothesisProbe)
+        |
+        v
+HypothesisDrivenProbeDiagnosticSelector.adjustForHypothesisProbe   [V5 proper -- UNCHANGED]
+        |
+        v
+AdaptiveDiagnosticSelector.select(...)                              [V2 -- UNCHANGED]
+```
+
+`V5` continues to supply all candidate authority (relationship resolution, eligibility, exposure
+filtering) unchanged. `V6` changes only *which* already-authorized `Selection` value is chosen when
+its own activation conditions hold; `HypothesisDrivenProbeDiagnosticSelector` itself is never
+modified, and its own `EngineVersionFreezeTests` hash is unaffected by anything `V6` does, because
+that hash is computed by calling `adjustForHypothesisProbe` directly with a hand-built `Selection` —
+independent of how the `Selection` was produced.
+
+### U. Provenance
+
+**Frozen minimum auditable fields** for a `V6`-driven decision, all already representable by the
+existing `core.diagnostic_probe_provenance` / `core.assessment_attempt` schema with **no migration**:
+`selection_policy_version = "DIAGNOSTIC_SELECTION_V6"` (attempt-level, existing column), source
+attempt id (existing `source_attempt_id` FK), selected hypothesis (existing
+`source_item_version_id`/`source_objective_id`/`relationship_type`/`target_objective_id`/
+`authorizing_relationship_id` columns — a hypothesis's identity is already fully reconstructable
+from these), and selected probe item id (existing `item_version_id` column). **Preference: no
+migration.** The engine versions of Step 1/Step 2 and the winning discrimination score are **not**
+persisted per-row, consistent with Amendment 2 §P's own decision ("compute-on-read... nothing here
+needs its own persisted provenance") — they are fully reconstructable by replay (§V) from already-
+persisted, immutable evidence, given the deterministic inputs below. If a future audit requirement
+demands recording the score itself without relying on replay, that is a new decision requiring its
+own schema change and its own review — not authorized here.
+
+### V. Replay / reproducibility
+
+**Corrected.** An earlier draft of this section claimed the same historical evidence "fully"
+reconstructs a `V6` decision, then separately conceded that a later replay could see a *larger*
+exposure set than the original decision did — two statements that directly contradict each other,
+since the candidate set a `V6` decision (and, today, a `V5` decision) considers is itself filtered by
+exposure. That contradiction is resolved below, not carried forward.
+
+**Frozen: `destinationExposureCutoff`.** A `V6` decision's candidate pool must use the learner's
+exposure state **as of immediately before the destination attempt's own item-selection decision** —
+never the exposure state at whatever later moment a replay happens to run.
+
+```
+destinationExposureCutoff = the destination attempt's own core.assessment_attempt.created_at value
+```
+
+This is available at decision time without any new column: `DiagnosticService.createAttempt` already
+inserts the destination attempt's row (`repository.insertAttempt(...)`) — fixing its `created_at` —
+**before** `selectForm`/the hypothesis walk runs, so `destinationExposureCutoff` is already a known,
+persisted, immutable value by the moment any `V6` decision would be made.
+
+**Verdict: YES, exposure state as of `destinationExposureCutoff` is reconstructable from already-
+persisted data, with no migration**, using columns that already exist:
+
+```sql
+SELECT DISTINCT lin.logical_item_id
+FROM core.assessment_attempt_item ai
+JOIN core.assessment_attempt a ON a.id = ai.attempt_id
+JOIN core.assessment_item_lineage lin ON lin.item_version_id = ai.item_version_id
+WHERE a.learner_id = ?
+  AND a.created_at < ?   -- destinationExposureCutoff
+```
+
+This is the same join `AssessmentRepository.findLearnerExposedLogicalItemIds` already performs
+(`core.assessment_attempt_item` → `core.assessment_attempt` → `core.assessment_item_lineage`), with
+one added predicate on `core.assessment_attempt.created_at` — a column that already exists
+(`V005__assessment_and_attempts.sql`, `NOT NULL DEFAULT CURRENT_TIMESTAMP`, never updated by any
+trigger or statement in this codebase; only `updated_at` is touched by
+`trg_assessment_attempt_touch_updated_at`) and is never mutated after insert. **No new column, no
+new table, no migration.**
+
+**Why today's real-time V5 decision needs no code change, and only a replay/audit tool does.** At
+the moment `V5` (or a future `V6`) actually makes its decision for a brand-new destination attempt,
+that attempt's own items do not exist in `core.assessment_attempt_item` yet, and no later attempt has
+been created yet either — so today's unbounded `findLearnerExposedLogicalItemIds(learnerId)` query
+and the cutoff-bounded query above return **identical** results at that exact moment. The two queries
+only diverge for a query issued **later** — after the destination attempt has been completed and/or
+the learner has taken further attempts — which is exactly the situation a replay or audit tool runs
+in, and exactly why replay must use the cutoff-bounded form, not the caller's own real-time query.
+
+**One residual, narrow, pre-existing caveat, stated precisely and not used to excuse the fix above:**
+`findLearnerExposedLogicalItemIds` is scoped to `learner_id` only, not to one assessment version, and
+`findActiveAttempt`'s one-active-attempt invariant is scoped to `(learnerId, assessmentVersionId)` —
+so a learner could in principle have a second attempt concurrently `IN_PROGRESS` under a *different*
+assessment version at a `created_at` interleaved with the destination attempt's own. This is a
+property of the exposure/no-repeat model shared by `V1`–`V5` today, not a new inconsistency `V6`
+introduces, and it does not affect the cutoff-bounded reconstruction's correctness for the single
+assessment version a given `V6` decision is scoped to.
+
+**Frozen replay inputs**, all already persisted or already frozen:
+
+- the source attempt id (persisted, immutable per M2-ADR-025's provenance trigger);
+- the ordered miss list for that source attempt (`presentation_order`, persisted, immutable);
+- the `V6`-actionable hypothesis working set (§E/§H) — reconstructable deterministically by
+  re-running the same (miss × `RELATIONSHIP_TYPE_PRIORITY`) walk, bounded by
+  `MAX_AUTHORIZED_HYPOTHESES_V6`, against `PUBLISHED`-only relationship rows (immutable once
+  published, M2-ADR-024 §1) and the exposure state **as of `destinationExposureCutoff`** above —
+  never the exposure state current at replay time;
+- the governed candidate-probe set for that working set (§H) — reconstructable the same way;
+- the source interaction's governed evidence (`core.diagnostic_probe_provenance` join
+  `core.assessment_response`, both immutable once written);
+- `HYPOTHESIS_UNCERTAINTY_V1` and `HYPOTHESIS_DISCRIMINATION_V1`'s own engine-version identifiers
+  (frozen, hashed by `EngineVersionFreezeTests`);
+- `DIAGNOSTIC_SELECTION_V6`'s own version identifier (§S) once minted.
+
+Given these, and using `destinationExposureCutoff` (not current exposure state) for every exposure
+read, a `V6` decision is fully and exactly reconstructable without persisting the score itself.
+
+### W. M2-ADR-032 isolation (reaffirmed)
+
+```
+LLM
+  |
+  v
+ADR-032 proposal
+  |
+  v
+deterministic gate
+  |
+  v
+ACCEPTED
+  |
+  v
+advisory / audit only
+  X                    <- no path into V6's relationship-authorized set, actionable working set, or
+                          candidate-probe set
+DIAGNOSTIC_SELECTION_V6
+```
+
+Reaffirmed exactly as Amendment 2 §E/§S/§V already freeze for Step 2: an accepted
+`DiagnosticProbeProposal` never enters `V6`'s relationship-authorized set, its `V6`-actionable
+working set (§E/§H), or its candidate-probe set (§H). Gate acceptance under M2-ADR-032 is an
+audit/evaluation outcome only. Promoting an
+accepted proposal into `V6` eligibility would require its own separate, explicit ADR — this
+amendment authorizes no such widening, and nothing in §E/§H's enumeration touches
+`io.ramals.learningplatform.diagnosticassessment` in any way.
+
+### X. M2-ADR-033 isolation (reaffirmed)
+
+```
+MisconceptionGraphQueryService
+        X                              <- no hypothesis, no candidate, no weight, no score
+DIAGNOSTIC_SELECTION_V6
+```
+
+Reaffirmed exactly as M2-ADR-033 §6 already names ("or a future `V6`") and as Amendments 1/2 §G/§M
+already freeze for Step 1/Step 2: no `MISCONCEPTION_RELATED`/`MISCONCEPTION_PREREQUISITE_LINK` edge,
+and no edge-type weight of any kind, participates in hypothesis admission (§E), candidate
+construction (§H), uncertainty (Step 1), discrimination (Step 2), or ranking (§Q).
+
+### Y. AI boundary (reaffirmed)
+
+```
+Java candidate authority (ProbeRelationshipResolver / Service, unchanged)
+        |
+        v
+Java uncertainty (HYPOTHESIS_UNCERTAINTY_V1, unchanged)
+        |
+        v
+Java discrimination (HYPOTHESIS_DISCRIMINATION_V1, unchanged)
+        |
+        v
+Java selection (V6 activation + fallback, this amendment)
+```
+
+An LLM or MCP tool may never: add a hypothesis to the authorized set (§E); add a candidate probe to
+the eligible set (§H); assign, adjust, or override any uncertainty or discrimination value; rank
+candidates; or override the selected probe. This is the same boundary M2-ADR-023 §2, M2-ADR-025 §10,
+M2-ADR-032 §3, and Amendment 2 §S already draw — restated here for `V6` specifically, not widened.
+
+### Z. Transactionality
+
+**Frozen:** a `V6` decision executes entirely inside the existing `DiagnosticService.createAttempt`
+`@Transactional` boundary, on one coherent repository snapshot, synchronously, in the same call
+stack that already resolves candidates, constructs hypotheses, and persists the packet and
+provenance today. No new transaction boundary, no asynchronous selection, and no eventual-consistency
+window between scoring and persistence is introduced.
+
+### AA. Performance bound — corrected
+
+**An earlier draft of this section bounded `H` by `(misses in source attempt) x 4` and cited the
+default adaptive-packet configuration as if it were a frozen ceiling.** That configuration
+(`AdaptiveDiagnosticFormProperties.singleChoiceTarget`/`fillBlankTarget`) is ordinary mutable
+`@ConfigurationProperties` state with setters and no frozen maximum — a future configuration change
+could raise it with no ADR review, silently invalidating that bound. Corrected below using §E's
+actually-frozen `MAX_AUTHORIZED_HYPOTHESES_V6` constant instead.
+
+**Frozen bound:**
+
+```
+H <= MAX_AUTHORIZED_HYPOTHESES_V6 = 4     (§E; independent of any mutable configuration)
+P <= however many verified, scoreable, unseen items are tagged to one hypothesis's target
+     objective — already small and curriculum-bounded, exactly as Amendment 2 §T already accepts
+```
+
+`HYPOTHESIS_DISCRIMINATION_V1`'s own frozen performance boundary (Amendment 2 §T) already bounds its
+cost to `2P` calls into Step 1 per candidate probe, each `O(H log H)`. With `H` fixed at a
+governance-frozen constant, worst-case Step-2 cost is a small, bounded multiple (at most `4x`) of a
+quantity Amendment 2 already treats as trivial — **entirely independent of adaptive-packet
+configuration, miss count, or any other mutable value.**
+
+The `(miss × type)` **walk** performed to populate the working set (§E) is not itself bounded by
+`MAX_AUTHORIZED_HYPOTHESES_V6` in terms of `ProbeRelationshipService.resolve` calls issued — the walk
+may still inspect every `(miss, type)` pair before finding `MAX_AUTHORIZED_HYPOTHESES_V6` actionable
+hypotheses, or may stop earlier once the bound is reached. This does not affect `H`/`P` (the
+Step-1/Step-2 computation size this section bounds) — it affects only how many `resolve` calls (each
+already-bounded-cost per M2-ADR-024/025) are issued before the working set is finalized, a
+consideration orthogonal to this section's `H`/`P` bound. **No unbounded `all misses x all
+relationships x all candidates` walk without a working-set cap is ratified** — the walk is
+exhaustive only up to `MAX_AUTHORIZED_HYPOTHESES_V6` admissions, over a domain that is itself
+finite (bounded by the source attempt's own, already-persisted miss count), not open-ended.
+
+### BB. Required golden scenarios (design-level; frozen expected behavior, not yet implemented)
+
+These are normative scenarios a future implementation PR's tests must reproduce exactly. They are
+not implemented here — no test exists yet, since no `V6` code exists yet.
+
+| # | Scenario | Frozen expected behavior |
+|---|---|---|
+| V6-1 | No previous completed source attempt | V5-equivalent behavior (activation condition 1 fails) |
+| V6-2 | Source attempt exists, no relationship-authorized hypothesis resolves | V5-equivalent behavior (condition 2 fails) |
+| V6-3 | Step 1 returns `INSUFFICIENT_EVIDENCE` | V5-equivalent behavior (§M) |
+| V6-4 | Exactly one participating hypothesis | V5-equivalent behavior (condition 5 fails; §J's mathematical proof) |
+| V6-5 | ≥2 participants, but every candidate probe scores `0.0000` (`maxScore == 0.0000`) | V5-equivalent behavior (§K) — a valid `SCORABLE` result, not an error |
+| V6-6 | ≥2 participants, two or more unequal positive scores | Highest-scoring candidate selected (§Q) |
+| V6-7 | `maxScore > 0.0000`, a positive-score tie among two or more candidates | Amendment 2 §K's frozen canonical tie-break resolves it — never confused with V6-5's all-zero fallback (§K) |
+| V6-8 | Same inputs, misses/candidates supplied in permuted order | Identical selection (enumeration is order-independent by construction; §G) |
+| V6-9 | An accepted M2-ADR-032 proposal exists for this learner/interaction | Proposal does not enter the relationship-authorized set, the `V6`-actionable working set, or the candidate-probe set (§W) |
+| V6-10 | A related misconception exists in the M2-ADR-033 graph | Graph has zero effect on selection (§X) |
+| V6-11 | A malformed/inconsistent Step-1 or Step-2 context (any validation reason code) | Fails the attempt-creation transaction closed (§N) — never silently falls back |
+| V6-12 | Identical replay of the same historical evidence, **using `destinationExposureCutoff` (§V) for exposure state, not the exposure state current at replay time** | Identical selected probe (§V) |
+| V6-A | A working set with ≥2 actionable/participating hypotheses, in which one specific hypothesis `H1` has exactly one eligible candidate probe targeting an *already-evidenced* hypothesis | `H1`'s sole candidate is scored normally by Step 2 and may receive a strictly positive score (§J/§P) — **no assertion that having only one candidate for `H1` forces `0.0000`**; contrast with §P's own scenario, where the working set's *combined* candidate total across every hypothesis is exactly one (which independently forces condition 5 to fail, per §P's structural note) |
+| V6-B | A relationship-authorized hypothesis `H2` resolves `CANDIDATES_AVAILABLE`, but every one of `H2`'s own candidate probes is excluded by destination-attempt eligibility (e.g. all already exposed) | `H2` is relationship-authorized but **not actionable** (§H) — it does not enter `HypothesisUncertaintyContext.candidates()` at all, and never influences `H1`/`H3`'s normalized values |
+| V6-C | More relationship-authorized *and* actionable hypotheses are discovered than `MAX_AUTHORIZED_HYPOTHESES_V6` (§E) | Only the first `MAX_AUTHORIZED_HYPOTHESES_V6` unique actionable hypotheses, in frozen enumeration order (miss `presentation_order` then `RELATIONSHIP_TYPE_PRIORITY`), enter the working set; later ones are not admitted and do not affect the decision (§E) — this is a computation bound, not an eligibility judgment about the ones excluded |
+| V6-D | A historical `V6` decision is replayed after the learner has taken further attempts that expose additional items | The replay uses the exposure state **as of the original decision's `destinationExposureCutoff`** (§V), not the learner's current exposure state — candidate set and selected probe are identical to the original decision |
+
+### CC. ADR diff summary (this amendment)
+
+- **Header** — a third `Amended` line added pointing to this amendment; the title's "Steps 1–2
+  implemented and inert, Step 3 design-only" suffix is unchanged (this amendment still authorizes no
+  `V6` code).
+- **§2 (original ADR body)** — superseded, precisely, only where it says: "`V6` acts only when a
+  bounded, well-formed hypothesis set with a computed posterior exists" (now defined exactly by §J);
+  and where it frames the two collapses as a single undifferentiated "step (b)" (now split into
+  Collapse A/B, §D, each separately addressed by §E/§H). Every other clause of §2 (composition order
+  unchanged, no `V1`–`V4` change, quota unchanged, no widening beyond one probe) remains binding,
+  unamended.
+- **No change** to Amendment 1 or Amendment 2 in any way — their frozen mathematics, golden vectors,
+  decimal contracts, and validation reason codes are untouched. This amendment only says *when* and
+  *with what inputs* a future `V6` may call them.
+- **Review-round corrections (same PR, before merge — this amendment's own draft edited directly,
+  not superseded, since it had not yet been ratified):**
+  - **§E** rewritten: the hypothesis-cardinality bound is now the explicit, derivation-justified
+    `MAX_AUTHORIZED_HYPOTHESES_V6 = 4`, replacing an earlier draft that cited mutable
+    `AdaptiveDiagnosticFormProperties` configuration defaults as if they were a frozen ceiling.
+  - **§F/§G** clarified: de-duplication and actionability are both checked before a hypothesis
+    consumes a working-set slot; enumeration order vs. canonical order vs. tie-break order restated
+    against the new working-set vocabulary.
+  - **§H/§I** rewritten to introduce and freeze the **relationship-authorized vs. `V6`-actionable**
+    hypothesis distinction: a hypothesis with zero surviving destination-eligible candidates is
+    excluded from `HypothesisUncertaintyContext.candidates()` entirely, not merely from Step 2's
+    candidate-probe list — preventing a non-actionable hypothesis from consuming uncertainty mass
+    that could alter actionable hypotheses' normalized values.
+  - **§J/§K** restructured: condition 7 (`maxScore > 0.0000`) is now an explicit, numbered activation
+    condition, with an explicit statement that `maxScore == 0.0000` is a valid `SCORABLE` result, not
+    an error, and a clarified distinction between the all-zero fallback case and an ordinary
+    positive-score tie (Amendment 2 §K's own frozen tie-break).
+  - **§P corrected — a mathematical error is fixed.** The earlier draft claimed Amendment 2 §H
+    proves a single candidate probe scores `0.0000`; §H proves this only for a sole *participating
+    hypothesis*, never from a candidate *count*. The frozen policy (select the sole eligible probe
+    directly without invoking Step 1/2) is unchanged; the rationale is corrected to "there is only
+    one action to choose, so ranking cannot change the outcome" — Amendment 3 makes no claim about
+    what score that probe would receive.
+  - **§V corrected — an internal contradiction is fixed.** The earlier draft claimed full
+    reconstructability while separately conceding exposure state could grow between the original
+    decision and a later replay. `destinationExposureCutoff` (the destination attempt's own,
+    already-persisted, immutable `created_at`) is now frozen as the exposure-state boundary a replay
+    must use, with the exact reconstruction query cited against real, already-existing columns
+    (`core.assessment_attempt.created_at`, `core.assessment_attempt_item`,
+    `core.assessment_item_lineage`) — no migration required.
+  - **§AA corrected**: the performance bound now uses `MAX_AUTHORIZED_HYPOTHESES_V6` instead of a
+    mutable-configuration-derived figure.
+  - **§BB expanded**: four new golden scenarios (`V6-A` through `V6-D`) covering the corrected
+    one-candidate semantics, non-actionable-hypothesis exclusion, the working-set bound, and
+    cutoff-based replay; existing scenarios' section references updated to match the renumbered
+    activation conditions.
+- **Companion doc edits (same PR):** `docs/adr/M2-ADR-034-step3-v6-discovery-report.md` corrected
+  (evidence-timing conclusion, two-collapse analysis, source-interaction ambiguity, the four
+  review-round corrections above, revised Amendment-3-now-resolved decision list);
+  `docs/adr/M2-ADR-register.md` and `docs/architecture/target-intelligence-loop.md` updated to record
+  this amendment's ratified, design-only status — `V6` remains unimplemented.
+
+### DD. Revisit triggers added by this amendment
+
+- If operational experience shows `MAX_AUTHORIZED_HYPOTHESES_V6 = 4` (§E) is insufficient (e.g.
+  curriculum content grows dense enough that a single miss routinely produces more actionable
+  hypotheses than the bound admits), that is a new, separate, explicit decision minting a versioned
+  successor constant — never a silent bump of the frozen value.
+- If a genuine multi-round adaptive diagnostic session model is ever introduced (allowing more than
+  one hypothesis-driven probe per learner across a longer arc, so that a hypothesis could
+  accumulate ≥2 observations within one governed evidence window), the §J mathematical note's
+  practical consequence (only a re-probed, already-evidenced hypothesis can ever score above
+  `0.0000`) should be revisited against that new model — it is a direct consequence of today's
+  quota-of-one, per-interaction-only architecture, not an immutable property of
+  `HYPOTHESIS_DISCRIMINATION_V1` itself.
+- If RAMALS later wants `V6`'s decision to persist the discrimination score or engine versions
+  per-row rather than relying on replay (§U/§V), that is a new decision requiring its own schema
+  change and its own review, not authorized here.
+- If the exposure/no-repeat model is ever scoped per-assessment-version rather than per-learner
+  (closing §V's narrow cross-domain-concurrency caveat), that is its own decision affecting
+  `V1`–`V5` equally, not specific to `V6` and not implied by this amendment.
