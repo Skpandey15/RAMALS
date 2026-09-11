@@ -1,11 +1,16 @@
-# M2-ADR-034: Information-gain diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `INFORMATION_GAIN_V1`) — design only
+# M2-ADR-034: Diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `HYPOTHESIS_DISCRIMINATION_V1`, formerly proposed as "`INFORMATION_GAIN_V1`") — design only, Steps 1–2 ratified for implementation
 
 - **Status:** Proposed. **Amended — 2026-09-10** — see
   [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10): ratifies the deterministic
   hypothesis-uncertainty construct §4 originally left to "the design PR", names it
   `HYPOTHESIS_UNCERTAINTY_V1`, freezes its complete mathematics and golden vectors, and authorizes
-  its inert implementation as Step 1. `DIAGNOSTIC_SELECTION_V6` and `INFORMATION_GAIN_V1` remain
-  design-only.
+  its inert implementation as Step 1 (implemented 2026-09-11). **Amended again — 2026-09-11** — see
+  [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11): ratifies the Step-2
+  per-probe scoring construct this ADR's §3 called `INFORMATION_GAIN_V1`, finds true *expected*
+  information gain undefensible from existing RAMALS semantics (no outcome-probability model
+  exists or may be invented), and freezes instead a non-expectation deterministic construct named
+  **`HYPOTHESIS_DISCRIMINATION_V1`** — its complete mathematics and golden vectors — authorizing its
+  inert implementation as **Step 2**. `DIAGNOSTIC_SELECTION_V6` (Step 3) remains design-only.
 - **Date:** 2026-09-08
 - **Decides:** the design constraints binding a future deterministic information-gain diagnostic
   probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` that supersedes only `V5`'s final
@@ -28,15 +33,20 @@
   boundary): the only permitted AI role remains "propose at most one bounded candidate per
   interaction; Java's independent, deterministic, fail-closed gate decides."
 - **Originates here**, on the same repository-native basis as M2-ADR-023 through M2-ADR-033.
-- **Scope (as amended 2026-09-10).** The original ADR authorized *design only*. [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10)
-  additionally authorizes implementation of the **inert `HYPOTHESIS_UNCERTAINTY_V1` foundation
-  construct only** (§4 as frozen there; staged as **Step 1**). It still authorizes **no**
-  `DIAGNOSTIC_SELECTION_V6` code, **no** `INFORMATION_GAIN_V1` code, **no** migration, **no** contract
-  change, and **no** `SelectionReason` value. `V6` is not implemented. `DIAGNOSTIC_SELECTION_V1`–`V5`,
-  their composition order, `MAX_HYPOTHESIS_PROBES_PER_PACKET`,
+- **Scope (as amended 2026-09-11).** The original ADR authorized *design only*.
+  [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10) authorized implementation of the
+  **inert `HYPOTHESIS_UNCERTAINTY_V1` foundation construct** (§4 as frozen there; **Step 1**,
+  implemented). [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11) additionally
+  authorizes implementation of the **inert `HYPOTHESIS_DISCRIMINATION_V1` scoring construct only**
+  (§3 as frozen there; **Step 2**) — the identifier this ADR's §3 originally anticipated as
+  `INFORMATION_GAIN_V1`; Amendment 2 explains why that name does not survive analysis. Together the
+  two amendments still authorize **no** `DIAGNOSTIC_SELECTION_V6` code, **no** migration, **no**
+  contract change, and **no** `SelectionReason` value. `V6` is not implemented.
+  `DIAGNOSTIC_SELECTION_V1`–`V5`, their composition order, `MAX_HYPOTHESIS_PROBES_PER_PACKET`,
   `core.diagnostic_probe_relationship` / `core.diagnostic_probe_provenance`, and every existing
-  frozen calculator are untouched; `HYPOTHESIS_UNCERTAINTY_V1` adds one new frozen vector to
-  `EngineVersionFreezeTests` and changes no existing one, and no runtime selector consumes it.
+  frozen calculator are untouched; each amendment adds exactly one new frozen vector to
+  `EngineVersionFreezeTests` and changes no existing one, and no runtime selector consumes either
+  construct.
 
 ## Context
 
@@ -101,6 +111,20 @@ updated hypothesis confidence               (recomputed deterministically from t
 Every arrow except "new evidence" is a deterministic, reproducible, versioned computation from
 already-authoritative inputs. No arrow is an LLM call.
 
+> **Amended 2026-09-11 (Amendment 2) — two clauses in this original sketch are corrected, not just
+> renamed.** (1) *"expected information gain per candidate (`INFORMATION_GAIN_V1`, frozen)"* —
+> [Amendment 2 §A–§D](#amendment-2--hypothesis_discrimination_v1-2026-09-11) found no defensible
+> outcome-probability model exists, rejected the expectation form, and froze a non-expectation
+> deterministic discrimination score named **`HYPOTHESIS_DISCRIMINATION_V1`** instead. (2)
+> *"candidate probes (from existing selection machinery + M2-ADR-032 advisory input, if any)"* —
+> [Amendment 2 §E](#e-candidate-probe-authority-and-representation) restricts Step-2 candidate-probe
+> eligibility to the existing deterministic V5/H4b resolution machinery **only**. Gate-acceptance
+> under M2-ADR-032 keeps an advisory proposal within its own advisory/audit boundary; it does **not**
+> by itself admit that proposal into `HYPOTHESIS_DISCRIMINATION_V1`'s candidate set. Promoting an
+> accepted proposal into scoring/selection eligibility would be a new decision requiring its own
+> separate, explicit ADR — this amendment authorizes no such widening. Every other arrow in this
+> sketch is unaffected.
+
 ### 2. `DIAGNOSTIC_SELECTION_V6` supersedes only `V5`'s final candidate tiebreak — never a rewrite
 
 - The wrapper chain stays `V3 → V4 → V5 → frozen V2`, mirroring exactly how `V3`/`V4`/`V5` already
@@ -135,10 +159,27 @@ already-authoritative inputs. No arrow is an LLM call.
 
 ### 3. `INFORMATION_GAIN_V1` — a named, versioned, frozen, deterministic construct
 
-- Follows the `EngineVersionFreezeTests` discipline: a `static final String … VERSION =
-  "INFORMATION_GAIN_V1"` identifier, a frozen behaviour vector, and no tunable threshold or weight
-  that can change silently across commits (M2-ADR-023 §2; the `DiagnosticConfidenceCalculatorV1`
-  precedent).
+> **Amended 2026-09-11.** [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11)
+> resolves exactly the fork this section anticipates: analysis found **no defensible deterministic
+> outcome-probability model** exists or may be invented (RAMALS has outcome *classification* via
+> `HypothesisEvidenceOutcome`, never outcome *probability*). **Amendment 2 supersedes this section
+> wherever it refers to:** the identifier `INFORMATION_GAIN_V1`; expected-information-gain semantics;
+> Shannon entropy / KL divergence / posterior interpretation; outcome probabilities; or language
+> describing Step 2 as an information-gain engine. **The sole Step-2 engine identifier is
+> `HYPOTHESIS_DISCRIMINATION_V1`; no code may define an `INFORMATION_GAIN_V1` version constant.** The
+> bullets below are retained as **historical framing only** — they record the design question exactly
+> as originally posed, not the frozen answer — and are marked inline where superseded. Every other
+> governance constraint below (reuse `HYPOTHESIS_UNCERTAINTY_V1` verbatim and never recompute it;
+> deterministic, reproducible, already-authoritative inputs only; no learned/fitted/tuned values; an
+> explicit documented tie-break, never SQL/row order; "evidence-acquisition value only, never a
+> diagnosis") remains binding, and is exactly what [Amendment 2 §D–§K](#d-selected-construct--two-world-total-variation-distance)
+> freezes for the new construct.
+
+- **Historical — identifier superseded by Amendment 2.** Follows the `EngineVersionFreezeTests`
+  discipline: a `static final String … VERSION = "INFORMATION_GAIN_V1"` identifier, a frozen
+  behaviour vector, and no tunable threshold or weight that can change silently across commits
+  (M2-ADR-023 §2; the `DiagnosticConfidenceCalculatorV1` precedent). **The frozen identifier is
+  `HYPOTHESIS_DISCRIMINATION_V1`; no `INFORMATION_GAIN_V1` constant may ever be defined.**
 - **Inputs are already-authoritative and persisted:** the diagnostic hypothesis set and its
   provenance (`DiagnosticHypothesis`, `core.diagnostic_probe_relationship`,
   `core.diagnostic_probe_provenance`); existing diagnostic/causal confidence
@@ -146,8 +187,11 @@ already-authoritative inputs. No arrow is an LLM call.
   distance; evidence volume and corroborating-versus-contradictory counts (the same input family
   M2-ADR-023 §2 already enumerates); and the candidate probe pool with each probe's possible
   *deterministically scoreable* outcomes.
-- **A deterministic outcome model is part of the freeze — an expectation needs one, and it may not
-  be learned.** An *expected*-information-gain score requires, for each candidate probe, the
+- **Historical — the fork below is resolved by Amendment 2 §B/§D.** RAMALS has no outcome-probability
+  model, so the expectation branch this bullet describes never applies; the frozen answer is the
+  non-expectation discrimination score. **A deterministic outcome model is part of the freeze — an
+  expectation needs one, and it may not be learned.** An *expected*-information-gain score requires,
+  for each candidate probe, the
   relationship between the probe's possible deterministically-scoreable outcomes and each
   hypothesis. `INFORMATION_GAIN_V1` MUST define that outcome model as a **fixed deterministic
   function of already-authoritative inputs**, frozen with the rest of the construct — for example
@@ -159,20 +203,24 @@ already-authoritative inputs. No arrow is an LLM call.
   discrimination score** — a bounded rubric over authoritative quantities such as posterior spread,
   relationship-type specificity, and evidence volume. "Expected information gain" wording is
   permitted only when the outcome model behind it is itself deterministic and frozen.
-- **Output:** a deterministic real-valued score per candidate probe (an expected-information-gain
-  value under the frozen outcome model above, or the non-expectation discrimination score), and a
-  total order over candidates with ties broken by an explicit, documented, deterministic key — never
-  by SQL row order (the discipline M2-ADR-024 §5 and M2-ADR-025 §4 already enforce). The score is
-  evidence-acquisition value only. It is never a diagnosis, never a learner-facing number, never
-  mastery, and never root-cause truth.
-- The design PR chooses and freezes the concrete method — entropy reduction over the hypothesis
-  posterior under the frozen outcome model, expected KL divergence, expected posterior-variance
-  reduction, or a bounded deterministic scoring rubric. The brief's constraint is adopted verbatim:
-  *do not over-engineer this into an ML system prematurely.*
-- **`INFORMATION_GAIN_V1` consumes, and never recomputes, the frozen hypothesis-uncertainty
-  distribution** (Amendment 1). It reads `HYPOTHESIS_UNCERTAINTY_V1`'s output verbatim; it may not
-  re-derive it with different band weights, a different evidence boundary, or a different
-  normalization. If the `INFORMATION_GAIN_V1` design needs different uncertainty semantics, that is a
+- **Historical — Amendment 2 §I freezes the actual output semantics** (a bounded total-variation
+  discrimination score, never an expected-information-gain value). **Output:** a deterministic
+  real-valued score per candidate probe (an expected-information-gain value under the frozen outcome
+  model above, or the non-expectation discrimination score), and a total order over candidates with
+  ties broken by an explicit, documented, deterministic key — never by SQL row order (the discipline
+  M2-ADR-024 §5 and M2-ADR-025 §4 already enforce). The score is evidence-acquisition value only. It
+  is never a diagnosis, never a learner-facing number, never mastery, and never root-cause truth.
+- **Historical — Amendment 2 §D freezes the two-world total-variation-distance construct.** The
+  entropy / KL-divergence / posterior-variance-reduction options this bullet lists were considered
+  and rejected (Amendment 2 §C). The design PR chooses and freezes the concrete method — entropy
+  reduction over the hypothesis posterior under the frozen outcome model, expected KL divergence,
+  expected posterior-variance reduction, or a bounded deterministic scoring rubric. The brief's
+  constraint is adopted verbatim: *do not over-engineer this into an ML system prematurely.*
+- **Binding — identifier corrected by Amendment 2: this is `HYPOTHESIS_DISCRIMINATION_V1`, not
+  `INFORMATION_GAIN_V1`.** `INFORMATION_GAIN_V1` consumes, and never recomputes, the frozen
+  hypothesis-uncertainty distribution (Amendment 1). It reads `HYPOTHESIS_UNCERTAINTY_V1`'s output
+  verbatim; it may not re-derive it with different band weights, a different evidence boundary, or a
+  different normalization. If the `INFORMATION_GAIN_V1` design needs different uncertainty semantics, that is a
   new `HYPOTHESIS_UNCERTAINTY_V2`, not a silent reinterpretation.
 
 ### 4. Hypothesis uncertainty / posterior representation
@@ -216,6 +264,15 @@ already-authoritative inputs. No arrow is an LLM call.
 - This ADR does not widen M2-ADR-032, does not authorize same-attempt LLM-driven questioning
   (M2-ADR-025 §10, M2-ADR-032 §6), and does not let an accepted recommendation feed any confidence
   computation (M2-ADR-032 §5).
+
+> **Amended 2026-09-11 (Amendment 2) — correction, not a widening.** The second bullet above
+> pre-dates the Step-2 freeze and reads as if gate acceptance promotes a proposal into the scored
+> pool. It does not. [Amendment 2 §E](#e-candidate-probe-authority-and-representation) freezes the
+> actual boundary: `HYPOTHESIS_DISCRIMINATION_V1`'s candidate-probe set is drawn **only** from the
+> existing deterministic V5/H4b resolution machinery. An M2-ADR-032 gate acceptance keeps a proposal
+> within its own advisory/audit boundary and does **not** by itself admit it into Step-2 eligibility.
+> Promoting an accepted proposal into scoring or selection would require its own separate, explicit
+> ADR — this ADR does not do so.
 
 ### 6. M2-ADR-023 and M2-ADR-025 are preserved
 
@@ -276,6 +333,26 @@ already governed here or elsewhere (the M2-ADR-026 §8 governance-rule pattern).
 - **(Amendment 1)** `HYPOTHESIS_UNCERTAINTY_V1` takes **no** misconception-relationship-graph
   (M2-ADR-033) input and **no** H7 longitudinal input; a PR adding either is a defect against
   Amendment 1 §F/§G.
+- **(Amendment 2)** `HYPOTHESIS_DISCRIMINATION_V1` must ship with an `EngineVersionFreezeTests`
+  frozen vector, plus tests reproducing [Amendment 2 §Q](#q-golden-vectors)'s eleven golden vectors
+  and its validation reason codes, before any consumer exists. Its Step-2 implementation is
+  **inert**: no `DIAGNOSTIC_SELECTION_V1`–`V5` or `V6` code, no runtime selector, no migration, and
+  no contract change. It consumes `HYPOTHESIS_UNCERTAINTY_V1` (and the exact
+  `HypothesisUncertaintyContext` that produced it) verbatim — it recomputes no band, weight,
+  normalization, or candidate hypothesis mass; a `HYPOTHESIS_UNCERTAINTY_V2` is required before
+  Step 2 may consume different uncertainty semantics. A PR that wires it into selection, changes the
+  scoring formula, the decimal contract, the tie-break, or the candidate-probe boundary without
+  minting `HYPOTHESIS_DISCRIMINATION_V2` is a defect against Amendment 2.
+- **(Amendment 2)** `HYPOTHESIS_DISCRIMINATION_V1` takes **no** misconception-relationship-graph
+  (M2-ADR-033) input, defines **no** edge-type weight, and discovers **no** candidate probe of its
+  own (LLM, embedding, or unrestricted curriculum search) — every candidate probe is drawn **only**
+  from the same deterministic, already-governed resolution `DIAGNOSTIC_SELECTION_V5` uses
+  (`ProbeRelationshipResolver`/`ProbeRelationshipService`). An M2-ADR-032 proposal admitted by its own
+  independent gate stays within that gate's advisory/audit boundary and is **not** eligible to enter
+  `HYPOTHESIS_DISCRIMINATION_V1`'s candidate set — promoting it into scoring/selection eligibility
+  requires its own separate, explicit ADR. A PR adding a new probe-discovery mechanism, a
+  graph-derived weight, or admitting an M2-ADR-032 proposal into this candidate set is a defect
+  against Amendment 2 §D/§E/§M.
 - Adds a row to [`M2-ADR-register.md`](M2-ADR-register.md). `AdrRegisterTests` matches only
   `M1-ADR-\d{3}` filenames, so it is unaffected.
 
@@ -595,6 +672,12 @@ the band, hence the weight, unchanged — monotonic non-decreasing only).
 | **Step 2** | `INFORMATION_GAIN_V1` — per-probe deterministic score consuming Step 1's distribution verbatim (§3) | **Design only.** Its own separately reviewed design PR. |
 | **Step 3** | `DIAGNOSTIC_SELECTION_V6` — replaces only `V5`'s step-(b) tiebreak with an information-gain ranking (§2) | **Design only.** Its own separately reviewed design PR; a further ADR only if it introduces a decision not already governed. |
 
+> **Amended 2026-09-11 (Amendment 2):** Step 2's mathematics are now frozen as
+> `HYPOTHESIS_DISCRIMINATION_V1`, not `INFORMATION_GAIN_V1` — see
+> [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11). Step 2 is **ratified, not yet
+> implemented**; it stays out of this Step-1 amendment's authorization above. Step 3
+> (`DIAGNOSTIC_SELECTION_V6`) remains design-only, unaffected by this row.
+
 After Step 1:
 
 ```
@@ -697,3 +780,472 @@ hypothesis exactly once (golden vector 10). Counting it twice because it arrived
 projections is a defect. The calculator does no de-duplication of its own, but §Q's
 `DUPLICATE_EVIDENCE_OBSERVATION` check rejects a context whose evidence list still carries a
 repeated observation id, so a mis-assembled context fails closed rather than double-counting.
+
+## Amendment 2 — `HYPOTHESIS_DISCRIMINATION_V1` (2026-09-11)
+
+§3 anticipated a named, versioned, frozen `INFORMATION_GAIN_V1` construct and explicitly permitted
+two possible shapes: a true expected-information-gain score under a frozen deterministic outcome
+model, or, failing that, "a non-expectation deterministic discrimination score." This amendment
+resolves the fork: analysis found that RAMALS has deterministic outcome *classification*
+(`HypothesisEvidenceOutcome`) but no deterministic outcome *probability*, and none may be invented
+(M2-ADR-023 §2). True expected information gain is therefore not defensible. This amendment freezes
+the non-expectation alternative instead, names it accurately, and authorizes its inert
+implementation as **Step 2** of the three-step plan Amendment 1 §M introduced. It changes no other
+section's constraints and does not touch `HYPOTHESIS_UNCERTAINTY_V1` (Step 1, already implemented)
+or `DIAGNOSTIC_SELECTION_V6` (Step 3, still design-only).
+
+### A. Name and nature — not information gain
+
+The construct is **`HYPOTHESIS_DISCRIMINATION_V1`**, not `INFORMATION_GAIN_V1`. It defines no prior,
+no likelihood, no outcome probability, and is not an expectation over anything — "information gain"
+would misrepresent its mathematical content, the same discipline that named
+`HYPOTHESIS_UNCERTAINTY_V1` rather than `HYPOTHESIS_POSTERIOR_V1` (Amendment 1 §A). It answers
+exactly one question — *"across this probe's deterministically reachable outcomes, how differently
+would the hypothesis-uncertainty distribution end up?"* — and nothing about which outcome is likely,
+what the learner will actually answer, or which hypothesis is true.
+
+The engine version identifier is the string `HYPOTHESIS_DISCRIMINATION_V1`, frozen under the
+`EngineVersionFreezeTests` discipline exactly as `HYPOTHESIS_UNCERTAINTY_V1` is.
+
+### B. The outcome-model problem — classification exists, probability does not
+
+`HypothesisEvidenceOutcome.classify(itemType, isCorrect)` is deterministic and hypothesis-agnostic:
+non-scoreable → `INCONCLUSIVE`; scoreable + incorrect → `SUPPORTING`; scoreable + correct →
+`CONTRADICTORY`. This is outcome **classification**: given a response, it deterministically says
+what kind of evidence it is. It is not, and cannot be read as, outcome **probability**: nothing in
+RAMALS states or calibrates `P(SUPPORTING | hypothesis, probe)` for any hypothesis or probe, and
+none may be authored, learned, fitted, or LLM-generated (M2-ADR-023 §2's existing, unmodified
+prohibition). Without `P(outcome | hypothesis, probe)`, the classical expected-information-gain
+formula
+
+```
+Expected(P) = uncertainty(now) - Σ_outcome P(outcome) * uncertainty(after outcome)
+```
+
+has no defensible `P(outcome)` term. §7's "the design PR cannot express a defensible deterministic
+outcome model" clause is therefore the operative one: this amendment does not use an expectation
+form.
+
+### C. Rejected alternatives
+
+| Approach | Why rejected |
+|---|---|
+| **True expected information gain** (§B formula) | Requires `P(outcome | hypothesis, probe)`, which does not exist and may not be invented. |
+| **Shannon entropy** (`H = -Σ p_i log p_i`) over the current distribution, or KL divergence between before/after distributions | Same missing-probability problem for the "after" term (still needs `P(outcome)` to weight the outcomes into a single expected reduction); additionally, `Math.log(double)` risks cross-JVM floating-point reproducibility RAMALS's `BigDecimal`-first convention exists to avoid, for no benefit once probabilities don't exist. Not selected. |
+| **Posterior-variance reduction** | "Posterior" language Amendment 1 §A already rejected for the very same reason (no prior/likelihood/update exists); would misname the construct the same way. |
+| **Graph-derived weighting** (M2-ADR-033 edge types as numeric contributions) | Authored curriculum structure is not automatically numeric evidence (Amendment 1 §G's boundary, reaffirmed here); would be new algorithmic policy with no separate ratification. |
+
+### D. Selected construct — two-world total variation distance
+
+Each candidate probe has a small, **deterministically enumerable set of reachable outcome worlds**
+(never a probability distribution over them):
+
+- **Scoreable** probe → two reachable worlds: the world where its target hypothesis gains one more
+  `SUPPORTING` observation, and the world where it gains one more `CONTRADICTORY` observation.
+- **Non-scoreable** probe → exactly one reachable world: `INCONCLUSIVE`, which — per
+  `DiagnosticConfidenceCalculatorV1`'s own frozen semantics — never changes any band, so this world
+  is identical to the current one.
+
+For a scoreable probe `P` targeting hypothesis `H_p` (already a member of the current bounded
+candidate hypothesis set — §E/§L), construct two **hypothetical** `HypothesisUncertaintyContext`s,
+each identical to the current one except for exactly one additional synthetic
+`HypothesisEvidenceInput` for `H_p` (§F's exact synthetic-id rule), and call
+**`HYPOTHESIS_UNCERTAINTY_V1.calculate(...)` verbatim** on each to obtain `resultSupporting` and
+`resultContradictory`. Because both hypothetical contexts differ from the current one, and from each
+other, only in `H_p`'s own evidence, `resultSupporting.candidates()` and
+`resultContradictory.candidates()` contain **exactly the same hypotheses**, in the same canonical
+order (Amendment 1 §H) — no other hypothesis's band can change, since no other hypothesis's evidence
+changed.
+
+**Score.** Let `valueSupporting(h)` / `valueContradictory(h)` be each hypothesis's own
+`normalizedValue` in the two hypothetical results, treating a non-participating hypothesis's value
+as exactly `0.0000` (it carries no belief mass in either world — Amendment 1 §D). Then:
+
+```
+Score(P) = ( Σ_h |valueSupporting(h) - valueContradictory(h)| ) / 2
+```
+
+— the **total variation distance** between the two hypothetical distributions: half their L1
+distance. For a non-scoreable probe (one reachable world), `Score(P) = 0.0000` exactly, by
+construction — there is no second world to differ from, so there is no possible variance to detect
+(prompt's "probe with `INCONCLUSIVE` effect for every hypothesis" case, §Q vector 5: this is not a
+special case in the formula, only a fact about how many worlds exist).
+
+**Why this is not information gain.** Both worlds are given equal standing in this formula, but not
+because they are believed equally *likely* — likelihood is exactly the quantity §B shows does not
+exist. `Score(P)` measures **separability**: whether the two deterministically reachable outcomes
+would leave the platform in meaningfully different relative-belief states, never which one is
+expected, never learner correctness, never ground truth.
+
+**Consequence, derived, not asserted.** Because `HYPOTHESIS_UNCERTAINTY_V1`'s weight function depends
+only on *band* (`LOW=1, MODERATE=2, HIGH=3` — Amendment 1 §C), not on raw evidence counts,
+`Score(P) > 0` **exactly when** `P`'s two reachable outcomes would move `H_p` into *different bands*.
+Two corollaries follow directly from `DiagnosticConfidenceCalculatorV1`'s own frozen thresholds, not
+from anything invented here:
+
+- **A probe's first-ever observation on a previously unprobed hypothesis always scores `0.0000`.**
+  `(s,c) = (0,0)` plus one `SUPPORTING` gives `(1,0)` → `LOW`; plus one `CONTRADICTORY` gives `(0,1)`
+  → `LOW` (`s > 3c` is `0 > 3`, false; `s - c >= 3` is `-1 >= 3`, false) — the **same** band either
+  way, so the same weight, so the same normalized value in both worlds.
+- **Every probe targeting the sole participating hypothesis in a single-participant candidate set
+  scores `0.0000`** — see §L.
+
+### E. Candidate-probe authority and representation
+
+`HYPOTHESIS_DISCRIMINATION_V1` **discovers no probe**. Every candidate probe originates from the
+same deterministic, already-governed resolution `DIAGNOSTIC_SELECTION_V5` already uses — for each
+candidate hypothesis in the input's own set, its own unseen candidate items as
+`ProbeRelationshipResolver` / `ProbeRelationshipService` already resolve them (verified, scoreable-
+or-not, no-repeat-exclusion already applied). No LLM, no embedding neighbour, no unrestricted graph
+traversal, and no free curriculum search may add a candidate (Amendment 1 §E's discipline, restated
+for probes rather than hypotheses).
+
+**An accepted M2-ADR-032 advisory proposal does not enter this candidate set.** M2-ADR-032's gate
+decides only whether a proposal is well-formed and bounded enough to remain within its own advisory
+boundary — acceptance is an audit/evaluation outcome, not a promotion into deterministic probe
+eligibility:
+
+```
+LLM
+  |
+  v
+ADR-032 proposal
+  |
+  v
+deterministic gate
+  |
+  v
+ACCEPTED
+  |
+  v
+audit / evaluation only
+  X                            <- no path from here into HYPOTHESIS_DISCRIMINATION_V1
+HYPOTHESIS_DISCRIMINATION_V1
+```
+
+`HYPOTHESIS_DISCRIMINATION_V1`'s candidate-probe pool is drawn **only** from the existing
+deterministic, bounded V5/H4b candidate-resolution machinery described above. Nothing in this
+amendment — no assembler, no future step — may include an accepted M2-ADR-032 proposal in that pool.
+If RAMALS later wants an accepted advisory proposal promoted into selection eligibility, that is a new
+decision requiring its own separate, explicit ADR; this amendment authorizes no such widening of
+M2-ADR-032.
+
+A candidate probe's authoritative shape:
+
+```
+CandidateProbe:
+  probeItemVersionId : UUID              -- the item this probe would present
+  hypothesis         : DiagnosticHypothesis  -- must equal one candidate in the input's own set
+  scoreable          : boolean           -- from the item's own AssessmentItemType.scoreable()
+```
+
+No generic map. No probe-specific weight, priority, or authored metadata beyond this — the score is
+computed entirely from the hypothetical re-evaluation (§D), not from any property stamped on the
+probe itself.
+
+### F. Input contract — consumes `HYPOTHESIS_UNCERTAINTY_V1` verbatim, never reinterpreted
+
+```
+HypothesisDiscriminationContext:
+  baseContext  : HypothesisUncertaintyContext   -- the exact context Step 1 was computed from
+  baseResult   : HypothesisUncertaintyResult    -- Step 1's own output from that exact context
+  candidates   : List<CandidateProbe>
+```
+
+**`baseResult` must equal `HYPOTHESIS_UNCERTAINTY_V1.calculate(baseContext)` exactly** (§Q's
+`BASE_RESULT_MISMATCH`) — this amendment never accepts a hand-constructed or stale result paired
+with a different context. Step 2 **never recomputes a band, a weight, a normalization, or candidate
+hypothesis mass on its own**: every distribution it ever produces — the baseline and both
+hypothetical worlds — comes from calling `HYPOTHESIS_UNCERTAINTY_V1.calculate(...)`, unmodified. If a
+future step needs different uncertainty semantics, that is `HYPOTHESIS_UNCERTAINTY_V2`, never a
+reinterpretation inside `HYPOTHESIS_DISCRIMINATION_V1`.
+
+**Synthetic evidence identity, frozen.** For a candidate probe `P` and a reachable outcome `o`, the
+synthetic `HypothesisEvidenceInput` added to build a hypothetical context uses:
+
+```
+observationId = UUID.nameUUIDFromBytes(
+    (probeItemVersionId.toString() + ":" + o.name()).getBytes(UTF_8))
+hypothesis    = P.hypothesis()
+outcome       = o
+interactionId = baseContext.interactionId()
+domainCode    = the domainCode baseContext's own CandidateHypothesis carries for P.hypothesis()
+```
+
+`UUID.nameUUIDFromBytes` (RFC 4122 name-based, version 3, MD5) is deterministic and reproduces
+identically across JVMs. This id is never persisted and never collides with a real governed
+observation id in practice (real ids are UUIDv7); it exists only so the hypothetical context can be
+validated and computed by `HYPOTHESIS_UNCERTAINTY_V1` exactly as any other context would be.
+
+### G. Status model
+
+```
+status in { SCORABLE, NOT_APPLICABLE }
+```
+
+- **`NOT_APPLICABLE`** — `baseResult.status()` is `NOT_APPLICABLE` or `INSUFFICIENT_EVIDENCE`. There
+  is no participating uncertainty mass to redistribute, so "how much of the current mass would this
+  probe separate" is undefined — not zero, undefined. No score is manufactured; `probes` is empty.
+  This is a **derived** consequence of the score's own semantics (§I), not an arbitrary carry-over
+  from Step 1's status names.
+- **`SCORABLE`** — `baseResult.status()` is `APPLICABLE`. Every supplied candidate probe is scored
+  (§D); zero supplied candidate probes is a valid, successful `SCORABLE` result with `probes = []`
+  (the same "valid empty state" discipline Amendment 1 §D holds for `NOT_APPLICABLE`/
+  `INSUFFICIENT_EVIDENCE`).
+
+No artificial uniform distribution is ever synthesized for a `NOT_APPLICABLE` base.
+
+### H. One-hypothesis / sole-participant handling
+
+If the candidate hypothesis set has **exactly one participating hypothesis** in `baseResult`
+(`status = APPLICABLE`, one entry with `participates = true`), every probe targeting it scores
+`Score(P) = 0.0000`, provably: a sole participant's `normalizedValue` is `1.0000` in *any* world
+where it is still the sole participant, regardless of its own band, because normalization divides its
+weight by itself. Since adding one observation of either outcome to the sole participant never
+un-participates it (any directional evidence keeps `s + c >= 1`, never `INSUFFICIENT_EVIDENCE`
+again), both hypothetical worlds have it at `1.0000` — `TVD = 0`. This is **not** treated as
+`NOT_APPLICABLE`: `status` stays `SCORABLE` (a genuine baseline participating mass exists — exactly
+one hypothesis' worth), and the scores are correctly, provably `0.0000`, not undefined.
+
+### I. Score semantics and range
+
+`Score(P)` is **half the total variation distance between the two deterministically reachable
+post-outcome hypothesis-uncertainty distributions** — for example, `0.6000` means *"60% of the
+normalized uncertainty mass ends up allocated differently depending on which of this probe's two
+reachable outcomes occurs."* It is explicitly **not**: a probability, an expectation, expected
+learner correctness, a measure of diagnostic truth, or a claim about which outcome is likely.
+
+**Range:** `0.0000 <= Score(P) <= 1.0000`, provable from the standard total-variation-distance
+property (half the L1 distance between two distributions that each sum to exactly `1.0000` — the
+Amendment 1 §I exact-sum invariant both hypothetical results independently satisfy — is bounded in
+`[0, 1]`, with `0` iff the two distributions coincide). `0.0000` means the two reachable outcomes
+would leave the distribution identical (no discriminating value). `1.0000` would mean the two
+outcomes' distributions share no participating mass at all (never observed to be reachable under
+the frozen `{1, 2, 3}` band-weight granularity in practice — see §Q's vectors for the range actually
+achieved — but the formula's mathematical range is `[0, 1]` regardless of how much of it is
+practically reachable, and no rescaling is applied merely to make the practical maximum look like
+`1.0000`).
+
+### J. Decimal contract
+
+- `java.math.BigDecimal` throughout; comparisons via `compareTo`, never `equals`.
+- `valueSupporting(h)` / `valueContradictory(h)` are already scale-4 outputs of
+  `HYPOTHESIS_UNCERTAINTY_V1` (or exactly `BigDecimal.ZERO` for a non-participating hypothesis, per
+  §D) — their differences and sum need no intermediate scale beyond what exact `BigDecimal` addition
+  and subtraction already preserve.
+- **Final division by 2** is the only rounding point: `score = sum.divide(BigDecimal.valueOf(2), 4,
+  RoundingMode.HALF_EVEN)`. Unlike Amendment 1's normalization, no Hamilton allocation applies here:
+  each probe's score is independent — there is no "must sum to `1.0000` across probes" invariant to
+  protect, so ordinary `HALF_EVEN` rounding to scale 4 is the complete rounding contract.
+- Zero is `0.0000`; one is `1.0000` (never reached in the golden vectors, but a valid representable
+  value per §I).
+
+### K. Ranking is a separate, frozen contract
+
+`HYPOTHESIS_DISCRIMINATION_V1` returns **scores**, one per candidate probe, in no particular
+priority order of its own beyond §L's canonical emission order. Ranking — "which probe should be
+tried first" — is a deterministic total order over the returned scores:
+
+```
+score DESCENDING
+  -> hypothesis canonical order ASCENDING (Amendment 1 §H, reused verbatim)
+    -> probeItemVersionId ASCENDING (lowercase UUID string)
+```
+
+Never SQL row order, never `HashMap`/`HashSet` order, never input-list order, never UUID randomness.
+This ranking is a read-only view over the scored result; `HYPOTHESIS_DISCRIMINATION_V1` does not
+itself select or execute a probe (§O).
+
+### L. Canonical emission order and cross-probe determinism
+
+Probes are emitted in the result in this order: primary key the probe's own `hypothesis` by
+Amendment 1 §H's canonical order; secondary key `probeItemVersionId` ascending (lowercase UUID
+string). Supplying `candidates` in any input order, or supplying the underlying hypothesis set in
+any order, produces the identical emitted list and identical scores — proven by golden vectors 8–9.
+
+### M. No graph weighting (reaffirmed)
+
+`MisconceptionGraphQueryService ── X ── HYPOTHESIS_DISCRIMINATION_V1`, restating Amendment 1 §G for
+Step 2: no `MISCONCEPTION_RELATED` or `MISCONCEPTION_PREREQUISITE_LINK` edge is read, and no
+edge-type numeric contribution (`CO_OCCURS_WITH = 0.5`, `SPECIALISES = 0.7`, `CONTRASTS_WITH = 0.9`,
+or any other) is defined. Authored curriculum structure remains distinct from evidence-derived
+belief state.
+
+### N. Candidate-probe validation (fail closed)
+
+| Condition | Reason code | Behaviour |
+|---|---|---|
+| `baseResult` does not equal `HYPOTHESIS_UNCERTAINTY_V1.calculate(baseContext)` | `BASE_RESULT_MISMATCH` | reject |
+| A candidate probe's `hypothesis` does not match any hypothesis in `baseContext.candidates()` | `PROBE_FOR_UNKNOWN_HYPOTHESIS` | reject |
+| A candidate probe is missing `probeItemVersionId` or `hypothesis` | `MALFORMED_CANDIDATE_PROBE` | reject |
+| The same `(probeItemVersionId, hypothesis)` pair appears twice in `candidates` | `DUPLICATE_CANDIDATE_PROBE` | reject |
+| A candidate probe's own domain (via its `hypothesis`) differs from `baseContext.domainCode()` for that hypothesis | `CROSS_DOMAIN_CANDIDATE_PROBE` | reject |
+
+Fail-closed, exactly Amendment 1 §Q's discipline: never repaired, never silently dropped, never a
+partial result. A valid empty state (`NOT_APPLICABLE`, or `SCORABLE` with `probes = []`) is never one
+of these.
+
+### O. Step separation — Step 2 is inert
+
+```
+HYPOTHESIS_UNCERTAINTY_V1
+        |
+        v
+HYPOTHESIS_DISCRIMINATION_V1        (frozen; inert)
+        |
+        v
+scores + deterministic ranking (§K)
+        |
+        X   <- DIAGNOSTIC_SELECTION_V1-V5 unchanged, do not read it
+        X   <- no DIAGNOSTIC_SELECTION_V6 (Step 3, still design-only)
+```
+
+`HYPOTHESIS_DISCRIMINATION_V1` selects nothing and executes nothing. No `DIAGNOSTIC_SELECTION_V1`–
+`V5` code, `SelectionReason` value, or runtime selector may consume its output under this amendment.
+Wiring the ranked output into `V5`'s step-(b) tiebreak is exactly, and only, Step 3
+(`DIAGNOSTIC_SELECTION_V6`), which remains design-only and is not authorized here.
+
+### P. No persistence
+
+`HYPOTHESIS_DISCRIMINATION_V1` is pure compute-on-read: no migration, no table, no append-only score
+ledger. Its inputs (`HypothesisUncertaintyContext`, `HypothesisUncertaintyResult`, the candidate
+probe list) and its engine version already make any output fully reconstructable; nothing here needs
+its own persisted provenance. A future step that wires this into runtime selection may revisit
+persistence for audit — this amendment does not authorize it.
+
+### Q. Golden vectors
+
+Eleven normative vectors — the implementation oracle. Hypotheses `Ha`, `Hb`, `Hc` are the same
+canonical-order fixtures Amendment 1 §J uses (all `ROOT_CAUSE_PROBE`, ascending `targetObjectiveId`).
+`(s, c)` is a hypothesis's own current `(supportingCount, contradictoryCount)` in `baseContext`
+(`inconclusiveCount` omitted where `0`). A probe is written `P(hypothesis, scoreable?)`.
+
+| # | Case | Base `(s,c)` per hypothesis | Probe | Expected `status` | Expected score |
+|---|---|---|---|---|---|
+| 1 | Two equal hypotheses, most-separating available probe | `Ha=(2,0)` MODERATE, `Hb=(2,0)` MODERATE (base: `Ha=0.5000, Hb=0.5000`) | `P(Ha, scoreable)` | `SCORABLE` | World-S: `Ha=(3,0)` HIGH -> `Ha=0.6000,Hb=0.4000`. World-C: `Ha=(2,1)` LOW -> `Ha=0.3333,Hb=0.6667`. **`0.2667`** |
+| 2 | Two equal hypotheses, non-scoreable probe | same base as #1 | `P(Ha, non-scoreable)` | `SCORABLE` | one reachable world -> **`0.0000`** |
+| 3 | Uneven base distribution | `Ha=(4,0)` HIGH, `Hb=(1,0)` LOW (base: `Ha=0.7500, Hb=0.2500`) | `P(Hb, scoreable)` | `SCORABLE` | World-S: `Hb=(2,0)` MODERATE -> `Ha=0.6000,Hb=0.4000`. World-C: `Hb=(1,1)` LOW (unchanged band) -> `Ha=0.7500,Hb=0.2500`. **`0.1500`** |
+| 4 | Three hypotheses, 1-vs-2 split, probe on the "1" side | `Ha=(3,0)` HIGH, `Hb=(2,0)` MODERATE, `Hc=(1,0)` LOW (base: `Ha=0.5000, Hb=0.3333, Hc=0.1667`) | `P(Ha, scoreable)` | `SCORABLE` | World-S: `Ha=(4,0)` HIGH (unchanged band) -> same as base. World-C: `Ha=(3,1)` LOW -> weights `1,2,1` -> `Ha=0.2500,Hb=0.5000,Hc=0.2500`. **`0.2500`** |
+| 5 | Probe inconclusive for its hypothesis (any base) | `Ha=(2,0)` MODERATE, `Hb=(1,0)` LOW, `Hc=(4,0)` HIGH | `P(Ha, non-scoreable)` | `SCORABLE` | one reachable world -> **`0.0000`** (not a special case -- same rule as #2) |
+| 6 | One participating hypothesis only | `Ha=(3,0)` HIGH, sole candidate (base: `Ha=1.0000`) | `P(Ha, scoreable)` | `SCORABLE` | World-S: `Ha=(4,0)` HIGH, sole -> `1.0000`. World-C: `Ha=(3,1)` LOW, sole -> `1.0000`. Identical -> **`0.0000`** (§H) |
+| 7 | Two probes, identical score -> deterministic tie-break | base as #1 (`Ha=Hb=`MODERATE`=0.5000`) | `P(Ha, scoreable)` and `P(Hb, scoreable)` | `SCORABLE` | both score **`0.2667`** by symmetry; ranking emits `P(Ha)` before `P(Hb)` (`Ha` precedes `Hb` in canonical order) |
+| 8 | Shuffled hypothesis order -> same result | same as #4, `baseContext.candidates()` supplied as `[Hc, Hb, Ha]` | `P(Ha, scoreable)` | `SCORABLE` | identical to #4's **`0.2500`**, emitted in canonical order `Ha, Hb, Hc` regardless |
+| 9 | Shuffled probe order -> same result | same as #4 | `[P(Ha), P(Hb), P(Hc)]` supplied in any permutation | `SCORABLE` | each probe's own score is unchanged by list order; emission order is always §L's canonical order, never input order |
+| 10 | Insufficient uncertainty input | `Ha=(0,0)`, `Hb=(0,0)`, `Hc=(0,0)` (base `status = INSUFFICIENT_EVIDENCE`) | `P(Ha, scoreable)` | **`NOT_APPLICABLE`** | no scores computed, regardless of candidate probes supplied |
+| 11 | Malformed/missing hypothesis-probe relation | base as #1 | a probe whose `hypothesis` is not `Ha` or `Hb` (any third, unrelated hypothesis) | -- | rejected: `PROBE_FOR_UNKNOWN_HYPOTHESIS` |
+
+### R. Invariants (implementation test obligations)
+
+Valid to assert:
+
+- determinism: identical input -> identical result (byte-identical serialization);
+- input-order independence: permuting `candidates`, or the underlying hypothesis set in
+  `baseContext`, does not change any probe's score or the emitted (canonical) order;
+- range: every score is `>= 0.0000` and `<= 1.0000`;
+- reuse fidelity: `resultSupporting`/`resultContradictory` for every hypothetical world equal
+  `HYPOTHESIS_UNCERTAINTY_V1.calculate(...)` called directly on the same hypothetical context --
+  never a value computed any other way;
+- single-world triviality: a non-scoreable probe's score is always exactly `0.0000`;
+- sole-participant triviality: every probe targeting a single-participant candidate set's only
+  participant scores exactly `0.0000` (§H).
+
+Not to be asserted: that a higher score means a more *likely* useful probe in any probabilistic
+sense; that the score predicts learner correctness; that scores across different base contexts are
+comparable (each is scoped to its own interaction's own baseline mass).
+
+### S. AI boundary (restated, and corrected — no candidate-eligibility widening)
+
+An LLM **must never** supply an outcome probability, a hypothesis probability, an entropy value, a
+discrimination score, a probe ranking, or a selected probe. The only permitted AI participation
+remains the already-governed M2-ADR-032 advisory boundary — an agent may propose at most one bounded
+candidate per interaction, and Java's independent, deterministic, fail-closed gate decides whether it
+is accepted. **Gate acceptance keeps that proposal within its own advisory/audit boundary; it is not,
+and never becomes, an input candidate probe to `HYPOTHESIS_DISCRIMINATION_V1`** (§E). Every candidate
+`HYPOTHESIS_DISCRIMINATION_V1` scores is drawn solely from the existing deterministic V5/H4b
+resolution. `HYPOTHESIS_DISCRIMINATION_V1` runs entirely in deterministic Java, reproducible from the
+persisted governed evidence of one interaction plus that frozen candidate-probe resolution.
+
+### T. Performance boundary
+
+With `H` candidate hypotheses and `P` candidate probes (each targeting exactly one hypothesis), the
+construct performs at most `2P` calls to `HYPOTHESIS_UNCERTAINTY_V1.calculate(...)` (one or two
+hypothetical worlds per probe), each itself `O(H log H)` (canonical sort) — no database access, no
+HTTP call, no LLM invocation, and no unbounded graph traversal occurs inside the scorer. `H` and `P`
+are already bounded by the existing V5/H4b candidate-resolution machinery (§E); this amendment adds
+no new unbounded input.
+
+### U. ADR diff summary (this amendment)
+
+- **Title / Header** — the document title and `Status` line corrected to name
+  `HYPOTHESIS_DISCRIMINATION_V1` as the sole Step-2 identifier (`INFORMATION_GAIN_V1` kept only as
+  "formerly proposed as"); the "Scope (as amended)" bullet names Step 2's authorization explicitly.
+- **§1** — a superseding note added after the original target-loop sketch: (a) the diagram's
+  "expected information gain (`INFORMATION_GAIN_V1`, frozen)" step is corrected to
+  `HYPOTHESIS_DISCRIMINATION_V1`; (b) the diagram's "candidate probes ... + M2-ADR-032 advisory input"
+  clause is corrected — Step-2 candidate eligibility never includes an M2-ADR-032 proposal.
+- **§3** — the "Amended 2026-09-11" note rewritten to state precisely **what is superseded**
+  (the `INFORMATION_GAIN_V1` identifier, expected-information-gain semantics, entropy/KL/posterior
+  interpretation, outcome probabilities, "information-gain engine" framing) versus **what remains
+  binding** (verbatim Step-1 reuse, deterministic-inputs-only, no learned values, explicit tie-break,
+  evidence-acquisition-only output). The bullets below are now individually marked historical,
+  binding, or corrected — no bullet is left silently contradicting Amendment 2.
+- **§5** — a note added correcting the pre-existing "admitted to the pool `INFORMATION_GAIN_V1` then
+  scores" framing: gate acceptance under M2-ADR-032 never by itself admits a proposal into Step-2
+  candidate eligibility.
+- **Consequences** — two bullets added (`EngineVersionFreezeTests` + golden-vector + inertness
+  obligation; no-graph / no-new-candidate-discovery boundary); the no-new-candidate-discovery bullet
+  is corrected to state explicitly that an M2-ADR-032 proposal does **not** enter
+  `HYPOTHESIS_DISCRIMINATION_V1`'s candidate set.
+- **New `## Amendment 2`** section (this one): §A name/nature, §B the outcome-model finding, §C
+  rejected alternatives, §D the selected two-world TVD construct with its derived corollaries, §E
+  candidate-probe authority and shape (corrected: M2-ADR-032 proposals excluded from eligibility, with
+  the frozen boundary diagram), §F input contract (verbatim Step-1 reuse + synthetic-evidence
+  formula), §G status model, §H one-hypothesis handling, §I score semantics/range, §J decimal
+  contract, §K ranking/tie-break, §L canonical emission order, §M no-graph-weighting, §N validation
+  reason codes, §O step separation/inertness, §P persistence decision, §Q eleven golden vectors, §R
+  invariants, §S AI boundary (corrected: same M2-ADR-032 exclusion as §E), §T performance boundary,
+  §U this summary, §V a revisit trigger, §W a known V1 limitation (no probe-specific psychometric
+  quality).
+- **No change** to §2, §4, §6–§7 (except the Amendment-1 pointer already present in §4), Alternatives
+  rejected, or Amendment 1 in any way. **No change** to the TVD formula, the synthetic
+  SUPPORTING/CONTRADICTORY worlds, Step-1 reuse, the `BigDecimal` contract, any golden-vector
+  mathematics, the tie-break, the score range, the no-persistence decision, or the no-graph-weighting
+  decision — this round of edits corrects only the M2-ADR-032 candidate-eligibility boundary, the
+  stale `INFORMATION_GAIN_V1` normative language, and adds the §W limitation.
+- **Companion doc edits (same PR):** `docs/adr/M2-ADR-register.md` row corrected to remove the same
+  M2-ADR-032 candidate-promotion language; `docs/architecture/target-intelligence-loop.md`'s
+  top-level loop diagram and stage 7–9 detail updated to `HYPOTHESIS_DISCRIMINATION_V1` throughout,
+  with "expected information gain" retained only as rejected historical rationale.
+
+### V. Revisit trigger added by this amendment
+
+- If a genuine, non-invented outcome-probability model ever becomes available (e.g. a calibrated,
+  authored item-difficulty model reviewed and ratified under its own ADR), a true
+  expected-information-gain construct may be introduced as its own new version
+  (`HYPOTHESIS_DISCRIMINATION_V2` or a distinctly named `INFORMATION_GAIN_V1`) — never a silent
+  reinterpretation of the `HYPOTHESIS_DISCRIMINATION_V1` score frozen here.
+- If RAMALS later wants an accepted M2-ADR-032 advisory proposal promoted into
+  `HYPOTHESIS_DISCRIMINATION_V1`'s candidate-probe eligibility, that is its own AI-authority-boundary
+  decision requiring a separate, explicit ADR (the same scrutiny M1-ADR-010 / M2-ADR-010 / M2-ADR-023
+  / M2-ADR-032 received) — never a silent widening of §E/§S here.
+
+### W. Known limitation — no probe-specific psychometric quality (V1)
+
+`HYPOTHESIS_DISCRIMINATION_V1` does not model probe-specific psychometric quality. Two scoreable
+candidate probes that target the same hypothesis and are evaluated against the same base context can
+therefore receive **the same score** — the construct has no mechanism to distinguish them further.
+
+The V1 score measures exactly one thing: the deterministic sensitivity of the hypothesis-uncertainty
+distribution to the probe's two synthetic scoreable evidence outcomes (§D). It does **not** measure,
+and must never be interpreted as measuring:
+
+- probability of learner correctness on the probe;
+- question difficulty;
+- an item discrimination parameter (in the psychometric / IRT sense);
+- calibrated assessment quality of any kind;
+- probability that the probe will resolve the diagnosis.
+
+This is intentional for V1, not an oversight to be patched with an ad hoc weight. Introducing any of
+the above would require an authored or calibrated psychometric input — new authoritative data this
+amendment does not have and may not invent (M2-ADR-023 §2) — and its own explicit ADR decision, never
+a silent addition inside `HYPOTHESIS_DISCRIMINATION_V1`'s existing frozen formula.
