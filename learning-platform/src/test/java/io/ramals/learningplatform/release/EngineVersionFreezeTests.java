@@ -42,6 +42,12 @@ import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalCo
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalGate;
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalGateResult;
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeTargetPort;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.CandidateHypothesis;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.CandidateUncertainty;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisEvidenceInput;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContext;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyResult;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DimensionResult;
 import io.ramals.learningplatform.evidence.Evidence;
 import io.ramals.learningplatform.evidence.EvidenceCoverage;
@@ -149,6 +155,8 @@ class EngineVersionFreezeTests {
     put(LearningWorkflowPolicy.POLICY_VERSION, EngineVersionFreezeTests::learningWorkflowPolicy);
     put(DiagnosticProbeProposalGate.POLICY_VERSION,
         EngineVersionFreezeTests::diagnosticProbeProposalGate);
+    put(HypothesisUncertaintyCalculatorV1.ENGINE_VERSION,
+        EngineVersionFreezeTests::hypothesisUncertainty);
   }};
 
   /**
@@ -206,7 +214,11 @@ class EngineVersionFreezeTests {
       // Minted with M2-ADR-032 step 2, when the advisory diagnostic-probe proposal gate was first
       // frozen. Nothing has been written under it yet, which is the only time an entry here may be
       // added rather than a new version identifier minted.
-      Map.entry("DIAGNOSTIC_PROBE_PROPOSAL_GATE_V1", "e2f5deba999701c158dee079e4a18d14bcd766c3db861200617969145913d11e"));
+      Map.entry("DIAGNOSTIC_PROBE_PROPOSAL_GATE_V1", "e2f5deba999701c158dee079e4a18d14bcd766c3db861200617969145913d11e"),
+      // Minted with M2-ADR-034 step 1 (Amendment 1), when the hypothesis-uncertainty calculator was
+      // first frozen. Nothing has been written under it yet, which is the only time an entry here
+      // may be added rather than a new version identifier minted.
+      Map.entry("HYPOTHESIS_UNCERTAINTY_V1", "7838b08a795c54731ae564c22f294dd9b3f1a0097cff6b8e3117a0acf1db3201"));
 
   @Test
   void everyVersionedEngineHasAFrozenVector() throws IOException {
@@ -1220,6 +1232,118 @@ class EngineVersionFreezeTests {
         new BigDecimal(normalizedScore), new BigDecimal(normalizedScore),
         itemsAnswered, itemsAnswered, EvidenceCoverage.none(), "interaction",
         Instant.EPOCH, Instant.EPOCH);
+  }
+
+  /**
+   * HYPOTHESIS_UNCERTAINTY_V1 (M2-ADR-034 Amendment 1) over eight representative cases: single
+   * candidate HIGH, two equal MODERATE, HIGH vs LOW, HIGH vs INSUFFICIENT_EVIDENCE (the reviewed
+   * failure mode -- a non-participating candidate must never receive a numeric value), all
+   * INSUFFICIENT_EVIDENCE, all INCONCLUSIVE (identical shape to all-insufficient), the 3-candidate
+   * rounding/residual case (Hamilton largest-remainder), and a mixed sufficient/insufficient case. A
+   * change to the band weights, the normalization/residual algorithm, the canonical ordering, or the
+   * status model moves this hash.
+   */
+  private static String hypothesisUncertainty() {
+    HypothesisUncertaintyCalculatorV1 calculator =
+        new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1());
+    UUID interactionId = UUID.fromString("01900000-0000-7000-8000-000000009000");
+    String domain = "KAFKA";
+    DiagnosticHypothesis a = huHypothesis("01900000-0000-7000-8000-000000003001");
+    DiagnosticHypothesis b = huHypothesis("01900000-0000-7000-8000-000000003002");
+    DiagnosticHypothesis c = huHypothesis("01900000-0000-7000-8000-000000003003");
+
+    StringBuilder out = new StringBuilder();
+    out.append(huRender(calculator.calculate(
+        huContext(interactionId, domain, List.of(a), huObservations(interactionId, domain, a, 3, 0, 0)))))
+        .append('\n');
+    out.append(huRender(calculator.calculate(huContext(interactionId, domain, List.of(a, b), concat(
+        huObservations(interactionId, domain, a, 2, 0, 0),
+        huObservations(interactionId, domain, b, 2, 0, 0))))))
+        .append('\n');
+    out.append(huRender(calculator.calculate(huContext(interactionId, domain, List.of(a, b), concat(
+        huObservations(interactionId, domain, a, 4, 0, 0),
+        huObservations(interactionId, domain, b, 1, 0, 0))))))
+        .append('\n');
+    out.append(huRender(calculator.calculate(huContext(interactionId, domain, List.of(a, b),
+        huObservations(interactionId, domain, a, 5, 0, 0)))))
+        .append('\n');
+    out.append(huRender(calculator.calculate(
+        huContext(interactionId, domain, List.of(a, b, c), List.of()))))
+        .append('\n');
+    out.append(huRender(calculator.calculate(huContext(interactionId, domain, List.of(a, b), concat(
+        huObservations(interactionId, domain, a, 0, 0, 4),
+        huObservations(interactionId, domain, b, 0, 0, 2))))))
+        .append('\n');
+    out.append(huRender(calculator.calculate(huContext(interactionId, domain, List.of(a, b, c), concat(
+        huObservations(interactionId, domain, a, 3, 0, 0),
+        huObservations(interactionId, domain, b, 3, 0, 0),
+        huObservations(interactionId, domain, c, 1, 0, 0))))))
+        .append('\n');
+    out.append(huRender(calculator.calculate(huContext(interactionId, domain, List.of(a, b, c), concat(
+        huObservations(interactionId, domain, a, 4, 0, 0),
+        huObservations(interactionId, domain, b, 1, 0, 0))))))
+        .append('\n');
+    return out.toString();
+  }
+
+  private static DiagnosticHypothesis huHypothesis(String targetObjectiveId) {
+    return new DiagnosticHypothesis(
+        UUID.fromString("01900000-0000-7000-8000-000000001000"),
+        UUID.fromString("01900000-0000-7000-8000-000000002000"),
+        ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        UUID.fromString(targetObjectiveId),
+        UUID.fromString("01900000-0000-7000-8000-000000004000"));
+  }
+
+  private static HypothesisUncertaintyContext huContext(
+      UUID interactionId, String domain, List<DiagnosticHypothesis> hypotheses,
+      List<HypothesisEvidenceInput> evidence) {
+    return new HypothesisUncertaintyContext(
+        interactionId, domain,
+        hypotheses.stream().map(h -> new CandidateHypothesis(h, domain)).toList(),
+        evidence);
+  }
+
+  private static List<HypothesisEvidenceInput> huObservations(
+      UUID interactionId, String domain, DiagnosticHypothesis hypothesis, int supporting,
+      int contradictory, int inconclusive) {
+    List<HypothesisEvidenceInput> result = new ArrayList<>();
+    for (int i = 0; i < supporting; i++) {
+      result.add(new HypothesisEvidenceInput(
+          UUID.randomUUID(), hypothesis,
+          io.ramals.learningplatform.assessment.HypothesisEvidenceOutcome.SUPPORTING, interactionId, domain));
+    }
+    for (int i = 0; i < contradictory; i++) {
+      result.add(new HypothesisEvidenceInput(
+          UUID.randomUUID(), hypothesis,
+          io.ramals.learningplatform.assessment.HypothesisEvidenceOutcome.CONTRADICTORY, interactionId, domain));
+    }
+    for (int i = 0; i < inconclusive; i++) {
+      result.add(new HypothesisEvidenceInput(
+          UUID.randomUUID(), hypothesis,
+          io.ramals.learningplatform.assessment.HypothesisEvidenceOutcome.INCONCLUSIVE, interactionId, domain));
+    }
+    return result;
+  }
+
+  @SafeVarargs
+  private static List<HypothesisEvidenceInput> concat(List<HypothesisEvidenceInput>... lists) {
+    List<HypothesisEvidenceInput> result = new ArrayList<>();
+    for (List<HypothesisEvidenceInput> list : lists) {
+      result.addAll(list);
+    }
+    return result;
+  }
+
+  private static String huRender(HypothesisUncertaintyResult result) {
+    StringBuilder line = new StringBuilder(result.status().name());
+    for (CandidateUncertainty candidate : result.candidates()) {
+      line.append('|').append(candidate.hypothesis().targetObjectiveId())
+          .append(':').append(candidate.band())
+          .append(':').append(candidate.participates())
+          .append(':').append(candidate.normalizedValue());
+    }
+    return line.toString();
   }
 
   private static MasterySnapshot snapshot(MasteryStatus status, String score) {
