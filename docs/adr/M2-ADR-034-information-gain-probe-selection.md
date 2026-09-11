@@ -1,6 +1,11 @@
 # M2-ADR-034: Information-gain diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `INFORMATION_GAIN_V1`) — design only
 
-- **Status:** Proposed
+- **Status:** Proposed. **Amended — 2026-09-10** — see
+  [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10): ratifies the deterministic
+  hypothesis-uncertainty construct §4 originally left to "the design PR", names it
+  `HYPOTHESIS_UNCERTAINTY_V1`, freezes its complete mathematics and golden vectors, and authorizes
+  its inert implementation as Step 1. `DIAGNOSTIC_SELECTION_V6` and `INFORMATION_GAIN_V1` remain
+  design-only.
 - **Date:** 2026-09-08
 - **Decides:** the design constraints binding a future deterministic information-gain diagnostic
   probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` that supersedes only `V5`'s final
@@ -23,9 +28,15 @@
   boundary): the only permitted AI role remains "propose at most one bounded candidate per
   interaction; Java's independent, deterministic, fail-closed gate decides."
 - **Originates here**, on the same repository-native basis as M2-ADR-023 through M2-ADR-033.
-- **This ADR authorizes no code, no migration, no contract change, and no `SelectionReason` value.**
-  `V6` is not implemented in this PR. Frozen calculators and `EngineVersionFreezeTests` are
-  untouched.
+- **Scope (as amended 2026-09-10).** The original ADR authorized *design only*. [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10)
+  additionally authorizes implementation of the **inert `HYPOTHESIS_UNCERTAINTY_V1` foundation
+  construct only** (§4 as frozen there; staged as **Step 1**). It still authorizes **no**
+  `DIAGNOSTIC_SELECTION_V6` code, **no** `INFORMATION_GAIN_V1` code, **no** migration, **no** contract
+  change, and **no** `SelectionReason` value. `V6` is not implemented. `DIAGNOSTIC_SELECTION_V1`–`V5`,
+  their composition order, `MAX_HYPOTHESIS_PROBES_PER_PACKET`,
+  `core.diagnostic_probe_relationship` / `core.diagnostic_probe_provenance`, and every existing
+  frozen calculator are untouched; `HYPOTHESIS_UNCERTAINTY_V1` adds one new frozen vector to
+  `EngineVersionFreezeTests` and changes no existing one, and no runtime selector consumes it.
 
 ## Context
 
@@ -158,8 +169,21 @@ already-authoritative inputs. No arrow is an LLM call.
   posterior under the frozen outcome model, expected KL divergence, expected posterior-variance
   reduction, or a bounded deterministic scoring rubric. The brief's constraint is adopted verbatim:
   *do not over-engineer this into an ML system prematurely.*
+- **`INFORMATION_GAIN_V1` consumes, and never recomputes, the frozen hypothesis-uncertainty
+  distribution** (Amendment 1). It reads `HYPOTHESIS_UNCERTAINTY_V1`'s output verbatim; it may not
+  re-derive it with different band weights, a different evidence boundary, or a different
+  normalization. If the `INFORMATION_GAIN_V1` design needs different uncertainty semantics, that is a
+  new `HYPOTHESIS_UNCERTAINTY_V2`, not a silent reinterpretation.
 
 ### 4. Hypothesis uncertainty / posterior representation
+
+> **Amended 2026-09-10.** [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10) resolves
+> the choices this section left open: the construct is a **normalized relative hypothesis-uncertainty
+> distribution** (not a Bayesian posterior — it has no prior, no likelihood, no evidence-update), it
+> is named **`HYPOTHESIS_UNCERTAINTY_V1`**, it is a **companion frozen construct** distinct from
+> `INFORMATION_GAIN_V1`, and its complete mathematics, status model, decimal contract, canonical
+> ordering, and golden vectors are frozen there. The bullets below remain binding as the framing
+> constraints; Amendment 1 is the authoritative specification of the construct itself.
 
 - Diagnostic hypotheses gain an explicit, versioned, deterministic uncertainty representation — a
   posterior mass, or an equivalent bounded uncertainty measure, over the current hypothesis set for
@@ -241,6 +265,17 @@ already governed here or elsewhere (the M2-ADR-026 §8 governance-rule pattern).
   runtime use.
 - The hypothesis posterior is a separate stream; a PR merging it into mastery, G2, G3, H5, or H7 is
   a defect against §4.
+- **(Amendment 1)** `HYPOTHESIS_UNCERTAINTY_V1` must ship with an `EngineVersionFreezeTests` frozen
+  vector, plus tests reproducing [Amendment 1 §J](#j-golden-vectors)'s eleven golden vectors and
+  [§Q](#q-input-validation-and-context-isolation-fail-closed)'s validation reason codes, before any
+  consumer exists. Its Step-1 implementation is **inert**: no `DIAGNOSTIC_SELECTION_V1`–`V5` code, no
+  runtime selector, no migration, and no contract change. A PR that wires it into selection, changes
+  a band weight, the normalization procedure, the residual rule, the evidence boundary, the
+  de-duplication identity, or the canonical ordering without minting `HYPOTHESIS_UNCERTAINTY_V2` is a
+  defect against Amendment 1.
+- **(Amendment 1)** `HYPOTHESIS_UNCERTAINTY_V1` takes **no** misconception-relationship-graph
+  (M2-ADR-033) input and **no** H7 longitudinal input; a PR adding either is a defect against
+  Amendment 1 §F/§G.
 - Adds a row to [`M2-ADR-register.md`](M2-ADR-register.md). `AdrRegisterTests` matches only
   `M1-ADR-\d{3}` filenames, so it is unaffected.
 
@@ -260,3 +295,405 @@ already governed here or elsewhere (the M2-ADR-026 §8 governance-rule pattern).
 Adds `M2-ADR-034` to [`docs/adr/M2-ADR-register.md`](M2-ADR-register.md)'s "Decisions originating in
 this repository" table, immediately after `M2-ADR-033`, in the same row format already used for
 `M2-ADR-016` through `M2-ADR-033`.
+
+## Amendment 1 — `HYPOTHESIS_UNCERTAINTY_V1` (2026-09-10)
+
+The original ADR (§3–§4) deferred the concrete hypothesis-uncertainty construct to "the design PR"
+and offered a menu (posterior mass, KL divergence, posterior-variance reduction, or a bounded
+deterministic rubric) without freezing priors, likelihoods, normalization, decimal policy, ordering,
+or vectors. A governance review found this under-specified: two independent implementations could not
+be guaranteed to produce the same numbers, and RAMALS's existing hypothesis-confidence construct
+(`DiagnosticConfidenceCalculatorV1`, `DIAGNOSTIC_CONFIDENCE_V1`) is a *deliberate* rejection of
+turning small discrete evidence counts into a decimal probability ("false precision"). This amendment
+resolves every open choice, freezes the construct, and authorizes its inert implementation as
+**Step 1** of a three-step plan. It changes no other section's constraints.
+
+### A. Name and nature — not a posterior
+
+The construct is **`HYPOTHESIS_UNCERTAINTY_V1`**. It is a **normalized relative
+hypothesis-uncertainty distribution**, not a Bayesian posterior: it defines no prior, no likelihood
+function, and no evidence-update operator, so "posterior" would misrepresent its mathematical
+content (M2-ADR-023 §2's "never a probability" discipline; the same reason
+`DiagnosticConfidenceResult` carries "deliberately no numeric score"). It answers exactly one
+question — *"given the hypotheses that currently have directional evidence in this interaction, how
+is relative corroboration distributed among them?"* — and nothing about ground truth, diagnosis, or
+what to probe next. A genuinely Bayesian construct, if ever wanted, is a separate future
+`HYPOTHESIS_POSTERIOR_V*` with its own ADR step; it is **not** what §4 authorizes.
+
+The engine version identifier is the string `HYPOTHESIS_UNCERTAINTY_V1`. It is frozen under the
+`EngineVersionFreezeTests` discipline (a `static final String … VERSION`, a frozen behaviour vector,
+no tunable weight or threshold) exactly as every other scored engine in the codebase.
+
+### B. Reuse of `DiagnosticConfidenceCalculatorV1` — valid, as the band source only
+
+`DiagnosticConfidenceCalculatorV1` (`DIAGNOSTIC_CONFIDENCE_V1`, M2-ADR-023 §2 / H5) is reused
+**verbatim and unmodified** — the exact-and-unmodified condition §4 sets. Its documented semantics:
+
+| Property | `DiagnosticConfidenceCalculatorV1` |
+|---|---|
+| Input | `DiagnosticConfidenceInputs(supportingCount, contradictoryCount, inconclusiveCount)` — distinct evidence-observation counts for one hypothesis tuple |
+| `SUPPORTING` | an incorrect scoreable probe response; raises corroboration |
+| `CONTRADICTORY` | a correct scoreable probe response; weighs against |
+| `INCONCLUSIVE` | **never participates** — contributes to neither count, "carried for audit completeness only" |
+| Insufficient | `s == 0 && c == 0` -> `INSUFFICIENT_EVIDENCE`, explicitly *"categorically different from one actively contradicted; never collapsed into `LOW`"* |
+| Thresholds | integer only: `c==0` -> `s` in {1,2,>=3} -> {LOW,MODERATE,HIGH}; `c>=1 && s>3c` -> HIGH; `c>=1 && s-c>=3` -> MODERATE; else LOW. The one constant is `3`. |
+| Ordering | n/a — a pure per-tuple function, one call, no collection |
+| `BigDecimal` | none — integer arithmetic, no numeric score in the result |
+| Output meaning | *"how strongly the SUPPORTING/CONTRADICTORY evidence gathered so far for one hypothesis tuple agrees with itself in favor of that hypothesis"* — an **isolated, non-comparative, non-probabilistic corroboration tier** |
+
+**Is its output valid as the sole input to a relative uncertainty distribution?** Only with the
+two safeguards this amendment adds, because the band is *not* a cardinal quantity and *not*
+comparative:
+
+1. **`INSUFFICIENT_EVIDENCE` is not a point on the LOW/MODERATE/HIGH scale.** It means "unprobed /
+   no directional evidence", which is *unresolved uncertainty*, not *low plausibility*. It is
+   therefore **excluded from the distribution entirely** (§C, §D), never assigned belief mass.
+2. **The three graded bands are treated as an ordinal scale with the minimal defensible linear
+   cardinalization** (§C), not as ratio-scaled probabilities. The distribution expresses *relative
+   corroboration rank*, and the amendment's output keeps the raw `band` alongside every normalized
+   value so a consumer is never forced to read the number as more than that.
+
+With those two safeguards the reuse is sound: `HYPOTHESIS_UNCERTAINTY_V1` calls
+`DiagnosticConfidenceCalculatorV1.compute(...)` once per candidate to obtain its band, and does not
+re-implement or alter any threshold.
+
+### C. Band -> weight mapping — ordinal-linear `LOW = 1, MODERATE = 2, HIGH = 3`
+
+`INSUFFICIENT_EVIDENCE` has **no weight** (it is not in the distribution — §D). For the three graded
+bands:
+
+| Mapping | Asserted semantics | Verdict |
+|---|---|---|
+| **`LOW=1, MODERATE=2, HIGH=3`** (ordinal-linear) | `MODERATE` corroboration counts twice `LOW`; `HIGH` three times `LOW`. Matches `DiagnosticConfidenceCalculatorV1`'s *own* structure: in uncontested support the bands are reached at exactly 1, 2, 3 observations, and the recurring policy constant is `3`. Smallest-integer linear embedding of a 3-tier ordinal scale. | **Chosen.** It asserts only the ordinal fact the bands actually encode, using the source construct's own spacing and constant. |
+| `LOW=1, MODERATE=2, HIGH=4/8` (exponential doubling) | `HIGH` is 4x `LOW`; a single `HIGH` candidate outweighs any number of `LOW` candidates below a fixed count. | **Rejected.** Geometric belief spacing is a *policy choice* the source construct never establishes; "convenient to normalize / monotonic / simple" are implementation properties, not diagnostic semantics. |
+| Authored probability-like weights (`0.15 / 0.35 / 0.50`, …) | A specific numeric belief per band. | **Rejected for V1.** Tuned decimals with no derivation — precisely the "`0.6234` no one could defend against `0.61`" false precision `DiagnosticConfidenceCalculatorV1`'s own rationale rejects. Would need an empirical or authored basis and its own ADR step. |
+| Direct evidence-derived score (`s/(s+c)`, `s-c`, …) | A continuous confidence recomputed from the raw counts. | **Rejected for V1.** Not "reuse" of the frozen calculator — a parallel confidence calculator over the same inputs, which §4 forbids, and which `DiagnosticConfidenceCalculatorV1`'s javadoc argues against directly for small counts. |
+
+The three weights `1, 2, 3` are the complete constant set of `HYPOTHESIS_UNCERTAINTY_V1`. There are
+no other tunable numbers. `INCONCLUSIVE` evidence has no weight and no effect (§B, §F).
+
+### D. Evidence sufficiency is kept separate from relative belief — a status model
+
+Rather than force `INSUFFICIENT_EVIDENCE` onto the numeric scale, the construct returns a **status**
+plus a **distribution over the evidenced subset only**:
+
+```
+status in { APPLICABLE, INSUFFICIENT_EVIDENCE, NOT_APPLICABLE }
+```
+
+- **`NOT_APPLICABLE`** — the candidate hypothesis set is empty. No distribution; `candidates` is
+  empty.
+- **`INSUFFICIENT_EVIDENCE`** — the candidate set is non-empty, but **no** candidate has directional
+  (`SUPPORTING` or `CONTRADICTORY`) evidence in this interaction (every band is
+  `INSUFFICIENT_EVIDENCE`). No distribution; each candidate is returned with its band,
+  `participates = false`, and `normalizedValue = null`. The honest answer: the platform cannot say
+  which hypothesis is more plausible.
+- **`APPLICABLE`** — at least one candidate has directional evidence. The distribution is computed
+  **only over the candidates whose band != `INSUFFICIENT_EVIDENCE`** ("participating" candidates).
+  Non-participating candidates are still returned — with their band, `participates = false`, and
+  `normalizedValue = null` — so a consumer (e.g. a future `INFORMATION_GAIN_V1` that wants to probe
+  the *unknown* hypotheses) sees the full candidate set, but they carry **no belief mass**.
+
+This directly resolves the reviewed failure mode: for `H1 -> HIGH`, `H2 -> INSUFFICIENT_EVIDENCE`,
+`H3 -> INSUFFICIENT_EVIDENCE`, `HYPOTHESIS_UNCERTAINTY_V1` returns `status = APPLICABLE`,
+`H1 = 1.0000`, `H2 = null`, `H3 = null` — **not** `0.8 / 0.1 / 0.1`. `0.1` of phantom diagnostic
+support for an unprobed hypothesis is never produced.
+
+### E. Candidate-set authority — the construct never creates candidates
+
+`HYPOTHESIS_UNCERTAINTY_V1` evaluates an **already-authorized bounded candidate set** produced by
+the existing deterministic diagnostic-hypothesis machinery (`DiagnosticService`'s miss walk ->
+`ProbeRelationshipResolver` / `ProbeRelationshipService` resolution in the frozen
+`HypothesisDrivenProbeDiagnosticSelector.RELATIONSHIP_TYPE_PRIORITY` order). No candidate may enter
+the set because of an LLM suggestion, an embedding, semantic similarity, an M2-ADR-033
+misconception-graph neighbour, graph centrality, or any model confidence. The construct adds no
+eligibility mechanism and removes none; it takes the set as an input.
+
+### F. Evidence temporal boundary — per-interaction only, no H7
+
+For each candidate hypothesis `h`, the input counts `(supportingCount, contradictoryCount,
+inconclusiveCount)` are the distinct governed **probe-response evidence observations for `h`'s
+hypothesis tuple `(learner, h.triggerObjectiveId, h.targetObjectiveId, h.relationshipType)`,
+produced within the single diagnostic interaction (attempt) the uncertainty is being computed
+for**, classified by the existing frozen `HypothesisEvidenceOutcome`. Explicitly:
+
+| Source | Participates in `HYPOTHESIS_UNCERTAINTY_V1`? |
+|---|---|
+| Diagnostic probe-response evidence in **this** interaction (`HypothesisEvidenceOutcome`) | **Yes** — the only input |
+| Prior interactions / other attempts / the learner's cross-attempt H5 history | **No** |
+| H6 diagnostic report projection | **No** (a read model, not an evidence source) |
+| H7 longitudinal evidence projection (`LONGITUDINAL_EVIDENCE_V1`) | **No** |
+| Misconception evidence (`MISCONCEPTION_EVIDENCE_V1`) / G3 misconception confidence | **No** — a separate stream (§4: "never merges into … G3") |
+| `core.diagnostic_confidence_observation` accumulated cross-attempt totals | **No** — V1 uses per-interaction counts, which are a *tighter* scope than the persisted H5 identity |
+
+The Step-1 assembler is responsible for producing per-interaction counts; the calculator consumes
+counts only and never queries a repository, a clock, or a random source.
+
+### G. M2-ADR-033 misconception-graph boundary — no participation in V1
+
+```
+MisconceptionGraphQueryService  --X--  HYPOTHESIS_UNCERTAINTY_V1
+```
+
+`HYPOTHESIS_UNCERTAINTY_V1` takes **no** `MISCONCEPTION_RELATED` or `MISCONCEPTION_PREREQUISITE_LINK`
+edge as input and defines **no** edge-type contribution (no `SPECIALISES +x`, `CO_OCCURS_WITH +y`,
+`PREREQUISITE_LINK +z`). Authored curriculum structure and evidence-derived learner belief state are
+separate concerns; combining them is new algorithmic policy that a future ADR step must authorize on
+its own merits (mirrors M2-ADR-033 §6 and this ADR §5's AI-authority discipline).
+
+### H. Canonical ordering — a total order on hypothesis identity
+
+Output order, residual-allocation tie-breaks, and the freeze vector are all governed by one
+**total order** on `DiagnosticHypothesis`, independent of any collection or database order:
+
+1. `relationshipType`, by the frozen `HypothesisDrivenProbeDiagnosticSelector.RELATIONSHIP_TYPE_PRIORITY`
+   index — `ROOT_CAUSE_PROBE (0) < CONTRADICTION_CHECK (1) < PREREQUISITE_VALIDATION (2) <
+   SAME_OBJECTIVE_CONFIRMATION (3)` (reused, not redefined);
+2. then `targetObjectiveId`, by lowercase canonical UUID string, ascending (byte-for-byte the
+   PostgreSQL `uuid` order);
+3. then `authorizingRelationshipId`: `null` sorts before any non-null, otherwise lowercase canonical
+   UUID string ascending (only `ROOT_CAUSE_PROBE` / `CONTRADICTION_CHECK` carry one);
+4. then `triggerObjectiveId`, lowercase canonical UUID string ascending;
+5. then `triggerItemVersionId`, lowercase canonical UUID string ascending.
+
+Keys 1–5 are `DiagnosticHypothesis`'s five identity fields; no two distinct hypotheses compare
+equal, so the order is total. No `HashSet` / `HashMap` / SQL row order can influence any output
+(the discipline M2-ADR-024 §5 / M2-ADR-025 §4 already enforce).
+
+### I. Exact decimal contract
+
+- All arithmetic on `java.math.BigDecimal`. Comparisons use `compareTo`, never `equals`.
+- **`scale = 4`** for every emitted value; representation of zero is `0.0000`, of one is `1.0000`;
+  serialization is `toPlainString()` at scale 4.
+- **`exact(h) = BigDecimal.valueOf(w(h)).divide(BigDecimal.valueOf(total), 20, RoundingMode.HALF_EVEN)`**
+  — intermediate scale 20, `HALF_EVEN`. (`w(h)` in {1,2,3}, `total` in [1, 3n]; 20 digits is far
+  beyond what any tie-break needs, and fixing it makes the intermediate reproducible.)
+- **`floor4(h) = exact(h).setScale(4, RoundingMode.DOWN)`** (truncate toward zero to 4 dp).
+- **`allocated = sum of floor4(h)`** over participating `h` (scale 4).
+- **`deficit = 1.0000 - allocated`** — a non-negative multiple of `0.0001`;
+  `D = deficit.movePointRight(4).intValueExact()` with `0 <= D < n` where `n = |participating|`
+  (proof: each `floor4` discards `< 0.0001` and `sum of exact = 1` in the reals, so
+  `allocated > 1 - n*0.0001`).
+- **Residual allocation — deterministic largest-remainder (Hamilton).** `remainder(h) = exact(h) -
+  floor4(h)` (scale 20, non-negative). Sort participating `h` by `remainder(h)` **descending**, ties
+  broken by the §H canonical order **ascending**. Add exactly `new BigDecimal("0.0001")` to the
+  first `D` candidates in that sorted order.
+- **`normalizedValue(h)`** is the resulting scale-4 value for a participating `h`; **`null`** (not
+  `0.0000`) for a non-participating `h` and for every `h` when `status != APPLICABLE`.
+- **Invariant.** When `status == APPLICABLE`, `sum of normalizedValue(h)` over participating `h`
+  `.compareTo(new BigDecimal("1.0000")) == 0`, exactly.
+- **Zero denominator is unreachable in the division.** `total == 0` iff `participating` is empty iff
+  `status` in `{ INSUFFICIENT_EVIDENCE, NOT_APPLICABLE }`, in which case no `exact(h)` is computed.
+- Rationale for largest-remainder over "add the residual to the first candidate": the latter would
+  make the canonical order part of the *cardinal* contract (the first hypothesis would be
+  systematically inflated); largest-remainder minimizes total rounding distortion and uses canonical
+  order only as a tie-break.
+
+### J. Golden vectors
+
+Eleven normative vectors — the implementation oracle. Synthetic hypotheses `Ha, Hb, Hc` are given in
+§H canonical order (all `ROOT_CAUSE_PROBE`, ascending `targetObjectiveId`). Unless a row says
+otherwise, per-candidate evidence is written `(s, c, i)` =
+`(supportingCount, contradictoryCount, inconclusiveCount)` — the **de-duplicated** counts for that
+hypothesis's tuple **in this one interaction** (§R), already classified by `HypothesisEvidenceOutcome`
+and passed to `DiagnosticConfidenceCalculatorV1.compute(...)` verbatim. Expected output lists
+`hypothesis -> band / participates / normalizedValue`. Every vector is independent of live DB, wall
+clock, randomness, LLM, and any external service.
+
+| # | Case | Input | Expected `status` | Expected per-candidate output |
+|---|---|---|---|---|
+| 1 | No candidate | `candidates = []` | `NOT_APPLICABLE` | `candidates = []` (no distribution, not an empty-object ambiguity) |
+| 2 | Single candidate | `Ha (3,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 1.0000` |
+| 3 | Two equal candidates | `Ha (2,0,0)`, `Hb (2,0,0)` | `APPLICABLE` | `Ha -> MODERATE / true / 0.5000`; `Hb -> MODERATE / true / 0.5000` |
+| 4 | `HIGH` vs `LOW` | `Ha (4,0,0)`, `Hb (1,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 0.7500`; `Hb -> LOW / true / 0.2500` |
+| 5 | `HIGH` vs `INSUFFICIENT_EVIDENCE` | `Ha (5,0,0)`, `Hb (0,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 1.0000`; `Hb -> INSUFFICIENT_EVIDENCE / false / null` (**not** `0.9xxx / 0.0xxx`) |
+| 6 | All `INSUFFICIENT_EVIDENCE` | `Ha (0,0,0)`, `Hb (0,0,0)`, `Hc (0,0,0)` | `INSUFFICIENT_EVIDENCE` | each -> `INSUFFICIENT_EVIDENCE / false / null` |
+| 7 | All `INCONCLUSIVE` evidence | `Ha (0,0,4)`, `Hb (0,0,2)` | `INSUFFICIENT_EVIDENCE` | each -> `INSUFFICIENT_EVIDENCE / false / null` (identical to #6 — `INCONCLUSIVE` never participates; the count is echoed for audit and changes nothing) |
+| 8 | Rounding / residual, 3 candidates | `Ha (3,0,0)`, `Hb (3,0,0)`, `Hc (1,0,0)` | `APPLICABLE` | weights `3,3,1`; `total 7`; `exact` `0.428571…, 0.428571…, 0.142857…`; `floor4` `0.4285, 0.4285, 0.1428`; `allocated 0.9998`; `deficit 0.0002` (`D=2`); remainders `0.00007143, 0.00007143, 0.00005714` -> +`0.0001` to `Ha, Hb` (tie broken by canonical order) -> `Ha -> HIGH / true / 0.4286`; `Hb -> HIGH / true / 0.4286`; `Hc -> LOW / true / 0.1428` (sum `1.0000`) |
+| 9 | Input order permuted, identical output | #8's candidates and each candidate's evidence list supplied in any order (e.g. `Hc, Hb, Ha`) | `APPLICABLE` | byte-identical to #8, candidates emitted in §H canonical order `Ha, Hb, Hc` |
+| 10 | Duplicate evidence de-duplicated (§R) | `Ha` raw observation list `[obs-1: SUPPORTING, obs-2: SUPPORTING, obs-1: SUPPORTING]` (one governed observation id reaching the assembler twice) | `APPLICABLE` | de-dup by observation id -> distinct set `{obs-1, obs-2}` -> `(s,c,i) = (2,0,0)` -> `Ha -> MODERATE / true / 1.0000`. (Without §R de-dup the count would be `s=3` -> `HIGH` — a wrong band; the vector pins the de-dup.) |
+| 11 | Mixed sufficient / insufficient, 3 candidates | `Ha (4,0,0)`, `Hb (1,0,0)`, `Hc (0,0,0)` | `APPLICABLE` | `Ha -> HIGH / true / 0.7500`; `Hb -> LOW / true / 0.2500`; `Hc -> INSUFFICIENT_EVIDENCE / false / null` (distribution is over `{Ha, Hb}` only; `Hc` is represented but unscored) |
+
+Worked answers for the decision cases §K.4 enumerates:
+
+- **Case A — no candidate hypotheses** — vector 1: `status = NOT_APPLICABLE`, `candidates = []`, no
+  distribution.
+- **Case B — candidates exist but none has participating (directional) evidence** — vectors 6/7:
+  `status = INSUFFICIENT_EVIDENCE`, every candidate `participates = false` / `normalizedValue =
+  null`, no distribution. Not a uniform prior — V1 manufactures no belief from absent evidence.
+- **Case C — all evidence `INCONCLUSIVE`** — vector 7: identical to Case B
+  (`INCONCLUSIVE` contributes to neither count, per frozen `DiagnosticConfidenceCalculatorV1`).
+- **Case D — some candidates have sufficient evidence, others do not** — vectors 5 and 11:
+  `status = APPLICABLE`; the distribution is normalized **over the participating subset only**; a
+  non-participating candidate is **represented but unscored** (`participates = false`,
+  `normalizedValue = null`) — it receives neither zero mass nor prior mass, and it does not make the
+  whole result insufficient.
+- **Case E — every candidate strongly contradicted** (e.g. `Ha (1,3,0)`, `Hb (0,2,0)`) — both bands
+  resolve to `LOW` (neither `s > 3c` nor `s - c >= 3`), both participate with weight `1`, so
+  `status = APPLICABLE` with a **uniform** `0.5000 / 0.5000` distribution. **V1 expresses relative
+  remaining plausibility among weakly-supported hypotheses; it does not model "all hypotheses
+  refuted" as a distinct state.** The per-candidate `band` field (all `LOW`) carries that signal to
+  a consumer. An absolute-refutation state would require a tuned "how contradicted is refuted"
+  threshold this construct deliberately does not introduce — see §P.
+
+### K. Output contract
+
+```
+HypothesisUncertaintyResult:
+  engineVersion : "HYPOTHESIS_UNCERTAINTY_V1"
+  status        : HypothesisUncertaintyStatus            // APPLICABLE | INSUFFICIENT_EVIDENCE | NOT_APPLICABLE
+  candidates    : List<CandidateUncertainty>             // canonical order (H); empty iff NOT_APPLICABLE
+
+CandidateUncertainty:
+  hypothesis      : DiagnosticHypothesis                 // the existing record — identity only
+  band            : DiagnosticConfidenceBand             // from DiagnosticConfidenceCalculatorV1, unmodified
+  participates    : boolean                              // band != INSUFFICIENT_EVIDENCE
+  normalizedValue : BigDecimal | null                    // scale 4; null iff !participates or status != APPLICABLE
+```
+
+1. The result contains **no** raw learner answer, prompt text, model rationale, or chain-of-thought
+   — governed identifiers, bands, and the normalized decimal only (M2-ADR-023 §2, this ADR §5).
+2. `NOT_APPLICABLE` returns `candidates = []` — never an ambiguous empty object.
+3. `INSUFFICIENT_EVIDENCE` returns every candidate with `participates = false`,
+   `normalizedValue = null`.
+4. The status of each of these cases is fixed by this amendment, not left to implementation
+   judgement (§J worked answers): **A** no candidate hypotheses -> `NOT_APPLICABLE`; **B** candidates
+   exist but none has directional evidence -> `INSUFFICIENT_EVIDENCE`; **C** all `INCONCLUSIVE` ->
+   `INSUFFICIENT_EVIDENCE`; **D** some candidates sufficient, some not -> `APPLICABLE` over the
+   participating subset, non-participating candidates represented-but-unscored (`null`, never zero
+   mass and never prior mass); **E** every candidate contradicted-to-`LOW` -> `APPLICABLE`, uniform
+   over the participating set. A non-participating candidate never causes the whole result to be
+   insufficient — only *zero* participating candidates does that.
+
+### L. Invariants (implementation test obligations)
+
+Valid to assert (the construct guarantees them):
+
+- determinism: identical input -> identical `HypothesisUncertaintyResult` (byte-identical
+  serialization);
+- input-order independence: permuting the input candidate list, or the evidence list, does not
+  change any `hypothesis -> (band, participates, normalizedValue)` mapping or the emitted order;
+- range: every `normalizedValue` is `>= 0.0000` and `<= 1.0000`;
+- normalization: when `status == APPLICABLE`, the participating `normalizedValue`s sum to exactly
+  `1.0000` (`compareTo`);
+- band monotonicity of weight: a higher `band` (`LOW < MODERATE < HIGH`) never yields a **smaller**
+  `rawWeight`, and — holding the rest of the participating set fixed — never a strictly smaller
+  `normalizedValue`;
+- reuse fidelity: for every candidate, `band` equals
+  `DiagnosticConfidenceCalculatorV1.compute(new DiagnosticConfidenceInputs(s, c, i)).band()`.
+
+**Not** to be asserted (the construct does not guarantee them): any probabilistic calibration;
+that `normalizedValue` estimates `P(hypothesis is the true cause)`; cross-interaction stability;
+that adding `SUPPORTING` evidence strictly increases a candidate's `normalizedValue` (it can leave
+the band, hence the weight, unchanged — monotonic non-decreasing only).
+
+### M. Staged plan (this ADR now distinguishes three independent steps)
+
+| Step | Construct | Authorization |
+|---|---|---|
+| **Step 1** | `HYPOTHESIS_UNCERTAINTY_V1` — the frozen construct above | **Authorized by this amendment.** Inert: a pure calculator + a context assembler + `EngineVersionFreezeTests` vector + golden vectors. **No** migration, **no** contract change, **no** `SelectionReason`, **no** runtime wiring. No `DIAGNOSTIC_SELECTION_V1`–`V5` code changes. |
+| **Step 2** | `INFORMATION_GAIN_V1` — per-probe deterministic score consuming Step 1's distribution verbatim (§3) | **Design only.** Its own separately reviewed design PR. |
+| **Step 3** | `DIAGNOSTIC_SELECTION_V6` — replaces only `V5`'s step-(b) tiebreak with an information-gain ranking (§2) | **Design only.** Its own separately reviewed design PR; a further ADR only if it introduces a decision not already governed. |
+
+After Step 1:
+
+```
+governed probe evidence (this interaction)
+        |
+        v
+HYPOTHESIS_UNCERTAINTY_V1              (frozen; inert)
+        |
+        v
+HypothesisUncertaintyResult
+        |
+        X   <- no INFORMATION_GAIN_V1
+        X   <- no DIAGNOSTIC_SELECTION_V6
+        X   <- DIAGNOSTIC_SELECTION_V1-V5 unchanged, do not read it
+```
+
+### N. AI boundary (restated, unchanged)
+
+An LLM may propose diagnostic *content* only through the already-governed M2-ADR-032 advisory
+boundary (<= 1 bounded candidate per interaction, admitted or rejected by Java's deterministic
+fail-closed gate). An LLM **must never** supply a hypothesis-uncertainty value, a normalized weight,
+a probability, an information-gain score, a ranking, or a selected probe; any such model-supplied
+field is non-authoritative and rejected under existing governance (M2-ADR-023 §2, this ADR §5).
+`HYPOTHESIS_UNCERTAINTY_V1` runs entirely in deterministic Java, reproducible from the persisted
+governed evidence of one interaction.
+
+### O. ADR diff summary (this amendment)
+
+- **Header** — `Status` line gains `Amended — 2026-09-10` pointing here; the "authorizes no code"
+  bullet becomes a scoped "Scope (as amended)" bullet that authorizes the inert
+  `HYPOTHESIS_UNCERTAINTY_V1` foundation only and re-states that `V6` / `INFORMATION_GAIN_V1` /
+  migrations / contracts / `SelectionReason` / `V1`-`V5` remain untouched.
+- **§3** — one bullet added: `INFORMATION_GAIN_V1` consumes and never recomputes the frozen
+  `HYPOTHESIS_UNCERTAINTY_V1` distribution; different uncertainty semantics require a new version.
+- **§4** — an "Amended 2026-09-10" note added at the top pointing here; the original design-only
+  bullets are unchanged and remain binding as framing.
+- **Consequences** — two bullets added: the `EngineVersionFreezeTests` + golden-vector + inertness
+  obligation for `HYPOTHESIS_UNCERTAINTY_V1`, and the no-M2-ADR-033-graph / no-H7 boundary.
+- **New `## Amendment 1`** section (this one): §A name/nature, §B reuse analysis, §C weight mapping
+  with rejected alternatives, §D status model, §E candidate-set authority, §F evidence boundary,
+  §G graph boundary, §H canonical ordering, §I decimal contract + largest-remainder residual, §J
+  eleven golden vectors + the five decision cases, §K output contract, §L invariants, §M staged
+  plan, §N AI boundary, §O this summary, §P a revisit trigger, §Q input validation + context
+  isolation (fail closed), §R evidence identity + de-duplication.
+- **No change** to §1, §2, §5, §6, §7, or Alternatives rejected.
+- **Companion doc edits (same PR):** `docs/adr/M2-ADR-register.md` row and note updated to reflect
+  the ratified Step-1 construct; `docs/architecture/target-intelligence-loop.md` stage 7 updated to
+  `HYPOTHESIS_UNCERTAINTY_V1` foundation ratified (implementation pending) with the adaptive use and
+  stage 8 still `DESIGNED`.
+
+### P. Revisit trigger added by this amendment
+
+- If a concrete requirement emerges to distinguish *"every candidate hypothesis is actively
+  refuted"* from *"relative plausibility among weak hypotheses"* (§J Case E), that needs an
+  absolute-threshold decision — a `HYPOTHESIS_UNCERTAINTY_V2` or a companion construct with its own
+  ADR step, not a silent change to V1's weights or status model.
+
+### Q. Input validation and context isolation (fail closed)
+
+`HYPOTHESIS_UNCERTAINTY_V1`'s `calculate(...)` is a pure function of an already-assembled
+`HypothesisUncertaintyContext`. It performs **deterministic input validation** and **never repairs
+malformed authoritative diagnostic data** (M2-ADR-023 §2; the M2-ADR-032 fail-closed discipline).
+Each check raises a stable typed reason; none is silently normalized. A *valid empty state*
+(`NOT_APPLICABLE` / `INSUFFICIENT_EVIDENCE`, §D) is categorically distinct from an *invalid context*.
+
+Validated, with the reason code the Step-1 implementation must use:
+
+| Condition | Reason code | Behaviour |
+|---|---|---|
+| The same hypothesis identity (§H key) appears twice in the candidate set | `DUPLICATE_HYPOTHESIS` | reject |
+| An evidence input references a hypothesis not in the candidate set | `EVIDENCE_FOR_UNKNOWN_HYPOTHESIS` | reject |
+| A negative `supportingCount` / `contradictoryCount` / `inconclusiveCount` | `NEGATIVE_EVIDENCE_COUNT` | reject (also enforced by `DiagnosticConfidenceInputs`' own constructor) |
+| A context `interactionId` that does not match the interaction a candidate's evidence was drawn from | `EVIDENCE_INTERACTION_MISMATCH` | reject |
+| Two candidates whose objectives resolve to **different curriculum domains** | `CROSS_DOMAIN_CANDIDATE_SET` | reject |
+| An evidence observation whose owning domain differs from its hypothesis tuple's domain | `CROSS_DOMAIN_EVIDENCE` | reject |
+| A repeated governed observation id within one hypothesis tuple's evidence list (see §R) | `DUPLICATE_EVIDENCE_OBSERVATION` | reject |
+| An empty / null hypothesis identity field required by the §H order | `MALFORMED_HYPOTHESIS_IDENTITY` | reject |
+
+**Context isolation is normative, not advisory.** `HYPOTHESIS_UNCERTAINTY_V1` may never combine a
+Kafka-domain hypothesis with unrelated-domain evidence, and — because V1 is interaction-bound (§F) —
+may never combine evidence from two diagnostic interactions. The candidate set and every evidence
+observation in one `calculate(...)` call belong to **one learner, one diagnostic interaction, one
+curriculum domain**; the assembler establishes that boundary and the calculator re-checks it and
+fails closed. A hypothesis's domain is resolved from its objectives' authoritative curriculum
+context, never inferred.
+
+### R. Evidence identity and de-duplication
+
+The authoritative identity of a governed evidence observation is its **observation id** — the
+primary key of the persisted row the diagnostic-evidence pipeline writes, the same identity H5's
+`DiagnosticConfidenceService` already counts "distinct evidence observations" by. It is **not** the
+`(hypothesis, outcome)` pair and **not** the probe item id.
+
+The assembler reduces each hypothesis tuple's evidence, for this interaction, to the **set of
+distinct observation ids**, then classifies each once via `HypothesisEvidenceOutcome` into the
+`(supportingCount, contradictoryCount, inconclusiveCount)` triple the calculator consumes. One
+observation reaching the assembler through more than one projection (e.g. an H5 read *and* a
+probe-provenance read) is **deterministically de-duplicated by observation id** and influences a
+hypothesis exactly once (golden vector 10). Counting it twice because it arrived through two
+projections is a defect. The calculator does no de-duplication of its own, but §Q's
+`DUPLICATE_EVIDENCE_OBSERVATION` check rejects a context whose evidence list still carries a
+repeated observation id, so a mis-assembled context fails closed rather than double-counting.
