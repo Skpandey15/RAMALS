@@ -42,6 +42,11 @@ import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalCo
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalGate;
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeProposalGateResult;
 import io.ramals.learningplatform.diagnosticassessment.DiagnosticProbeTargetPort;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.CandidateDiscrimination;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.CandidateProbe;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationContext;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationResult;
 import io.ramals.learningplatform.assessment.hypothesisuncertainty.CandidateHypothesis;
 import io.ramals.learningplatform.assessment.hypothesisuncertainty.CandidateUncertainty;
 import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisEvidenceInput;
@@ -157,6 +162,8 @@ class EngineVersionFreezeTests {
         EngineVersionFreezeTests::diagnosticProbeProposalGate);
     put(HypothesisUncertaintyCalculatorV1.ENGINE_VERSION,
         EngineVersionFreezeTests::hypothesisUncertainty);
+    put(HypothesisDiscriminationCalculatorV1.ENGINE_VERSION,
+        EngineVersionFreezeTests::hypothesisDiscrimination);
   }};
 
   /**
@@ -218,7 +225,11 @@ class EngineVersionFreezeTests {
       // Minted with M2-ADR-034 step 1 (Amendment 1), when the hypothesis-uncertainty calculator was
       // first frozen. Nothing has been written under it yet, which is the only time an entry here
       // may be added rather than a new version identifier minted.
-      Map.entry("HYPOTHESIS_UNCERTAINTY_V1", "7838b08a795c54731ae564c22f294dd9b3f1a0097cff6b8e3117a0acf1db3201"));
+      Map.entry("HYPOTHESIS_UNCERTAINTY_V1", "7838b08a795c54731ae564c22f294dd9b3f1a0097cff6b8e3117a0acf1db3201"),
+      // Minted with M2-ADR-034 step 2 (Amendment 2), when the hypothesis-discrimination calculator
+      // was first frozen. Nothing has been written under it yet, which is the only time an entry
+      // here may be added rather than a new version identifier minted.
+      Map.entry("HYPOTHESIS_DISCRIMINATION_V1", "a665ee3daab838e3c30170aac6d8c9483035378b379520b62cd710061b2d331d"));
 
   @Test
   void everyVersionedEngineHasAFrozenVector() throws IOException {
@@ -1333,6 +1344,88 @@ class EngineVersionFreezeTests {
       result.addAll(list);
     }
     return result;
+  }
+
+  /**
+   * HYPOTHESIS_DISCRIMINATION_V1 (M2-ADR-034 Amendment 2) over a representative slice of its own
+   * eleven normative golden vectors: two equal hypotheses with a discriminating probe, the same
+   * pair with a non-scoreable probe, an uneven base distribution, a three-hypothesis 1-vs-2 split,
+   * a sole-participant hypothesis, two probes scored together (exercising canonical emission
+   * order), and an insufficient base. A change to the total-variation-distance formula, the
+   * synthetic-evidence-id derivation, the decimal contract, the emission order, or which base
+   * statuses become NOT_APPLICABLE moves this hash.
+   */
+  private static String hypothesisDiscrimination() {
+    HypothesisUncertaintyCalculatorV1 uncertaintyCalculator =
+        new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1());
+    HypothesisDiscriminationCalculatorV1 calculator =
+        new HypothesisDiscriminationCalculatorV1(uncertaintyCalculator);
+    UUID interactionId = UUID.fromString("01900000-0000-7000-8000-000000009100");
+    String domain = "KAFKA";
+    DiagnosticHypothesis a = huHypothesis("01900000-0000-7000-8000-000000003001");
+    DiagnosticHypothesis b = huHypothesis("01900000-0000-7000-8000-000000003002");
+    DiagnosticHypothesis c = huHypothesis("01900000-0000-7000-8000-000000003003");
+    UUID probe1 = UUID.fromString("01900000-0000-7000-8000-000000006001");
+    UUID probe2 = UUID.fromString("01900000-0000-7000-8000-000000006002");
+
+    StringBuilder out = new StringBuilder();
+    out.append(hdRender(calculator.calculate(hdContext(uncertaintyCalculator,
+        huContext(interactionId, domain, List.of(a, b), concat(
+            huObservations(interactionId, domain, a, 2, 0, 0),
+            huObservations(interactionId, domain, b, 2, 0, 0))),
+        List.of(new CandidateProbe(probe1, a, true))))))
+        .append('\n');
+    out.append(hdRender(calculator.calculate(hdContext(uncertaintyCalculator,
+        huContext(interactionId, domain, List.of(a, b), concat(
+            huObservations(interactionId, domain, a, 2, 0, 0),
+            huObservations(interactionId, domain, b, 2, 0, 0))),
+        List.of(new CandidateProbe(probe1, a, false))))))
+        .append('\n');
+    out.append(hdRender(calculator.calculate(hdContext(uncertaintyCalculator,
+        huContext(interactionId, domain, List.of(a, b), concat(
+            huObservations(interactionId, domain, a, 4, 0, 0),
+            huObservations(interactionId, domain, b, 1, 0, 0))),
+        List.of(new CandidateProbe(probe1, b, true))))))
+        .append('\n');
+    out.append(hdRender(calculator.calculate(hdContext(uncertaintyCalculator,
+        huContext(interactionId, domain, List.of(a, b, c), concat(
+            huObservations(interactionId, domain, a, 3, 0, 0),
+            huObservations(interactionId, domain, b, 2, 0, 0),
+            huObservations(interactionId, domain, c, 1, 0, 0))),
+        List.of(new CandidateProbe(probe1, a, true))))))
+        .append('\n');
+    out.append(hdRender(calculator.calculate(hdContext(uncertaintyCalculator,
+        huContext(interactionId, domain, List.of(a), huObservations(interactionId, domain, a, 3, 0, 0)),
+        List.of(new CandidateProbe(probe1, a, true))))))
+        .append('\n');
+    out.append(hdRender(calculator.calculate(hdContext(uncertaintyCalculator,
+        huContext(interactionId, domain, List.of(a, b), concat(
+            huObservations(interactionId, domain, a, 2, 0, 0),
+            huObservations(interactionId, domain, b, 2, 0, 0))),
+        List.of(new CandidateProbe(probe2, b, true), new CandidateProbe(probe1, a, true))))))
+        .append('\n');
+    out.append(hdRender(calculator.calculate(hdContext(uncertaintyCalculator,
+        huContext(interactionId, domain, List.of(a, b, c), List.of()),
+        List.of(new CandidateProbe(probe1, a, true))))))
+        .append('\n');
+    return out.toString();
+  }
+
+  private static HypothesisDiscriminationContext hdContext(
+      HypothesisUncertaintyCalculatorV1 uncertaintyCalculator, HypothesisUncertaintyContext baseContext,
+      List<CandidateProbe> candidates) {
+    return new HypothesisDiscriminationContext(
+        baseContext, uncertaintyCalculator.calculate(baseContext), candidates);
+  }
+
+  private static String hdRender(HypothesisDiscriminationResult result) {
+    StringBuilder line = new StringBuilder(result.status().name());
+    for (CandidateDiscrimination candidate : result.probes()) {
+      line.append('|').append(candidate.probeItemVersionId())
+          .append(':').append(candidate.hypothesis().targetObjectiveId())
+          .append(':').append(candidate.score());
+    }
+    return line.toString();
   }
 
   private static String huRender(HypothesisUncertaintyResult result) {

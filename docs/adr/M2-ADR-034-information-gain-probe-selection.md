@@ -1,4 +1,4 @@
-# M2-ADR-034: Diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `HYPOTHESIS_DISCRIMINATION_V1`, formerly proposed as "`INFORMATION_GAIN_V1`") — design only, Steps 1–2 ratified for implementation
+# M2-ADR-034: Diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `HYPOTHESIS_DISCRIMINATION_V1`, formerly proposed as "`INFORMATION_GAIN_V1`") — Steps 1–2 implemented and inert, Step 3 design-only
 
 - **Status:** Proposed. **Amended — 2026-09-10** — see
   [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10): ratifies the deterministic
@@ -10,7 +10,8 @@
   information gain undefensible from existing RAMALS semantics (no outcome-probability model
   exists or may be invented), and freezes instead a non-expectation deterministic construct named
   **`HYPOTHESIS_DISCRIMINATION_V1`** — its complete mathematics and golden vectors — authorizing its
-  inert implementation as **Step 2**. `DIAGNOSTIC_SELECTION_V6` (Step 3) remains design-only.
+  inert implementation as **Step 2** (implemented 2026-09-11). `DIAGNOSTIC_SELECTION_V6` (Step 3)
+  remains design-only.
 - **Date:** 2026-09-08
 - **Decides:** the design constraints binding a future deterministic information-gain diagnostic
   probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` that supersedes only `V5`'s final
@@ -38,7 +39,7 @@
   **inert `HYPOTHESIS_UNCERTAINTY_V1` foundation construct** (§4 as frozen there; **Step 1**,
   implemented). [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11) additionally
   authorizes implementation of the **inert `HYPOTHESIS_DISCRIMINATION_V1` scoring construct only**
-  (§3 as frozen there; **Step 2**) — the identifier this ADR's §3 originally anticipated as
+  (§3 as frozen there; **Step 2**, implemented) — the identifier this ADR's §3 originally anticipated as
   `INFORMATION_GAIN_V1`; Amendment 2 explains why that name does not survive analysis. Together the
   two amendments still authorize **no** `DIAGNOSTIC_SELECTION_V6` code, **no** migration, **no**
   contract change, and **no** `SelectionReason` value. `V6` is not implemented.
@@ -674,9 +675,10 @@ the band, hence the weight, unchanged — monotonic non-decreasing only).
 
 > **Amended 2026-09-11 (Amendment 2):** Step 2's mathematics are now frozen as
 > `HYPOTHESIS_DISCRIMINATION_V1`, not `INFORMATION_GAIN_V1` — see
-> [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11). Step 2 is **ratified, not yet
-> implemented**; it stays out of this Step-1 amendment's authorization above. Step 3
-> (`DIAGNOSTIC_SELECTION_V6`) remains design-only, unaffected by this row.
+> [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11). Step 2 is **implemented
+> (2026-09-11), inert**; it stays out of this Step-1 amendment's authorization above, which remains
+> scoped to Step 1 only. Step 3 (`DIAGNOSTIC_SELECTION_V6`) remains design-only, unaffected by this
+> row.
 
 After Step 1:
 
