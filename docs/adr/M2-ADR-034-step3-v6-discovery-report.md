@@ -23,6 +23,40 @@ No production code, migration, or test was changed to produce this report. It is
 > final verdict of this report is unchanged: implementation may not begin until Amendment 3 is
 > reviewed and merged.
 
+> **Correction, round 2 (same day, PR review).** A review of Amendment 3's first draft found four
+> further defects, all now fixed directly in the ADR (Amendment 3 was not yet merged, so its own
+> draft was corrected in place rather than superseded):
+>
+> **A. One probe does not equal one hypothesis.** §12 below and Amendment 3's original §P claimed a
+> single governed candidate probe must score `0.0000`, citing Amendment 2 §H. That citation was
+> wrong — §H proves `0.0000` for a sole *participating hypothesis*, never from a candidate *count*.
+> With ≥2 participating hypotheses, a single eligible probe that re-probes an already-evidenced
+> hypothesis can legitimately score above zero. **Candidate count never determines a discrimination
+> score, in either direction.** Amendment 3 §P's frozen *policy* (select the sole eligible probe
+> directly, skip Step 1/2) is unchanged; the rationale is corrected to "there is only one action, so
+> ranking cannot change the outcome" — never a claim about what score that probe would receive.
+>
+> **B. The bound was mutable-configuration-derived, not real.** §18's `H <= 28` figure (misses × 4,
+> with misses bounded by default `singleChoiceTarget(5) + fillBlankTarget(2) = 7`) cited ordinary
+> mutable `@ConfigurationProperties` fields as if they were a frozen ceiling. Amendment 3 §E now
+> freezes an explicit, derivation-justified `MAX_AUTHORIZED_HYPOTHESES_V6 = 4`, independent of any
+> mutable configuration — see §18's correction below.
+>
+> **C. Historical exposure snapshot.** Earlier text asserted full replay reconstructability while
+> separately conceding exposure state could grow between decision and replay — an internal
+> contradiction. Amendment 3 §V now freezes `destinationExposureCutoff` (the destination attempt's
+> own, already-persisted, immutable `core.assessment_attempt.created_at`) as the exposure-state
+> boundary a replay must use, with an exact SQL-level reconstruction against already-existing
+> columns. **Verdict: YES, reconstructable without a migration** — full citation in Amendment 3 §V.
+>
+> **D. Actionable hypothesis set.** §4/§5/§11 did not distinguish a hypothesis that is merely
+> *relationship-authorized* (`ProbeRelationshipService.resolve` returns `CANDIDATES_AVAILABLE`) from
+> one that is `V6`-*actionable* (additionally has ≥1 candidate surviving destination-attempt
+> eligibility). Amendment 3 §H/§I now freeze this distinction: only actionable hypotheses ever enter
+> `HypothesisUncertaintyContext.candidates()` — a relationship-authorized-but-non-actionable
+> hypothesis is excluded from Step 1 entirely, so it can never consume uncertainty mass that would
+> otherwise distort an actionable hypothesis's normalized value.
+
 ---
 
 ## 1. Repository state
@@ -172,6 +206,19 @@ This is the single most consequential fact in this report (expanded in §11).
 changes. It is **not yet achievable** for any multi-hypothesis case, because the thing to feed
 `HYPOTHESIS_DISCRIMINATION_V1` (a comparison across ≥2 hypotheses) doesn't exist as a producible
 value anywhere in the current runtime.
+
+**Correction (round 2, item D) — the relationship-authorized / actionable distinction.** This
+section's original analysis did not distinguish "a hypothesis `ProbeRelationshipService.resolve`
+authorizes" from "a hypothesis `V6` can actually act on for *this* destination attempt." A
+relationship-authorized hypothesis whose every candidate is excluded by destination-attempt
+eligibility (already exposed, cross-domain, etc.) is not actionable, and — per Amendment 3 §H/§I —
+must never be admitted to `HypothesisUncertaintyContext.candidates()`, because doing so would let it
+consume a share of the normalized uncertainty mass and measurably shift *actionable* hypotheses'
+values, despite `V6` never being able to select any action for it. Candidate authority (this
+section's original question) is unaffected by this distinction — it is still true that every
+candidate probe must originate from the same existing `ProbeRelationshipResolver`/
+`ProbeRelationshipService` authority — but *hypothesis* admission to Step 1's own input is now
+additionally gated on actionability, not merely relationship authorization.
 
 ---
 
@@ -364,6 +411,15 @@ underlying diagnostic signal), and Amendment 3 §K explains why this does not co
 2 §K's own frozen ranking contract (Step 2's ranking is correct for a result that carries genuine
 separating power; Step 3 separately decides *when* to act on it).
 
+**Correction (round 2, item A):** an earlier version of Amendment 3 §P additionally, and
+incorrectly, claimed that a candidate-probe *count* of exactly one implies `0.0000` by Amendment 2
+§H. It does not — §H's proof is about a sole *participating hypothesis*, never about how many
+candidate probes exist. Amendment 3 §P now states the corrected rationale (skip Step 1/2 because
+there is only one possible action, not because the score is provably zero) and §J adds a
+supporting note that candidate *count*, for one hypothesis or the whole working set, never by
+itself determines any score — only (a) the number of *participating* hypotheses and (b) whether a
+given candidate's own target hypothesis already carries prior evidence do.
+
 ---
 
 ## 13. `NOT_APPLICABLE` semantics (Step 1)
@@ -429,17 +485,30 @@ are pure functions with no shared mutable state. **No new concurrency risk ident
 
 ## 18. Performance impact
 
-Under §11's finding, `H` (candidate hypotheses) is effectively always 1 with the current discovery
-walk, and `P` (candidate probes for that one hypothesis) is bounded by however many verified
-scoreable items are tagged to one target objective — small, curriculum-bounded, typically single
-digits. Step 2's own cost is at most `2P` calls into Step 1, each `O(H log H)` — trivial at `H=1`.
-DB calls before the calculator ever runs are already bounded (`resolve` does a handful of indexed
-reads per (miss, type) pair; `itemsForObjective` and `findObjectiveDomainCodes` are already batched,
-not N+1). **If** Amendment 3 resolves §11 by choosing to enumerate multiple hypotheses (e.g., all
-misses × all relationship types instead of stopping at the first hit), the DB-call count before
-scoring could grow to `O(misses × 4)` in the worst case — worth re-estimating once that direction is
-chosen, but not a blocking concern at today's typical miss counts (small, bounded by one attempt's
-own item count).
+**Corrected (round 2, item B).** An earlier draft of this section, and of Amendment 3 §AA, bounded
+`H` by `(misses in source attempt) × 4` and cited the *default* adaptive-packet configuration
+(`singleChoiceTarget(5) + fillBlankTarget(2) = 7`, so `H <= 28`) as if it were a frozen ceiling. It
+is not: `AdaptiveDiagnosticFormProperties`'s target sizes are ordinary mutable
+`@ConfigurationProperties` fields with setters and no frozen maximum, so that figure could silently
+change with no ADR review.
+
+**Amendment 3 §E now freezes `MAX_AUTHORIZED_HYPOTHESES_V6 = 4`** — a bound derived from the *one*
+compile-time-fixed cardinality in this entire feature area
+(`HypothesisDrivenProbeDiagnosticSelector.RELATIONSHIP_TYPE_PRIORITY.size() == 4`), independent of
+any mutable configuration. `H <= 4` always, regardless of packet-size configuration. `P` (candidate
+probes for one actionable hypothesis) remains bounded, as Amendment 2 §T already accepts, by however
+many verified/scoreable/unseen items are tagged to one target objective — small and
+curriculum-bounded, not newly bounded by this amendment. Step 2's own cost is at most `2P` calls into
+Step 1 per candidate probe, each `O(H log H)` — with `H` fixed at `4`, worst-case Step-2 cost is a
+small constant multiple of a quantity Amendment 2 already treats as trivial, independent of
+adaptive-packet configuration.
+
+DB calls **before** the calculator ever runs (the `(miss × type)` walk populating the working set)
+are not reduced by this bound in the worst case — the walk may still inspect up to `misses × 4`
+`(miss, type)` pairs before finding `MAX_AUTHORIZED_HYPOTHESES_V6` actionable hypotheses, or may
+exhaust the domain first. `resolve` itself does a handful of indexed reads per pair;
+`itemsForObjective`/`findObjectiveDomainCodes` are already batched, not N+1. This DB-call-count
+consideration is orthogonal to, and does not affect, the `H`/`P` computation bound above.
 
 ---
 
@@ -469,18 +538,24 @@ DiagnosticService.selectHypothesisDrivenProbeForm               [unchanged]
         |
         v
 [[ NOT YET BUILT — the actual V6 seam ]]
-resolveHypothesisProbeSelection  -->  a V6-aware replacement that must first resolve
-        |                              Amendment-3 Decisions #1 (activation/evidence scope)
-        |                              and #2 (multi-hypothesis enumeration) below
+resolveHypothesisProbeSelection  -->  a V6-aware replacement, now fully specified by
+        |                              Amendment 3 §C (source interaction), §E (bounded
+        |                              enumeration, MAX_AUTHORIZED_HYPOTHESES_V6 = 4), and
+        |                              §H (actionable-hypothesis filter, below)
         v
 ProbeRelationshipResolver / ProbeRelationshipService             [reused verbatim, unchanged]
         |  ProbeResolution.candidates() : List<ProbeCandidateItem>   <- read in full, not .get(0)
+        v
+[[ NEW ]] actionability filter (Amendment 3 §H) -- a relationship-authorized hypothesis with
+        |  zero surviving destination-eligible candidates is discarded HERE, before Step 1,
+        |  never merely excluded from Step 2's candidate list
         v
 [[ NEW, small ]] CandidateProbe adapter                          <- owned by whichever class
         |                                                            replaces resolveHypothesisProbeSelection;
         |                                                            NOT a controller, NOT AI/MCP
         v
-HypothesisUncertaintyContextAssembler.assemble(interactionId, hypotheses)   [reused verbatim]
+HypothesisUncertaintyContextAssembler.assemble(interactionId, hypotheses)   [reused verbatim;
+        |                                          interactionId = source attempt, Amendment 3 §C]
         v
 HypothesisUncertaintyCalculatorV1.calculate(...)                 [reused verbatim, Step 1]
         v
@@ -488,10 +563,15 @@ HypothesisDiscriminationContext(baseContext, baseResult, candidateProbes)
         v
 HypothesisDiscriminationCalculatorV1.calculate(...)              [reused verbatim, Step 2]
         v
-[[ NEW ]] V6 deterministic ranking (§K, reused verbatim) -> choose highest-scoring CandidateDiscrimination
-        |                                    (fallback: today's resolution.candidates().get(0)
-        |                                     when Step 2 status != SCORABLE or all scores tie at 0.0000
-        |                                     and no tie-break policy has been frozen — Amendment 3)
+[[ NEW ]] Amendment 3 §J activation gate (7 numbered conditions) -> pass?
+        |
+        +-- NO  --> fallback: today's resolution.candidates().get(0), exactly as V5 chooses it now
+        |           (§J/§K -- includes maxScore == 0.0000, which is a valid SCORABLE result, not
+        |            an error, and is never treated as one)
+        |
+        +-- YES --> V6 deterministic ranking (Amendment 2 §K, reused verbatim) ->
+                     highest-scoring CandidateDiscrimination (Amendment 2's own frozen
+                     canonical tie-break resolves a positive-score tie)
         v
 HypothesisDrivenProbeDiagnosticSelector.Selection(...)           [unchanged record shape]
         v
@@ -502,11 +582,13 @@ AdaptiveDiagnosticSelector.select(...)                           [V2 — complet
 finishAdaptiveSelection -> repository.insertSelectedItems -> ProbeProvenanceRepository.insert
 ```
 
-Fallback path (both today and under any V6 design that respects §2): if the V6-aware resolution step
-cannot produce a ranked `Selection` (no hypothesis, Step 1/2 not `APPLICABLE`/`SCORABLE`, or — per
-§11 — essentially every real invocation today), it returns `null` exactly as
+Fallback path (both today and under the now-frozen V6 design, Amendment 3 §J/§K/§L/§M/§O/§P): if the
+V6-aware resolution step's activation gate fails for any reason (no source interaction, empty
+actionable-hypothesis working set, empty candidate set, Step 1 not `APPLICABLE`, fewer than two
+participants, Step 2 not `SCORABLE`, or `maxScore == 0.0000`), it returns `null` exactly as
 `resolveHypothesisProbeSelection` does today, and every downstream step behaves byte-for-byte as it
-does on `main` right now.
+does on `main` right now. A genuine validation/invariant failure (§N) is the one exception: it fails
+the transaction closed instead of falling back.
 
 ---
 
@@ -537,8 +619,10 @@ does on `main` right now.
 | `V1`–`V5` compatibility | Yes (frozen, hashed); reaffirmed Amendment 3 §S/§T | Confirmed unaffected by any proposed seam (§20) | None | No |
 | ADR-032 boundary | Yes (Amendment 2 §E/§V; M2-ADR-032 §5/§6); reaffirmed Amendment 3 §W | No accidental path exists today | None | No (already governed) |
 | ADR-033 boundary | Yes (M2-ADR-033 §6, names "or a future V6" explicitly); reaffirmed Amendment 3 §X | No graph dependency anywhere in the diagnostic path | None | No |
-| Performance bound | **Now frozen — Amendment 3 §AA** (`H ≤ misses × 4`, both pre-existing quantities) | N/A | None | Resolved |
-| Replay/reproducibility | **Now frozen — Amendment 3 §V** | N/A | Exposure-set monotonic-growth caveat noted, pre-existing to `V1`–`V5` | No (pre-existing property, not new) |
+| Hypothesis working-set bound | **Now frozen — Amendment 3 §E** (`MAX_AUTHORIZED_HYPOTHESES_V6 = 4`, derived from the frozen `RELATIONSHIP_TYPE_PRIORITY.size()`, independent of mutable packet-size configuration) | N/A | None (corrected from an earlier, mutable-configuration-derived draft — round 2, item B) | Resolved |
+| Actionable vs. relationship-authorized hypothesis | **Now frozen — Amendment 3 §H/§I** | N/A | None (round 2, item D) | Resolved |
+| Performance bound | **Now frozen — Amendment 3 §AA** (`H ≤ MAX_AUTHORIZED_HYPOTHESES_V6 = 4`, not a mutable-configuration-derived figure) | N/A | None | Resolved |
+| Replay/reproducibility | **Now frozen — Amendment 3 §V**, using `destinationExposureCutoff` (round 2, item C) | N/A | None — the earlier "monotonic-growth caveat" was an unresolved internal contradiction, now closed by the cutoff-bounded reconstruction query | Resolved |
 
 ---
 
@@ -612,13 +696,18 @@ deliberately, not inferred.
 **Risk if left unspecified:** Same as Decision 1 — without resolving this, Decision 1(a) alone still
 leaves H=1 in the overwhelming majority of cases.
 
-**Resolved by Amendment 3 §E**, choosing a variant of option (c) bounded not by an invented cap but
-by the two already-existing quantities identified during drafting: `RELATIONSHIP_TYPE_PRIORITY
-.size() = 4` and the source attempt's own (already operationally bounded, e.g. by
-`AdaptiveDiagnosticFormProperties`'s default target sizes) miss count — walking the full
-`misses × RELATIONSHIP_TYPE_PRIORITY` domain exhaustively, de-duplicated by exact `DiagnosticHypothesis`
-identity (§F), explicitly justified (not merely preferred) by Amendment 2 §H's own theorem making
-option (d) mathematically certain to be inert, not just the status quo.
+**Resolved by Amendment 3 §E** — with a correction applied during PR review (round 2, item B). The
+first draft chose a variant of option (c) bounded by `RELATIONSHIP_TYPE_PRIORITY.size() = 4` **times
+the source attempt's miss count**, citing `AdaptiveDiagnosticFormProperties`'s default target sizes
+as an "operationally bounded" figure. That was wrong: those target sizes are mutable
+`@ConfigurationProperties` with no frozen maximum, so the resulting bound (`H <= 28` under today's
+defaults) could silently change with no ADR review. **Corrected:** Amendment 3 §E now freezes a
+single explicit constant, `MAX_AUTHORIZED_HYPOTHESES_V6 = 4`, independent of any mutable
+configuration — the walk still covers the full `misses × RELATIONSHIP_TYPE_PRIORITY` domain (§E),
+de-duplicated by exact `DiagnosticHypothesis` identity (§F) and filtered to actionable hypotheses
+only (§H), but **admission to the working set stops once 4 actionable hypotheses are admitted**,
+regardless of how many misses exist. Explicitly justified (not merely preferred) by Amendment 2 §H's
+own theorem making option (d) mathematically certain to be inert, not just the status quo.
 
 ### Decision 3 — Zero-score / tie fallback (§12/§16 of the numbered prompt)
 **Why unresolved:** No document says what V6 does when every candidate scores `0.0000` (the expected
@@ -692,6 +781,30 @@ the same way.
 failures fail the attempt-creation transaction closed, consistent with how Amendment 1/2's own
 fail-closed calculators are already treated everywhere else in this codebase (no caller silently
 substitutes a fallback for a `*ValidationException`).
+
+### Decision 8 — One-candidate-probe mathematical rationale — corrected during PR review (round 2)
+**Why unresolved:** Amendment 3's first draft (§P) claimed Amendment 2 §H proves a single governed
+candidate probe must score `0.0000`. That citation was incorrect — §H proves `0.0000` for a sole
+*participating hypothesis*, never from a candidate *count*; with ≥2 participating hypotheses, a
+single eligible probe re-probing an already-evidenced hypothesis can legitimately score above zero.
+**Resolved by Amendment 3 §P (corrected) and §J's supporting mathematical note**: the frozen
+*policy* is unchanged (select the sole eligible probe directly, skip Step 1/2, since there is only
+one action to choose regardless of its score) but the rationale no longer makes any claim about what
+score that probe would receive — candidate count, for one hypothesis or the whole working set,
+never by itself determines a discrimination score.
+
+### Decision 9 — Historical exposure snapshot for replay — corrected during PR review (round 2)
+**Why unresolved:** Amendment 3's first draft (§V) asserted full replay reconstructability while
+separately conceding exposure state could grow between the original decision and a later replay —
+an internal contradiction, since the candidate pool a decision considers is itself exposure-filtered.
+**Resolved by Amendment 3 §V**: `destinationExposureCutoff` (the destination attempt's own,
+already-persisted, immutable `core.assessment_attempt.created_at`) is now the frozen exposure-state
+boundary a replay must use, with an exact SQL-level reconstruction query cited against real,
+already-existing columns (`core.assessment_attempt.created_at`, `core.assessment_attempt_item`,
+`core.assessment_item_lineage`) — **verdict: reconstructable with no migration.** Today's real-time
+`V5`/`V6` decision needs no code change (at decision time, nothing later exists yet, so the
+unbounded and cutoff-bounded queries agree); only a replay/audit tool run later must use the
+cutoff-bounded form.
 
 ---
 

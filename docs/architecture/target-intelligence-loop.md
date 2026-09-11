@@ -102,11 +102,13 @@ ORGANIZATIONAL CAPABILITY DIGITAL TWIN
 ### Stages 7–9 in detail (M2-ADR-034)
 
 ```
-immediately preceding completed source attempt      (Amendment 3 §C -- never the destination attempt)
-        ->
+immediately preceding completed source attempt      (Amendment 3 §C -- never the destination attempt;
+        ->                                             exposure reads use destinationExposureCutoff, §V)
 misses (presentation_order) x RELATIONSHIP_TYPE_PRIORITY   (Amendment 3 §E -- bounded, exhaustive walk,
         ->                                                  not the first-match-wins V5 walk today)
-bounded authorized hypothesis set, de-duplicated     (Amendment 3 §F/§G)
+relationship-authorized, de-duplicated, actionable   (Amendment 3 §F/§G/§H -- a hypothesis with zero
+hypotheses only, capped at                           surviving destination-eligible candidates is
+MAX_AUTHORIZED_HYPOTHESES_V6 = 4                     excluded here, never merely from Step 2's list)
         ->
 HYPOTHESIS_UNCERTAINTY_V1                            (stage 7 — implemented, inert; Amendment 1)
         ->
@@ -114,15 +116,17 @@ bounded deterministic candidate probes, full list    (Amendment 3 §H; V5/H4b re
         ->                                             no M2-ADR-032 proposal enters here)
 HYPOTHESIS_DISCRIMINATION_V1                         (stage 8 — implemented, inert; Amendment 2)
         ->
-if >=2 participate and a score separates them        (Amendment 3 §J activation rule)
+if >=2 participate and a score separates them        (Amendment 3 §J's 7-condition activation rule)
         ->
 deterministic score / ranking                        (score DESC -> hypothesis canonical order -> probe id)
         ->
 DIAGNOSTIC_SELECTION_V6   [future, unimplemented]     (stage 9 — Step 3; runtime semantics ratified
                                                         by Amendment 3, code not authorized)
 
-fallback (no source attempt / no hypothesis / <2 participants / all scores 0.0000 / any non-SCORABLE
-status): preserve V5's existing selection exactly (Amendment 3 §K/§L/§M/§O/§P)
+fallback (no source attempt / no actionable hypothesis / <2 participants / maxScore == 0.0000 (a
+valid, non-error SCORABLE result) / any non-SCORABLE status): preserve V5's existing selection
+exactly (Amendment 3 §K/§L/§M/§O/§P) -- never confused with a genuine validation/invariant failure
+(§N), which fails attempt creation closed instead
 ```
 
 `HYPOTHESIS_DISCRIMINATION_V1` is a non-expectation deterministic discrimination score (total
