@@ -4,6 +4,7 @@ import io.ramals.learningplatform.assessment.DiagnosticHypothesis;
 import io.ramals.learningplatform.assessment.HypothesisEvidenceOutcome;
 import io.ramals.learningplatform.curriculum.AssessmentItemType;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,19 @@ import org.springframework.stereotype.Service;
  * HypothesisUncertaintyRepository#findPerInteractionEvidence}, scoped to exactly the supplied {@code
  * interactionId} (one attempt), is read. No H6, no H7, no cross-attempt H5 history, no misconception
  * evidence, and no M2-ADR-033 graph read appears anywhere in this class.
+ *
+ * <p><b>De-duplication by observation id (Amendment 1 §R) happens here, not in the calculator.</b>
+ * A governed observation can legitimately reach this method through more than one projection (e.g.
+ * an H5-shaped read and a probe-provenance read both naming the same {@code
+ * core.diagnostic_probe_provenance} row). Such a benign repeat -- the same id, attributed to the
+ * same hypothesis, classified to the same outcome -- is folded into a single {@link
+ * HypothesisEvidenceInput} before any {@link HypothesisUncertaintyContext} is built, so it
+ * influences a hypothesis exactly once (§J vector 10). A repeat that instead <em>disagrees</em> --
+ * a different hypothesis or a different outcome for the same observation id -- is corrupt input:
+ * this method fails closed rather than silently choosing one of the conflicting records. {@link
+ * HypothesisUncertaintyCalculatorV1} performs no de-duplication of its own; a repeated id that still
+ * reaches it is refused as {@code DUPLICATE_EVIDENCE_OBSERVATION}, the fail-closed backstop for a
+ * mis-assembled context.
  */
 @Service
 public class HypothesisUncertaintyContextAssembler {
@@ -48,7 +62,9 @@ public class HypothesisUncertaintyContextAssembler {
    * (incorrectly) points cross-domain is caught by {@link HypothesisUncertaintyCalculatorV1}'s own
    * validation rather than silently assembled away.
    *
-   * @throws HypothesisUncertaintyAssemblyException if an objective's domain cannot be resolved
+   * @throws HypothesisUncertaintyAssemblyException if an objective's domain cannot be resolved, or
+   *     if the same governed observation id is returned with disagreeing hypothesis/outcome by more
+   *     than one read (a data-integrity failure, never silently resolved by picking one)
    * @throws IllegalArgumentException if {@code candidates} is empty -- there is no trigger objective
    *     to resolve a domain from; call sites should not invoke the assembler for an empty set
    *     (the calculator's own {@code NOT_APPLICABLE} handling is for a context, not for skipping
@@ -71,7 +87,9 @@ public class HypothesisUncertaintyContextAssembler {
     String domainCode = domainOf(domainByObjectiveId, triggerObjectiveId);
 
     List<CandidateHypothesis> candidateHypotheses = new ArrayList<>(candidates.size());
-    List<HypothesisEvidenceInput> evidence = new ArrayList<>();
+    // Keyed by observation id so the same governed observation, however many projections return it,
+    // is folded into exactly one HypothesisEvidenceInput before the context is built (§R).
+    Map<UUID, HypothesisEvidenceInput> evidenceByObservationId = new LinkedHashMap<>();
     for (DiagnosticHypothesis hypothesis : candidates) {
       String candidateDomainCode = domainOf(domainByObjectiveId, hypothesis.targetObjectiveId());
       candidateHypotheses.add(new CandidateHypothesis(hypothesis, candidateDomainCode));
@@ -81,18 +99,26 @@ public class HypothesisUncertaintyContextAssembler {
           hypothesis.relationshipType())) {
         HypothesisEvidenceOutcome outcome = HypothesisEvidenceOutcome.classify(
             AssessmentItemType.of(raw.itemType()), raw.isCorrect());
-        evidence.add(new HypothesisEvidenceInput(
-            raw.observationId(), hypothesis, outcome, interactionId, candidateDomainCode));
+        HypothesisEvidenceInput input = new HypothesisEvidenceInput(
+            raw.observationId(), hypothesis, outcome, interactionId, candidateDomainCode);
+
+        HypothesisEvidenceInput existing = evidenceByObservationId.putIfAbsent(raw.observationId(), input);
+        if (existing != null && !existing.equals(input)) {
+          throw HypothesisUncertaintyAssemblyException.conflictingObservation(raw.observationId());
+        }
+        // existing != null && existing.equals(input): the same observation reached this method
+        // through another projection -- already recorded once, nothing more to do (§J vector 10).
       }
     }
 
-    return new HypothesisUncertaintyContext(interactionId, domainCode, candidateHypotheses, evidence);
+    return new HypothesisUncertaintyContext(
+        interactionId, domainCode, candidateHypotheses, List.copyOf(evidenceByObservationId.values()));
   }
 
   private static String domainOf(Map<UUID, String> domainByObjectiveId, UUID objectiveId) {
     String domainCode = domainByObjectiveId.get(objectiveId);
     if (domainCode == null) {
-      throw new HypothesisUncertaintyAssemblyException(objectiveId);
+      throw HypothesisUncertaintyAssemblyException.unresolvableDomain(objectiveId);
     }
     return domainCode;
   }

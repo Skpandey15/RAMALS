@@ -98,6 +98,60 @@ class HypothesisUncertaintyContextAssemblerTests {
   }
 
   @Test
+  @DisplayName("ADR vector 10: the same governed observation returned through duplicate projections "
+      + "is emitted into the context exactly once, and the full pipeline yields MODERATE / 1.0000")
+  void sameObservationThroughDuplicateProjectionsIsEmittedOnce() {
+    DiagnosticHypothesis a = hypothesis(TARGET_A);
+    UUID obs1 = UUID.randomUUID();
+    UUID obs2 = UUID.randomUUID();
+    when(repository.findObjectiveDomainCodes(any())).thenReturn(Map.of(
+        TRIGGER_OBJECTIVE, "KAFKA", TARGET_A, "KAFKA"));
+    // obs1 is returned twice -- as if two projections (e.g. an H5-shaped read and a probe-provenance
+    // read) both named the same core.diagnostic_probe_provenance row -- with agreeing facts.
+    when(repository.findPerInteractionEvidence(INTERACTION_ID, TRIGGER_OBJECTIVE, TARGET_A,
+        ProbeRelationshipType.ROOT_CAUSE_PROBE))
+        .thenReturn(List.of(
+            new HypothesisUncertaintyRepository.RawObservation(obs1, false, "SINGLE_CHOICE"),
+            new HypothesisUncertaintyRepository.RawObservation(obs2, false, "SINGLE_CHOICE"),
+            new HypothesisUncertaintyRepository.RawObservation(obs1, false, "SINGLE_CHOICE")));
+
+    HypothesisUncertaintyContext context = assembler().assemble(INTERACTION_ID, List.of(a));
+
+    assertThat(context.evidence()).hasSize(2);
+    assertThat(context.evidence()).extracting(HypothesisEvidenceInput::observationId)
+        .containsExactlyInAnyOrder(obs1, obs2);
+
+    // End-to-end: exactly the ADR's own vector 10 outcome (Amendment 1 §J).
+    HypothesisUncertaintyResult result = new HypothesisUncertaintyCalculatorV1(
+        new io.ramals.learningplatform.assessment.DiagnosticConfidenceCalculatorV1()).calculate(context);
+    assertThat(result.status()).isEqualTo(HypothesisUncertaintyStatus.APPLICABLE);
+    assertThat(result.candidates().get(0).band())
+        .isEqualTo(io.ramals.learningplatform.assessment.DiagnosticConfidenceBand.MODERATE);
+    assertThat(result.candidates().get(0).normalizedValue())
+        .isEqualByComparingTo(new java.math.BigDecimal("1.0000"));
+  }
+
+  @Test
+  @DisplayName("the same observation id returned with disagreeing facts by different reads fails "
+      + "assembly closed -- it is never silently resolved by choosing one record")
+  void conflictingDuplicateObservationFailsAssemblyClosed() {
+    DiagnosticHypothesis a = hypothesis(TARGET_A);
+    UUID obs1 = UUID.randomUUID();
+    when(repository.findObjectiveDomainCodes(any())).thenReturn(Map.of(
+        TRIGGER_OBJECTIVE, "KAFKA", TARGET_A, "KAFKA"));
+    // The same observation id, but one read says incorrect (-> SUPPORTING) and the other says
+    // correct (-> CONTRADICTORY) -- a data-integrity failure, not a benign repeat.
+    when(repository.findPerInteractionEvidence(INTERACTION_ID, TRIGGER_OBJECTIVE, TARGET_A,
+        ProbeRelationshipType.ROOT_CAUSE_PROBE))
+        .thenReturn(List.of(
+            new HypothesisUncertaintyRepository.RawObservation(obs1, false, "SINGLE_CHOICE"),
+            new HypothesisUncertaintyRepository.RawObservation(obs1, true, "SINGLE_CHOICE")));
+
+    assertThatThrownBy(() -> assembler().assemble(INTERACTION_ID, List.of(a)))
+        .isInstanceOf(HypothesisUncertaintyAssemblyException.class);
+  }
+
+  @Test
   @DisplayName("reads evidence scoped to exactly the supplied interaction id, per candidate tuple")
   void readsEvidenceScopedToTheSuppliedInteractionOnly() {
     DiagnosticHypothesis a = hypothesis(TARGET_A);

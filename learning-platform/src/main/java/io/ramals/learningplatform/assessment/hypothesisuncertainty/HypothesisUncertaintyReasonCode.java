@@ -34,10 +34,13 @@ public enum HypothesisUncertaintyReasonCode {
    * evidence for. */
   CROSS_DOMAIN_EVIDENCE,
 
-  /** The same governed observation id appears more than once with disagreeing outcomes or against
-   * disagreeing hypotheses -- see {@link HypothesisUncertaintyCalculatorV1}'s javadoc for how this
-   * reconciles Amendment 1 §J vector 10 (a benign repeat -- same id, same hypothesis, same outcome --
-   * is silently de-duplicated) with §Q (a repeat that disagrees is corrupt input and is rejected). */
+  /** The same governed observation id appears more than once in {@code context.evidence()} --
+   * whether or not the repeated records agree. Amendment 1 §R is explicit that de-duplicating a
+   * benign repeat (the same observation reaching the pipeline through more than one projection,
+   * §J vector 10) is {@link HypothesisUncertaintyContextAssembler}'s job, not the calculator's: "the
+   * calculator does no de-duplication of its own." A repeated id that still reaches {@link
+   * HypothesisUncertaintyCalculatorV1} therefore always means assembly failed to reduce it, and the
+   * whole context is refused -- never silently folded together, never one record silently chosen. */
   DUPLICATE_EVIDENCE_OBSERVATION,
 
   /** A candidate hypothesis is missing one of the identity fields Amendment 1 §H's canonical order

@@ -13,11 +13,14 @@ import java.util.UUID;
  *
  * @param observationId the authoritative identity of this observation -- the persisted {@code
  *     core.diagnostic_probe_provenance} row id, the same identity H5 counts "distinct evidence
- *     observations" by (Amendment 1 §R). Two inputs with the same id and the same {@code hypothesis}
- *     / {@code outcome} are one observation reaching the assembler twice (e.g. through two
- *     projections) and are silently de-duplicated (§J vector 10); two inputs with the same id but a
- *     disagreeing {@code hypothesis} or {@code outcome} are corrupt input and refuse the whole
- *     context ({@code DUPLICATE_EVIDENCE_OBSERVATION}) -- see {@link HypothesisUncertaintyCalculatorV1}.
+ *     observations" by (Amendment 1 §R). {@link HypothesisUncertaintyContextAssembler} is where a
+ *     benign repeat (the same observation reaching the pipeline through more than one projection,
+ *     §J vector 10) is de-duplicated to one input <em>before</em> a {@link
+ *     HypothesisUncertaintyContext} is ever built. Once inside a context, every {@code
+ *     observationId} must be unique: if it repeats here -- agreeing or not -- {@link
+ *     HypothesisUncertaintyCalculatorV1} refuses the whole context ({@code
+ *     DUPLICATE_EVIDENCE_OBSERVATION}) rather than de-duplicating or choosing one record itself
+ *     (§R: "the calculator does no de-duplication of its own").
  * @param hypothesis which candidate hypothesis tuple this observation is evidence for -- must be one
  *     of the owning context's candidates or the context is refused ({@code
  *     EVIDENCE_FOR_UNKNOWN_HYPOTHESIS})

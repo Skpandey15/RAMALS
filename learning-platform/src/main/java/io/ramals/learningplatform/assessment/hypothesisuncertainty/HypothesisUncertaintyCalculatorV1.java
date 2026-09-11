@@ -40,12 +40,18 @@ import org.springframework.stereotype.Component;
  * <h2>Algorithm, exactly as frozen (Amendment 1 §B/§C/§H/§I)</h2>
  *
  * <ol>
- *   <li>Validate the context (§Q) -- fail closed, never repaired.
- *   <li>For each candidate, in canonical order (§H): reduce its evidence to distinct observation ids
- *       (§R), classify via the existing {@link
- *       io.ramals.learningplatform.assessment.HypothesisEvidenceOutcome}, and call {@link
- *       DiagnosticConfidenceCalculatorV1#compute} <b>verbatim</b> -- this class re-implements no
- *       threshold.
+ *   <li>Validate the context (§Q) -- fail closed, never repaired. In particular, every governed
+ *       observation id in {@code context.evidence()} must be unique: de-duplication is {@link
+ *       HypothesisUncertaintyContextAssembler}'s job, not this class's (§R -- "the calculator does
+ *       no de-duplication of its own"). A context that still carries a repeated observation id, for
+ *       any reason, is refused with {@link
+ *       HypothesisUncertaintyReasonCode#DUPLICATE_EVIDENCE_OBSERVATION} -- a mis-assembled context
+ *       fails closed rather than double-counting or silently choosing one record.
+ *   <li>For each candidate, in canonical order (§H): count its (already-unique) evidence by outcome
+ *       -- classified via the existing {@link
+ *       io.ramals.learningplatform.assessment.HypothesisEvidenceOutcome} upstream, in the assembler
+ *       -- and call {@link DiagnosticConfidenceCalculatorV1#compute} <b>verbatim</b> -- this class
+ *       re-implements no threshold.
  *   <li>Candidates whose band is {@code INSUFFICIENT_EVIDENCE} do not participate (§D); if none
  *       participate, the result is {@link HypothesisUncertaintyStatus#INSUFFICIENT_EVIDENCE} with no
  *       distribution.
@@ -158,20 +164,18 @@ public class HypothesisUncertaintyCalculatorV1 {
 
   // -- band derivation: reuse DiagnosticConfidenceCalculatorV1 verbatim (§B) -----------------------
 
-  private DiagnosticConfidenceBand bandFor(List<HypothesisEvidenceInput> rawEvidence) {
-    // De-duplicate by observation id (§R). A repeat with the SAME outcome is the same observation
-    // reaching the assembler twice and is silently folded into one (§J vector 10); a repeat that
-    // disagrees on outcome is corrupt input and refuses the whole context -- checked in validate().
-    Map<UUID, io.ramals.learningplatform.assessment.HypothesisEvidenceOutcome> distinct = new LinkedHashMap<>();
-    for (HypothesisEvidenceInput input : rawEvidence) {
-      distinct.putIfAbsent(input.observationId(), input.outcome());
-    }
-
+  /**
+   * Counts {@code evidence} by outcome and hands the triple to {@link
+   * DiagnosticConfidenceCalculatorV1} unmodified. {@code evidence} is already known to carry no
+   * repeated observation id -- {@link #validate} rejects the whole context before this method ever
+   * runs (§R: de-duplication is the assembler's job, this method does none).
+   */
+  private DiagnosticConfidenceBand bandFor(List<HypothesisEvidenceInput> evidence) {
     int supporting = 0;
     int contradictory = 0;
     int inconclusive = 0;
-    for (var outcome : distinct.values()) {
-      switch (outcome) {
+    for (HypothesisEvidenceInput input : evidence) {
+      switch (input.outcome()) {
         case SUPPORTING -> supporting++;
         case CONTRADICTORY -> contradictory++;
         case INCONCLUSIVE -> inconclusive++;
@@ -264,10 +268,11 @@ public class HypothesisUncertaintyCalculatorV1 {
         throw new HypothesisUncertaintyValidationException(
             HypothesisUncertaintyReasonCode.CROSS_DOMAIN_EVIDENCE);
       }
+      // §R: de-duplication is the assembler's job. Any observation id that still repeats here --
+      // agreeing or not -- means assembly failed to do it, and the whole context is refused rather
+      // than the calculator silently choosing (or folding together) one of the records itself.
       HypothesisEvidenceInput priorObservation = byObservationId.putIfAbsent(input.observationId(), input);
-      if (priorObservation != null
-          && (priorObservation.outcome() != input.outcome()
-              || !priorObservation.hypothesis().equals(input.hypothesis()))) {
+      if (priorObservation != null) {
         throw new HypothesisUncertaintyValidationException(
             HypothesisUncertaintyReasonCode.DUPLICATE_EVIDENCE_OBSERVATION);
       }

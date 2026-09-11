@@ -181,20 +181,28 @@ class HypothesisUncertaintyGoldenVectorTests {
   }
 
   @Test
-  @DisplayName("#10 -- duplicate evidence de-duplicated by observation id -> MODERATE / 1.0000")
+  @DisplayName("#10 -- two distinct observations (post de-duplication) -> MODERATE / 1.0000")
   void vector10DuplicateEvidenceDeduplicated() {
+    // Amendment 1 §R: de-duplicating a benign repeated observation id is
+    // HypothesisUncertaintyContextAssembler's job, not the calculator's -- see
+    // HypothesisUncertaintyContextAssemblerTests for the assembler-side proof that a governed
+    // observation reaching it through more than one projection is folded into one input before a
+    // context is ever built. What reaches the calculator here is exactly what a correctly-assembled
+    // context for the ADR's raw scenario ({@code [obs-1: SUPPORTING, obs-2: SUPPORTING, obs-1:
+    // SUPPORTING]}) looks like after that de-duplication: two distinct observation ids, both
+    // SUPPORTING -- (s,c,i) = (2,0,0) -> MODERATE, not HIGH (which a wrongly-undeduplicated s=3 would
+    // give). A repeated id reaching the calculator directly is instead rejected -- see
+    // duplicateEvidenceIdenticalRepeatIsRejected in HypothesisUncertaintyCalculatorV1Tests.
     DiagnosticHypothesis a = ha();
     UUID obs1 = UUID.randomUUID();
     UUID obs2 = UUID.randomUUID();
     List<HypothesisEvidenceInput> evidence = List.of(
         evidence(obs1, a, HypothesisEvidenceOutcome.SUPPORTING),
-        evidence(obs2, a, HypothesisEvidenceOutcome.SUPPORTING),
-        evidence(obs1, a, HypothesisEvidenceOutcome.SUPPORTING)); // obs1 repeated, same outcome
+        evidence(obs2, a, HypothesisEvidenceOutcome.SUPPORTING));
 
     HypothesisUncertaintyResult result =
         calculator.calculate(HypothesisUncertaintyTestFixtures.context(List.of(a), evidence));
 
-    // De-duplicated to {obs1, obs2} -> (s,c,i) = (2,0,0) -> MODERATE, not HIGH.
     assertCandidate(result, 0, a, DiagnosticConfidenceBand.MODERATE, true, "1.0000");
   }
 

@@ -224,25 +224,28 @@ class HypothesisUncertaintyCalculatorV1Tests {
     assertThat(result.candidates().get(0).band()).isEqualTo(DiagnosticConfidenceBand.INSUFFICIENT_EVIDENCE);
   }
 
-  // -- duplicate evidence: benign repeat vs. corrupt disagreement ---------------------------------
+  // -- duplicate evidence: the calculator de-duplicates nothing -- §R is the assembler's job -------
 
   @Test
-  @DisplayName("duplicate evidence: benign repeat (same id, same outcome) is de-duplicated, not rejected")
-  void duplicateEvidenceBenignRepeatDeduplicates() {
+  @DisplayName("duplicate evidence: an identical repeated observation id is rejected, not de-duplicated "
+      + "-- de-duplication is HypothesisUncertaintyContextAssembler's job (Amendment 1 §R), not the "
+      + "calculator's")
+  void duplicateEvidenceIdenticalRepeatIsRejected() {
     DiagnosticHypothesis a = ha();
     UUID observationId = UUID.randomUUID();
     List<HypothesisEvidenceInput> evidenceList = List.of(
         evidence(observationId, a, HypothesisEvidenceOutcome.SUPPORTING),
         evidence(observationId, a, HypothesisEvidenceOutcome.SUPPORTING));
 
-    HypothesisUncertaintyResult result =
-        calculator.calculate(HypothesisUncertaintyTestFixtures.context(List.of(a), evidenceList));
-
-    assertThat(result.candidates().get(0).band()).isEqualTo(DiagnosticConfidenceBand.LOW); // s=1, not 2
+    assertThatThrownBy(() ->
+        calculator.calculate(HypothesisUncertaintyTestFixtures.context(List.of(a), evidenceList)))
+        .isInstanceOf(HypothesisUncertaintyValidationException.class)
+        .extracting(e -> ((HypothesisUncertaintyValidationException) e).reasonCode())
+        .isEqualTo(HypothesisUncertaintyReasonCode.DUPLICATE_EVIDENCE_OBSERVATION);
   }
 
   @Test
-  @DisplayName("duplicate evidence: disagreeing outcome for the same id is rejected")
+  @DisplayName("duplicate evidence: disagreeing outcome for the same id is rejected the same way")
   void duplicateEvidenceDisagreeingOutcomeRejected() {
     DiagnosticHypothesis a = ha();
     UUID observationId = UUID.randomUUID();
