@@ -20,6 +20,7 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceRepository;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceService;
 import io.ramals.learningplatform.assessment.MisconceptionEvidenceCaptureService;
@@ -28,6 +29,10 @@ import io.ramals.learningplatform.assessment.MisconceptionOptionMappingRepositor
 import io.ramals.learningplatform.assessment.ProbeProvenanceRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipRepository;
 import io.ramals.learningplatform.assessment.ProbeRelationshipService;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContextAssembler;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyRepository;
 import io.ramals.learningplatform.learner.Learner;
 import io.ramals.learningplatform.learner.LearnerRepository;
 import io.ramals.learningplatform.learner.LearnerService;
@@ -152,7 +157,13 @@ class EvidenceLedgerPersistenceIntegrationTests {
           new MasteryRepository(runtimeJdbc),
           new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()),
           new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
-          new ProbeProvenanceRepository(runtimeJdbc));
+          new ProbeProvenanceRepository(runtimeJdbc),
+          new HypothesisDiscriminationDiagnosticSelector(assessments,
+              new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+              new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
+              new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
+              new HypothesisDiscriminationCalculatorV1(
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
       MasteryService masteryService = new MasteryService(
           new MasteryRepository(runtimeJdbc), evidence, new WeightedMasteryCalculator(),
           new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());

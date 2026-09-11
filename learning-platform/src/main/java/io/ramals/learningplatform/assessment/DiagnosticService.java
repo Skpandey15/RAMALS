@@ -45,6 +45,7 @@ public class DiagnosticService {
   private final CurriculumService curriculumService;
   private final ProbeRelationshipService probeRelationshipService;
   private final ProbeProvenanceRepository probeProvenanceRepository;
+  private final HypothesisDiscriminationDiagnosticSelector hypothesisDiscriminationSelector;
 
   public DiagnosticService(
       AssessmentRepository repository,
@@ -54,7 +55,8 @@ public class DiagnosticService {
       MasteryRepository masteryRepository,
       CurriculumService curriculumService,
       ProbeRelationshipService probeRelationshipService,
-      ProbeProvenanceRepository probeProvenanceRepository) {
+      ProbeProvenanceRepository probeProvenanceRepository,
+      HypothesisDiscriminationDiagnosticSelector hypothesisDiscriminationSelector) {
     this.repository = repository;
     this.learnerService = learnerService;
     this.selector = selector;
@@ -63,6 +65,7 @@ public class DiagnosticService {
     this.curriculumService = curriculumService;
     this.probeRelationshipService = probeRelationshipService;
     this.probeProvenanceRepository = probeProvenanceRepository;
+    this.hypothesisDiscriminationSelector = hypothesisDiscriminationSelector;
   }
 
   @Transactional
@@ -92,7 +95,8 @@ public class DiagnosticService {
       boolean isAdaptivePacket = AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
           || PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
           || HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
-          || HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy);
+          || HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)
+          || HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy);
       String packetPolicy = isAdaptivePacket ? AdaptiveDiagnosticSelector.PACKET_POLICY : null;
       AssessmentAttempt created =
           repository.insertAttempt(learner.id(), versionId, key, selectionPolicy, packetPolicy);
@@ -137,7 +141,9 @@ public class DiagnosticService {
    */
   private void selectForm(
       AssessmentAttempt attempt, UUID learnerId, ResolvedDiagnostic diagnostic, String selectionPolicy) {
-    if (HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
+    if (HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
+      selectDiagnosticSelectionV6Form(attempt, learnerId, diagnostic);
+    } else if (HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
       selectHypothesisDrivenProbeForm(attempt, learnerId, diagnostic);
     } else if (HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION.equals(selectionPolicy)) {
       selectHypothesisConfirmingForm(attempt, learnerId, diagnostic);
@@ -270,6 +276,77 @@ public class DiagnosticService {
         .anyMatch(item -> item.itemVersionId().equals(probeSelection.chosenItemVersionId()))) {
       probeProvenanceRepository.insert(attempt.id(), probeSelection);
     }
+  }
+
+  /**
+   * DIAGNOSTIC_SELECTION_V6 (M2-ADR-034 Amendment 3): V3's cap and V4's regression reprioritisation
+   * applied first, exactly as for V5, then {@link HypothesisDiscriminationDiagnosticSelector} decides
+   * whether {@code HYPOTHESIS_DISCRIMINATION_V1}'s ranking may override V5's own first-eligible
+   * tiebreak. Whenever it does not activate (any {@link V6FallbackReason}), this method falls back to
+   * calling {@link #resolveHypothesisProbeSelection} -- unmodified, the exact same method V5 itself
+   * calls -- never a "similar" re-derivation. From there on (V5's own {@code
+   * adjustForHypothesisProbe}, V2's {@code select}, packet persistence, provenance) this method is
+   * byte-for-byte identical to {@link #selectHypothesisDrivenProbeForm}; only which {@code Selection}
+   * feeds it can differ.
+   */
+  private void selectDiagnosticSelectionV6Form(
+      AssessmentAttempt attempt, UUID learnerId, ResolvedDiagnostic diagnostic) {
+    AdaptiveSelectionInputs inputs = resolveAdaptiveInputs(learnerId, diagnostic.assessmentVersionId());
+    Map<String, SkillMasterySignal> afterPrerequisiteCap = PrerequisiteAwareDiagnosticSelector
+        .adjustForPrerequisites(
+            inputs.signals(), prerequisitesBySkillCode(inputs.curriculumVersionId()),
+            inputs.statusBySkillCode());
+    Set<String> regressedSkillCodes = detectRegressedSkills(
+        learnerId, inputs.skillIdByCode(), inputs.curriculumVersionId());
+    Map<String, SkillMasterySignal> afterRegression = HypothesisConfirmationDiagnosticSelector
+        .adjustForRegressions(afterPrerequisiteCap, regressedSkillCodes);
+
+    HypothesisDiscriminationDiagnosticSelector.Decision decision =
+        hypothesisDiscriminationSelector.select(learnerId, diagnostic, inputs.unseenPool());
+    HypothesisDrivenProbeDiagnosticSelector.Selection probeSelection = decision.selection()
+        .orElseGet(() -> resolveHypothesisProbeSelection(learnerId, diagnostic, inputs));
+
+    HypothesisDrivenProbeDiagnosticSelector.Adjusted adjusted = HypothesisDrivenProbeDiagnosticSelector
+        .adjustForHypothesisProbe(afterRegression, inputs.unseenPool(), probeSelection);
+
+    AdaptivePacket packet =
+        adaptiveSelector.select(adjusted.pool(), adjusted.signals(), ThreadLocalRandom.current());
+    finishAdaptiveSelection(attempt, learnerId, inputs, packet,
+        HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION);
+
+    if (probeSelection != null && packet.items().stream()
+        .anyMatch(item -> item.itemVersionId().equals(probeSelection.chosenItemVersionId()))) {
+      probeProvenanceRepository.insert(attempt.id(), probeSelection);
+    }
+
+    logV6Decision(attempt, learnerId, decision, probeSelection);
+  }
+
+  /** Deterministic business telemetry for one V6 decision (M2-ADR-034 Amendment 3's implementation
+   * brief §22) -- never learner answer content, only counts, statuses, and identifiers. */
+  private void logV6Decision(
+      AssessmentAttempt attempt, UUID learnerId, HypothesisDiscriminationDiagnosticSelector.Decision decision,
+      HypothesisDrivenProbeDiagnosticSelector.Selection probeSelection) {
+    BusinessEventLogger.info(LOGGER, "assessment.probe.selection.v6",
+        "Discrimination-driven probe selection evaluated",
+        Map.ofEntries(
+            Map.entry("entityType", "ASSESSMENT_ATTEMPT"), Map.entry("entityId", attempt.id()),
+            Map.entry("learnerId", learnerId),
+            Map.entry("selectionPolicy", HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION),
+            Map.entry("sourceAttemptId", String.valueOf(decision.sourceAttemptId())),
+            Map.entry("relationshipAuthorizedHypothesisCount", decision.relationshipAuthorizedHypothesisCount()),
+            Map.entry("actionableHypothesisCount", decision.actionableHypothesisCount()),
+            Map.entry("workingSetBound", HypothesisDiscriminationDiagnosticSelector.MAX_AUTHORIZED_HYPOTHESES_V6),
+            Map.entry("candidateProbeCount", decision.candidateProbeCount()),
+            Map.entry("participatingHypothesisCount", decision.participatingHypothesisCount()),
+            Map.entry("step1Status", String.valueOf(decision.step1Status())),
+            Map.entry("step2Status", String.valueOf(decision.step2Status())),
+            Map.entry("maxDiscriminationScore", String.valueOf(decision.maxDiscriminationScore())),
+            Map.entry("v6Activated", decision.activated()),
+            Map.entry("fallbackReason", String.valueOf(decision.fallbackReason())),
+            Map.entry("selectedProbeItemVersionId",
+                String.valueOf(probeSelection == null ? null : probeSelection.chosenItemVersionId())),
+            Map.entry("outcome", "SUCCESS")));
   }
 
   /**

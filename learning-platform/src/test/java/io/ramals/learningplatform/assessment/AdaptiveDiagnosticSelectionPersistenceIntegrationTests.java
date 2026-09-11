@@ -27,6 +27,10 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContextAssembler;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import tools.jackson.databind.json.JsonMapper;
@@ -330,7 +334,13 @@ class AdaptiveDiagnosticSelectionPersistenceIntegrationTests {
           new AdaptiveDiagnosticSelector(new AdaptiveDiagnosticFormProperties()), masteryRepository,
           new CurriculumService(new CurriculumRepository(runtimeJdbc), new CurriculumGraphValidator()),
           new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
-          new ProbeProvenanceRepository(runtimeJdbc));
+          new ProbeProvenanceRepository(runtimeJdbc),
+          new HypothesisDiscriminationDiagnosticSelector(assessments,
+              new ProbeRelationshipService(new ProbeRelationshipRepository(runtimeJdbc), assessments),
+              new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
+              new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
+              new HypothesisDiscriminationCalculatorV1(
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
     }
   }
 

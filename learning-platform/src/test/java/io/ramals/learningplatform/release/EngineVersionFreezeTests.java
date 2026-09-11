@@ -15,12 +15,21 @@ import io.ramals.learningplatform.assessment.DiagnosticFormProperties;
 import io.ramals.learningplatform.assessment.DiagnosticFormSelector;
 import io.ramals.learningplatform.assessment.DiagnosticScorer;
 import io.ramals.learningplatform.assessment.DiagnosticScorerV2;
+import io.ramals.learningplatform.assessment.AssessmentAttempt;
+import io.ramals.learningplatform.assessment.AssessmentRepository;
 import io.ramals.learningplatform.assessment.DiagnosticHypothesis;
 import io.ramals.learningplatform.assessment.EligibleItem;
 import io.ramals.learningplatform.assessment.HypothesisConfirmationDiagnosticSelector;
+import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector;
+import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector.Decision;
 import io.ramals.learningplatform.assessment.HypothesisDrivenProbeDiagnosticSelector;
 import io.ramals.learningplatform.assessment.PrerequisiteAwareDiagnosticSelector;
+import io.ramals.learningplatform.assessment.ProbeCandidateItem;
+import io.ramals.learningplatform.assessment.ProbeRelationshipService;
 import io.ramals.learningplatform.assessment.ProbeRelationshipType;
+import io.ramals.learningplatform.assessment.ProbeResolution;
+import io.ramals.learningplatform.assessment.ProbeResolutionOutcome;
+import io.ramals.learningplatform.assessment.ResolvedDiagnostic;
 import io.ramals.learningplatform.assessment.SelectedItem;
 import io.ramals.learningplatform.assessment.SelectionReason;
 import io.ramals.learningplatform.assessment.ScoredResponse;
@@ -52,6 +61,7 @@ import io.ramals.learningplatform.assessment.hypothesisuncertainty.CandidateUnce
 import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisEvidenceInput;
 import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1;
 import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContext;
+import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyContextAssembler;
 import io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyResult;
 import io.ramals.learningplatform.assessmentevaluation.EvaluationProposalGate.DimensionResult;
 import io.ramals.learningplatform.evidence.Evidence;
@@ -83,6 +93,8 @@ import io.ramals.learningplatform.mastery.MasteryStatusPolicyV2;
 import io.ramals.learningplatform.mastery.WeightedMasteryCalculator;
 import io.ramals.learningplatform.recommendation.RecommendationPolicy;
 import java.io.IOException;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -164,6 +176,8 @@ class EngineVersionFreezeTests {
         EngineVersionFreezeTests::hypothesisUncertainty);
     put(HypothesisDiscriminationCalculatorV1.ENGINE_VERSION,
         EngineVersionFreezeTests::hypothesisDiscrimination);
+    put(HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION,
+        EngineVersionFreezeTests::diagnosticSelectionV6);
   }};
 
   /**
@@ -229,7 +243,11 @@ class EngineVersionFreezeTests {
       // Minted with M2-ADR-034 step 2 (Amendment 2), when the hypothesis-discrimination calculator
       // was first frozen. Nothing has been written under it yet, which is the only time an entry
       // here may be added rather than a new version identifier minted.
-      Map.entry("HYPOTHESIS_DISCRIMINATION_V1", "a665ee3daab838e3c30170aac6d8c9483035378b379520b62cd710061b2d331d"));
+      Map.entry("HYPOTHESIS_DISCRIMINATION_V1", "a665ee3daab838e3c30170aac6d8c9483035378b379520b62cd710061b2d331d"),
+      // Minted with M2-ADR-034 step 3 (Amendment 3), when the DIAGNOSTIC_SELECTION_V6 orchestrator
+      // was first frozen. Nothing has been written under it yet, which is the only time an entry
+      // here may be added rather than a new version identifier minted.
+      Map.entry("DIAGNOSTIC_SELECTION_V6", "4604c153e57f516b3ab75ab72ddaebc2c3fa4885b2c96e01f15e1137b2d90fed"));
 
   @Test
   void everyVersionedEngineHasAFrozenVector() throws IOException {
@@ -1416,6 +1434,150 @@ class EngineVersionFreezeTests {
       List<CandidateProbe> candidates) {
     return new HypothesisDiscriminationContext(
         baseContext, uncertaintyCalculator.calculate(baseContext), candidates);
+  }
+
+  /**
+   * DIAGNOSTIC_SELECTION_V6 (M2-ADR-034 Amendment 3) over three cases: no source attempt (activation
+   * condition 1 fails), exactly one candidate probe in the whole working set (Amendment 3 sec P's
+   * optimization, Step 1/2 never invoked), and a genuine tied-score activation resolved by
+   * {@code HYPOTHESIS_DISCRIMINATION_V1.RANKING_ORDER}'s hypothesis-canonical-order tiebreak rather
+   * than probe id. {@code AssessmentRepository}, {@code ProbeRelationshipService} and {@code
+   * HypothesisUncertaintyContextAssembler} are mocked -- this orchestrator's own contract is which
+   * calls it makes and what it does with their results, not their own (separately frozen) internals.
+   * A change to the activation gates, the enumeration/dedup/actionability rules, or the ranking
+   * delegation moves this hash.
+   */
+  private static String diagnosticSelectionV6() {
+    HypothesisUncertaintyCalculatorV1 uncertaintyCalculator =
+        new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1());
+    HypothesisDiscriminationCalculatorV1 discriminationCalculator =
+        new HypothesisDiscriminationCalculatorV1(uncertaintyCalculator);
+    UUID learnerId = UUID.fromString("01900000-0000-7000-8000-0000000f0001");
+    UUID assessmentVersionId = UUID.fromString("01900000-0000-7000-8000-0000000f0002");
+    String domain = "KAFKA";
+    ResolvedDiagnostic diagnostic =
+        new ResolvedDiagnostic(assessmentVersionId, domain, "PROBE_CODE", "v1", "PUBLISHED");
+
+    StringBuilder out = new StringBuilder();
+    out.append(v6Render(v6SelectNoSourceAttempt(learnerId, assessmentVersionId, diagnostic))).append('\n');
+    out.append(v6Render(v6SelectSingleCandidateTotal(learnerId, assessmentVersionId, domain, diagnostic)))
+        .append('\n');
+    out.append(v6Render(v6SelectTiedActivation(
+        learnerId, assessmentVersionId, domain, diagnostic, uncertaintyCalculator, discriminationCalculator)))
+        .append('\n');
+    return out.toString();
+  }
+
+  private static Decision v6SelectNoSourceAttempt(
+      UUID learnerId, UUID assessmentVersionId, ResolvedDiagnostic diagnostic) {
+    AssessmentRepository repository = Mockito.mock(AssessmentRepository.class);
+    Mockito.when(repository.findMostRecentCompletedAttempt(learnerId, assessmentVersionId))
+        .thenReturn(java.util.Optional.empty());
+    HypothesisDiscriminationDiagnosticSelector selector = new HypothesisDiscriminationDiagnosticSelector(
+        repository, Mockito.mock(ProbeRelationshipService.class),
+        Mockito.mock(HypothesisUncertaintyContextAssembler.class),
+        new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
+        new HypothesisDiscriminationCalculatorV1(
+            new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1())));
+    return selector.select(learnerId, diagnostic, List.of());
+  }
+
+  private static Decision v6SelectSingleCandidateTotal(
+      UUID learnerId, UUID assessmentVersionId, String domain, ResolvedDiagnostic diagnostic) {
+    UUID sourceAttemptId = UUID.fromString("01900000-0000-7000-8000-0000000f1000");
+    UUID miss1 = UUID.fromString("01900000-0000-7000-8000-0000000f1001");
+    UUID itemA1 = UUID.fromString("01900000-0000-7000-8000-0000000f2001");
+    DiagnosticHypothesis hA = huHypothesis("01900000-0000-7000-8000-000000003001");
+
+    AssessmentRepository repository = Mockito.mock(AssessmentRepository.class);
+    Mockito.when(repository.findMostRecentCompletedAttempt(learnerId, assessmentVersionId)).thenReturn(
+        java.util.Optional.of(new AssessmentAttempt(sourceAttemptId, learnerId, assessmentVersionId,
+            "COMPLETED", "idem-key", java.time.Instant.parse("2026-01-01T00:00:00Z"),
+            java.time.Instant.parse("2026-01-01T00:00:00Z"))));
+    Mockito.when(repository.findIncorrectItemVersionIdsInPresentationOrder(sourceAttemptId))
+        .thenReturn(List.of(miss1));
+    ProbeRelationshipService probeRelationshipService = Mockito.mock(ProbeRelationshipService.class);
+    Mockito.when(probeRelationshipService.resolve(
+        ArgumentMatchers.any(), ArgumentMatchers.any(), ArgumentMatchers.eq(learnerId))).thenReturn(
+        new ProbeResolution(ProbeResolutionOutcome.NO_RELATIONSHIP_DEFINED, null, List.of(), List.of()));
+    Mockito.when(probeRelationshipService.resolve(miss1, ProbeRelationshipType.ROOT_CAUSE_PROBE, learnerId))
+        .thenReturn(new ProbeResolution(ProbeResolutionOutcome.CANDIDATES_AVAILABLE, hA,
+            List.of(new ProbeCandidateItem(itemA1, UUID.randomUUID())), List.of()));
+
+    HypothesisDiscriminationDiagnosticSelector selector = new HypothesisDiscriminationDiagnosticSelector(
+        repository, probeRelationshipService, Mockito.mock(HypothesisUncertaintyContextAssembler.class),
+        new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
+        new HypothesisDiscriminationCalculatorV1(
+            new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1())));
+    return selector.select(learnerId, diagnostic,
+        List.of(adaptiveEligibleItem(itemA1, "SKILL_A")));
+  }
+
+  private static Decision v6SelectTiedActivation(
+      UUID learnerId, UUID assessmentVersionId, String domain, ResolvedDiagnostic diagnostic,
+      HypothesisUncertaintyCalculatorV1 uncertaintyCalculator,
+      HypothesisDiscriminationCalculatorV1 discriminationCalculator) {
+    UUID sourceAttemptId = UUID.fromString("01900000-0000-7000-8000-0000000f3000");
+    UUID miss1 = UUID.fromString("01900000-0000-7000-8000-0000000f3001");
+    UUID miss2 = UUID.fromString("01900000-0000-7000-8000-0000000f3002");
+    UUID itemA1 = UUID.fromString("01900000-0000-7000-8000-0000000f4001");
+    UUID itemB1 = UUID.fromString("01900000-0000-7000-8000-0000000f4002");
+    DiagnosticHypothesis hA = huHypothesis("01900000-0000-7000-8000-000000003001");
+    DiagnosticHypothesis hB = huHypothesis("01900000-0000-7000-8000-000000003002");
+
+    AssessmentRepository repository = Mockito.mock(AssessmentRepository.class);
+    Mockito.when(repository.findMostRecentCompletedAttempt(learnerId, assessmentVersionId)).thenReturn(
+        java.util.Optional.of(new AssessmentAttempt(sourceAttemptId, learnerId, assessmentVersionId,
+            "COMPLETED", "idem-key", java.time.Instant.parse("2026-01-01T00:00:00Z"),
+            java.time.Instant.parse("2026-01-01T00:00:00Z"))));
+    Mockito.when(repository.findIncorrectItemVersionIdsInPresentationOrder(sourceAttemptId))
+        .thenReturn(List.of(miss1, miss2));
+    ProbeRelationshipService probeRelationshipService = Mockito.mock(ProbeRelationshipService.class);
+    Mockito.when(probeRelationshipService.resolve(
+        ArgumentMatchers.any(), ArgumentMatchers.any(), ArgumentMatchers.eq(learnerId))).thenReturn(
+        new ProbeResolution(ProbeResolutionOutcome.NO_RELATIONSHIP_DEFINED, null, List.of(), List.of()));
+    Mockito.when(probeRelationshipService.resolve(miss1, ProbeRelationshipType.ROOT_CAUSE_PROBE, learnerId))
+        .thenReturn(new ProbeResolution(ProbeResolutionOutcome.CANDIDATES_AVAILABLE, hA,
+            List.of(new ProbeCandidateItem(itemA1, UUID.randomUUID())), List.of()));
+    Mockito.when(probeRelationshipService.resolve(miss2, ProbeRelationshipType.ROOT_CAUSE_PROBE, learnerId))
+        .thenReturn(new ProbeResolution(ProbeResolutionOutcome.CANDIDATES_AVAILABLE, hB,
+            List.of(new ProbeCandidateItem(itemB1, UUID.randomUUID())), List.of()));
+
+    HypothesisUncertaintyContextAssembler assembler = Mockito.mock(HypothesisUncertaintyContextAssembler.class);
+    HypothesisUncertaintyContext context = huContext(sourceAttemptId, domain, List.of(hA, hB), concat(
+        huObservations(sourceAttemptId, domain, hA, 2, 0, 0),
+        huObservations(sourceAttemptId, domain, hB, 2, 0, 0)));
+    Mockito.when(assembler.assemble(ArgumentMatchers.eq(sourceAttemptId), ArgumentMatchers.any()))
+        .thenReturn(context);
+
+    HypothesisDiscriminationDiagnosticSelector selector = new HypothesisDiscriminationDiagnosticSelector(
+        repository, probeRelationshipService, assembler, uncertaintyCalculator, discriminationCalculator);
+    List<AdaptiveEligibleItem> pool = List.of(
+        adaptiveEligibleItem(itemA1, "SKILL_A"), adaptiveEligibleItem(itemB1, "SKILL_B"));
+    return selector.select(learnerId, diagnostic, pool);
+  }
+
+  private static AdaptiveEligibleItem adaptiveEligibleItem(UUID itemVersionId, String skillCode) {
+    return new AdaptiveEligibleItem(
+        itemVersionId, UUID.randomUUID(), UUID.randomUUID(), skillCode, "SINGLE_CHOICE", "MEDIUM");
+  }
+
+  private static String v6Render(Decision decision) {
+    StringBuilder line = new StringBuilder();
+    line.append(decision.activated()).append('|')
+        .append(decision.fallbackReason()).append('|')
+        .append(decision.relationshipAuthorizedHypothesisCount()).append('|')
+        .append(decision.actionableHypothesisCount()).append('|')
+        .append(decision.candidateProbeCount()).append('|')
+        .append(decision.participatingHypothesisCount()).append('|')
+        .append(decision.step1Status()).append('|')
+        .append(decision.step2Status()).append('|')
+        .append(decision.maxDiscriminationScore());
+    decision.selection().ifPresent(selection -> line.append("||selection=")
+        .append(selection.hypothesis().targetObjectiveId()).append(':')
+        .append(selection.targetSkillCode()).append(':')
+        .append(selection.chosenItemVersionId()));
+    return line.toString();
   }
 
   private static String hdRender(HypothesisDiscriminationResult result) {

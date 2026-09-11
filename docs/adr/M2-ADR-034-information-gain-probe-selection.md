@@ -1,4 +1,4 @@
-# M2-ADR-034: Diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `HYPOTHESIS_DISCRIMINATION_V1`, formerly proposed as "`INFORMATION_GAIN_V1`") — Steps 1–2 implemented and inert, Step 3 design-only
+# M2-ADR-034: Diagnostic probe selection (`DIAGNOSTIC_SELECTION_V6` / `HYPOTHESIS_DISCRIMINATION_V1`, formerly proposed as "`INFORMATION_GAIN_V1`") — Steps 1–3 implemented
 
 - **Status:** Proposed. **Amended — 2026-09-10** — see
   [Amendment 1](#amendment-1--hypothesis_uncertainty_v1-2026-09-10): ratifies the deterministic
@@ -10,25 +10,26 @@
   information gain undefensible from existing RAMALS semantics (no outcome-probability model
   exists or may be invented), and freezes instead a non-expectation deterministic construct named
   **`HYPOTHESIS_DISCRIMINATION_V1`** — its complete mathematics and golden vectors — authorizing its
-  inert implementation as **Step 2** (implemented 2026-09-11). `DIAGNOSTIC_SELECTION_V6` (Step 3)
-  remains design-only. **Amended a third time — 2026-09-11** — see
-  [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11): freezes
-  the runtime semantics a `DIAGNOSTIC_SELECTION_V6` implementation must satisfy — which interaction
-  supplies Step-1 evidence, the two independent V5 "collapses" and which one V6 replaces, bounded
-  multi-hypothesis enumeration (ratified, not assumed — Amendment 2 §H's own theorem makes it
+  inert implementation as **Step 2** (implemented 2026-09-11). **Amended a third time — 2026-09-11**
+  — see [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11):
+  freezes the runtime semantics a `DIAGNOSTIC_SELECTION_V6` implementation must satisfy — which
+  interaction supplies Step-1 evidence, the two independent V5 "collapses" and which one V6 replaces,
+  bounded multi-hypothesis enumeration (ratified, not assumed — Amendment 2 §H's own theorem makes it
   mathematically necessary), activation and fallback rules, and twelve normative behavioral
-  scenarios. Still authorizes **no** `DIAGNOSTIC_SELECTION_V6` code, migration, or runtime change.
-  **Amended a fourth time — 2026-09-11** — see
+  scenarios. Amendment 3's own text authorized no `DIAGNOSTIC_SELECTION_V6` code, migration, or
+  runtime change at ratification. **Step 3 implemented — 2026-09-11** — `DIAGNOSTIC_SELECTION_V6`
+  has since been implemented, in a separate PR, exactly to Amendment 3's frozen runtime semantics —
+  no migration, and Amendment 1–3's own frozen mathematics/text are unchanged. **Amended a fourth
+  time — 2026-09-11** — see
   [Amendment 4](#amendment-4--diagnostic_selection_v6-replayprovenance-correction-2026-09-11):
-  corrects Amendment 3 §V's replay/reproducibility conclusion, which a `DIAGNOSTIC_SELECTION_V6`
-  implementation-review round found does not hold under concurrent PostgreSQL transactions (§V's own
-  ratified text is left historically intact, not rewritten); freezes that exact historical replay
-  requires persisting `V6`'s decision-time source-attempt identity, actionable-hypothesis, and
-  candidate-probe working set — never reconstructing any of them from `created_at` or from
-  re-running a time-sensitive "most recent completed attempt" lookup; and freezes the resulting
-  persisted-provenance design. Still
-  authorizes **no** `DIAGNOSTIC_SELECTION_V6` code, migration, or runtime change — Amendment 4 is
-  itself design-only, same as Amendments 1–3 were before their own implementation steps.
+  corrects Amendment 3 §V's replay/reproducibility conclusion, which the same implementation-review
+  round found does not hold under concurrent PostgreSQL transactions (§V's own ratified text is left
+  historically intact, not rewritten); freezes that exact historical replay requires persisting
+  `V6`'s decision-time source-attempt identity, actionable-hypothesis, and candidate-probe working
+  set — never reconstructing any of them from `created_at` or from re-running a time-sensitive "most
+  recent completed attempt" lookup; and freezes the resulting persisted-provenance design. Amendment
+  4 authorizes **no** `DIAGNOSTIC_SELECTION_V6` code, migration, or runtime change — it is itself
+  design-only, same as Amendments 1–3 were before their own implementation steps.
 - **Date:** 2026-09-08
 - **Decides:** the design constraints binding a future deterministic information-gain diagnostic
   probe-selection policy — a `DIAGNOSTIC_SELECTION_V6` that supersedes only `V5`'s final
@@ -61,9 +62,10 @@
   [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11) freezes
   the runtime semantics **Step 3** (`DIAGNOSTIC_SELECTION_V6`) must satisfy once implemented — which
   interaction supplies Step-1 evidence, bounded multi-hypothesis enumeration, activation, and
-  fallback — but **authorizes no implementation of it**. Together the three amendments still
-  authorize **no** `DIAGNOSTIC_SELECTION_V6` code, **no** migration, **no** contract change, and
-  **no** `SelectionReason` value. `V6` is not implemented.
+  fallback — but its own text **authorized no implementation of it** at ratification.
+  **`DIAGNOSTIC_SELECTION_V6` has since been implemented (2026-09-11)**, in a separate PR, exactly
+  to Amendment 3's frozen runtime semantics: no migration, no contract change, and no
+  `SelectionReason` value were needed.
   `DIAGNOSTIC_SELECTION_V1`–`V5`, their composition order, `MAX_HYPOTHESIS_PROBES_PER_PACKET`,
   `core.diagnostic_probe_relationship` / `core.diagnostic_probe_provenance`, and every existing
   frozen calculator are untouched; each of Amendments 1–2 adds exactly one new frozen vector to
@@ -708,8 +710,12 @@ the band, hence the weight, unchanged — monotonic non-decreasing only).
 > `HYPOTHESIS_DISCRIMINATION_V1`, not `INFORMATION_GAIN_V1` — see
 > [Amendment 2](#amendment-2--hypothesis_discrimination_v1-2026-09-11). Step 2 is **implemented
 > (2026-09-11), inert**; it stays out of this Step-1 amendment's authorization above, which remains
-> scoped to Step 1 only. Step 3 (`DIAGNOSTIC_SELECTION_V6`) remains design-only, unaffected by this
-> row.
+> scoped to Step 1 only.
+>
+> **Amended 2026-09-11 (Amendment 3, plus implementation):** Step 3's runtime semantics are frozen
+> by [Amendment 3](#amendment-3--diagnostic_selection_v6-runtime-semantics-freeze-2026-09-11), and
+> `DIAGNOSTIC_SELECTION_V6` is now **implemented (2026-09-11)**, exactly to that frozen
+> specification, in a separate PR.
 
 After Step 1:
 
@@ -1979,6 +1985,46 @@ assessment version a given `V6` decision is scoped to.
 Given these, and using `destinationExposureCutoff` (not current exposure state) for every exposure
 read, a `V6` decision is fully and exactly reconstructable without persisting the score itself.
 
+> **Post-merge correction flagged — 2026-09-11 (implementation-review finding, not yet a ratified
+> amendment).** This section's own "Verdict: YES, ... fully and exactly reconstructable ... with no
+> migration" is **not correct under concurrent PostgreSQL transactions**, and this note records that
+> defect rather than silently rewriting the ratified text above (M2-ADR-034's own discipline: an
+> amendment, once ratified, is corrected by a new dated amendment, never edited in place).
+>
+> `created_at` is stamped at `INSERT` (transaction-statement) time, not at commit time. Under
+> PostgreSQL's default `READ COMMITTED` isolation (RAMALS configures no isolation override anywhere;
+> this is confirmed, not assumed), row visibility is decided by *commit order*, not by which
+> `created_at` value a row happens to carry. §V's own "residual, narrow, pre-existing caveat"
+> paragraph above considered a concurrent cross-version attempt interleaving with the destination
+> attempt's own `created_at` and concluded it "does not affect the cutoff-bounded reconstruction's
+> correctness" — that conclusion is wrong. Concretely: nothing in this codebase serializes attempt
+> creation for one learner across different `assessment_version_id`s (`uq_assessment_attempt_one_active`
+> is scoped per version; no advisory lock exists anywhere in the codebase). If a concurrent attempt's
+> `INSERT` fixes an earlier `created_at` but does not *commit* until after the destination decision's
+> own live exposure read, the live decision correctly never sees it (ordinary `READ COMMITTED`
+> isolation, exactly as this section claims) — but a later replay using `created_at <
+> destinationExposureCutoff` **will** wrongly include it, since `created_at` carries no commit-order
+> information. Executable proof: `AssessmentItemLineagePersistenceIntegrationTests
+> #concurrentUncommittedAttemptCreatesADestinationExposureCutoffReplayDivergence`, run against a real
+> PostgreSQL 18.1 instance.
+>
+> **Governance disposition.** Exact replay cannot be restored by further refining the `created_at`
+> query — the defect is that no timestamp column can encode commit-visibility order at all. The
+> leading candidate fix is persisting sufficient immutable decision-time inputs (the actionable
+> hypothesis working set and candidate-probe set actually computed, keyed to the destination
+> attempt) so replay consumes a persisted snapshot rather than re-deriving exposure from `created_at`
+> at all. That fix requires a schema migration, which directly contradicts this section's own
+> ratified "no new column, no new table, no migration" verdict — so it is **not implemented by this
+> note or by the PR that added it**. **A new M2-ADR-034 amendment (Amendment 4) is required to
+> correct §V and authorize the persistence-based fix before `DIAGNOSTIC_SELECTION_V6` may honestly
+> claim exact historical replay.** [Amendment
+> 4](#amendment-4--diagnostic_selection_v6-replayprovenance-correction-2026-09-11), below, is that
+> correction. Until its own persisted-snapshot design is implemented,
+> `AssessmentRepository#findLearnerExposedLogicalItemIdsBefore` remains available for its real,
+> narrower value (correct reconstruction in the common, non-concurrent-interleaving case) but must
+> not be described or relied upon as an exact MVCC-safe replay of a `V6` decision — see that method's
+> own corrected javadoc.
+
 ### W. M2-ADR-032 isolation (reaffirmed)
 
 ```
@@ -2106,6 +2152,11 @@ not implemented here — no test exists yet, since no `V6` code exists yet.
 | V6-B | A relationship-authorized hypothesis `H2` resolves `CANDIDATES_AVAILABLE`, but every one of `H2`'s own candidate probes is excluded by destination-attempt eligibility (e.g. all already exposed) | `H2` is relationship-authorized but **not actionable** (§H) — it does not enter `HypothesisUncertaintyContext.candidates()` at all, and never influences `H1`/`H3`'s normalized values |
 | V6-C | More relationship-authorized *and* actionable hypotheses are discovered than `MAX_AUTHORIZED_HYPOTHESES_V6` (§E) | Only the first `MAX_AUTHORIZED_HYPOTHESES_V6` unique actionable hypotheses, in frozen enumeration order (miss `presentation_order` then `RELATIONSHIP_TYPE_PRIORITY`), enter the working set; later ones are not admitted and do not affect the decision (§E) — this is a computation bound, not an eligibility judgment about the ones excluded |
 | V6-D | A historical `V6` decision is replayed after the learner has taken further attempts that expose additional items | The replay uses the exposure state **as of the original decision's `destinationExposureCutoff`** (§V), not the learner's current exposure state — candidate set and selected probe are identical to the original decision |
+
+> **V6-12 / V6-D correction — 2026-09-11.** Both scenarios above assume §V's `destinationExposureCutoff`
+> mechanism achieves exact reconstruction. It does not, under concurrent transactions — see the
+> post-merge correction note at the end of §V. Until Amendment 4 corrects §V, V6-12/V6-D are frozen
+> *targets*, not properties the current `created_at`-bounded mechanism actually guarantees.
 
 ### CC. ADR diff summary (this amendment)
 
