@@ -103,7 +103,10 @@ ORGANIZATIONAL CAPABILITY DIGITAL TWIN
 
 ```
 immediately preceding completed source attempt      (Amendment 3 §C -- never the destination attempt;
-        ->                                             exposure reads use destinationExposureCutoff, §V)
+        ->                                             live exposure reads use the real-time,
+                                                        unbounded exposure query -- see the LIVE vs
+                                                        AUDIT/REPLAY split below; Amendment 4 corrects
+                                                        §V's own replay-reconstruction mechanism)
 misses (presentation_order) x RELATIONSHIP_TYPE_PRIORITY   (Amendment 3 §E -- bounded, exhaustive walk,
         ->                                                  not the first-match-wins V5 walk today)
 relationship-authorized, de-duplicated, actionable   (Amendment 3 §F/§G/§H -- a hypothesis with zero
@@ -146,6 +149,55 @@ Widening `V5`'s hypothesis discovery from "first match wins" to the bounded enum
 Amendment 3's own ratified decision, not an automatic assumption — Amendment 2's own frozen
 sole-participant theorem (§H) makes the alternative (leaving discovery unchanged) provably
 incapable of ever producing a non-zero discrimination score.
+
+### Live selection vs. historical replay (Amendment 4 correction, 2026-09-11)
+
+A `DIAGNOSTIC_SELECTION_V6` implementation-review round found that Amendment 3 §V's own claim —
+that historical replay could reconstruct decision-time exposure exactly from
+`destinationExposureCutoff` (`created_at`-bounded) alone, with no migration — does not hold under
+concurrent PostgreSQL transactions (`created_at` orders row-creation time, never commit-visibility
+order; proven against real PostgreSQL 18.1). Amendment 3 §V's own ratified text is left historically
+intact in the ADR, not rewritten; [Amendment
+4](../adr/M2-ADR-034-information-gain-probe-selection.md#amendment-4--diagnostic_selection_v6-replayprovenance-correction-2026-09-11)
+corrects the conclusion prospectively. The two paths are therefore drawn separately, and **current
+learner exposure is never part of historical replay**:
+
+```
+LIVE (unaffected by this correction):
+Java deterministic V6 decision
+  (reads current, real-time exposure -- correct, ordinary READ COMMITTED semantics)
+    |
+    v
+persist selected packet / diagnostic probe provenance
+  (already exact today, for whichever probe is actually chosen -- Amendment 4 §S)
+
+AUDIT/REPLAY (Amendment 4 -- design only, no code/migration authorized yet):
+persisted V6 decision-time snapshot: WHICH source attempt was used (sourceAttemptId, or NULL
+  for NO_SOURCE_ATTEMPT) + actionable hypotheses + surviving candidate probes, as they existed
+  at decision time -- source identity never re-derived via findMostRecentCompletedAttempt(...)
+  (that lookup is itself time-sensitive), working set never re-derived from created_at, never
+  re-queries current exposure or new curriculum content
+    |
+    v
+load WHAT that identified source attempt contained (immutable assessment_response /
+  diagnostic_probe_provenance, read via the persisted sourceAttemptId only)
+    |
+    v
+frozen HYPOTHESIS_UNCERTAINTY_V1  (recomputed from the persisted snapshot)
+    |
+    v
+frozen HYPOTHESIS_DISCRIMINATION_V1  (recomputed from the persisted snapshot)
+    |
+    v
+frozen V6 activation / fallback / ranking rules (Amendment 3, unchanged)
+    |
+    v
+reproduced decision (activation/fallback reason + selected probe)
+```
+
+Until Amendment 4 is ratified and implemented, historical replay of a `DIAGNOSTIC_SELECTION_V6`
+decision is **not exact** — see the ADR's own Amendment 4 §X for the honest pre-/post-activation
+boundary.
 
 ## Production-simulation evidence (crosses stages 10 and 2)
 
@@ -225,7 +277,14 @@ Every link is captured with provenance, policy/engine version, and `interactionI
   Amendment 3 (2026-09-11) froze the runtime semantics `DIAGNOSTIC_SELECTION_V6` (Step 3, stage 8/9)
   must satisfy — source-interaction evidence, bounded multi-hypothesis enumeration, activation, and
   fallback. **Step 3 implemented (2026-09-11)**: `DIAGNOSTIC_SELECTION_V6` is now implemented, in a
-  separate PR, exactly to Amendment 3's frozen specification. See also
-  `docs/adr/M2-ADR-034-step3-v6-discovery-report.md` for the discovery analysis behind Amendment 3.
+  separate PR, exactly to Amendment 3's frozen specification. **Amendment 4 (2026-09-11)** corrects
+  Amendment 3 §V only — historical-replay exposure reconstruction from `created_at` alone is not
+  exact under concurrent PostgreSQL transactions — and freezes a persisted decision-time working-set
+  snapshot (including source-attempt identity, never rediscovered via a "most recent completed
+  attempt" lookup) as the replacement replay boundary; live `V6` selection is unaffected; Amendment 4
+  itself authorizes no `V6` code or migration. See also
+  `docs/adr/M2-ADR-034-step3-v6-discovery-report.md` for the discovery analysis behind Amendment 3,
+  and `docs/adr/M2-ADR-034-amendment-4-replay-provenance-discovery.md` for the discovery analysis
+  behind Amendment 4.
 - M2-ADR-035 / M2-ADR-036 / M2-ADR-037 — deferred roadmap stubs for stages 13–16, the simulation
   modality, and stages 18–19.
