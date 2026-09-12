@@ -97,39 +97,76 @@ public class HypothesisDiscriminationDiagnosticSelector {
     Optional<AssessmentAttempt> sourceAttemptOpt =
         repository.findMostRecentCompletedAttempt(learnerId, diagnostic.assessmentVersionId());
     if (sourceAttemptOpt.isEmpty()) {
-      return Decision.fallback(null, 0, 0, 0, V6FallbackReason.NO_SOURCE_ATTEMPT);
+      return Decision.fallback(null, new WorkingSet(List.of(), List.of(), 0), V6FallbackReason.NO_SOURCE_ATTEMPT);
     }
     AssessmentAttempt sourceAttempt = sourceAttemptOpt.get();
 
     WorkingSet workingSet = buildWorkingSet(learnerId, sourceAttempt, unseenPool);
+    return decide(sourceAttempt.id(), workingSet, unseenPool);
+  }
+
+  /**
+   * M2-ADR-034 Amendment 4 §O: the same activation/fallback/ranking decision {@link #select} makes
+   * from a freshly built {@link WorkingSet}, applied instead to a working set reconstructed from a
+   * persisted {@code DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1} snapshot. This is the single
+   * authoritative decision computation both the live path and historical replay share -- there is no
+   * second, independently written copy of the activation rules for replay to drift from.
+   *
+   * <p>{@code itemPool} is used only to resolve the winning candidate's {@code targetSkillCode}
+   * (item metadata, not an exposure-dependent fact) -- callers replaying a historical decision must
+   * pass the destination version's full, unfiltered item pool (e.g. {@code
+   * AssessmentRepository#findAdaptiveEligibleItems}), never a learner's current unseen pool, so that
+   * replay never reintroduces a live-exposure dependency through this parameter.
+   */
+  public Decision decideFromPersistedWorkingSet(
+      UUID sourceAttemptId, List<DiagnosticHypothesis> actionableHypotheses,
+      List<CandidateProbe> candidateProbes, int relationshipAuthorizedCount,
+      List<AdaptiveEligibleItem> itemPool) {
+    WorkingSet workingSet =
+        new WorkingSet(List.copyOf(actionableHypotheses), List.copyOf(candidateProbes), relationshipAuthorizedCount);
+    return decide(sourceAttemptId, workingSet, itemPool);
+  }
+
+  /**
+   * M2-ADR-034 Amendment 4 §K: the exact {@link Decision} {@link #select} produces when no source
+   * attempt exists, for replay to reproduce directly, without searching. {@code
+   * decideFromPersistedWorkingSet} cannot be reused for this case: called with an empty working set
+   * it would reach {@link #decide}'s own {@code NO_ACTIONABLE_HYPOTHESES} branch, which is a
+   * genuinely different, ambiguous outcome (a real source attempt that happened to authorize no
+   * hypotheses) -- this factory disambiguates the {@code NO_SOURCE_ATTEMPT} case by construction
+   * instead of by re-deriving it from an empty list.
+   */
+  public static Decision noSourceAttemptDecision() {
+    return Decision.fallback(null, new WorkingSet(List.of(), List.of(), 0), V6FallbackReason.NO_SOURCE_ATTEMPT);
+  }
+
+  private Decision decide(UUID sourceAttemptId, WorkingSet workingSet, List<AdaptiveEligibleItem> unseenPool) {
     if (workingSet.actionableHypotheses.isEmpty()) {
-      return Decision.fallback(sourceAttempt.id(), workingSet.relationshipAuthorizedCount, 0, 0,
-          V6FallbackReason.NO_ACTIONABLE_HYPOTHESES);
+      return Decision.fallback(sourceAttemptId, workingSet, V6FallbackReason.NO_ACTIONABLE_HYPOTHESES);
     }
 
     // Amendment 3 §P: exactly one possible action anywhere in the working set -- ranking cannot
     // change the outcome. Skip Step 1/Step 2 entirely; no claim is made about what score that sole
     // candidate would receive.
     if (workingSet.candidateProbes.size() == 1) {
-      return Decision.fallback(sourceAttempt.id(), workingSet.relationshipAuthorizedCount,
-          workingSet.actionableHypotheses.size(), 1, V6FallbackReason.SINGLE_CANDIDATE_TOTAL);
+      return Decision.fallback(sourceAttemptId, workingSet, V6FallbackReason.SINGLE_CANDIDATE_TOTAL);
     }
 
     // Amendment 3 §C: source-interaction evidence, never the destination attempt's own id.
     HypothesisUncertaintyContext baseContext =
-        uncertaintyContextAssembler.assemble(sourceAttempt.id(), workingSet.actionableHypotheses);
+        uncertaintyContextAssembler.assemble(sourceAttemptId, workingSet.actionableHypotheses);
     HypothesisUncertaintyResult baseResult = uncertaintyCalculator.calculate(baseContext);
 
     if (baseResult.status() != HypothesisUncertaintyStatus.APPLICABLE) {
       V6FallbackReason reason = baseResult.status() == HypothesisUncertaintyStatus.NOT_APPLICABLE
           ? V6FallbackReason.STEP1_NOT_APPLICABLE
           : V6FallbackReason.STEP1_INSUFFICIENT_EVIDENCE;
-      return Decision.afterStep1(sourceAttempt.id(), workingSet, baseResult, reason);
+      return Decision.afterStep1(sourceAttemptId, workingSet, baseResult, reason);
     }
 
     long participating = baseResult.candidates().stream().filter(CandidateUncertainty::participates).count();
     if (participating < 2) {
-      return Decision.afterStep1(sourceAttempt.id(), workingSet, baseResult,
+      return Decision.afterStep1(sourceAttemptId, workingSet, baseResult,
           V6FallbackReason.FEWER_THAN_TWO_PARTICIPANTS);
     }
 
@@ -139,7 +176,7 @@ public class HypothesisDiscriminationDiagnosticSelector {
         discriminationCalculator.calculate(discriminationContext);
 
     if (discriminationResult.status() != HypothesisDiscriminationStatus.SCORABLE) {
-      return Decision.afterStep2(sourceAttempt.id(), workingSet, baseResult, discriminationResult,
+      return Decision.afterStep2(sourceAttemptId, workingSet, baseResult, discriminationResult,
           null, V6FallbackReason.STEP2_NOT_APPLICABLE);
     }
 
@@ -149,7 +186,7 @@ public class HypothesisDiscriminationDiagnosticSelector {
         .orElse(BigDecimal.ZERO);
 
     if (maxScore.compareTo(BigDecimal.ZERO) == 0) {
-      return Decision.afterStep2(sourceAttempt.id(), workingSet, baseResult, discriminationResult,
+      return Decision.afterStep2(sourceAttemptId, workingSet, baseResult, discriminationResult,
           maxScore, V6FallbackReason.ALL_SCORES_ZERO);
     }
 
@@ -163,9 +200,9 @@ public class HypothesisDiscriminationDiagnosticSelector {
     String targetSkillCode = skillCodeOfItem(unseenPool, winner.probeItemVersionId());
     HypothesisDrivenProbeDiagnosticSelector.Selection selection =
         new HypothesisDrivenProbeDiagnosticSelector.Selection(
-            winner.hypothesis(), sourceAttempt.id(), targetSkillCode, winner.probeItemVersionId());
+            winner.hypothesis(), sourceAttemptId, targetSkillCode, winner.probeItemVersionId());
 
-    return Decision.activated(sourceAttempt.id(), workingSet, baseResult, discriminationResult,
+    return Decision.activated(sourceAttemptId, workingSet, baseResult, discriminationResult,
         maxScore, selection);
   }
 
@@ -244,7 +281,9 @@ public class HypothesisDiscriminationDiagnosticSelector {
   }
 
   /** The bounded, de-duplicated, actionability-filtered result of one enumeration walk (Amendment 3
-   * §E-§I). Package-visible only for {@link Decision}'s own construction. */
+   * §E-§I) -- or, for replay, the identical shape reconstructed from a persisted
+   * {@code DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1} snapshot (Amendment 4 §G). Package-visible only
+   * for {@link Decision}'s own construction. */
   private record WorkingSet(
       List<DiagnosticHypothesis> actionableHypotheses,
       List<CandidateProbe> candidateProbes,
@@ -252,9 +291,15 @@ public class HypothesisDiscriminationDiagnosticSelector {
   }
 
   /**
-   * The complete outcome of one {@link #select} call, carrying both the (possibly absent) resulting
+   * The complete outcome of one {@link #select} (or {@link #decideFromPersistedWorkingSet}) call,
+   * carrying both the (possibly absent) resulting
    * {@link HypothesisDrivenProbeDiagnosticSelector.Selection} and the deterministic telemetry this
    * decision is built from (M2-ADR-034 Amendment 3's own implementation brief §22).
+   *
+   * <p>{@code actionableHypotheses} and {@code candidateProbes} (Amendment 4 §F/§G) are exactly the
+   * working set the decision was made from -- the caller (today, {@code DiagnosticService}) persists
+   * these verbatim into the {@code DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1} snapshot; this class
+   * never persists anything itself.
    *
    * @param selection present iff every activation condition (Amendment 3 §J) held; absent for every
    *     {@link V6FallbackReason}
@@ -277,13 +322,19 @@ public class HypothesisDiscriminationDiagnosticSelector {
       String step2Status,
       BigDecimal maxDiscriminationScore,
       boolean activated,
-      V6FallbackReason fallbackReason) {
+      V6FallbackReason fallbackReason,
+      List<DiagnosticHypothesis> actionableHypotheses,
+      List<CandidateProbe> candidateProbes) {
 
-    private static Decision fallback(
-        UUID sourceAttemptId, int relationshipAuthorizedCount, int actionableCount,
-        int candidateProbeCount, V6FallbackReason reason) {
-      return new Decision(Optional.empty(), sourceAttemptId, relationshipAuthorizedCount,
-          actionableCount, candidateProbeCount, 0, null, null, null, false, reason);
+    public Decision {
+      actionableHypotheses = List.copyOf(actionableHypotheses);
+      candidateProbes = List.copyOf(candidateProbes);
+    }
+
+    private static Decision fallback(UUID sourceAttemptId, WorkingSet workingSet, V6FallbackReason reason) {
+      return new Decision(Optional.empty(), sourceAttemptId, workingSet.relationshipAuthorizedCount(),
+          workingSet.actionableHypotheses().size(), workingSet.candidateProbes().size(), 0, null, null,
+          null, false, reason, workingSet.actionableHypotheses(), workingSet.candidateProbes());
     }
 
     private static Decision afterStep1(
@@ -293,7 +344,8 @@ public class HypothesisDiscriminationDiagnosticSelector {
           baseResult.candidates().stream().filter(CandidateUncertainty::participates).count();
       return new Decision(Optional.empty(), sourceAttemptId, workingSet.relationshipAuthorizedCount(),
           workingSet.actionableHypotheses().size(), workingSet.candidateProbes().size(),
-          (int) participating, baseResult.status().name(), null, null, false, reason);
+          (int) participating, baseResult.status().name(), null, null, false, reason,
+          workingSet.actionableHypotheses(), workingSet.candidateProbes());
     }
 
     private static Decision afterStep2(
@@ -305,7 +357,7 @@ public class HypothesisDiscriminationDiagnosticSelector {
       return new Decision(Optional.empty(), sourceAttemptId, workingSet.relationshipAuthorizedCount(),
           workingSet.actionableHypotheses().size(), workingSet.candidateProbes().size(),
           (int) participating, baseResult.status().name(), discriminationResult.status().name(),
-          maxScore, false, reason);
+          maxScore, false, reason, workingSet.actionableHypotheses(), workingSet.candidateProbes());
     }
 
     private static Decision activated(
@@ -317,7 +369,8 @@ public class HypothesisDiscriminationDiagnosticSelector {
       return new Decision(Optional.of(selection), sourceAttemptId,
           workingSet.relationshipAuthorizedCount(), workingSet.actionableHypotheses().size(),
           workingSet.candidateProbes().size(), (int) participating, baseResult.status().name(),
-          discriminationResult.status().name(), maxScore, true, null);
+          discriminationResult.status().name(), maxScore, true, null,
+          workingSet.actionableHypotheses(), workingSet.candidateProbes());
     }
   }
 }
