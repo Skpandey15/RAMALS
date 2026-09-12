@@ -21,13 +21,67 @@
 # NOTE: RAMALS has deliberately configured this integration to capture full prompts and completions
 # in Langfuse (not metadata-only), a policy decision distinct from BusinessEventLogger's own
 # redaction of learner content in structured logs (M1-T04). See ramals-ai's Langfuse doc for why.
+#
+# LANGFUSE_DB_USER, LANGFUSE_DB_PASSWORD and LANGFUSE_DB_NAME are interpolated directly into
+# DATABASE_URL's `postgresql://user:password@host/name` form below. Compose has no built-in
+# URL-encoding, so a value containing a URL-reserved character (@ : / ? # %) would silently change
+# what the connection string means instead of failing loudly -- e.g. a password containing `@` would
+# be parsed as introducing the host part early. Langfuse also accepts DATABASE_HOST/
+# DATABASE_USERNAME/DATABASE_PASSWORD/DATABASE_NAME as an alternative to DATABASE_URL, but its own
+# web/entrypoint.sh and worker/entrypoint.sh build this exact same unencoded string internally from
+# those variables, so using them would not remove the hazard, only relocate it. The
+# `langfuse-validate-secrets` service below rejects any of the three values containing a
+# URL-reserved character before Postgres-dependent services start. Generate a URL-safe secret with:
+#   openssl rand -hex 32
 
 name: ramals-langfuse
 
 services:
+  # One-shot pre-flight gate, not a long-running service (see `restart: "no"` and the healthcheck-free
+  # `service_completed_successfully` condition it's depended on by, below): rejects a Postgres user,
+  # password or database name that would corrupt DATABASE_URL's meaning instead of merely failing
+  # noisily deep inside Langfuse's own Prisma migration step. Reuses the postgres:17 image already
+  # pulled for langfuse-postgres rather than introducing a new one purely for this check.
+  langfuse-validate-secrets:
+    image: postgres:17
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        case "$$LANGFUSE_DB_USER" in
+          *[@:/?#%]*)
+            echo "LANGFUSE_DB_USER must not contain any of @ : / ? # % -- see infrastructure/docker/compose.langfuse.yml for why." >&2
+            exit 1
+            ;;
+        esac
+        case "$$LANGFUSE_DB_PASSWORD" in
+          *[@:/?#%]*)
+            echo "LANGFUSE_DB_PASSWORD must not contain any of @ : / ? # % -- see infrastructure/docker/compose.langfuse.yml for why." >&2
+            exit 1
+            ;;
+        esac
+        case "$$LANGFUSE_DB_NAME" in
+          *[@:/?#%]*)
+            echo "LANGFUSE_DB_NAME must not contain any of @ : / ? # % -- see infrastructure/docker/compose.langfuse.yml for why." >&2
+            exit 1
+            ;;
+        esac
+        echo "Langfuse Postgres credentials are URL-safe."
+    environment:
+      LANGFUSE_DB_USER: ${LANGFUSE_DB_USER:-postgres}
+      LANGFUSE_DB_PASSWORD: ${LANGFUSE_DB_PASSWORD:?Set LANGFUSE_DB_PASSWORD in .env}
+      LANGFUSE_DB_NAME: ${LANGFUSE_DB_NAME:-postgres}
+    networks:
+      - data
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
   langfuse-worker:
     image: docker.langfuse.com/langfuse/langfuse-worker:4
     depends_on: &langfuse-depends-on
+      langfuse-validate-secrets:
+        condition: service_completed_successfully
       langfuse-postgres:
         condition: service_healthy
       langfuse-minio:

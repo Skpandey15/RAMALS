@@ -61,7 +61,7 @@ class LiteLLMProvider:
 
     @staticmethod
     def _configure_langfuse_tracing(litellm_module: Any) -> None:
-        """Enables LiteLLM's own langfuse_otel callback.
+        """Enables LiteLLM's own langfuse_otel callback, alongside whatever is already registered.
 
         A small, separately-testable step so this class's own unit tests can assert the exact
         callback configuration without needing the real `litellm` package installed (CI's default
@@ -73,9 +73,32 @@ class LiteLLMProvider:
         entirely separate from this service's own request-tracing `TracerProvider`
         (`ramals_ai.telemetry.tracing`), so enabling it here neither depends on nor interferes with
         that provider.
+
+        `success_callback`/`failure_callback` are process-wide lists LiteLLM itself may default to
+        something other than empty, and another integration could already have populated. Assigning
+        a fresh one-element list here would silently discard whatever was already registered, so
+        this appends instead -- and skips the append if `langfuse_otel` is present already, since
+        `_module()` runs this once per provider instance and a process can hold more than one.
         """
-        litellm_module.success_callback = ["langfuse_otel"]
-        litellm_module.failure_callback = ["langfuse_otel"]
+        litellm_module.success_callback = LiteLLMProvider._with_langfuse_callback(
+            getattr(litellm_module, "success_callback", None)
+        )
+        litellm_module.failure_callback = LiteLLMProvider._with_langfuse_callback(
+            getattr(litellm_module, "failure_callback", None)
+        )
+
+    @staticmethod
+    def _with_langfuse_callback(callbacks: list[Any] | None) -> list[Any]:
+        """Returns a new list holding `callbacks` plus `"langfuse_otel"`, added at most once.
+
+        Builds a new list rather than appending in place: `callbacks` may be the exact list object
+        LiteLLM (or another integration) is holding a reference to, and mutating it in place would
+        be a surprising side effect for whoever passed it in.
+        """
+        existing = list(callbacks) if callbacks else []
+        if "langfuse_otel" not in existing:
+            existing.append("langfuse_otel")
+        return existing
 
     def durable_capability(self) -> DurableExecutionCapability:
         """Declares Contract B unsupported on the synchronous path, and says which rows fail.

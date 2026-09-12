@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -116,3 +117,97 @@ def test_configure_langfuse_tracing_enables_the_litellm_native_callback(attribut
     LiteLLMProvider._configure_langfuse_tracing(fake_litellm_module)  # noqa: SLF001
 
     assert getattr(fake_litellm_module, attribute) == ["langfuse_otel"]
+
+
+@pytest.mark.parametrize("attribute", ["success_callback", "failure_callback"])
+def test_configure_langfuse_tracing_preserves_callbacks_already_registered(attribute: str) -> None:
+    """Assigning a fresh one-element list would silently drop whatever another integration (or a
+    future RAMALS one) already registered on this process-wide LiteLLM list."""
+    fake_litellm_module = SimpleNamespace(success_callback=["existing-success"])
+    fake_litellm_module.failure_callback = ["existing-failure"]
+
+    LiteLLMProvider._configure_langfuse_tracing(fake_litellm_module)  # noqa: SLF001
+
+    existing_entry = "existing-success" if attribute == "success_callback" else "existing-failure"
+    assert getattr(fake_litellm_module, attribute) == [existing_entry, "langfuse_otel"]
+
+
+@pytest.mark.parametrize("attribute", ["success_callback", "failure_callback"])
+def test_configure_langfuse_tracing_does_not_duplicate_an_existing_entry(attribute: str) -> None:
+    """Langfuse_otel already present (a prior call, or pre-set by the caller) must not become two
+    entries -- LiteLLM would otherwise invoke the same callback twice per request."""
+    fake_litellm_module = SimpleNamespace(success_callback=["langfuse_otel"])
+    fake_litellm_module.failure_callback = ["langfuse_otel"]
+
+    LiteLLMProvider._configure_langfuse_tracing(fake_litellm_module)  # noqa: SLF001
+
+    assert getattr(fake_litellm_module, attribute) == ["langfuse_otel"]
+
+
+def test_configure_langfuse_tracing_is_idempotent_across_repeated_calls() -> None:
+    """A process can hold more than one LiteLLMProvider instance; each one's _module() calls this,
+    so calling it twice on the same module object must not accumulate duplicates."""
+    fake_litellm_module = SimpleNamespace(success_callback=[], failure_callback=[])
+
+    LiteLLMProvider._configure_langfuse_tracing(fake_litellm_module)  # noqa: SLF001
+    LiteLLMProvider._configure_langfuse_tracing(fake_litellm_module)  # noqa: SLF001
+
+    assert fake_litellm_module.success_callback == ["langfuse_otel"]
+    assert fake_litellm_module.failure_callback == ["langfuse_otel"]
+
+
+@pytest.mark.parametrize("attribute", ["success_callback", "failure_callback"])
+def test_configure_langfuse_tracing_handles_a_none_callback_value(attribute: str) -> None:
+    """LiteLLM (or a test double) may hold None rather than an empty list; this must not raise."""
+    fake_litellm_module = SimpleNamespace(success_callback=None, failure_callback=None)
+
+    LiteLLMProvider._configure_langfuse_tracing(fake_litellm_module)  # noqa: SLF001
+
+    assert getattr(fake_litellm_module, attribute) == ["langfuse_otel"]
+
+
+def test_configure_langfuse_tracing_does_not_mutate_the_original_list_object() -> None:
+    """Callers (or LiteLLM itself) may hold their own reference to the original list; appending to
+    it in place would be a surprising action-at-a-distance for whoever holds that reference."""
+    original_success = ["existing-success"]
+    fake_litellm_module = SimpleNamespace(success_callback=original_success, failure_callback=[])
+
+    LiteLLMProvider._configure_langfuse_tracing(fake_litellm_module)  # noqa: SLF001
+
+    assert original_success == ["existing-success"]
+    assert fake_litellm_module.success_callback == ["existing-success", "langfuse_otel"]
+
+
+def test_module_preserves_existing_callbacks_when_tracing_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end through _module(), using a fake module injected into sys.modules so this never
+    touches the real litellm package's own process-global callback lists (monkeypatch restores
+    sys.modules afterwards, so no state leaks into other tests)."""
+    fake_litellm_module = SimpleNamespace(
+        success_callback=["existing-success"], failure_callback=["existing-failure"]
+    )
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm_module)
+
+    provider = LiteLLMProvider(api_key="test-key", langfuse_tracing_enabled=True)
+    provider._module()  # noqa: SLF001
+
+    assert fake_litellm_module.success_callback == ["existing-success", "langfuse_otel"]
+    assert fake_litellm_module.failure_callback == ["existing-failure", "langfuse_otel"]
+
+
+def test_module_does_not_touch_callbacks_when_tracing_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default, off configuration must leave whatever callbacks the process already has -- its
+    own or another integration's -- completely alone."""
+    fake_litellm_module = SimpleNamespace(
+        success_callback=["existing-success"], failure_callback=["existing-failure"]
+    )
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm_module)
+
+    provider = LiteLLMProvider(api_key="test-key", langfuse_tracing_enabled=False)
+    provider._module()  # noqa: SLF001
+
+    assert fake_litellm_module.success_callback == ["existing-success"]
+    assert fake_litellm_module.failure_callback == ["existing-failure"]

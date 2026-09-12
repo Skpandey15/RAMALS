@@ -119,6 +119,17 @@ open `http://localhost:3000`, create a project, and use its public/secret key pa
 `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` above (or pre-seed that same project via the compose
 file's `LANGFUSE_INIT_*` variables to skip the manual signup step).
 
+**`LANGFUSE_DB_USER`, `LANGFUSE_DB_PASSWORD` and `LANGFUSE_DB_NAME` must be URL-safe** (no `@ : / ? # %`).
+They are interpolated directly into Langfuse's `DATABASE_URL` connection string, and Compose has no
+built-in URL-encoding — a password containing `@`, for example, would silently change where the
+connection string's host part is parsed to begin, rather than failing loudly. The compose file's
+`langfuse-validate-secrets` service checks this and refuses to let Postgres-dependent services start
+otherwise. Generate a value that is safe by construction:
+
+```bash
+openssl rand -hex 32
+```
+
 ## Container
 
 ```bash
