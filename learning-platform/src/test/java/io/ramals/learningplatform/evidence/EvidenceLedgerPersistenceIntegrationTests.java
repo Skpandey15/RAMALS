@@ -20,6 +20,7 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.DiagnosticSelectionReplayInputRepository;
 import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceRepository;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceService;
@@ -163,7 +164,8 @@ class EvidenceLedgerPersistenceIntegrationTests {
               new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
               new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
               new HypothesisDiscriminationCalculatorV1(
-                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))),
+          new DiagnosticSelectionReplayInputRepository(runtimeJdbc));
       MasteryService masteryService = new MasteryService(
           new MasteryRepository(runtimeJdbc), evidence, new WeightedMasteryCalculator(),
           new EvidenceConfidenceCalculatorV2(), new MasteryStatusPolicyV2());

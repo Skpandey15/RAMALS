@@ -20,6 +20,7 @@ import io.ramals.learningplatform.assessment.DiagnosticService;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionRequest.ItemResponse;
 import io.ramals.learningplatform.assessment.DiagnosticSubmissionService;
+import io.ramals.learningplatform.assessment.DiagnosticSelectionReplayInputRepository;
 import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceRepository;
 import io.ramals.learningplatform.assessment.MisconceptionConfidenceService;
@@ -174,7 +175,8 @@ class RecommendationPersistenceIntegrationTests {
               new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
               new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
               new HypothesisDiscriminationCalculatorV1(
-                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))),
+          new DiagnosticSelectionReplayInputRepository(runtimeJdbc));
       submissions = new DiagnosticSubmissionService(
           assessments, learnerService, new DiagnosticScorerV2(), new EvidenceService(evidence),
           masteryService, recommendationService,

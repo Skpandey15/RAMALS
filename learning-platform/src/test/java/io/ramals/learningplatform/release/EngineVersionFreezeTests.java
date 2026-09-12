@@ -22,6 +22,7 @@ import io.ramals.learningplatform.assessment.EligibleItem;
 import io.ramals.learningplatform.assessment.HypothesisConfirmationDiagnosticSelector;
 import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector;
 import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector.Decision;
+import io.ramals.learningplatform.assessment.DiagnosticSelectionReplayInputRepository;
 import io.ramals.learningplatform.assessment.HypothesisDrivenProbeDiagnosticSelector;
 import io.ramals.learningplatform.assessment.PrerequisiteAwareDiagnosticSelector;
 import io.ramals.learningplatform.assessment.ProbeCandidateItem;
@@ -178,6 +179,8 @@ class EngineVersionFreezeTests {
         EngineVersionFreezeTests::hypothesisDiscrimination);
     put(HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION,
         EngineVersionFreezeTests::diagnosticSelectionV6);
+    put(DiagnosticSelectionReplayInputRepository.SNAPSHOT_CONTRACT_VERSION,
+        EngineVersionFreezeTests::diagnosticSelectionV6ReplayInputV1);
   }};
 
   /**
@@ -247,7 +250,13 @@ class EngineVersionFreezeTests {
       // Minted with M2-ADR-034 step 3 (Amendment 3), when the DIAGNOSTIC_SELECTION_V6 orchestrator
       // was first frozen. Nothing has been written under it yet, which is the only time an entry
       // here may be added rather than a new version identifier minted.
-      Map.entry("DIAGNOSTIC_SELECTION_V6", "4604c153e57f516b3ab75ab72ddaebc2c3fa4885b2c96e01f15e1137b2d90fed"));
+      Map.entry("DIAGNOSTIC_SELECTION_V6", "4604c153e57f516b3ab75ab72ddaebc2c3fa4885b2c96e01f15e1137b2d90fed"),
+      // Minted with M2-ADR-034 step 4 (Amendment 4), when exact-replay persistence/reconstruction
+      // was added. Freezes the replay-input contract -- decideFromPersistedWorkingSet's parity with
+      // the live decision, and noSourceAttemptDecision's direct reproduction -- never
+      // DIAGNOSTIC_SELECTION_V6's own selection semantics above, which this step does not touch.
+      Map.entry("DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1",
+          "7d30f365a0a55844977d3b448c49a777787169ffcf4ef6fe9bf03c1dd6508df4"));
 
   @Test
   void everyVersionedEngineHasAFrozenVector() throws IOException {
@@ -1465,6 +1474,58 @@ class EngineVersionFreezeTests {
     out.append(v6Render(v6SelectTiedActivation(
         learnerId, assessmentVersionId, domain, diagnostic, uncertaintyCalculator, discriminationCalculator)))
         .append('\n');
+    return out.toString();
+  }
+
+  /**
+   * DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1 (M2-ADR-034 Amendment 4): freezes the exact-replay
+   * contract, never {@code DIAGNOSTIC_SELECTION_V6}'s own frozen vector above. Two facts are frozen
+   * here: {@code decideFromPersistedWorkingSet} reproduces the identical activation/ranking output a
+   * hand-built persisted working set implies (there is no second, independently written replay
+   * computation to drift from {@link #decide}), and {@code noSourceAttemptDecision} reproduces
+   * {@code NO_SOURCE_ATTEMPT} directly. A change to the replay-input contract's shape, to the
+   * snapshot-contract identifier itself, or any drift between the live and replay decision
+   * computations moves this hash; {@code DIAGNOSTIC_SELECTION_V6} does not move.
+   */
+  private static String diagnosticSelectionV6ReplayInputV1() {
+    HypothesisUncertaintyCalculatorV1 uncertaintyCalculator =
+        new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1());
+    HypothesisDiscriminationCalculatorV1 discriminationCalculator =
+        new HypothesisDiscriminationCalculatorV1(uncertaintyCalculator);
+    UUID sourceAttemptId = UUID.fromString("01900000-0000-7000-8000-0000000f5000");
+    String domain = "KAFKA";
+    UUID itemA1 = UUID.fromString("01900000-0000-7000-8000-0000000f6001");
+    UUID itemB1 = UUID.fromString("01900000-0000-7000-8000-0000000f6002");
+    DiagnosticHypothesis hA = huHypothesis("01900000-0000-7000-8000-000000003003");
+    DiagnosticHypothesis hB = huHypothesis("01900000-0000-7000-8000-000000003004");
+    List<DiagnosticHypothesis> actionableHypotheses = List.of(hA, hB);
+    List<CandidateProbe> candidateProbes = List.of(
+        new CandidateProbe(itemA1, hA, true), new CandidateProbe(itemB1, hB, true));
+    List<AdaptiveEligibleItem> itemPool = List.of(
+        adaptiveEligibleItem(itemA1, "SKILL_A"), adaptiveEligibleItem(itemB1, "SKILL_B"));
+
+    HypothesisUncertaintyContextAssembler assembler = Mockito.mock(HypothesisUncertaintyContextAssembler.class);
+    HypothesisUncertaintyContext context = huContext(sourceAttemptId, domain, actionableHypotheses, concat(
+        huObservations(sourceAttemptId, domain, hA, 2, 0, 0),
+        huObservations(sourceAttemptId, domain, hB, 2, 0, 0)));
+    Mockito.when(assembler.assemble(ArgumentMatchers.eq(sourceAttemptId), ArgumentMatchers.any()))
+        .thenReturn(context);
+
+    // AssessmentRepository and ProbeRelationshipService are mocked, unused, and never stubbed --
+    // decideFromPersistedWorkingSet's own contract is that it calls neither, exactly the "never
+    // rediscover historical candidates" invariant Amendment 4 exists to enforce.
+    HypothesisDiscriminationDiagnosticSelector selector = new HypothesisDiscriminationDiagnosticSelector(
+        Mockito.mock(AssessmentRepository.class), Mockito.mock(ProbeRelationshipService.class),
+        assembler, uncertaintyCalculator, discriminationCalculator);
+
+    Decision replayed = selector.decideFromPersistedWorkingSet(
+        sourceAttemptId, actionableHypotheses, candidateProbes, actionableHypotheses.size(), itemPool);
+    Decision noSource = HypothesisDiscriminationDiagnosticSelector.noSourceAttemptDecision();
+
+    StringBuilder out = new StringBuilder();
+    out.append(DiagnosticSelectionReplayInputRepository.SNAPSHOT_CONTRACT_VERSION).append('\n');
+    out.append(v6Render(replayed)).append('\n');
+    out.append(v6Render(noSource)).append('\n');
     return out.toString();
   }
 

@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import io.ramals.learningplatform.assessment.DiagnosticSelectionReplayInputRepository;
 import io.ramals.learningplatform.assessment.HypothesisDiscriminationDiagnosticSelector;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -30,6 +31,9 @@ class DiagnosticSelectionV6ArchitectureGuardrailTests {
 
   private static final String BASE = "io.ramals.learningplatform";
   private static final String V6_CLASS = BASE + ".assessment.HypothesisDiscriminationDiagnosticSelector";
+  private static final String V6_REPLAY_SERVICE_CLASS = BASE + ".assessment.DiagnosticSelectionV6ReplayService";
+  private static final String V6_REPLAY_REPOSITORY_CLASS =
+      BASE + ".assessment.DiagnosticSelectionReplayInputRepository";
 
   private final JavaClasses classes =
       new ClassFileImporter()
@@ -125,6 +129,74 @@ class DiagnosticSelectionV6ArchitectureGuardrailTests {
   @DisplayName("V6 has its own policy identifier, distinct from every earlier version")
   void policyIdentifierIsDistinctFromEveryEarlierVersion() {
     assertThat(HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION)
+        .isNotEqualTo(io.ramals.learningplatform.assessment.DiagnosticFormSelector.SELECTION_POLICY_VERSION)
+        .isNotEqualTo(io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION)
+        .isNotEqualTo(io.ramals.learningplatform.assessment.PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION)
+        .isNotEqualTo(io.ramals.learningplatform.assessment.HypothesisConfirmationDiagnosticSelector.SELECTION_POLICY_VERSION)
+        .isNotEqualTo(io.ramals.learningplatform.assessment.HypothesisDrivenProbeDiagnosticSelector.SELECTION_POLICY_VERSION);
+  }
+
+  // -- M2-ADR-034 Amendment 4 (Step 4): the exact-replay persistence layer holds to the identical
+  // boundaries -- it is exactly as deterministic-Java-only as V6 itself, since it does no more than
+  // persist and later replay V6's own already-governed decision. -----------------------------------
+
+  @Test
+  @DisplayName("the replay service reaches no AI, MCP, or orchestration code")
+  void replayServiceCannotReachAiOrMcpOrOrchestration() {
+    noClasses()
+        .that()
+        .haveFullyQualifiedName(V6_REPLAY_SERVICE_CLASS)
+        .should()
+        .dependOnClassesThat()
+        .resideInAnyPackage(BASE + ".ai..", BASE + ".orchestration..", BASE + ".mcp..")
+        .because(
+            "exact replay recomputes DIAGNOSTIC_SELECTION_V6's own decision from persisted "
+                + "provenance alone -- no LLM, no LangGraph, no MCP participates in reconstructing "
+                + "or verifying a historical decision, exactly as none participates in making it")
+        .check(classes);
+  }
+
+  @Test
+  @DisplayName("the replay service takes no M2-ADR-032 advisory-proposal or M2-ADR-033 "
+      + "misconception-graph input")
+  void replayServiceCannotReachAdvisoryProposalOrMisconceptionGraph() {
+    noClasses()
+        .that()
+        .haveFullyQualifiedName(V6_REPLAY_SERVICE_CLASS)
+        .should()
+        .dependOnClassesThat()
+        .resideInAnyPackage(BASE + ".diagnosticassessment..", BASE + ".assessment.misconceptiongraph")
+        .because(
+            "replay reconstructs exactly the working set the original decision persisted -- an "
+                + "accepted advisory proposal or a misconception-graph edge is no more eligible input "
+                + "to replay than it was to the live decision")
+        .check(classes);
+  }
+
+  @Test
+  @DisplayName("the replay-input repository reaches no AI, MCP, or orchestration code")
+  void replayRepositoryCannotReachAiOrMcpOrOrchestration() {
+    noClasses()
+        .that()
+        .haveFullyQualifiedName(V6_REPLAY_REPOSITORY_CLASS)
+        .should()
+        .dependOnClassesThat()
+        .resideInAnyPackage(BASE + ".ai..", BASE + ".orchestration..", BASE + ".mcp..")
+        .because(
+            "the snapshot writer/reader is a plain JDBC persistence boundary -- it recommends "
+                + "nothing and decides nothing, and no AI/MCP/orchestration code is any part of it")
+        .check(classes);
+  }
+
+  @Test
+  @DisplayName("the replay-input snapshot-contract identifier is distinct from every other frozen "
+      + "identifier -- versions the persistence schema only, never any selection or scoring engine")
+  void snapshotContractVersionIsDistinctFromEveryOtherFrozenIdentifier() {
+    assertThat(DiagnosticSelectionReplayInputRepository.SNAPSHOT_CONTRACT_VERSION)
+        .isEqualTo("DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1")
+        .isNotEqualTo(HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION)
+        .isNotEqualTo(io.ramals.learningplatform.assessment.hypothesisuncertainty.HypothesisUncertaintyCalculatorV1.ENGINE_VERSION)
+        .isNotEqualTo(io.ramals.learningplatform.assessment.hypothesisdiscrimination.HypothesisDiscriminationCalculatorV1.ENGINE_VERSION)
         .isNotEqualTo(io.ramals.learningplatform.assessment.DiagnosticFormSelector.SELECTION_POLICY_VERSION)
         .isNotEqualTo(io.ramals.learningplatform.assessment.AdaptiveDiagnosticSelector.SELECTION_POLICY_VERSION)
         .isNotEqualTo(io.ramals.learningplatform.assessment.PrerequisiteAwareDiagnosticSelector.SELECTION_POLICY_VERSION)

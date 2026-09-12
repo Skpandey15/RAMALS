@@ -367,7 +367,8 @@ class DiagnosticFormPersistenceIntegrationTests {
               new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
               new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
               new HypothesisDiscriminationCalculatorV1(
-                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))),
+          new DiagnosticSelectionReplayInputRepository(runtimeJdbc));
       EvidenceRepository evidenceRepository = new EvidenceRepository(runtimeJdbc);
       MasteryService masteryService = new MasteryService(
           masteryRepository, evidenceRepository, new WeightedMasteryCalculator(),
