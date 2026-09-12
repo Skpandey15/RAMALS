@@ -98,6 +98,37 @@ class Settings(BaseSettings):
     expected_workload_client_id: str = "ramals-core-workload"
     jwks_cache_seconds: int = Field(default=300, gt=0, le=3600)
 
+    # --- LLM observability (Langfuse, via LiteLLM's native langfuse_otel callback) ---------------
+    # Off by default: with it off, litellm's callback list is never touched, and a build without the
+    # `provider` extra (litellm not installed) is completely unaffected -- the same "absent means
+    # safely off" discipline every other flag in this file holds to.
+    #
+    # The three credential fields below are read from LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY/
+    # LANGFUSE_HOST -- deliberately NOT the RAMALS_AI_ prefix every other setting in this file uses,
+    # because LiteLLM's own langfuse_otel integration (litellm.integrations.langfuse.langfuse_otel)
+    # reads exactly these three names directly from the environment. Duplicating them under a RAMALS
+    # prefix would just be a second place for the same secret to go stale.
+    langfuse_tracing_enabled: bool = False
+    langfuse_public_key: str | None = Field(
+        default=None, repr=False, validation_alias="LANGFUSE_PUBLIC_KEY"
+    )
+    langfuse_secret_key: str | None = Field(
+        default=None, repr=False, validation_alias="LANGFUSE_SECRET_KEY"
+    )
+    langfuse_host: str | None = Field(default=None, validation_alias="LANGFUSE_HOST")
+
+    @model_validator(mode="after")
+    def _require_langfuse_credentials_when_enabled(self) -> Settings:
+        """Tracing that silently has no destination is worse than none."""
+        has_credentials = self.langfuse_public_key and self.langfuse_secret_key
+        if self.langfuse_tracing_enabled and not has_credentials:
+            raise ValueError(
+                "RAMALS_AI_LANGFUSE_TRACING_ENABLED requires LANGFUSE_PUBLIC_KEY and "
+                "LANGFUSE_SECRET_KEY (the same two environment variables every Langfuse SDK reads, "
+                "not a RAMALS_AI_-prefixed name)"
+            )
+        return self
+
     # --- MCP-3: outgoing Java MCP client (M2-ADR-031) --------------------------------------------
     # The reverse direction from workload_auth_enabled above: here ramals-ai is the *caller*,
     # authenticating to Java's MCP transport as ramals-ai-workload, audience ramals-mcp -- a

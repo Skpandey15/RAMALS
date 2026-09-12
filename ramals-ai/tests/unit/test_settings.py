@@ -65,6 +65,58 @@ def test_api_key_is_not_shown_in_repr() -> None:
     assert "super-secret" not in repr(settings)
 
 
+def test_defaults_start_without_langfuse_tracing() -> None:
+    settings = Settings()
+    assert settings.langfuse_tracing_enabled is False
+    assert settings.langfuse_public_key is None
+    assert settings.langfuse_secret_key is None
+    assert settings.langfuse_host is None
+
+
+def test_langfuse_tracing_without_credentials_is_rejected() -> None:
+    with pytest.raises(ValueError, match="LANGFUSE_PUBLIC_KEY"):
+        Settings(langfuse_tracing_enabled=True)
+
+
+def test_langfuse_tracing_with_only_one_credential_is_still_rejected() -> None:
+    with pytest.raises(ValueError, match="LANGFUSE_PUBLIC_KEY"):
+        Settings(langfuse_tracing_enabled=True, langfuse_public_key="pk-lf-test")
+
+
+def test_langfuse_tracing_with_both_credentials_is_accepted() -> None:
+    settings = Settings(
+        langfuse_tracing_enabled=True,
+        langfuse_public_key="pk-lf-test",
+        langfuse_secret_key="sk-lf-test",
+    )
+    assert settings.langfuse_tracing_enabled is True
+
+
+def test_langfuse_secret_key_is_not_shown_in_repr() -> None:
+    settings = Settings(
+        langfuse_tracing_enabled=True,
+        langfuse_public_key="pk-lf-test",
+        langfuse_secret_key="super-secret-lf-key",
+    )
+    assert "super-secret-lf-key" not in repr(settings)
+
+
+def test_langfuse_credentials_are_read_from_the_unprefixed_environment_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deliberately not RAMALS_AI_-prefixed: LiteLLM's own langfuse_otel integration reads exactly
+    these three names directly from the environment, the same convention every Langfuse SDK uses."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-env")
+    monkeypatch.setenv("LANGFUSE_HOST", "http://langfuse.local:3000")
+
+    settings = Settings()
+
+    assert settings.langfuse_public_key == "pk-lf-env"
+    assert settings.langfuse_secret_key == "sk-lf-env"
+    assert settings.langfuse_host == "http://langfuse.local:3000"
+
+
 def test_invalid_configuration_raises_explicit_startup_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

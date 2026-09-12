@@ -18,9 +18,13 @@ COPY ramals-ai/src ./src
 # The import in litellm_adapter stays lazy regardless, so a service configured for `ci-fake` still
 # never imports it. Installing it costs image size; not installing it cost the ability to serve.
 #
+# `observability` is the same reasoning applied to LLM call tracing: langfuse_tracing_enabled is
+# off by default, but the deployable artifact must actually be ABLE to export a trace once an
+# operator turns it on, rather than failing that first traced call with an ImportError.
+#
 # scripts/ci/export-python-requirements.py already projects every optional group into the pip-audit
 # input, so this adds no unaudited dependency.
-RUN python -m pip install --prefix=/install ".[provider]"
+RUN python -m pip install --prefix=/install ".[provider,observability]"
 
 FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
 

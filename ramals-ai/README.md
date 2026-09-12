@@ -65,9 +65,59 @@ misconfiguration, not something to ignore.
 | `RAMALS_AI_PROVIDER_API_KEY` | *unset* | Required only for a live route; never logged |
 | `RAMALS_AI_REQUEST_TIMEOUT_SECONDS` | `12.0` | Within the Doc 01 INTERACTIVE_AI deadline |
 | `RAMALS_AI_LOG_LEVEL` | `INFO` | |
+| `RAMALS_AI_LANGFUSE_TRACING_ENABLED` | `false` | Turns on LLM call tracing to Langfuse (below) |
 
 Startup fails with an explicit `ConfigurationError` rather than degrading — a live model route with
 no credential would otherwise surface as an opaque provider error long after deployment.
+
+## LLM call tracing (Langfuse)
+
+Every live-route call goes through LiteLLM (`gateway/providers/litellm_adapter.py`), which ships its
+own `langfuse_otel` callback — a purpose-built OTLP exporter to
+[Langfuse](https://github.com/langfuse/langfuse) (MIT-licensed; only its `ee/` directory is separate
+commercial code, and this integration never touches it). Enabling it needs no code change, only
+configuration:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `RAMALS_AI_LANGFUSE_TRACING_ENABLED` | `false` | Off by default; requires both keys below when `true` |
+| `LANGFUSE_PUBLIC_KEY` | *unset* | Project public key from the Langfuse UI. **Not** `RAMALS_AI_`-prefixed — LiteLLM's own integration and every Langfuse SDK read this exact name |
+| `LANGFUSE_SECRET_KEY` | *unset* | Project secret key; never logged |
+| `LANGFUSE_HOST` | Langfuse's own default (US cloud) | Point this at a self-hosted instance, e.g. `http://localhost:3000` |
+
+Startup fails the same way a live route without a provider key does: `langfuse_tracing_enabled=true`
+without both keys raises `ConfigurationError` rather than silently tracing nothing.
+
+Each traced call carries `metadata.trace_id` set to `ProviderRequest.request_id` — the same stable
+request identity `BusinessEventLogger`'s structured logs already carry (M1-T04) — so a Langfuse trace
+and a RAMALS log line for the same request can be correlated by that id.
+
+**Data captured is a deliberate policy decision, not a default:** this integration sends full,
+unredacted prompts and completions to Langfuse. That is the opposite of `BusinessEventLogger`, which
+redacts prompt/answer/content fields in its own structured logs. The divergence is intentional —
+Langfuse is a debugging tool and its value depends on seeing what the model actually saw and said —
+but it means enabling tracing sends raw learner-facing content to wherever `LANGFUSE_HOST` points.
+Treat that host (and its credentials) with the same care as a system that stores learner content,
+because it is one.
+
+### Running Langfuse locally
+
+Langfuse is not part of `ramals-ai`'s own container or the main `infrastructure/docker/compose.yml`
+(which does not include `ramals-ai` either — see that file). It ships as its own standalone compose
+stack, adapted from
+[Langfuse's published compose file](https://github.com/langfuse/langfuse/blob/main/docker-compose.yml)
+to this repo's required-secret conventions:
+
+```bash
+docker compose -f infrastructure/docker/compose.langfuse.yml --env-file .env up -d
+```
+
+It needs `LANGFUSE_DB_PASSWORD`, `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`,
+`LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_REDIS_AUTH`, `LANGFUSE_MINIO_ROOT_PASSWORD`, and
+`LANGFUSE_NEXTAUTH_SECRET` set in `.env` — startup refuses to come up otherwise. Once it's running,
+open `http://localhost:3000`, create a project, and use its public/secret key pair as
+`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` above (or pre-seed that same project via the compose
+file's `LANGFUSE_INIT_*` variables to skip the manual signup step).
 
 ## Container
 

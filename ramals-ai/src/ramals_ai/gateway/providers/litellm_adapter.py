@@ -31,8 +31,9 @@ class LiteLLMProvider:
 
     name = "litellm"
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(self, api_key: str | None = None, langfuse_tracing_enabled: bool = False) -> None:
         self._api_key = api_key
+        self._langfuse_tracing_enabled = langfuse_tracing_enabled
         self._litellm: Any = None
 
     def _module(self) -> Any:
@@ -53,8 +54,28 @@ class LiteLLMProvider:
             # Turning that off is what keeps it out of exception messages and logs.
             litellm.drop_params = True
             litellm.suppress_debug_info = True
+            if self._langfuse_tracing_enabled:
+                self._configure_langfuse_tracing(litellm)
             self._litellm = litellm
         return self._litellm
+
+    @staticmethod
+    def _configure_langfuse_tracing(litellm_module: Any) -> None:
+        """Enables LiteLLM's own langfuse_otel callback.
+
+        A small, separately-testable step so this class's own unit tests can assert the exact
+        callback configuration without needing the real `litellm` package installed (CI's default
+        unit-test job installs only the `dev` extra, never `provider`).
+
+        LiteLLM's langfuse_otel integration
+        (`litellm.integrations.langfuse.langfuse_otel.LangfuseOtelLogger`) builds and manages its
+        own OTLP exporter from `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST` --
+        entirely separate from this service's own request-tracing `TracerProvider`
+        (`ramals_ai.telemetry.tracing`), so enabling it here neither depends on nor interferes with
+        that provider.
+        """
+        litellm_module.success_callback = ["langfuse_otel"]
+        litellm_module.failure_callback = ["langfuse_otel"]
 
     def durable_capability(self) -> DurableExecutionCapability:
         """Declares Contract B unsupported on the synchronous path, and says which rows fail.
@@ -121,6 +142,11 @@ class LiteLLMProvider:
                 "timeout": request.timeout_seconds,
                 "api_key": self._api_key,
             }
+            if self._langfuse_tracing_enabled and request.request_id:
+                # Correlates this call's Langfuse trace back to the same RAMALS request identity
+                # BusinessEventLogger's own structured logs already carry (M1-T04) -- never learner
+                # free-text, just the id. langfuse_otel accepts dashes or not; it normalizes them.
+                arguments["metadata"] = {"trace_id": request.request_id}
             if request.single_submission:
                 # LiteLLM otherwise owns a retry policy below RAMALS' gateway. Contract A permits
                 # one intended external submission after durable IN_FLIGHT and therefore has to

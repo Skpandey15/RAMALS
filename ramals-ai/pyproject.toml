@@ -50,6 +50,15 @@ provider = [
   # retrieves one -- so it cannot reach the results at all. Addendum A records the evaluation.
   "anthropic==1.1.0",
 ]
+# LLM call tracing (Langfuse, via LiteLLM's own langfuse_otel callback -- gated by
+# Settings.langfuse_tracing_enabled, off by default). A separate group from `provider`: it is an
+# OTLP *exporter*, not a provider SDK, and a build can need one without the other (a fake/ci-fake
+# route never calls litellm.completion at all, so it never constructs this exporter either). Pinned
+# to the same version as the already-declared opentelemetry-api/-sdk, since an exporter must match
+# the API/SDK major.minor it ships against.
+observability = [
+  "opentelemetry-exporter-otlp-proto-http==1.44.0",
+]
 dev = [
   # Contract tooling (M1-ADR-002). datamodel-code-generator emits the Python models from the
   # canonical OpenAPI; the others lint it and keep the committed output honest.

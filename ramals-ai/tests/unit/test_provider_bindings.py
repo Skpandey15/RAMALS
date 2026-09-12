@@ -245,10 +245,22 @@ def _dockerfile() -> str:
     return (Path(__file__).resolve().parents[2] / "Dockerfile").read_text(encoding="utf-8")
 
 
+def _pip_install_line(dockerfile: str) -> str:
+    return next(line for line in dockerfile.splitlines() if "pip install" in line)
+
+
 def test_the_image_installs_the_provider_extra() -> None:
     """Without it the image can only ever serve the deterministic fake."""
-    assert ".[provider]" in _dockerfile(), (
+    assert "provider" in _pip_install_line(_dockerfile()), (
         "the runtime image installs the base package only, so no live model route can dispatch"
+    )
+
+
+def test_the_image_installs_the_observability_extra() -> None:
+    """Without it, turning on langfuse_tracing_enabled fails the first traced call with an
+    ImportError instead of exporting a trace."""
+    assert "observability" in _pip_install_line(_dockerfile()), (
+        "the runtime image cannot export a trace even once an operator enables tracing"
     )
 
 
