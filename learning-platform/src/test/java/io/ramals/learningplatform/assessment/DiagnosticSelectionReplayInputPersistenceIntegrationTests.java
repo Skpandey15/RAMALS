@@ -323,6 +323,51 @@ class DiagnosticSelectionReplayInputPersistenceIntegrationTests {
   }
 
   // -------------------------------------------------------------------------------------------
+  // M2-ADR-034 Amendment 4 correction round: a replay snapshot may exist ONLY for a
+  // DIAGNOSTIC_SELECTION_V6 destination attempt (blocker 3), and only under the one
+  // snapshot_contract_version this schema currently recognizes (blocker 1).
+  // -------------------------------------------------------------------------------------------
+
+  @Test
+  void headerRowIsRejectedForANonV6DestinationAttempt() {
+    wire();
+    Learner learner = learners.provisionForSubject("replay-header-non-v6-attempt");
+    UUID destinationAttemptId = inProgressAttemptUnderPolicy(learner.id(), "DIAGNOSTIC_SELECTION_V5");
+
+    assertThatThrownBy(() -> insertHeaderDirect(UUID.randomUUID(), destinationAttemptId, null, false,
+        V6FallbackReason.NO_SOURCE_ATTEMPT))
+        .isInstanceOf(DataAccessException.class)
+        .hasMessageContaining("DIAGNOSTIC_SELECTION_V6");
+  }
+
+  @Test
+  void headerRowIsAcceptedForAGenuineV6DestinationAttempt() {
+    wire();
+    Learner learner = learners.provisionForSubject("replay-header-genuine-v6-attempt");
+    UUID destinationAttemptId = inProgressAttempt(learner.id());
+
+    replayInputs.insert(destinationAttemptId, HypothesisDiscriminationDiagnosticSelector.noSourceAttemptDecision());
+
+    assertThat(replayInputs.findByDestinationAttempt(destinationAttemptId)).isPresent();
+  }
+
+  @Test
+  void headerRowRejectsAnUnsupportedSnapshotContractVersion() {
+    wire();
+    Learner learner = learners.provisionForSubject("replay-header-unsupported-contract-version");
+    UUID destinationAttemptId = inProgressAttempt(learner.id());
+
+    assertThatThrownBy(() -> runtimeJdbc.update("""
+        INSERT INTO core.diagnostic_selection_replay_input
+          (id, destination_attempt_id, source_attempt_id, snapshot_contract_version,
+           relationship_authorized_count, actionable_hypothesis_count, candidate_probe_count,
+           participating_hypothesis_count, step1_status, step2_status, activated, fallback_reason)
+        VALUES (?, ?, NULL, 'DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V2', 0, 0, 0, 0, NULL, NULL, FALSE, 'NO_SOURCE_ATTEMPT')
+        """, UUID.randomUUID(), destinationAttemptId))
+        .isInstanceOf(DataIntegrityViolationException.class);
+  }
+
+  // -------------------------------------------------------------------------------------------
   // Append-only protection, IN_PROGRESS gating, Fact-1 check, and composite-consistency discipline
   // (candidate-probe table).
   // -------------------------------------------------------------------------------------------
@@ -518,13 +563,30 @@ class DiagnosticSelectionReplayInputPersistenceIntegrationTests {
     return attemptId;
   }
 
+  /** A destination attempt whose own {@code selection_policy} is genuinely {@code
+   * DIAGNOSTIC_SELECTION_V6} -- required by {@code trg_diagnostic_selection_replay_input_guard}
+   * (M2-ADR-034 Amendment 4 correction round, blocker 3), which now rejects a replay-input
+   * snapshot for any attempt not governed by V6. */
   private UUID inProgressAttempt(UUID learnerId) {
     UUID attemptId = UUID.randomUUID();
     runtimeJdbc.update("""
         INSERT INTO core.assessment_attempt
-          (id, learner_id, assessment_version_id, status, idempotency_key)
-        VALUES (?, ?, ?, 'IN_PROGRESS', ?)
-        """, attemptId, learnerId, ASSESSMENT_V2, "replay-destination-fixture-" + attemptId);
+          (id, learner_id, assessment_version_id, status, idempotency_key, selection_policy)
+        VALUES (?, ?, ?, 'IN_PROGRESS', ?, ?)
+        """, attemptId, learnerId, ASSESSMENT_V2, "replay-destination-fixture-" + attemptId,
+        HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION);
+    return attemptId;
+  }
+
+  /** An attempt deliberately NOT governed by {@code DIAGNOSTIC_SELECTION_V6} -- for proving the
+   * trigger rejects a replay-input snapshot attached to it. */
+  private UUID inProgressAttemptUnderPolicy(UUID learnerId, String selectionPolicy) {
+    UUID attemptId = UUID.randomUUID();
+    runtimeJdbc.update("""
+        INSERT INTO core.assessment_attempt
+          (id, learner_id, assessment_version_id, status, idempotency_key, selection_policy)
+        VALUES (?, ?, ?, 'IN_PROGRESS', ?, ?)
+        """, attemptId, learnerId, ASSESSMENT_V2, "replay-destination-fixture-" + attemptId, selectionPolicy);
     return attemptId;
   }
 

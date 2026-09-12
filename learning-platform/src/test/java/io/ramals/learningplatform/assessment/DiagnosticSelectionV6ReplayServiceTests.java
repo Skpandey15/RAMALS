@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -80,14 +81,39 @@ class DiagnosticSelectionV6ReplayServiceTests {
         repository, probeRelationshipService, assembler, uncertaintyCalculator, discriminationCalculator);
     service = new DiagnosticSelectionV6ReplayService(
         repository, replayInputRepository, probeProvenanceRepository, selector);
+    // The overwhelming majority of tests in this class replay a genuine DIAGNOSTIC_SELECTION_V6
+    // attempt; the handful that deliberately exercise a non-V6 destination attempt (M2-ADR-034
+    // Amendment 4 correction round, blocker 3) override this with their own stub. lenient() avoids
+    // Mockito's strict-stubbing failure on the tests that never reach this call at all (e.g. an
+    // unknown attempt, which throws first).
+    lenient().when(repository.findSelectionPolicy(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(HypothesisDiscriminationDiagnosticSelector.SELECTION_POLICY_VERSION));
+  }
+
+  /** A header shaped exactly like {@link #stubGenuineTieActivation()}'s own working set (two
+   * actionable hypotheses, two candidates, both Step-1 participants, Step-2 SCORABLE) -- valid for
+   * either an activated outcome or a deliberately-mismatched-activation test built on top of it. */
+  private DiagnosticSelectionReplayInput header(
+      UUID sourceAttemptId, boolean activated, V6FallbackReason fallbackReason) {
+    return header(sourceAttemptId, activated, fallbackReason, 2, 2, 2, 2, "APPLICABLE", "SCORABLE");
   }
 
   private DiagnosticSelectionReplayInput header(
-      UUID sourceAttemptId, boolean activated, V6FallbackReason fallbackReason) {
+      UUID sourceAttemptId, boolean activated, V6FallbackReason fallbackReason,
+      int relationshipAuthorizedCount, int actionableHypothesisCount, int candidateProbeCount,
+      int participatingHypothesisCount, String step1Status, String step2Status) {
     return new DiagnosticSelectionReplayInput(
         REPLAY_INPUT_ID, DESTINATION_ATTEMPT_ID, sourceAttemptId,
         DiagnosticSelectionReplayInputRepository.SNAPSHOT_CONTRACT_VERSION,
-        2, 2, 2, 2, "APPLICABLE", "SCORABLE", activated, fallbackReason);
+        relationshipAuthorizedCount, actionableHypothesisCount, candidateProbeCount,
+        participatingHypothesisCount, step1Status, step2Status, activated, fallbackReason);
+  }
+
+  /** The correctly-shaped header for a genuine NO_SOURCE_ATTEMPT outcome -- every count zero, no
+   * Step-1/Step-2 status, exactly what {@link HypothesisDiscriminationDiagnosticSelector#noSourceAttemptDecision()}
+   * itself produces. */
+  private DiagnosticSelectionReplayInput noSourceAttemptHeader() {
+    return header(null, false, V6FallbackReason.NO_SOURCE_ATTEMPT, 0, 0, 0, 0, null, null);
   }
 
   private static AdaptiveEligibleItem eligibleItem(UUID itemVersionId, String skillCode) {
@@ -109,7 +135,7 @@ class DiagnosticSelectionV6ReplayServiceTests {
         List.of(
             new CandidateDiscrimination(ITEM_A1, HYPOTHESIS_A, new BigDecimal("0.3000")),
             new CandidateDiscrimination(ITEM_B1, HYPOTHESIS_B, new BigDecimal("0.7000")))));
-    when(repository.findAdaptiveEligibleItems(ASSESSMENT_VERSION_ID)).thenReturn(
+    lenient().when(repository.findAdaptiveEligibleItemsForItemVersions(any())).thenReturn(
         List.of(eligibleItem(ITEM_A1, "SKILL_A"), eligibleItem(ITEM_B1, "SKILL_B")));
     when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID)).thenReturn(List.of(
         new CandidateProbe(ITEM_A1, HYPOTHESIS_A, true), new CandidateProbe(ITEM_B1, HYPOTHESIS_B, true)));
@@ -144,15 +170,17 @@ class DiagnosticSelectionV6ReplayServiceTests {
   void replay_noSourceAttempt_verifiesDirectlyWithoutSearching() {
     when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
     when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
-        .thenReturn(Optional.of(header(null, false, V6FallbackReason.NO_SOURCE_ATTEMPT)));
+        .thenReturn(Optional.of(noSourceAttemptHeader()));
 
     DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
 
     assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.VERIFIED);
     assertThat(result.recomputedDecision().activated()).isFalse();
     assertThat(result.recomputedDecision().fallbackReason()).isEqualTo(V6FallbackReason.NO_SOURCE_ATTEMPT);
+    assertThat(result.verifiedProbeProvenance()).isNull();
     verify(repository, never()).findMostRecentCompletedAttempt(any(), any());
     verify(repository, never()).findAdaptiveEligibleItems(any());
+    verify(repository, never()).findAdaptiveEligibleItemsForItemVersions(any());
     verify(replayInputRepository, never()).findCandidateProbes(any());
     verify(replayInputRepository, never()).findActionableHypotheses(any());
     verifyNoInteractions(assembler, uncertaintyCalculator, discriminationCalculator);
@@ -165,17 +193,19 @@ class DiagnosticSelectionV6ReplayServiceTests {
     when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
         .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, true, null)));
     stubGenuineTieActivation();
-    when(probeProvenanceRepository.findByAttemptAndItem(DESTINATION_ATTEMPT_ID, ITEM_B1))
-        .thenReturn(Optional.of(new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, ITEM_B1,
-            SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
-            TARGET_B, AUTHORIZING_RELATIONSHIP)));
+    ProbeProvenance provenance = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, ITEM_B1,
+        SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        TARGET_B, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(provenance));
 
     DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
 
     assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.VERIFIED);
     assertThat(result.recomputedDecision().activated()).isTrue();
     assertThat(result.recomputedDecision().selection().orElseThrow().chosenItemVersionId()).isEqualTo(ITEM_B1);
+    assertThat(result.verifiedProbeProvenance()).isEqualTo(provenance);
     verify(repository, never()).findMostRecentCompletedAttempt(any(), any());
+    verify(repository, never()).findAdaptiveEligibleItems(any());
   }
 
   @Test
@@ -185,13 +215,34 @@ class DiagnosticSelectionV6ReplayServiceTests {
     when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
         .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, true, null)));
     stubGenuineTieActivation();
-    when(probeProvenanceRepository.findByAttemptAndItem(DESTINATION_ATTEMPT_ID, ITEM_B1))
-        .thenReturn(Optional.empty());
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of());
 
     DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
 
     assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
     assertThat(result.integrityFailureDetail()).contains("diagnostic_probe_provenance");
+  }
+
+  @Test
+  @DisplayName("more than one diagnostic_probe_provenance row for one attempt -> INTEGRITY_FAILURE "
+      + "(packet quota violation, MAX_HYPOTHESIS_PROBES_PER_PACKET = 1)")
+  void replay_multipleProvenanceRowsForOneAttempt_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, true, null)));
+    stubGenuineTieActivation();
+    ProbeProvenance first = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, ITEM_B1,
+        SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        TARGET_B, AUTHORIZING_RELATIONSHIP);
+    ProbeProvenance second = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, ITEM_A1,
+        SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        TARGET_A, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(first, second));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("MAX_HYPOTHESIS_PROBES_PER_PACKET");
   }
 
   @Test
@@ -210,5 +261,276 @@ class DiagnosticSelectionV6ReplayServiceTests {
     assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
     assertThat(result.integrityFailureDetail()).contains("diverges from persisted");
     assertThat(result.recomputedDecision().activated()).isTrue();
+  }
+
+  @Test
+  @DisplayName("fallback_reason alone diverges from persisted (both non-activated) -> INTEGRITY_FAILURE")
+  void replay_fallbackReasonMismatch_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.STEP1_NOT_APPLICABLE)));
+    stubAllScoresZeroFallback();
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("fallbackReason");
+  }
+
+  // -- M2-ADR-034 Amendment 4 correction round: blocker 1 -- snapshot_contract_version -----------
+
+  @Test
+  @DisplayName("unsupported snapshot_contract_version -> UNSUPPORTED_SNAPSHOT_VERSION, fails closed "
+      + "before touching Step 1/Step 2 or any source-attempt/exposure discovery")
+  void replay_unsupportedSnapshotContractVersion_failsClosedWithoutTouchingEngines() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(
+        new DiagnosticSelectionReplayInput(REPLAY_INPUT_ID, DESTINATION_ATTEMPT_ID, SOURCE_ATTEMPT_ID,
+            "DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V2", 2, 2, 2, 2, "APPLICABLE", "SCORABLE", true, null)));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.UNSUPPORTED_SNAPSHOT_VERSION);
+    assertThat(result.integrityFailureDetail())
+        .contains("DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1")
+        .contains("DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V2");
+    assertThat(result.recomputedDecision()).isNull();
+    verify(repository, never()).findMostRecentCompletedAttempt(any(), any());
+    verify(repository, never()).findAdaptiveEligibleItems(any());
+    verify(repository, never()).findAdaptiveEligibleItemsForItemVersions(any());
+    verify(replayInputRepository, never()).findCandidateProbes(any());
+    verify(replayInputRepository, never()).findActionableHypotheses(any());
+    verifyNoInteractions(assembler, uncertaintyCalculator, discriminationCalculator, probeRelationshipService,
+        probeProvenanceRepository);
+  }
+
+  // -- M2-ADR-034 Amendment 4 correction round: blocker 3 -- destination attempt must be V6 -------
+
+  @Test
+  @DisplayName("non-V6 destination attempt, no snapshot -> NOT_AVAILABLE")
+  void replay_nonV6AttemptWithNoSnapshot_returnsNotAvailable() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(repository.findSelectionPolicy(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of("DIAGNOSTIC_SELECTION_V5"));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.NOT_AVAILABLE);
+    assertThat(result.recomputedDecision()).isNull();
+  }
+
+  @Test
+  @DisplayName("non-V6 destination attempt with a V6 replay snapshot -> INTEGRITY_FAILURE "
+      + "(a contradictory persisted state, never silently accepted as replayable)")
+  void replay_nonV6AttemptWithV6Snapshot_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(repository.findSelectionPolicy(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of("DIAGNOSTIC_SELECTION_V5"));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, true, null)));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("selection_policy");
+    assertThat(result.recomputedDecision()).isNull();
+    verifyNoInteractions(assembler, uncertaintyCalculator, discriminationCalculator);
+  }
+
+  // -- M2-ADR-034 Amendment 4 correction round: blocker 2 -- fallback final-probe verification ----
+
+  private void stubAllScoresZeroFallback() {
+    HypothesisUncertaintyContext context =
+        new HypothesisUncertaintyContext(SOURCE_ATTEMPT_ID, "KAFKA", List.of(), List.of());
+    when(assembler.assemble(eq(SOURCE_ATTEMPT_ID), any())).thenReturn(context);
+    when(uncertaintyCalculator.calculate(context)).thenReturn(new HypothesisUncertaintyResult(
+        "HYPOTHESIS_UNCERTAINTY_V1", HypothesisUncertaintyStatus.APPLICABLE,
+        List.of(
+            new CandidateUncertainty(HYPOTHESIS_A, DiagnosticConfidenceBand.MODERATE, true, new BigDecimal("0.5000")),
+            new CandidateUncertainty(HYPOTHESIS_B, DiagnosticConfidenceBand.MODERATE, true, new BigDecimal("0.5000")))));
+    when(discriminationCalculator.calculate(any())).thenReturn(new HypothesisDiscriminationResult(
+        "HYPOTHESIS_DISCRIMINATION_V1", HypothesisDiscriminationStatus.SCORABLE,
+        List.of(
+            new CandidateDiscrimination(ITEM_A1, HYPOTHESIS_A, BigDecimal.ZERO),
+            new CandidateDiscrimination(ITEM_B1, HYPOTHESIS_B, BigDecimal.ZERO))));
+    when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID)).thenReturn(List.of(
+        new CandidateProbe(ITEM_A1, HYPOTHESIS_A, true), new CandidateProbe(ITEM_B1, HYPOTHESIS_B, true)));
+    when(replayInputRepository.findActionableHypotheses(REPLAY_INPUT_ID))
+        .thenReturn(List.of(HYPOTHESIS_A, HYPOTHESIS_B));
+    lenient().when(repository.findAdaptiveEligibleItemsForItemVersions(any())).thenReturn(
+        List.of(eligibleItem(ITEM_A1, "SKILL_A"), eligibleItem(ITEM_B1, "SKILL_B")));
+  }
+
+  @Test
+  @DisplayName("V6 fallback (ALL_SCORES_ZERO) with V5's own final selected probe already recorded -> "
+      + "VERIFIED, without re-running V5's own discovery (M2-ADR-034 Amendment 4 sec S / golden "
+      + "scenario A4-5)")
+  void replay_fallbackWithFinalProbeAlreadyRecorded_returnsVerified() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.ALL_SCORES_ZERO)));
+    stubAllScoresZeroFallback();
+    ProbeProvenance v5Selection = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, ITEM_A1,
+        SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        TARGET_A, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(v5Selection));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.VERIFIED);
+    assertThat(result.recomputedDecision().activated()).isFalse();
+    assertThat(result.recomputedDecision().fallbackReason()).isEqualTo(V6FallbackReason.ALL_SCORES_ZERO);
+    assertThat(result.verifiedProbeProvenance()).isEqualTo(v5Selection);
+    verify(probeRelationshipService, never()).resolve(any(), any(), any());
+  }
+
+  @Test
+  @DisplayName("fallback decision that could not possibly have produced a probe (no source attempt), "
+      + "but provenance records one anyway -> INTEGRITY_FAILURE, never re-derived from V5's own "
+      + "discovery to decide whether it 'should' be there")
+  void replay_fallbackWithImpossibleProbeRecorded_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(noSourceAttemptHeader()));
+    ProbeProvenance impossible = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, ITEM_A1,
+        SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        TARGET_A, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(impossible));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("could not have produced a hypothesis-driven probe");
+  }
+
+  // -- Additional review hardening: persisted audit counts/statuses are integrity-checked too -----
+
+  @Test
+  @DisplayName("persisted candidate_probe_count does not match actual candidate rows -> "
+      + "INTEGRITY_FAILURE before Step 1/Step 2 ever run")
+  void replay_candidateProbeCountMismatch_failsBeforeStep1Step2() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, true, null)));
+    // Header claims 2 candidates; only 1 actual row is returned.
+    when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID))
+        .thenReturn(List.of(new CandidateProbe(ITEM_A1, HYPOTHESIS_A, true)));
+    when(replayInputRepository.findActionableHypotheses(REPLAY_INPUT_ID))
+        .thenReturn(List.of(HYPOTHESIS_A, HYPOTHESIS_B));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("candidate_probe_count");
+    assertThat(result.recomputedDecision()).isNull();
+    verifyNoInteractions(assembler, uncertaintyCalculator, discriminationCalculator);
+  }
+
+  @Test
+  @DisplayName("persisted actionable_hypothesis_count does not match the hypotheses reconstructed "
+      + "from candidate rows -> INTEGRITY_FAILURE before Step 1/Step 2 ever run")
+  void replay_actionableHypothesisCountMismatch_failsBeforeStep1Step2() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, true, null)));
+    when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID)).thenReturn(List.of(
+        new CandidateProbe(ITEM_A1, HYPOTHESIS_A, true), new CandidateProbe(ITEM_B1, HYPOTHESIS_B, true)));
+    // Header claims 2 actionable hypotheses; only 1 distinct hypothesis is reconstructed.
+    when(replayInputRepository.findActionableHypotheses(REPLAY_INPUT_ID)).thenReturn(List.of(HYPOTHESIS_A));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("actionable_hypothesis_count");
+    assertThat(result.recomputedDecision()).isNull();
+    verifyNoInteractions(assembler, uncertaintyCalculator, discriminationCalculator);
+  }
+
+  @Test
+  @DisplayName("persisted participating_hypothesis_count diverges from the recomputed value -> "
+      + "INTEGRITY_FAILURE even though activated/fallbackReason match")
+  void replay_participatingHypothesisCountMismatch_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    // Real decision: only HYPOTHESIS_A participates (1), so it falls back to
+    // FEWER_THAN_TWO_PARTICIPANTS -- but the header wrongly persists participating count 2.
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(
+        header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.FEWER_THAN_TWO_PARTICIPANTS,
+            2, 2, 2, 2, "APPLICABLE", null)));
+    HypothesisUncertaintyContext context =
+        new HypothesisUncertaintyContext(SOURCE_ATTEMPT_ID, "KAFKA", List.of(), List.of());
+    when(assembler.assemble(eq(SOURCE_ATTEMPT_ID), any())).thenReturn(context);
+    when(uncertaintyCalculator.calculate(context)).thenReturn(new HypothesisUncertaintyResult(
+        "HYPOTHESIS_UNCERTAINTY_V1", HypothesisUncertaintyStatus.APPLICABLE,
+        List.of(
+            new CandidateUncertainty(HYPOTHESIS_A, DiagnosticConfidenceBand.HIGH, true, new BigDecimal("1.0000")),
+            new CandidateUncertainty(HYPOTHESIS_B, DiagnosticConfidenceBand.INSUFFICIENT_EVIDENCE, false, null))));
+    when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID)).thenReturn(List.of(
+        new CandidateProbe(ITEM_A1, HYPOTHESIS_A, true), new CandidateProbe(ITEM_B1, HYPOTHESIS_B, true)));
+    when(replayInputRepository.findActionableHypotheses(REPLAY_INPUT_ID))
+        .thenReturn(List.of(HYPOTHESIS_A, HYPOTHESIS_B));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("participatingHypothesisCount");
+    verifyNoInteractions(discriminationCalculator);
+  }
+
+  @Test
+  @DisplayName("persisted step1_status diverges from the recomputed value -> INTEGRITY_FAILURE even "
+      + "though activated/fallbackReason match")
+  void replay_step1StatusMismatch_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    // Real decision: HYPOTHESIS_UNCERTAINTY_V1 is genuinely NOT_APPLICABLE -- but the header wrongly
+    // persists step1_status = APPLICABLE.
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(
+        header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.STEP1_NOT_APPLICABLE,
+            2, 2, 2, 0, "APPLICABLE", null)));
+    HypothesisUncertaintyContext context =
+        new HypothesisUncertaintyContext(SOURCE_ATTEMPT_ID, "KAFKA", List.of(), List.of());
+    when(assembler.assemble(eq(SOURCE_ATTEMPT_ID), any())).thenReturn(context);
+    when(uncertaintyCalculator.calculate(context)).thenReturn(
+        new HypothesisUncertaintyResult("HYPOTHESIS_UNCERTAINTY_V1", HypothesisUncertaintyStatus.NOT_APPLICABLE, List.of()));
+    when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID)).thenReturn(List.of(
+        new CandidateProbe(ITEM_A1, HYPOTHESIS_A, true), new CandidateProbe(ITEM_B1, HYPOTHESIS_B, true)));
+    when(replayInputRepository.findActionableHypotheses(REPLAY_INPUT_ID))
+        .thenReturn(List.of(HYPOTHESIS_A, HYPOTHESIS_B));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("step1Status");
+    verifyNoInteractions(discriminationCalculator);
+  }
+
+  @Test
+  @DisplayName("persisted step2_status diverges from the recomputed value -> INTEGRITY_FAILURE even "
+      + "though activated/fallbackReason match")
+  void replay_step2StatusMismatch_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    // Real decision: HYPOTHESIS_DISCRIMINATION_V1 is genuinely NOT_APPLICABLE -- but the header
+    // wrongly persists step2_status = SCORABLE.
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(
+        header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.STEP2_NOT_APPLICABLE,
+            2, 2, 2, 2, "APPLICABLE", "SCORABLE")));
+    HypothesisUncertaintyContext context =
+        new HypothesisUncertaintyContext(SOURCE_ATTEMPT_ID, "KAFKA", List.of(), List.of());
+    when(assembler.assemble(eq(SOURCE_ATTEMPT_ID), any())).thenReturn(context);
+    when(uncertaintyCalculator.calculate(context)).thenReturn(new HypothesisUncertaintyResult(
+        "HYPOTHESIS_UNCERTAINTY_V1", HypothesisUncertaintyStatus.APPLICABLE,
+        List.of(
+            new CandidateUncertainty(HYPOTHESIS_A, DiagnosticConfidenceBand.MODERATE, true, new BigDecimal("0.5000")),
+            new CandidateUncertainty(HYPOTHESIS_B, DiagnosticConfidenceBand.MODERATE, true, new BigDecimal("0.5000")))));
+    when(discriminationCalculator.calculate(any())).thenReturn(new HypothesisDiscriminationResult(
+        "HYPOTHESIS_DISCRIMINATION_V1", HypothesisDiscriminationStatus.NOT_APPLICABLE, List.of()));
+    when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID)).thenReturn(List.of(
+        new CandidateProbe(ITEM_A1, HYPOTHESIS_A, true), new CandidateProbe(ITEM_B1, HYPOTHESIS_B, true)));
+    when(replayInputRepository.findActionableHypotheses(REPLAY_INPUT_ID))
+        .thenReturn(List.of(HYPOTHESIS_A, HYPOTHESIS_B));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("step2Status");
   }
 }
