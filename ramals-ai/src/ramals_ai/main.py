@@ -178,7 +178,10 @@ def _adapter_for(settings: Settings) -> ProviderAdapter:
             qualification_provider_pause_ms=settings.qualification_provider_pause_ms,
         )
 
-    provider = LiteLLMProvider(api_key=settings.provider_api_key)
+    provider = LiteLLMProvider(
+        api_key=settings.provider_api_key,
+        langfuse_tracing_enabled=settings.langfuse_tracing_enabled,
+    )
     # Checked at startup for the same reason the credential is (see Settings): a live route whose
     # SDK is absent is a misconfiguration, not a degraded mode, and it is invisible until a learner
     # triggers it. The image installs the 'provider' extra precisely so this passes.

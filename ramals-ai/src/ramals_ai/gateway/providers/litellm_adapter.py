@@ -31,8 +31,9 @@ class LiteLLMProvider:
 
     name = "litellm"
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(self, api_key: str | None = None, langfuse_tracing_enabled: bool = False) -> None:
         self._api_key = api_key
+        self._langfuse_tracing_enabled = langfuse_tracing_enabled
         self._litellm: Any = None
 
     def _module(self) -> Any:
@@ -53,8 +54,61 @@ class LiteLLMProvider:
             # Turning that off is what keeps it out of exception messages and logs.
             litellm.drop_params = True
             litellm.suppress_debug_info = True
+            if self._langfuse_tracing_enabled:
+                self._configure_langfuse_tracing(litellm)
             self._litellm = litellm
         return self._litellm
+
+    @staticmethod
+    def _configure_langfuse_tracing(litellm_module: Any) -> None:
+        """Enables LiteLLM's own langfuse_otel callback, alongside whatever is already registered.
+
+        A small, separately-testable step so this class's own unit tests can assert the exact
+        callback configuration without needing the real `litellm` package installed (CI's default
+        unit-test job installs only the `dev` extra, never `provider`).
+
+        LiteLLM's langfuse_otel integration
+        (`litellm.integrations.langfuse.langfuse_otel.LangfuseOtelLogger`) builds and manages its
+        own OTLP exporter from `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST` --
+        entirely separate from this service's own request-tracing `TracerProvider`
+        (`ramals_ai.telemetry.tracing`), so enabling it here neither depends on nor interferes with
+        that provider.
+
+        `success_callback`/`failure_callback` are process-wide lists LiteLLM itself may default to
+        something other than empty, and another integration could already have populated. Assigning
+        a fresh one-element list here would silently discard whatever was already registered, so
+        this appends instead -- and skips the append if `langfuse_otel` is present already, since
+        `_module()` runs this once per provider instance and a process can hold more than one.
+
+        Scope this deliberately does NOT have: `success_callback`/`failure_callback` live on the
+        `litellm` module itself, not on any `LiteLLMProvider` instance. Enabling tracing on one
+        `LiteLLMProvider` therefore enables it for every `LiteLLMProvider` sharing that module in
+        the same process -- there is no per-instance isolation, because LiteLLM offers none at this
+        layer. RAMALS's assumption here is that ramals-ai runs at most one effective, live LiteLLM
+        tracing configuration per process: `main.py` constructs exactly one `LiteLLMProvider`, from
+        one `Settings` object, at startup. If a future need arises for different tracing
+        configuration across provider instances within a single process, this module-global
+        approach stops being sufficient and needs redesigning -- that redesign is out of scope here.
+        """
+        litellm_module.success_callback = LiteLLMProvider._with_langfuse_callback(
+            getattr(litellm_module, "success_callback", None)
+        )
+        litellm_module.failure_callback = LiteLLMProvider._with_langfuse_callback(
+            getattr(litellm_module, "failure_callback", None)
+        )
+
+    @staticmethod
+    def _with_langfuse_callback(callbacks: list[Any] | None) -> list[Any]:
+        """Returns a new list holding `callbacks` plus `"langfuse_otel"`, added at most once.
+
+        Builds a new list rather than appending in place: `callbacks` may be the exact list object
+        LiteLLM (or another integration) is holding a reference to, and mutating it in place would
+        be a surprising side effect for whoever passed it in.
+        """
+        existing = list(callbacks) if callbacks else []
+        if "langfuse_otel" not in existing:
+            existing.append("langfuse_otel")
+        return existing
 
     def durable_capability(self) -> DurableExecutionCapability:
         """Declares Contract B unsupported on the synchronous path, and says which rows fail.
@@ -121,6 +175,11 @@ class LiteLLMProvider:
                 "timeout": request.timeout_seconds,
                 "api_key": self._api_key,
             }
+            if self._langfuse_tracing_enabled and request.request_id:
+                # Correlates this call's Langfuse trace back to the same RAMALS request identity
+                # BusinessEventLogger's own structured logs already carry (M1-T04) -- never learner
+                # free-text, just the id. langfuse_otel accepts dashes or not; it normalizes them.
+                arguments["metadata"] = {"trace_id": request.request_id}
             if request.single_submission:
                 # LiteLLM otherwise owns a retry policy below RAMALS' gateway. Contract A permits
                 # one intended external submission after durable IN_FLIGHT and therefore has to

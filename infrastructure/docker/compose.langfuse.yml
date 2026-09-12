@@ -1,0 +1,264 @@
+# Self-hosted Langfuse (LLM call tracing), adapted from Langfuse's own published stack at
+# https://github.com/langfuse/langfuse/blob/main/docker-compose.yml to RAMALS's own conventions:
+# every real secret is a required `${VAR:?...}` rather than an insecure `# CHANGEME` default, every
+# service gets `no-new-privileges` and `unless-stopped`, and the `data`/`edge` network split mirrors
+# infrastructure/docker/compose.yml (only langfuse-web is reachable from the host; everything else
+# -- Postgres, ClickHouse, Redis, MinIO, the worker -- stays on the internal network).
+#
+# Deliberately its own compose file rather than a service added to compose.yml: ramals-ai is not
+# part of local Compose today (it runs as a local process or in K8s -- see deploy/k8s/), so there is
+# nothing in that file for it to join. Bring this stack up on its own and point a locally-run
+# ramals-ai at it:
+#
+#   docker compose -f infrastructure/docker/compose.langfuse.yml --env-file .env up -d
+#
+# Then, for ramals-ai (see ramals-ai/README or its config/settings.py):
+#   RAMALS_AI_LANGFUSE_TRACING_ENABLED=true
+#   LANGFUSE_PUBLIC_KEY=<project public key, created in the Langfuse UI or via LANGFUSE_INIT_* below>
+#   LANGFUSE_SECRET_KEY=<project secret key>
+#   LANGFUSE_HOST=http://localhost:${RAMALS_LANGFUSE_PORT:-3000}
+#
+# NOTE: RAMALS has deliberately configured this integration to capture full prompts and completions
+# in Langfuse (not metadata-only), a policy decision distinct from BusinessEventLogger's own
+# redaction of learner content in structured logs (M1-T04). See ramals-ai's Langfuse doc for why.
+#
+# LANGFUSE_DB_USER, LANGFUSE_DB_PASSWORD and LANGFUSE_DB_NAME are interpolated directly into
+# DATABASE_URL's `postgresql://user:password@host/name` form below. Compose has no built-in
+# URL-encoding, so a value containing a URL-reserved character (@ : / ? # %) would silently change
+# what the connection string means instead of failing loudly -- e.g. a password containing `@` would
+# be parsed as introducing the host part early. Langfuse also accepts DATABASE_HOST/
+# DATABASE_USERNAME/DATABASE_PASSWORD/DATABASE_NAME as an alternative to DATABASE_URL, but its own
+# web/entrypoint.sh and worker/entrypoint.sh build this exact same unencoded string internally from
+# those variables, so using them would not remove the hazard, only relocate it. The
+# `langfuse-validate-secrets` service below rejects any of the three values containing a
+# URL-reserved character before Postgres-dependent services start. Generate a URL-safe secret with:
+#   openssl rand -hex 32
+
+name: ramals-langfuse
+
+services:
+  # One-shot pre-flight gate, not a long-running service (see `restart: "no"` and the healthcheck-free
+  # `service_completed_successfully` condition it's depended on by, below): rejects a Postgres user,
+  # password or database name that would corrupt DATABASE_URL's meaning instead of merely failing
+  # noisily deep inside Langfuse's own Prisma migration step. Reuses the postgres:17 image already
+  # pulled for langfuse-postgres rather than introducing a new one purely for this check.
+  langfuse-validate-secrets:
+    image: postgres:17
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        case "$$LANGFUSE_DB_USER" in
+          *[@:/?#%]*)
+            echo "LANGFUSE_DB_USER must not contain any of @ : / ? # % -- see infrastructure/docker/compose.langfuse.yml for why." >&2
+            exit 1
+            ;;
+        esac
+        case "$$LANGFUSE_DB_PASSWORD" in
+          *[@:/?#%]*)
+            echo "LANGFUSE_DB_PASSWORD must not contain any of @ : / ? # % -- see infrastructure/docker/compose.langfuse.yml for why." >&2
+            exit 1
+            ;;
+        esac
+        case "$$LANGFUSE_DB_NAME" in
+          *[@:/?#%]*)
+            echo "LANGFUSE_DB_NAME must not contain any of @ : / ? # % -- see infrastructure/docker/compose.langfuse.yml for why." >&2
+            exit 1
+            ;;
+        esac
+        echo "Langfuse Postgres credentials are URL-safe."
+    environment:
+      LANGFUSE_DB_USER: ${LANGFUSE_DB_USER:-postgres}
+      LANGFUSE_DB_PASSWORD: ${LANGFUSE_DB_PASSWORD:?Set LANGFUSE_DB_PASSWORD in .env}
+      LANGFUSE_DB_NAME: ${LANGFUSE_DB_NAME:-postgres}
+    networks:
+      - data
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4
+    depends_on: &langfuse-depends-on
+      langfuse-validate-secrets:
+        condition: service_completed_successfully
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    environment: &langfuse-worker-env
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-postgres}:${LANGFUSE_DB_PASSWORD:?Set LANGFUSE_DB_PASSWORD in .env}@langfuse-postgres:5432/${LANGFUSE_DB_NAME:-postgres}
+      SALT: ${LANGFUSE_SALT:?Set LANGFUSE_SALT in .env (openssl rand -hex 32)}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?Set LANGFUSE_ENCRYPTION_KEY in .env (openssl rand -hex 32)}
+      TELEMETRY_ENABLED: ${LANGFUSE_TELEMETRY_ENABLED:-false}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?Set LANGFUSE_CLICKHOUSE_PASSWORD in .env}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:?Set LANGFUSE_MINIO_ROOT_PASSWORD in .env}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:?Set LANGFUSE_MINIO_ROOT_PASSWORD in .env}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:?Set LANGFUSE_REDIS_AUTH in .env}
+      REDIS_TLS_ENABLED: "false"
+      EMAIL_FROM_ADDRESS: ${LANGFUSE_EMAIL_FROM_ADDRESS:-}
+      SMTP_CONNECTION_URL: ${LANGFUSE_SMTP_CONNECTION_URL:-}
+    networks:
+      - data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4
+    depends_on: *langfuse-depends-on
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?Set LANGFUSE_NEXTAUTH_SECRET in .env (openssl rand -hex 32)}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:${RAMALS_LANGFUSE_MINIO_PORT:-9091}
+      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://langfuse-minio:9000
+      # Optional one-time bootstrap: when set, Langfuse creates this org/project/user/API-key pair
+      # on first start instead of requiring manual signup through the web UI. Set
+      # LANGFUSE_INIT_PROJECT_PUBLIC_KEY / LANGFUSE_INIT_PROJECT_SECRET_KEY to the same values you
+      # give ramals-ai as LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY so the two line up without a
+      # manual copy-paste step. All blank (the default) skips bootstrap entirely.
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
+    networks:
+      - data
+      - edge
+    ports:
+      - "127.0.0.1:${RAMALS_LANGFUSE_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/public/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:25.12
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?Set LANGFUSE_CLICKHOUSE_PASSWORD in .env}
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+      - langfuse-clickhouse-logs:/var/log/clickhouse-server
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:?Set LANGFUSE_MINIO_ROOT_PASSWORD in .env}
+    volumes:
+      - langfuse-minio-data:/data
+    networks:
+      - data
+    ports:
+      # This is MinIO's S3 API port (9000), not its admin console (9001, not exposed here).
+      # langfuse-web serves media uploads back to a browser through this endpoint directly (see
+      # LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT above), so unlike Postgres/ClickHouse/Redis it needs a
+      # host-reachable port even though the bucket itself is internal infrastructure.
+      - "127.0.0.1:${RAMALS_LANGFUSE_MINIO_PORT:-9091}:9000"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  langfuse-redis:
+    image: redis:7
+    command: >
+      --requirepass ${LANGFUSE_REDIS_AUTH:?Set LANGFUSE_REDIS_AUTH in .env}
+      --maxmemory-policy noeviction
+    volumes:
+      - langfuse-redis-data:/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "$${LANGFUSE_REDIS_AUTH}", "--no-auth-warning", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  langfuse-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${LANGFUSE_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:?Set LANGFUSE_DB_PASSWORD in .env}
+      POSTGRES_DB: ${LANGFUSE_DB_NAME:-postgres}
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - langfuse-postgres-data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=\"$${POSTGRES_USER}\" --dbname=\"$${POSTGRES_DB}\""]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  data:
+    internal: true
+  edge:
+
+volumes:
+  langfuse-postgres-data:
+  langfuse-clickhouse-data:
+  langfuse-clickhouse-logs:
+  langfuse-minio-data:
+  langfuse-redis-data:

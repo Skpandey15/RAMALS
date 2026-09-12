@@ -98,6 +98,53 @@ class Settings(BaseSettings):
     expected_workload_client_id: str = "ramals-core-workload"
     jwks_cache_seconds: int = Field(default=300, gt=0, le=3600)
 
+    # --- LLM observability (Langfuse, via LiteLLM's native langfuse_otel callback) ---------------
+    # Off by default: with it off, litellm's callback list is never touched, and a build without the
+    # `provider` extra (litellm not installed) is completely unaffected -- the same "absent means
+    # safely off" discipline every other flag in this file holds to.
+    #
+    # The three fields below are read from LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY/LANGFUSE_HOST --
+    # deliberately NOT the RAMALS_AI_ prefix every other setting in this file uses, because
+    # LiteLLM's own langfuse_otel integration (litellm.integrations.langfuse.langfuse_otel) reads
+    # exactly these three names directly from the environment. Duplicating them under a RAMALS
+    # prefix would just be a second place for the same secret to go stale.
+    #
+    # LANGFUSE_HOST is required, not optional, when tracing is enabled -- see the validator below.
+    # Tracing sends full, unredacted prompts and completions (README.md records this as a deliberate
+    # policy decision); leaving the destination unset would let litellm's langfuse_otel integration
+    # fall back to Langfuse's own cloud endpoint the moment both keys are set, turning an
+    # observability flag into an implicit external export of learner-facing content nobody chose.
+    langfuse_tracing_enabled: bool = False
+    langfuse_public_key: str | None = Field(
+        default=None, repr=False, validation_alias="LANGFUSE_PUBLIC_KEY"
+    )
+    langfuse_secret_key: str | None = Field(
+        default=None, repr=False, validation_alias="LANGFUSE_SECRET_KEY"
+    )
+    langfuse_host: str | None = Field(default=None, validation_alias="LANGFUSE_HOST")
+
+    @model_validator(mode="after")
+    def _require_langfuse_destination_when_enabled(self) -> Settings:
+        """Tracing that silently has no explicit destination is worse than none.
+
+        All three of LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_HOST must be set and
+        non-blank -- LANGFUSE_HOST included. Without that, an operator who sets only the two keys
+        would have litellm's langfuse_otel integration silently pick Langfuse's own cloud default,
+        exporting full learner-facing prompts/completions to a destination nobody configured. This
+        never substitutes a default (localhost or otherwise) for a missing host; it only refuses.
+        """
+        required = (self.langfuse_public_key, self.langfuse_secret_key, self.langfuse_host)
+        all_present = all(value and value.strip() for value in required)
+        if self.langfuse_tracing_enabled and not all_present:
+            raise ValueError(
+                "RAMALS_AI_LANGFUSE_TRACING_ENABLED requires LANGFUSE_PUBLIC_KEY, "
+                "LANGFUSE_SECRET_KEY and LANGFUSE_HOST all set and non-blank (the same names every "
+                "Langfuse SDK reads, not RAMALS_AI_-prefixed) -- LANGFUSE_HOST must be explicit "
+                "because tracing sends full learner-facing prompts/completions and must never fall "
+                "back to Langfuse's cloud default"
+            )
+        return self
+
     # --- MCP-3: outgoing Java MCP client (M2-ADR-031) --------------------------------------------
     # The reverse direction from workload_auth_enabled above: here ramals-ai is the *caller*,
     # authenticating to Java's MCP transport as ramals-ai-workload, audience ramals-mcp -- a
