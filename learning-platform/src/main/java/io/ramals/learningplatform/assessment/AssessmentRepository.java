@@ -98,6 +98,19 @@ public class AssessmentRepository {
         .stream().findFirst();
   }
 
+  /**
+   * M2-ADR-034 Amendment 4 sec O: which {@code selection_policy} actually governed this attempt,
+   * fixed forever at {@link #insertAttempt} time and never mutated afterward -- the fact exact V6
+   * replay must check before interpreting any replay-input snapshot, so a snapshot can never be
+   * misread as V6 provenance for an attempt {@code DIAGNOSTIC_SELECTION_V6} never governed.
+   */
+  public Optional<String> findSelectionPolicy(UUID attemptId) {
+    return jdbcTemplate.query(
+        "SELECT selection_policy FROM core.assessment_attempt WHERE id = ?",
+        (result, row) -> result.getString("selection_policy"), attemptId)
+        .stream().findFirst();
+  }
+
   /** Loads and row-locks an attempt so concurrent submissions serialize on its state transition. */
   public Optional<AssessmentAttempt> findAttemptForUpdate(UUID attemptId) {
     return jdbcTemplate.query(
@@ -256,51 +269,6 @@ public class AssessmentRepository {
         """, (result, row) -> result.getObject("logical_item_id", UUID.class), learnerId));
   }
 
-  /**
-   * A {@code created_at}-bounded historical exposure query: the same logical-item exposure identity
-   * {@link #findLearnerExposedLogicalItemIds} resolves, restricted to attempts whose own {@code
-   * created_at} is strictly before {@code destinationExposureCutoff}.
-   *
-   * <p><b>Governance note (post-merge correction to M2-ADR-034 Amendment 3 §V) -- this is NOT an
-   * exact reconstruction of the original PostgreSQL MVCC visibility a {@code
-   * DIAGNOSTIC_SELECTION_V6} decision saw, despite Amendment 3 §V's ratified "Verdict: YES, ...
-   * fully and exactly reconstructable ... with no migration."</b> {@code created_at} is stamped at
-   * {@code INSERT} (transaction-statement) time, not at commit time, and PostgreSQL's default {@code
-   * READ COMMITTED} isolation means a row's visibility is decided by commit order, not by which
-   * timestamp value it happens to carry. Concretely: nothing in this codebase serializes attempt
-   * creation for one learner across different {@code assessment_version_id}s (only {@code
-   * uq_assessment_attempt_one_active}, scoped per version, and no advisory lock anywhere) -- see
-   * {@code AssessmentItemLineagePersistenceIntegrationTests
-   * #concurrentUncommittedAttemptCreatesADestinationExposureCutoffReplayDivergence} for an
-   * executable proof. If a concurrent attempt's {@code INSERT} starts (fixing an earlier {@code
-   * created_at}) before this decision's own live exposure read, but does not <em>commit</em> until
-   * afterward, the live decision correctly never sees it (ordinary {@code READ COMMITTED} isolation,
-   * exactly as Amendment 3 §V claims) -- but a later replay using this method's {@code created_at <
-   * cutoff} predicate WILL include it, because {@code created_at} carries no commit-order
-   * information at all. Replay and the original decision can therefore diverge under an entirely
-   * ordinary interleaving Amendment 3 §V's own "residual, narrow, pre-existing caveat" paragraph
-   * considered and incorrectly dismissed as not affecting correctness.
-   *
-   * <p>This method is retained for its real, narrower value -- reconstructing exposure state
-   * correctly in the (common) case where no such concurrent cross-version attempt creation
-   * interleaves with the destination decision -- but callers must not treat its result as a proven
-   * exact replay of a {@code DIAGNOSTIC_SELECTION_V6} decision's original visibility until M2-ADR-034
-   * is amended to correct §V (a persisted decision-time snapshot, not further {@code created_at}
-   * refinement, is the leading candidate fix; that change is deliberately not made here because it
-   * would contradict Amendment 3 §V's own ratified "no migration" verdict without a new amendment
-   * ratifying the correction first).
-   */
-  public Set<UUID> findLearnerExposedLogicalItemIdsBefore(UUID learnerId, Instant destinationExposureCutoff) {
-    return Set.copyOf(jdbcTemplate.query("""
-        SELECT DISTINCT lin.logical_item_id
-        FROM core.assessment_attempt_item ai
-        JOIN core.assessment_attempt a ON a.id = ai.attempt_id
-        JOIN core.assessment_item_lineage lin ON lin.item_version_id = ai.item_version_id
-        WHERE a.learner_id = ? AND a.created_at < ?
-        """, (result, row) -> result.getObject("logical_item_id", UUID.class),
-        learnerId, OffsetDateTime.ofInstant(destinationExposureCutoff, ZoneOffset.UTC)));
-  }
-
   /** Transitions an in-progress attempt to COMPLETED. Returns true if this call finalized it. */
   public boolean completeAttempt(UUID attemptId) {
     return jdbcTemplate.update("""
@@ -402,6 +370,34 @@ public class AssessmentRepository {
         """ + SCOREABLE_TYPE_FILTER + """
         ORDER BY iv.display_order, iv.item_code
         """, ADAPTIVE_ELIGIBLE_ITEM_MAPPER, assessmentVersionId);
+  }
+
+  /**
+   * M2-ADR-034 Amendment 4 sec O/P: the same item metadata {@link #findAdaptiveEligibleItems}
+   * exposes, but scoped only to the exact, already-persisted {@code itemVersionId}s a caller already
+   * has -- never to "every item this assessment version currently has," which can grow after a
+   * historical decision. An item version's own skill is immutable once written, so this lookup's
+   * answer for a given id never changes; unlike {@link #findAdaptiveEligibleItems}, it carries no
+   * live-curriculum-discovery dependency at all, which is what makes it safe for {@code
+   * DiagnosticSelectionV6ReplayService} to resolve a historical winner's {@code targetSkillCode}
+   * from, in place of loading the destination version's whole current item roster.
+   */
+  public List<AdaptiveEligibleItem> findAdaptiveEligibleItemsForItemVersions(
+      java.util.Collection<UUID> itemVersionIds) {
+    if (itemVersionIds.isEmpty()) {
+      return List.of();
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(itemVersionIds.size(), "?"));
+    return jdbcTemplate.query("""
+        SELECT iv.id, lin.logical_item_id, iv.skill_id, s.stable_code AS skill_code,
+               iv.item_type, iv.difficulty
+        FROM core.assessment_item_version iv
+        JOIN core.skill s ON s.id = iv.skill_id
+        JOIN core.assessment_item_lineage lin ON lin.item_version_id = iv.id
+        WHERE iv.id IN (""" + placeholders + ")\n"
+        + "AND iv.trust_state = 'VERIFIED_CONTENT'\n"
+        + SCOREABLE_TYPE_FILTER,
+        ADAPTIVE_ELIGIBLE_ITEM_MAPPER, itemVersionIds.toArray());
   }
 
   /** Records the assembled form. Written once, inside the attempt-creation transaction. */

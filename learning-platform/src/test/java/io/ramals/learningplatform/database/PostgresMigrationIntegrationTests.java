@@ -82,11 +82,11 @@ class PostgresMigrationIntegrationTests {
     assertThat(baseline.migrate().migrationsExecuted).isEqualTo(1);
 
     Flyway upgraded = configuration("classpath:db/migration", "classpath:db/upgrade").load();
-    // 61 with V061 (the misconception relationship graph foundation, M2-ADR-033 step 1).
+    // 62 with V062 (M2-ADR-034 Amendment 4's DIAGNOSTIC_SELECTION_V6 exact-replay provenance).
     // Asserting the count rather than merely that the upgrade succeeds is what makes an accidentally
     // unapplied migration visible -- it caught V029 the first time it ran, V042 the first time this
     // suite saw a real PostgreSQL, and V043 in CI.
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(61);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(62);
     assertThat(upgraded.validateWithResult().validationSuccessful).isTrue();
   }
 

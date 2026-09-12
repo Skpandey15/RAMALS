@@ -135,7 +135,8 @@ class DiagnosticSubmissionPersistenceIntegrationTests {
               new HypothesisUncertaintyContextAssembler(new HypothesisUncertaintyRepository(runtimeJdbc)),
               new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()),
               new HypothesisDiscriminationCalculatorV1(
-                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))));
+                  new HypothesisUncertaintyCalculatorV1(new DiagnosticConfidenceCalculatorV1()))),
+          new DiagnosticSelectionReplayInputRepository(runtimeJdbc));
       EvidenceRepository evidenceRepository = new EvidenceRepository(runtimeJdbc);
       EvidenceService evidenceService = new EvidenceService(evidenceRepository);
       MasteryService masteryService = new MasteryService(

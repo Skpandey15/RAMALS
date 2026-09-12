@@ -153,3 +153,113 @@ atomically in the same `DiagnosticService.createAttempt` transaction, whenever
 `selection_policy_version = DIAGNOSTIC_SELECTION_V6`, regardless of final outcome. See the ADR's
 own §F–§L for the full freeze and conceptual schema; no migration is created by this discovery
 report or by Amendment 4 itself.
+
+## Implementation status (M2-ADR-034 Step 4, 2026-09-12)
+
+The boundary this report recommends is now implemented, on branch
+`feat/m2-adr-034-step-4-v6-exact-replay-provenance`. Recorded here as a status note, appended after
+the fact — it does not revise the discovery or recommendation above.
+
+- **Migration**: `V062__diagnostic_selection_v6_replay_input.sql` adds
+  `core.diagnostic_selection_replay_input` (header, one row per `DIAGNOSTIC_SELECTION_V6` attempt,
+  unconditional) and `core.diagnostic_selection_replay_candidate_probe` (full five-field
+  `DiagnosticHypothesis` identity per surviving candidate), both immutable
+  (`trg_diagnostic_selection_replay_input_guard` / `trg_diagnostic_selection_replay_candidate_probe_guard`,
+  the same discipline as `trg_probe_provenance_guard`) and insertable only for an `IN_PROGRESS`
+  destination attempt.
+- **Persistence**: `DiagnosticSelectionReplayInputRepository` is the sole writer, called from
+  `DiagnosticService.selectDiagnosticSelectionV6Form` in the same transaction `createAttempt` already
+  runs, immediately after `HypothesisDiscriminationDiagnosticSelector.select` returns — before any
+  probe-provenance or packet-persistence step, so a write failure here fails attempt creation whole.
+- **One authoritative computation**: `HypothesisDiscriminationDiagnosticSelector`'s activation/
+  fallback/ranking logic was extracted into a single private `decide(...)` method, called by both the
+  live `select(...)` and the new `decideFromPersistedWorkingSet(...)` (used by replay) — there is no
+  second, independently written copy of the activation rules for replay to drift from. A dedicated
+  `noSourceAttemptDecision()` factory reproduces `NO_SOURCE_ATTEMPT` directly, since an empty
+  persisted working set is otherwise ambiguous with a source attempt that authorized nothing.
+- **Frozen identifier**: `DiagnosticSelectionReplayInputRepository.SNAPSHOT_CONTRACT_VERSION =
+  "DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1"` — independent of `DIAGNOSTIC_SELECTION_V6` (the
+  selection policy, unchanged by this step) and of either frozen engine's own version string. Added
+  to `EngineVersionFreezeTests` as its own vector/hash; the existing `DIAGNOSTIC_SELECTION_V6` vector
+  and hash are untouched.
+- **Replay service**: `DiagnosticSelectionV6ReplayService.replay(destinationAttemptId)` loads the
+  snapshot (or reports `NOT_AVAILABLE` — deliberately indistinguishable between "pre-Amendment-4"
+  and "not a V6 attempt", never inferred from `created_at`), reconstructs the working set, calls
+  `decideFromPersistedWorkingSet` (or `noSourceAttemptDecision` when the persisted source attempt is
+  `NULL`), and compares the recomputed outcome against the persisted `activated`/`fallback_reason`
+  and, when a probe was selected, against `core.diagnostic_probe_provenance` — surfacing any
+  divergence as `INTEGRITY_FAILURE` rather than trusting persisted metadata.
+- **Replay-availability boundary**: exact replay is available only for attempts created after this
+  migration. A pre-existing `DIAGNOSTIC_SELECTION_V6` attempt has no replay-input row and returns
+  `NOT_AVAILABLE` — this is never backfilled or simulated from `created_at`, UUID ordering, or
+  current state.
+- **Superseded helper removed**: `AssessmentRepository.findLearnerExposedLogicalItemIdsBefore` (the
+  `created_at`-bounded query this report's own §"Why `created_at` fails" section falsifies) has been
+  deleted, along with its two now-superseded tests. The MVCC-race lesson those tests recorded is
+  preserved by `DiagnosticSelectionReplayInputPersistenceIntegrationTests
+  #persistedSnapshotIsImmuneToTheConcurrentUncommittedAttemptRace`, which proves the persisted
+  snapshot (not a `created_at` query) is unaffected by the identical concurrent-uncommitted-attempt
+  interleaving.
+- **Live `DIAGNOSTIC_SELECTION_V6` behavior is unchanged**: no live selection semantics, activation
+  condition, fallback reason, ranking rule, or frozen identifier from Amendment 3 was modified by
+  this step; `EngineVersionFreezeTests`' existing `DIAGNOSTIC_SELECTION_V6` hash is byte-identical to
+  before this step.
+
+### Correction round (PR #279 review, 2026-09-12)
+
+Review of the Step 4 implementation above (same PR, not a new one) found three replay-integrity
+gaps the original implementation left open, all now closed:
+
+- **Snapshot-contract-version validation**: replay now rejects (`UNSUPPORTED_SNAPSHOT_VERSION`) any
+  snapshot whose `snapshot_contract_version` is not `DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1`, rather
+  than silently interpreting an unrecognized future contract under `_V1` semantics. `V062`'s own
+  `CHECK` constraint is frozen to that exact value (widened, never relaxed, by whichever migration
+  introduces a `_V2` contract).
+- **Selected-probe verification for the `V5`-fallback path**: replay now reads back
+  `core.diagnostic_probe_provenance` for both an activated `V6` decision and a `V6`-fallback
+  decision (Amendment 4 §S), rather than only the activated case, and checks internal consistency
+  against the recomputed decision's own `sourceAttemptId`/`actionableHypothesisCount` without ever
+  re-running `V5`'s own probe discovery.
+- **Destination-attempt policy validation**: replay now verifies the destination attempt's own
+  `selection_policy` is `DIAGNOSTIC_SELECTION_V6` before interpreting any snapshot (Amendment 4 §O's
+  own algorithm ordering), and `trg_diagnostic_selection_replay_input_guard` now enforces the same
+  fact at the database level -- a replay snapshot can no longer be inserted against a `V1`-`V5`
+  attempt.
+
+Additionally hardened: every persisted audit count/status (`candidate_probe_count`,
+`actionable_hypothesis_count`, `participating_hypothesis_count`, `step1_status`, `step2_status`) is
+now compared against the recomputed decision, not only `activated`/`fallback_reason`; and the
+historical winner's `targetSkillCode` is resolved via a narrow, item-version-scoped lookup
+(`AssessmentRepository.findAdaptiveEligibleItemsForItemVersions`) rather than the destination
+version's whole current item roster.
+
+### Second correction round (PR #279 review, 2026-09-12): `V6` → `V5` fallback provenance
+
+Review found that the first correction round's fallback-path verification checked
+`core.diagnostic_probe_provenance` only negatively (absent when no probe *could* exist), never
+positively when `V5` genuinely had a working candidate set to choose from. Fixing this required
+reading the live `V5` path (`DiagnosticService.resolveHypothesisProbeSelection` and
+`HypothesisDrivenProbeDiagnosticSelector.adjustForHypothesisProbe`) rather than hard-coding a rule,
+which surfaced two real, code-level subtleties the naive "provenance must always exist and must
+always match a persisted candidate" rule would have false-flagged as corruption:
+
+- **Provenance may legitimately be absent even with actionable candidates.** `adjustForHypothesisProbe`'s
+  own doc records that V3's mastery-band packet-composition cap can exclude `V5`'s chosen candidate
+  from the assembled packet entirely, and `DiagnosticService` only writes provenance when the chosen
+  item actually lands in that packet. Whether that exclusion applied is a fact about historical
+  mastery/evidence state the Amendment 4 snapshot deliberately never persists -- so replay never
+  requires provenance to exist for a fallback decision, only verifies it when present.
+- **A present provenance row may legitimately fall outside the persisted candidate set.** `V5`'s own
+  resolution walks the identical (miss, relationship-type) enumeration `V6`'s own working-set walk
+  does, so whenever that walk completes without hitting `MAX_AUTHORIZED_HYPOTHESES_V6` (never capped
+  early), any candidate `V5` could choose was already evaluated -- and, if destination-eligible,
+  already admitted -- by `V6` too, and a match is required. Only when `V6`'s own walk stopped early
+  at the cap can `V5`'s independent, uncapped walk legitimately reach a candidate `V6`'s own snapshot
+  never recorded; that specific divergence is accepted, not flagged, since re-deriving it would mean
+  re-running `V5`'s own discovery.
+
+`provenance.source_attempt_id` matching the persisted snapshot's own `sourceAttemptId`, and
+`provenance.attempt_id` matching the destination attempt, remain unconditional checks regardless of
+the cap. The `V6`-activated path is unchanged in requirement (provenance must always exist and match)
+but now compares the full historical identity -- trigger item/objective, relationship type, target
+objective, authorizing relationship, and source attempt -- not `itemVersionId` alone.

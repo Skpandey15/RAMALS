@@ -46,6 +46,7 @@ public class DiagnosticService {
   private final ProbeRelationshipService probeRelationshipService;
   private final ProbeProvenanceRepository probeProvenanceRepository;
   private final HypothesisDiscriminationDiagnosticSelector hypothesisDiscriminationSelector;
+  private final DiagnosticSelectionReplayInputRepository replayInputRepository;
 
   public DiagnosticService(
       AssessmentRepository repository,
@@ -56,7 +57,8 @@ public class DiagnosticService {
       CurriculumService curriculumService,
       ProbeRelationshipService probeRelationshipService,
       ProbeProvenanceRepository probeProvenanceRepository,
-      HypothesisDiscriminationDiagnosticSelector hypothesisDiscriminationSelector) {
+      HypothesisDiscriminationDiagnosticSelector hypothesisDiscriminationSelector,
+      DiagnosticSelectionReplayInputRepository replayInputRepository) {
     this.repository = repository;
     this.learnerService = learnerService;
     this.selector = selector;
@@ -66,6 +68,7 @@ public class DiagnosticService {
     this.probeRelationshipService = probeRelationshipService;
     this.probeProvenanceRepository = probeProvenanceRepository;
     this.hypothesisDiscriminationSelector = hypothesisDiscriminationSelector;
+    this.replayInputRepository = replayInputRepository;
   }
 
   @Transactional
@@ -303,6 +306,10 @@ public class DiagnosticService {
 
     HypothesisDiscriminationDiagnosticSelector.Decision decision =
         hypothesisDiscriminationSelector.select(learnerId, diagnostic, inputs.unseenPool());
+    // M2-ADR-034 Amendment 4: persisted unconditionally, regardless of outcome, in the same
+    // transaction createAttempt already runs -- the authoritative replay-input snapshot for this
+    // attempt, never re-derived later from created_at or from re-running source-attempt discovery.
+    replayInputRepository.insert(attempt.id(), decision);
     HypothesisDrivenProbeDiagnosticSelector.Selection probeSelection = decision.selection()
         .orElseGet(() -> resolveHypothesisProbeSelection(learnerId, diagnostic, inputs));
 

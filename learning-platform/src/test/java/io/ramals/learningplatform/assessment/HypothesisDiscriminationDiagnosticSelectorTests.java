@@ -533,6 +533,84 @@ class HypothesisDiscriminationDiagnosticSelectorTests {
     assertThat(first).isEqualTo(second);
   }
 
+  // -- M2-ADR-034 Amendment 4: decideFromPersistedWorkingSet / noSourceAttemptDecision ------------
+
+  @Test
+  @DisplayName("decideFromPersistedWorkingSet reproduces select()'s own Decision byte-for-byte when "
+      + "fed back the exact working set select() evaluated -- the ONE authoritative computation "
+      + "both the live and replay paths share")
+  void decideFromPersistedWorkingSet_reproducesLiveDecisionForTheSameWorkingSet() {
+    DiagnosticHypothesis[] hypotheses = setUpTwoActionableHypotheses();
+    when(uncertaintyContextAssembler.assemble(eq(SOURCE_ATTEMPT_ID), any())).thenReturn(DUMMY_CONTEXT);
+    when(uncertaintyCalculator.calculate(DUMMY_CONTEXT)).thenReturn(twoParticipantsApplicable(hypotheses));
+    when(discriminationCalculator.calculate(any())).thenReturn(new HypothesisDiscriminationResult(
+        "HYPOTHESIS_DISCRIMINATION_V1", HypothesisDiscriminationStatus.SCORABLE,
+        List.of(
+            new CandidateDiscrimination(ITEM_A1, hypotheses[0], new BigDecimal("0.3000")),
+            new CandidateDiscrimination(ITEM_B1, hypotheses[1], new BigDecimal("0.7000")))));
+    Decision live = selector.select(LEARNER_ID, diagnostic, TWO_ITEM_POOL);
+    org.mockito.Mockito.clearInvocations(repository, probeRelationshipService);
+
+    List<CandidateProbe> persistedCandidates = List.of(
+        new CandidateProbe(ITEM_A1, hypotheses[0], true), new CandidateProbe(ITEM_B1, hypotheses[1], true));
+    Decision replayed = selector.decideFromPersistedWorkingSet(
+        SOURCE_ATTEMPT_ID, List.of(hypotheses[0], hypotheses[1]), persistedCandidates,
+        live.relationshipAuthorizedHypothesisCount(), TWO_ITEM_POOL);
+
+    assertThat(replayed).isEqualTo(live);
+    // decideFromPersistedWorkingSet never rediscovers historical candidates -- it never touches
+    // either collaborator select() itself uses only to build the WorkingSet in the first place.
+    verifyNoInteractions(repository, probeRelationshipService);
+  }
+
+  @Test
+  @DisplayName("decideFromPersistedWorkingSet: candidate-row order does not affect the winner -- "
+      + "the frozen RANKING_ORDER re-derives ranking from the set, never from row-storage order")
+  void decideFromPersistedWorkingSet_candidateRowOrderIndependence() {
+    DiagnosticHypothesis hA = hypothesis(MISS_1, ProbeRelationshipType.ROOT_CAUSE_PROBE, TARGET_A);
+    DiagnosticHypothesis hB = hypothesis(MISS_2, ProbeRelationshipType.ROOT_CAUSE_PROBE, TARGET_B);
+    when(uncertaintyContextAssembler.assemble(eq(SOURCE_ATTEMPT_ID), any())).thenReturn(DUMMY_CONTEXT);
+    when(uncertaintyCalculator.calculate(DUMMY_CONTEXT))
+        .thenReturn(twoParticipantsApplicable(new DiagnosticHypothesis[] {hA, hB}));
+    // A genuine tie: RANKING_ORDER must break it by hypothesis canonical order (TARGET_A < TARGET_B),
+    // never by which row happened to be stored/passed first.
+    when(discriminationCalculator.calculate(any())).thenReturn(new HypothesisDiscriminationResult(
+        "HYPOTHESIS_DISCRIMINATION_V1", HypothesisDiscriminationStatus.SCORABLE,
+        List.of(
+            new CandidateDiscrimination(ITEM_A1_LARGE, hA, new BigDecimal("0.5000")),
+            new CandidateDiscrimination(ITEM_B1_SMALL, hB, new BigDecimal("0.5000")))));
+    List<AdaptiveEligibleItem> pool = List.of(
+        eligibleItem(ITEM_A1_LARGE, "SKILL_A"), eligibleItem(ITEM_B1_SMALL, "SKILL_B"));
+    // Candidate rows fed back in the OPPOSITE order from every other test in this file.
+    List<CandidateProbe> reversedCandidates =
+        List.of(new CandidateProbe(ITEM_B1_SMALL, hB, true), new CandidateProbe(ITEM_A1_LARGE, hA, true));
+
+    Decision replayed = selector.decideFromPersistedWorkingSet(
+        SOURCE_ATTEMPT_ID, List.of(hB, hA), reversedCandidates, 2, pool);
+
+    assertThat(replayed.activated()).isTrue();
+    assertThat(replayed.selection().orElseThrow().hypothesis()).isEqualTo(hA);
+    assertThat(replayed.selection().orElseThrow().chosenItemVersionId()).isEqualTo(ITEM_A1_LARGE);
+  }
+
+  @Test
+  @DisplayName("noSourceAttemptDecision reproduces NO_SOURCE_ATTEMPT directly, touching nothing")
+  void noSourceAttemptDecision_reproducesNoSourceAttemptDirectly() {
+    Decision decision = HypothesisDiscriminationDiagnosticSelector.noSourceAttemptDecision();
+
+    assertThat(decision.activated()).isFalse();
+    assertThat(decision.selection()).isEmpty();
+    assertThat(decision.sourceAttemptId()).isNull();
+    assertThat(decision.fallbackReason()).isEqualTo(V6FallbackReason.NO_SOURCE_ATTEMPT);
+    assertThat(decision.relationshipAuthorizedHypothesisCount()).isZero();
+    assertThat(decision.actionableHypothesisCount()).isZero();
+    assertThat(decision.candidateProbeCount()).isZero();
+    assertThat(decision.actionableHypotheses()).isEmpty();
+    assertThat(decision.candidateProbes()).isEmpty();
+    verifyNoInteractions(repository, probeRelationshipService, uncertaintyContextAssembler,
+        uncertaintyCalculator, discriminationCalculator);
+  }
+
   // -- fail-closed validation: real, frozen calculators --------------------------------------------
 
   @Test
