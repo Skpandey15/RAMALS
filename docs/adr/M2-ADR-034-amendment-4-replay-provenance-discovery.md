@@ -153,3 +153,54 @@ atomically in the same `DiagnosticService.createAttempt` transaction, whenever
 `selection_policy_version = DIAGNOSTIC_SELECTION_V6`, regardless of final outcome. See the ADR's
 own §F–§L for the full freeze and conceptual schema; no migration is created by this discovery
 report or by Amendment 4 itself.
+
+## Implementation status (M2-ADR-034 Step 4, 2026-09-12)
+
+The boundary this report recommends is now implemented, on branch
+`feat/m2-adr-034-step-4-v6-exact-replay-provenance`. Recorded here as a status note, appended after
+the fact — it does not revise the discovery or recommendation above.
+
+- **Migration**: `V062__diagnostic_selection_v6_replay_input.sql` adds
+  `core.diagnostic_selection_replay_input` (header, one row per `DIAGNOSTIC_SELECTION_V6` attempt,
+  unconditional) and `core.diagnostic_selection_replay_candidate_probe` (full five-field
+  `DiagnosticHypothesis` identity per surviving candidate), both immutable
+  (`trg_diagnostic_selection_replay_input_guard` / `trg_diagnostic_selection_replay_candidate_probe_guard`,
+  the same discipline as `trg_probe_provenance_guard`) and insertable only for an `IN_PROGRESS`
+  destination attempt.
+- **Persistence**: `DiagnosticSelectionReplayInputRepository` is the sole writer, called from
+  `DiagnosticService.selectDiagnosticSelectionV6Form` in the same transaction `createAttempt` already
+  runs, immediately after `HypothesisDiscriminationDiagnosticSelector.select` returns — before any
+  probe-provenance or packet-persistence step, so a write failure here fails attempt creation whole.
+- **One authoritative computation**: `HypothesisDiscriminationDiagnosticSelector`'s activation/
+  fallback/ranking logic was extracted into a single private `decide(...)` method, called by both the
+  live `select(...)` and the new `decideFromPersistedWorkingSet(...)` (used by replay) — there is no
+  second, independently written copy of the activation rules for replay to drift from. A dedicated
+  `noSourceAttemptDecision()` factory reproduces `NO_SOURCE_ATTEMPT` directly, since an empty
+  persisted working set is otherwise ambiguous with a source attempt that authorized nothing.
+- **Frozen identifier**: `DiagnosticSelectionReplayInputRepository.SNAPSHOT_CONTRACT_VERSION =
+  "DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1"` — independent of `DIAGNOSTIC_SELECTION_V6` (the
+  selection policy, unchanged by this step) and of either frozen engine's own version string. Added
+  to `EngineVersionFreezeTests` as its own vector/hash; the existing `DIAGNOSTIC_SELECTION_V6` vector
+  and hash are untouched.
+- **Replay service**: `DiagnosticSelectionV6ReplayService.replay(destinationAttemptId)` loads the
+  snapshot (or reports `NOT_AVAILABLE` — deliberately indistinguishable between "pre-Amendment-4"
+  and "not a V6 attempt", never inferred from `created_at`), reconstructs the working set, calls
+  `decideFromPersistedWorkingSet` (or `noSourceAttemptDecision` when the persisted source attempt is
+  `NULL`), and compares the recomputed outcome against the persisted `activated`/`fallback_reason`
+  and, when a probe was selected, against `core.diagnostic_probe_provenance` — surfacing any
+  divergence as `INTEGRITY_FAILURE` rather than trusting persisted metadata.
+- **Replay-availability boundary**: exact replay is available only for attempts created after this
+  migration. A pre-existing `DIAGNOSTIC_SELECTION_V6` attempt has no replay-input row and returns
+  `NOT_AVAILABLE` — this is never backfilled or simulated from `created_at`, UUID ordering, or
+  current state.
+- **Superseded helper removed**: `AssessmentRepository.findLearnerExposedLogicalItemIdsBefore` (the
+  `created_at`-bounded query this report's own §"Why `created_at` fails" section falsifies) has been
+  deleted, along with its two now-superseded tests. The MVCC-race lesson those tests recorded is
+  preserved by `DiagnosticSelectionReplayInputPersistenceIntegrationTests
+  #persistedSnapshotIsImmuneToTheConcurrentUncommittedAttemptRace`, which proves the persisted
+  snapshot (not a `created_at` query) is unaffected by the identical concurrent-uncommitted-attempt
+  interleaving.
+- **Live `DIAGNOSTIC_SELECTION_V6` behavior is unchanged**: no live selection semantics, activation
+  condition, fallback reason, ranking rule, or frozen identifier from Amendment 3 was modified by
+  this step; `EngineVersionFreezeTests`' existing `DIAGNOSTIC_SELECTION_V6` hash is byte-identical to
+  before this step.

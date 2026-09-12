@@ -199,6 +199,17 @@ Until Amendment 4 is ratified and implemented, historical replay of a `DIAGNOSTI
 decision is **not exact** — see the ADR's own Amendment 4 §X for the honest pre-/post-activation
 boundary.
 
+**Step 4 implemented (2026-09-12)**: the AUDIT/REPLAY path above is no longer design-only.
+Migration `V062` persists exactly the snapshot the diagram describes
+(`core.diagnostic_selection_replay_input` / `core.diagnostic_selection_replay_candidate_probe`,
+written unconditionally in the same transaction as `createAttempt`); `DiagnosticSelectionV6ReplayService`
+implements the AUDIT/REPLAY chain above verbatim, sharing its activation/fallback/ranking computation
+with the LIVE path (`HypothesisDiscriminationDiagnosticSelector.decide`, called by both `select()` and
+`decideFromPersistedWorkingSet()`) so replay cannot silently drift from live semantics. Exact replay
+is available only for attempts created after this migration — a pre-existing attempt still returns
+`NOT_AVAILABLE` (never simulated). The LIVE half of the diagram is unaffected and remains exactly as
+Step 3 implemented it.
+
 ## Production-simulation evidence (crosses stages 10 and 2)
 
 `DEFERRED` — **M2-ADR-036** (stub). A production-simulation / scenario evidence modality that
@@ -285,6 +296,9 @@ Every link is captured with provenance, policy/engine version, and `interactionI
   itself authorizes no `V6` code or migration. See also
   `docs/adr/M2-ADR-034-step3-v6-discovery-report.md` for the discovery analysis behind Amendment 3,
   and `docs/adr/M2-ADR-034-amendment-4-replay-provenance-discovery.md` for the discovery analysis
-  behind Amendment 4.
+  behind Amendment 4. **Step 4 implemented (2026-09-12)**: Amendment 4's persisted-snapshot design is
+  now implemented, in a separate PR (migration `V062`, `DiagnosticSelectionReplayInputRepository`,
+  `DiagnosticSelectionV6ReplayService`), exactly to its own frozen boundary; `DIAGNOSTIC_SELECTION_V1`–`V6`
+  and their composition order remain untouched.
 - M2-ADR-035 / M2-ADR-036 / M2-ADR-037 — deferred roadmap stubs for stages 13–16, the simulation
   modality, and stages 18–19.
