@@ -51,8 +51,16 @@ CREATE TABLE core.diagnostic_selection_replay_input (
   -- this column, rather than trusting it as the sole source of truth (Amendment 4 §T).
   fallback_reason VARCHAR(32),
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Frozen to exactly the one contract version this repository's only writer
+  -- (DiagnosticSelectionReplayInputRepository) ever inserts today. A future _V2 contract widens
+  -- this CHECK (the same DROP+ADD pattern already used elsewhere in this schema to widen an
+  -- enumerated membership check, e.g. ck_assessment_attempt_item_reason) in the migration that
+  -- introduces it -- never by relaxing this one to "any non-empty string." Replay itself (
+  -- DiagnosticSelectionV6ReplayService) independently rejects an unsupported contract version
+  -- rather than guessing compatibility from table shape; this CHECK is defense-in-depth at the
+  -- point of insertion, not a substitute for that runtime check.
   CONSTRAINT ck_diagnostic_selection_replay_input_version
-    CHECK (length(btrim(snapshot_contract_version)) > 0),
+    CHECK (snapshot_contract_version = 'DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1'),
   CONSTRAINT ck_diagnostic_selection_replay_input_counts CHECK (
     relationship_authorized_count >= 0 AND actionable_hypothesis_count >= 0
     AND candidate_probe_count >= 0 AND participating_hypothesis_count >= 0
@@ -146,21 +154,34 @@ CREATE INDEX idx_diagnostic_selection_replay_candidate_probe_replay_input
   ON core.diagnostic_selection_replay_candidate_probe (replay_input_id);
 
 -- Immutable once written -- append-only historical provenance, the same guarantee
--- trg_probe_provenance_guard gives core.diagnostic_probe_provenance -- and insertable only while
--- the owning destination attempt is IN_PROGRESS.
+-- trg_probe_provenance_guard gives core.diagnostic_probe_provenance -- insertable only while the
+-- owning destination attempt is IN_PROGRESS, and (M2-ADR-034 Amendment 4 correction round) only for
+-- an attempt whose own selection_policy is actually DIAGNOSTIC_SELECTION_V6. Without this second
+-- check, a V6 replay snapshot could be attached to a V1-V5 attempt, producing exactly the
+-- contradictory persisted state ("this V5 attempt has V6 replay provenance") DiagnosticSelectionV6ReplayService
+-- must otherwise detect and reject at read time -- the database now makes that state
+-- unrepresentable in the first place.
 CREATE FUNCTION core.protect_diagnostic_selection_replay_input()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 DECLARE
   attempt_status VARCHAR(16);
+  attempt_selection_policy VARCHAR(48);
 BEGIN
   IF TG_OP IN ('UPDATE', 'DELETE') THEN
     RAISE EXCEPTION 'diagnostic selection replay-input snapshots are immutable' USING ERRCODE = '55000';
   END IF;
-  SELECT status INTO attempt_status FROM core.assessment_attempt WHERE id = NEW.destination_attempt_id;
+  SELECT status, selection_policy INTO attempt_status, attempt_selection_policy
+    FROM core.assessment_attempt WHERE id = NEW.destination_attempt_id;
   IF attempt_status IS DISTINCT FROM 'IN_PROGRESS' THEN
     RAISE EXCEPTION 'a replay-input snapshot may only be recorded for an in-progress attempt'
+      USING ERRCODE = '55000';
+  END IF;
+  IF attempt_selection_policy IS DISTINCT FROM 'DIAGNOSTIC_SELECTION_V6' THEN
+    RAISE EXCEPTION
+      'a DIAGNOSTIC_SELECTION_V6 replay-input snapshot may only be recorded for an attempt whose '
+      'own selection_policy is DIAGNOSTIC_SELECTION_V6, not %', attempt_selection_policy
       USING ERRCODE = '55000';
   END IF;
   RETURN NEW;

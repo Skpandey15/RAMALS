@@ -204,3 +204,31 @@ the fact — it does not revise the discovery or recommendation above.
   condition, fallback reason, ranking rule, or frozen identifier from Amendment 3 was modified by
   this step; `EngineVersionFreezeTests`' existing `DIAGNOSTIC_SELECTION_V6` hash is byte-identical to
   before this step.
+
+### Correction round (PR #279 review, 2026-09-12)
+
+Review of the Step 4 implementation above (same PR, not a new one) found three replay-integrity
+gaps the original implementation left open, all now closed:
+
+- **Snapshot-contract-version validation**: replay now rejects (`UNSUPPORTED_SNAPSHOT_VERSION`) any
+  snapshot whose `snapshot_contract_version` is not `DIAGNOSTIC_SELECTION_V6_REPLAY_INPUT_V1`, rather
+  than silently interpreting an unrecognized future contract under `_V1` semantics. `V062`'s own
+  `CHECK` constraint is frozen to that exact value (widened, never relaxed, by whichever migration
+  introduces a `_V2` contract).
+- **Selected-probe verification for the `V5`-fallback path**: replay now reads back
+  `core.diagnostic_probe_provenance` for both an activated `V6` decision and a `V6`-fallback
+  decision (Amendment 4 §S), rather than only the activated case, and checks internal consistency
+  against the recomputed decision's own `sourceAttemptId`/`actionableHypothesisCount` without ever
+  re-running `V5`'s own probe discovery.
+- **Destination-attempt policy validation**: replay now verifies the destination attempt's own
+  `selection_policy` is `DIAGNOSTIC_SELECTION_V6` before interpreting any snapshot (Amendment 4 §O's
+  own algorithm ordering), and `trg_diagnostic_selection_replay_input_guard` now enforces the same
+  fact at the database level -- a replay snapshot can no longer be inserted against a `V1`-`V5`
+  attempt.
+
+Additionally hardened: every persisted audit count/status (`candidate_probe_count`,
+`actionable_hypothesis_count`, `participating_hypothesis_count`, `step1_status`, `step2_status`) is
+now compared against the recomputed decision, not only `activated`/`fallback_reason`; and the
+historical winner's `targetSkillCode` is resolved via a narrow, item-version-scoped lookup
+(`AssessmentRepository.findAdaptiveEligibleItemsForItemVersions`) rather than the destination
+version's whole current item roster.

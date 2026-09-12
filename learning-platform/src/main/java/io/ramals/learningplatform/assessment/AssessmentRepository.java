@@ -98,6 +98,19 @@ public class AssessmentRepository {
         .stream().findFirst();
   }
 
+  /**
+   * M2-ADR-034 Amendment 4 sec O: which {@code selection_policy} actually governed this attempt,
+   * fixed forever at {@link #insertAttempt} time and never mutated afterward -- the fact exact V6
+   * replay must check before interpreting any replay-input snapshot, so a snapshot can never be
+   * misread as V6 provenance for an attempt {@code DIAGNOSTIC_SELECTION_V6} never governed.
+   */
+  public Optional<String> findSelectionPolicy(UUID attemptId) {
+    return jdbcTemplate.query(
+        "SELECT selection_policy FROM core.assessment_attempt WHERE id = ?",
+        (result, row) -> result.getString("selection_policy"), attemptId)
+        .stream().findFirst();
+  }
+
   /** Loads and row-locks an attempt so concurrent submissions serialize on its state transition. */
   public Optional<AssessmentAttempt> findAttemptForUpdate(UUID attemptId) {
     return jdbcTemplate.query(
@@ -357,6 +370,34 @@ public class AssessmentRepository {
         """ + SCOREABLE_TYPE_FILTER + """
         ORDER BY iv.display_order, iv.item_code
         """, ADAPTIVE_ELIGIBLE_ITEM_MAPPER, assessmentVersionId);
+  }
+
+  /**
+   * M2-ADR-034 Amendment 4 sec O/P: the same item metadata {@link #findAdaptiveEligibleItems}
+   * exposes, but scoped only to the exact, already-persisted {@code itemVersionId}s a caller already
+   * has -- never to "every item this assessment version currently has," which can grow after a
+   * historical decision. An item version's own skill is immutable once written, so this lookup's
+   * answer for a given id never changes; unlike {@link #findAdaptiveEligibleItems}, it carries no
+   * live-curriculum-discovery dependency at all, which is what makes it safe for {@code
+   * DiagnosticSelectionV6ReplayService} to resolve a historical winner's {@code targetSkillCode}
+   * from, in place of loading the destination version's whole current item roster.
+   */
+  public List<AdaptiveEligibleItem> findAdaptiveEligibleItemsForItemVersions(
+      java.util.Collection<UUID> itemVersionIds) {
+    if (itemVersionIds.isEmpty()) {
+      return List.of();
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(itemVersionIds.size(), "?"));
+    return jdbcTemplate.query("""
+        SELECT iv.id, lin.logical_item_id, iv.skill_id, s.stable_code AS skill_code,
+               iv.item_type, iv.difficulty
+        FROM core.assessment_item_version iv
+        JOIN core.skill s ON s.id = iv.skill_id
+        JOIN core.assessment_item_lineage lin ON lin.item_version_id = iv.id
+        WHERE iv.id IN (""" + placeholders + ")\n"
+        + "AND iv.trust_state = 'VERIFIED_CONTENT'\n"
+        + SCOREABLE_TYPE_FILTER,
+        ADAPTIVE_ELIGIBLE_ITEM_MAPPER, itemVersionIds.toArray());
   }
 
   /** Records the assembled form. Written once, inside the attempt-creation transaction. */
