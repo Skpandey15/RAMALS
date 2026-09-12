@@ -66,6 +66,7 @@ def test_api_key_is_not_shown_in_repr() -> None:
 
 
 def test_defaults_start_without_langfuse_tracing() -> None:
+    """Tracing disabled requires no credential and no destination -- case 1."""
     settings = Settings()
     assert settings.langfuse_tracing_enabled is False
     assert settings.langfuse_public_key is None
@@ -73,30 +74,69 @@ def test_defaults_start_without_langfuse_tracing() -> None:
     assert settings.langfuse_host is None
 
 
-def test_langfuse_tracing_without_credentials_is_rejected() -> None:
+def test_langfuse_tracing_without_public_key_is_rejected() -> None:
+    """Case 2: no public key at all (secret key and host also absent here, but the public key is
+    the one this asserts on)."""
     with pytest.raises(ValueError, match="LANGFUSE_PUBLIC_KEY"):
         Settings(langfuse_tracing_enabled=True)
 
 
-def test_langfuse_tracing_with_only_one_credential_is_still_rejected() -> None:
-    with pytest.raises(ValueError, match="LANGFUSE_PUBLIC_KEY"):
-        Settings(langfuse_tracing_enabled=True, langfuse_public_key="pk-lf-test")
+def test_langfuse_tracing_without_secret_key_is_rejected() -> None:
+    """Case 3: public key and host present, secret key missing."""
+    with pytest.raises(ValueError, match="LANGFUSE_SECRET_KEY"):
+        Settings(
+            langfuse_tracing_enabled=True,
+            langfuse_public_key="pk-lf-test",
+            langfuse_host="http://localhost:3000",
+        )
 
 
-def test_langfuse_tracing_with_both_credentials_is_accepted() -> None:
+def test_langfuse_tracing_with_keys_but_no_host_is_rejected() -> None:
+    """Case 4: both keys present, LANGFUSE_HOST simply never set.
+
+    This is the governance-critical case: without it, litellm's langfuse_otel integration would
+    silently fall back to Langfuse's own cloud endpoint the moment both keys exist, turning an
+    observability flag into an implicit export of full learner-facing content to a destination
+    nobody configured.
+    """
+    with pytest.raises(ValueError, match="LANGFUSE_HOST"):
+        Settings(
+            langfuse_tracing_enabled=True,
+            langfuse_public_key="pk-lf-test",
+            langfuse_secret_key="sk-lf-test",
+        )
+
+
+def test_langfuse_tracing_with_blank_host_is_rejected() -> None:
+    """Case 5: LANGFUSE_HOST set but empty/whitespace must be treated the same as absent."""
+    with pytest.raises(ValueError, match="LANGFUSE_HOST"):
+        Settings(
+            langfuse_tracing_enabled=True,
+            langfuse_public_key="pk-lf-test",
+            langfuse_secret_key="sk-lf-test",
+            langfuse_host="   ",
+        )
+
+
+def test_langfuse_tracing_with_explicit_destination_is_accepted() -> None:
+    """Case 6: all three explicit -- the only configuration tracing may start with."""
     settings = Settings(
         langfuse_tracing_enabled=True,
         langfuse_public_key="pk-lf-test",
         langfuse_secret_key="sk-lf-test",
+        langfuse_host="http://localhost:3000",
     )
     assert settings.langfuse_tracing_enabled is True
+    assert settings.langfuse_host == "http://localhost:3000"
 
 
 def test_langfuse_secret_key_is_not_shown_in_repr() -> None:
+    """Case 8: the secret key must never reach a log line or crash dump through repr()."""
     settings = Settings(
         langfuse_tracing_enabled=True,
         langfuse_public_key="pk-lf-test",
         langfuse_secret_key="super-secret-lf-key",
+        langfuse_host="http://localhost:3000",
     )
     assert "super-secret-lf-key" not in repr(settings)
 
@@ -104,8 +144,11 @@ def test_langfuse_secret_key_is_not_shown_in_repr() -> None:
 def test_langfuse_credentials_are_read_from_the_unprefixed_environment_variables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Deliberately not RAMALS_AI_-prefixed: LiteLLM's own langfuse_otel integration reads exactly
-    these three names directly from the environment, the same convention every Langfuse SDK uses."""
+    """Case 7: LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY/LANGFUSE_HOST continue to bind correctly.
+
+    Deliberately not RAMALS_AI_-prefixed: LiteLLM's own langfuse_otel integration reads exactly
+    these three names directly from the environment, the same convention every Langfuse SDK uses.
+    """
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-env")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-env")
     monkeypatch.setenv("LANGFUSE_HOST", "http://langfuse.local:3000")
@@ -115,6 +158,21 @@ def test_langfuse_credentials_are_read_from_the_unprefixed_environment_variables
     assert settings.langfuse_public_key == "pk-lf-env"
     assert settings.langfuse_secret_key == "sk-lf-env"
     assert settings.langfuse_host == "http://langfuse.local:3000"
+
+
+def test_langfuse_tracing_enabled_via_environment_with_full_destination_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The env-bound values from the test above must also satisfy the enabled-tracing validator,
+    not just round-trip onto the settings object."""
+    monkeypatch.setenv("RAMALS_AI_LANGFUSE_TRACING_ENABLED", "true")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-env")
+    monkeypatch.setenv("LANGFUSE_HOST", "http://langfuse.local:3000")
+
+    settings = Settings()
+
+    assert settings.langfuse_tracing_enabled is True
 
 
 def test_invalid_configuration_raises_explicit_startup_error(

@@ -103,11 +103,17 @@ class Settings(BaseSettings):
     # `provider` extra (litellm not installed) is completely unaffected -- the same "absent means
     # safely off" discipline every other flag in this file holds to.
     #
-    # The three credential fields below are read from LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY/
-    # LANGFUSE_HOST -- deliberately NOT the RAMALS_AI_ prefix every other setting in this file uses,
-    # because LiteLLM's own langfuse_otel integration (litellm.integrations.langfuse.langfuse_otel)
-    # reads exactly these three names directly from the environment. Duplicating them under a RAMALS
+    # The three fields below are read from LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY/LANGFUSE_HOST --
+    # deliberately NOT the RAMALS_AI_ prefix every other setting in this file uses, because
+    # LiteLLM's own langfuse_otel integration (litellm.integrations.langfuse.langfuse_otel) reads
+    # exactly these three names directly from the environment. Duplicating them under a RAMALS
     # prefix would just be a second place for the same secret to go stale.
+    #
+    # LANGFUSE_HOST is required, not optional, when tracing is enabled -- see the validator below.
+    # Tracing sends full, unredacted prompts and completions (README.md records this as a deliberate
+    # policy decision); leaving the destination unset would let litellm's langfuse_otel integration
+    # fall back to Langfuse's own cloud endpoint the moment both keys are set, turning an
+    # observability flag into an implicit external export of learner-facing content nobody chose.
     langfuse_tracing_enabled: bool = False
     langfuse_public_key: str | None = Field(
         default=None, repr=False, validation_alias="LANGFUSE_PUBLIC_KEY"
@@ -118,14 +124,24 @@ class Settings(BaseSettings):
     langfuse_host: str | None = Field(default=None, validation_alias="LANGFUSE_HOST")
 
     @model_validator(mode="after")
-    def _require_langfuse_credentials_when_enabled(self) -> Settings:
-        """Tracing that silently has no destination is worse than none."""
-        has_credentials = self.langfuse_public_key and self.langfuse_secret_key
-        if self.langfuse_tracing_enabled and not has_credentials:
+    def _require_langfuse_destination_when_enabled(self) -> Settings:
+        """Tracing that silently has no explicit destination is worse than none.
+
+        All three of LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_HOST must be set and
+        non-blank -- LANGFUSE_HOST included. Without that, an operator who sets only the two keys
+        would have litellm's langfuse_otel integration silently pick Langfuse's own cloud default,
+        exporting full learner-facing prompts/completions to a destination nobody configured. This
+        never substitutes a default (localhost or otherwise) for a missing host; it only refuses.
+        """
+        required = (self.langfuse_public_key, self.langfuse_secret_key, self.langfuse_host)
+        all_present = all(value and value.strip() for value in required)
+        if self.langfuse_tracing_enabled and not all_present:
             raise ValueError(
-                "RAMALS_AI_LANGFUSE_TRACING_ENABLED requires LANGFUSE_PUBLIC_KEY and "
-                "LANGFUSE_SECRET_KEY (the same two environment variables every Langfuse SDK reads, "
-                "not a RAMALS_AI_-prefixed name)"
+                "RAMALS_AI_LANGFUSE_TRACING_ENABLED requires LANGFUSE_PUBLIC_KEY, "
+                "LANGFUSE_SECRET_KEY and LANGFUSE_HOST all set and non-blank (the same names every "
+                "Langfuse SDK reads, not RAMALS_AI_-prefixed) -- LANGFUSE_HOST must be explicit "
+                "because tracing sends full learner-facing prompts/completions and must never fall "
+                "back to Langfuse's cloud default"
             )
         return self
 

@@ -211,3 +211,27 @@ def test_module_does_not_touch_callbacks_when_tracing_is_disabled(
 
     assert fake_litellm_module.success_callback == ["existing-success"]
     assert fake_litellm_module.failure_callback == ["existing-failure"]
+
+
+def test_langfuse_callback_registration_is_process_wide_not_per_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Documents a real constraint of this design, not a bug: success_callback/failure_callback
+    live on the litellm module itself, not on any LiteLLMProvider instance, so enabling tracing on
+    one provider enables it for every provider sharing that module in the same process -- there is
+    no per-instance isolation, because LiteLLM offers none at this layer. RAMALS's assumption is
+    that ramals-ai runs at most one effective, live tracing configuration per process (main.py
+    constructs exactly one LiteLLMProvider at startup), so this is not a live concern today."""
+    fake_litellm_module = SimpleNamespace(success_callback=[], failure_callback=[])
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm_module)
+
+    tracing_disabled_provider = LiteLLMProvider(api_key="test-key", langfuse_tracing_enabled=False)
+    tracing_enabled_provider = LiteLLMProvider(api_key="test-key", langfuse_tracing_enabled=True)
+
+    tracing_disabled_provider._module()  # noqa: SLF001
+    tracing_enabled_provider._module()  # noqa: SLF001
+
+    # The module both instances share now carries langfuse_otel -- an instance constructed with
+    # langfuse_tracing_enabled=False cannot opt itself out of a sibling instance's tracing.
+    assert fake_litellm_module.success_callback == ["langfuse_otel"]
+    assert fake_litellm_module.failure_callback == ["langfuse_otel"]

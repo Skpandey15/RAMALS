@@ -79,6 +79,16 @@ class LiteLLMProvider:
         a fresh one-element list here would silently discard whatever was already registered, so
         this appends instead -- and skips the append if `langfuse_otel` is present already, since
         `_module()` runs this once per provider instance and a process can hold more than one.
+
+        Scope this deliberately does NOT have: `success_callback`/`failure_callback` live on the
+        `litellm` module itself, not on any `LiteLLMProvider` instance. Enabling tracing on one
+        `LiteLLMProvider` therefore enables it for every `LiteLLMProvider` sharing that module in
+        the same process -- there is no per-instance isolation, because LiteLLM offers none at this
+        layer. RAMALS's assumption here is that ramals-ai runs at most one effective, live LiteLLM
+        tracing configuration per process: `main.py` constructs exactly one `LiteLLMProvider`, from
+        one `Settings` object, at startup. If a future need arises for different tracing
+        configuration across provider instances within a single process, this module-global
+        approach stops being sufficient and needs redesigning -- that redesign is out of scope here.
         """
         litellm_module.success_callback = LiteLLMProvider._with_langfuse_callback(
             getattr(litellm_module, "success_callback", None)
