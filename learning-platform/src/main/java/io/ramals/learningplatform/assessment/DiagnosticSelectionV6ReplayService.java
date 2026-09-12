@@ -103,9 +103,11 @@ public class DiagnosticSelectionV6ReplayService {
     }
 
     HypothesisDiscriminationDiagnosticSelector.Decision recomputed;
+    List<CandidateProbe> persistedCandidateProbes;
     if (snapshot.sourceAttemptId() == null) {
       // Amendment 4 sec O: reproduced directly, never by re-running source-attempt discovery.
       recomputed = HypothesisDiscriminationDiagnosticSelector.noSourceAttemptDecision();
+      persistedCandidateProbes = List.of();
     } else {
       List<CandidateProbe> candidateProbes = replayInputRepository.findCandidateProbes(snapshot.id());
       List<DiagnosticHypothesis> actionableHypotheses =
@@ -135,14 +137,16 @@ public class DiagnosticSelectionV6ReplayService {
       recomputed = selector.decideFromPersistedWorkingSet(
           snapshot.sourceAttemptId(), actionableHypotheses, candidateProbes,
           snapshot.relationshipAuthorizedCount(), itemPool);
+      persistedCandidateProbes = candidateProbes;
     }
 
-    return verify(destinationAttemptId, snapshot, recomputed);
+    return verify(destinationAttemptId, snapshot, recomputed, persistedCandidateProbes);
   }
 
   private DiagnosticSelectionV6ReplayResult verify(
       UUID destinationAttemptId, DiagnosticSelectionReplayInput snapshot,
-      HypothesisDiscriminationDiagnosticSelector.Decision recomputed) {
+      HypothesisDiscriminationDiagnosticSelector.Decision recomputed,
+      List<CandidateProbe> persistedCandidateProbes) {
     List<String> mismatches = new ArrayList<>();
     if (recomputed.activated() != snapshot.activated()
         || !Objects.equals(recomputed.fallbackReason(), snapshot.fallbackReason())) {
@@ -198,33 +202,117 @@ public class DiagnosticSelectionV6ReplayService {
     }
     ProbeProvenance provenance = provenanceRows.isEmpty() ? null : provenanceRows.get(0);
 
-    if (recomputed.activated()) {
-      UUID winner = recomputed.selection()
-          .orElseThrow(() -> new IllegalStateException("activated Decision must carry a selection"))
-          .chosenItemVersionId();
-      if (provenance == null || !provenance.itemVersionId().equals(winner)) {
-        return DiagnosticSelectionV6ReplayResult.integrityFailure(destinationAttemptId, recomputed,
-            "recomputed V6-activated probe %s has no matching core.diagnostic_probe_provenance row for attempt %s"
-                .formatted(winner, destinationAttemptId));
-      }
-    } else {
-      // A fallback decision with no source attempt, or with zero actionable hypotheses, could not
-      // possibly have had V5 produce a hypothesis-driven probe either: resolveHypothesisProbeSelection
-      // requires the identical source attempt, and the identical destination-eligibility gate V6's
-      // own enumeration already found nothing survived. Provenance existing anyway is corruption,
-      // never verified by re-deriving what V5 "should" have chosen.
-      boolean noProbeCouldPossiblyExist =
-          recomputed.sourceAttemptId() == null || recomputed.actionableHypothesisCount() == 0;
-      if (noProbeCouldPossiblyExist && provenance != null) {
-        return DiagnosticSelectionV6ReplayResult.integrityFailure(destinationAttemptId, recomputed,
-            "fallback decision (sourceAttemptId=%s, actionableHypothesisCount=%d) could not have "
-                + "produced a hypothesis-driven probe, but core.diagnostic_probe_provenance records "
-                + "one (%s) for attempt %s"
-                    .formatted(recomputed.sourceAttemptId(), recomputed.actionableHypothesisCount(),
-                        provenance.itemVersionId(), destinationAttemptId));
-      }
+    String finalProbeMismatch = verifyFinalProbeProvenance(
+        destinationAttemptId, snapshot, recomputed, persistedCandidateProbes, provenance);
+    if (finalProbeMismatch != null) {
+      return DiagnosticSelectionV6ReplayResult.integrityFailure(destinationAttemptId, recomputed, finalProbeMismatch);
     }
 
     return DiagnosticSelectionV6ReplayResult.verified(destinationAttemptId, recomputed, provenance);
+  }
+
+  /**
+   * Amendment 4 sec S: verifies the historical final probe -- whether {@code V6} itself activated
+   * and chose it, or {@code V6} fell back and {@code V5}'s own already-governed {@code
+   * resolveHypothesisProbeSelection} chose it -- against the already-exact, immutable {@code
+   * core.diagnostic_probe_provenance} record, without ever re-running either selector's own
+   * discovery. Returns a human-readable mismatch description, or {@code null} when the persisted
+   * (or legitimately absent) provenance is consistent with this replay.
+   *
+   * <p><b>V6-activated ({@code recomputed.activated()}):</b> the recomputed winner's full identity
+   * (item, trigger item/objective, relationship type, target objective, authorizing relationship,
+   * and source attempt) must match provenance exactly -- an activated winner is the direct output of
+   * {@code V6}'s own ranking over its own persisted candidate set, so a match is always required.
+   *
+   * <p><b>{@code V6} fallback:</b> provenance is never required to exist. {@code
+   * HypothesisDrivenProbeDiagnosticSelector.adjustForHypothesisProbe}'s own packet-composition rule
+   * -- and, before that, {@code resolveHypothesisProbeSelection}'s own destination-eligibility gate
+   * -- can legitimately exclude a candidate {@code V5} itself chose from ever reaching {@code
+   * core.diagnostic_probe_provenance} (a band-cap exclusion, decided by mastery/evidence state this
+   * snapshot deliberately never persists -- Amendment 4 sec Z), so a fallback attempt with no
+   * provenance row is never itself a failure. When provenance IS present, its {@code
+   * source_attempt_id} must equal the persisted {@code sourceAttemptId} (both {@code V6} and {@code
+   * V5} resolve the same "immediately preceding completed attempt" fact within the same
+   * transaction), and -- unless {@code V6}'s own working-set walk stopped early at {@code
+   * MAX_AUTHORIZED_HYPOTHESES_V6} -- its full hypothesis/item identity must match one of the
+   * persisted candidate probes: {@code V5}'s own resolution walks the identical (miss, relationship
+   * type) enumeration {@code V6}'s own working-set walk does, so whenever that walk runs to
+   * completion (never capped early), any candidate {@code V5} could possibly choose was already
+   * evaluated -- and, if destination-eligible, already admitted -- by {@code V6} too. Only when
+   * {@code V6}'s walk stopped early can {@code V5}'s own uncapped walk legitimately reach a pair
+   * {@code V6}'s own snapshot never recorded; that divergence is not itself re-derivable without
+   * re-running {@code V5}'s discovery, so it is not treated as corruption.
+   */
+  private String verifyFinalProbeProvenance(
+      UUID destinationAttemptId, DiagnosticSelectionReplayInput snapshot,
+      HypothesisDiscriminationDiagnosticSelector.Decision recomputed,
+      List<CandidateProbe> persistedCandidateProbes, ProbeProvenance provenance) {
+    if (recomputed.activated()) {
+      HypothesisDrivenProbeDiagnosticSelector.Selection winner = recomputed.selection()
+          .orElseThrow(() -> new IllegalStateException("activated Decision must carry a selection"));
+      boolean matches = provenance != null
+          && provenance.attemptId().equals(destinationAttemptId)
+          && Objects.equals(provenance.sourceAttemptId(), winner.sourceAttemptId())
+          && identityMatches(provenance, winner.hypothesis(), winner.chosenItemVersionId());
+      if (!matches) {
+        return "recomputed V6-activated selection (item=%s) has no matching "
+            + "core.diagnostic_probe_provenance row for attempt %s"
+                .formatted(winner.chosenItemVersionId(), destinationAttemptId);
+      }
+      return null;
+    }
+
+    // Fallback: provenance absence is never itself a failure (see javadoc) -- V5's own
+    // packet-composition/band-cap rules can legitimately exclude any candidate from ever reaching
+    // core.diagnostic_probe_provenance, and neither fact is reconstructable from this snapshot.
+    if (provenance == null) {
+      return null;
+    }
+
+    boolean noProbeCouldPossiblyExist =
+        recomputed.sourceAttemptId() == null || recomputed.actionableHypothesisCount() == 0;
+    if (noProbeCouldPossiblyExist) {
+      return "fallback decision (sourceAttemptId=%s, actionableHypothesisCount=%d) could not have "
+          + "produced a hypothesis-driven probe, but core.diagnostic_probe_provenance records one "
+          + "(%s) for attempt %s"
+              .formatted(recomputed.sourceAttemptId(), recomputed.actionableHypothesisCount(),
+                  provenance.itemVersionId(), destinationAttemptId);
+    }
+
+    if (!provenance.attemptId().equals(destinationAttemptId)) {
+      return "core.diagnostic_probe_provenance row's own attempt_id %s does not match destination attempt %s"
+          .formatted(provenance.attemptId(), destinationAttemptId);
+    }
+    if (!Objects.equals(provenance.sourceAttemptId(), snapshot.sourceAttemptId())) {
+      return "core.diagnostic_probe_provenance source_attempt_id %s diverges from the persisted "
+          + "snapshot's sourceAttemptId %s"
+              .formatted(provenance.sourceAttemptId(), snapshot.sourceAttemptId());
+    }
+
+    boolean v6WalkWasGuaranteedComplete = snapshot.actionableHypothesisCount()
+        < HypothesisDiscriminationDiagnosticSelector.MAX_AUTHORIZED_HYPOTHESES_V6;
+    if (v6WalkWasGuaranteedComplete) {
+      boolean matchesAPersistedCandidate = persistedCandidateProbes.stream()
+          .anyMatch(candidate -> identityMatches(provenance, candidate.hypothesis(), candidate.probeItemVersionId()));
+      if (!matchesAPersistedCandidate) {
+        return "core.diagnostic_probe_provenance row (item=%s) does not match any persisted candidate "
+            + "probe for replay input %s, and V6's own working-set walk completed without hitting "
+            + "MAX_AUTHORIZED_HYPOTHESES_V6 -- V5's own pick must have been among V6's own candidates"
+                .formatted(provenance.itemVersionId(), snapshot.id());
+      }
+    }
+    // Else: V6's walk stopped early at the cap -- V5's own, uncapped walk may legitimately have
+    // reached a candidate V6's own snapshot never recorded (see javadoc); not corruption.
+    return null;
+  }
+
+  private static boolean identityMatches(
+      ProbeProvenance provenance, DiagnosticHypothesis hypothesis, UUID probeItemVersionId) {
+    return provenance.itemVersionId().equals(probeItemVersionId)
+        && provenance.sourceItemVersionId().equals(hypothesis.triggerItemVersionId())
+        && provenance.sourceObjectiveId().equals(hypothesis.triggerObjectiveId())
+        && provenance.relationshipType() == hypothesis.relationshipType()
+        && provenance.targetObjectiveId().equals(hypothesis.targetObjectiveId())
+        && Objects.equals(provenance.authorizingRelationshipId(), hypothesis.authorizingRelationshipId());
   }
 }

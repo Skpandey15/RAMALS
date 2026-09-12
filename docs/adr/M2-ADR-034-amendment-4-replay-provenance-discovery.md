@@ -232,3 +232,34 @@ now compared against the recomputed decision, not only `activated`/`fallback_rea
 historical winner's `targetSkillCode` is resolved via a narrow, item-version-scoped lookup
 (`AssessmentRepository.findAdaptiveEligibleItemsForItemVersions`) rather than the destination
 version's whole current item roster.
+
+### Second correction round (PR #279 review, 2026-09-12): `V6` → `V5` fallback provenance
+
+Review found that the first correction round's fallback-path verification checked
+`core.diagnostic_probe_provenance` only negatively (absent when no probe *could* exist), never
+positively when `V5` genuinely had a working candidate set to choose from. Fixing this required
+reading the live `V5` path (`DiagnosticService.resolveHypothesisProbeSelection` and
+`HypothesisDrivenProbeDiagnosticSelector.adjustForHypothesisProbe`) rather than hard-coding a rule,
+which surfaced two real, code-level subtleties the naive "provenance must always exist and must
+always match a persisted candidate" rule would have false-flagged as corruption:
+
+- **Provenance may legitimately be absent even with actionable candidates.** `adjustForHypothesisProbe`'s
+  own doc records that V3's mastery-band packet-composition cap can exclude `V5`'s chosen candidate
+  from the assembled packet entirely, and `DiagnosticService` only writes provenance when the chosen
+  item actually lands in that packet. Whether that exclusion applied is a fact about historical
+  mastery/evidence state the Amendment 4 snapshot deliberately never persists -- so replay never
+  requires provenance to exist for a fallback decision, only verifies it when present.
+- **A present provenance row may legitimately fall outside the persisted candidate set.** `V5`'s own
+  resolution walks the identical (miss, relationship-type) enumeration `V6`'s own working-set walk
+  does, so whenever that walk completes without hitting `MAX_AUTHORIZED_HYPOTHESES_V6` (never capped
+  early), any candidate `V5` could choose was already evaluated -- and, if destination-eligible,
+  already admitted -- by `V6` too, and a match is required. Only when `V6`'s own walk stopped early
+  at the cap can `V5`'s independent, uncapped walk legitimately reach a candidate `V6`'s own snapshot
+  never recorded; that specific divergence is accepted, not flagged, since re-deriving it would mean
+  re-running `V5`'s own discovery.
+
+`provenance.source_attempt_id` matching the persisted snapshot's own `sourceAttemptId`, and
+`provenance.attempt_id` matching the destination attempt, remain unconditional checks regardless of
+the cap. The `V6`-activated path is unchanged in requirement (provenance must always exist and match)
+but now compares the full historical identity -- trigger item/objective, relationship type, target
+objective, authorizing relationship, and source attempt -- not `itemVersionId` alone.

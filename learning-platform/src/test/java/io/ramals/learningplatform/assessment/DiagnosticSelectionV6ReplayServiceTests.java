@@ -403,6 +403,200 @@ class DiagnosticSelectionV6ReplayServiceTests {
     assertThat(result.integrityFailureDetail()).contains("could not have produced a hypothesis-driven probe");
   }
 
+  @Test
+  @DisplayName("fallback decision with a real source attempt but zero actionable hypotheses, and "
+      + "provenance records a probe anyway -> INTEGRITY_FAILURE")
+  void replay_fallbackWithNoActionableHypothesesButProvenanceRecorded_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(
+        header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.NO_ACTIONABLE_HYPOTHESES, 0, 0, 0, 0, null, null)));
+    when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID)).thenReturn(List.of());
+    when(replayInputRepository.findActionableHypotheses(REPLAY_INPUT_ID)).thenReturn(List.of());
+    ProbeProvenance impossible = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, ITEM_A1,
+        SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        TARGET_A, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(impossible));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("could not have produced a hypothesis-driven probe");
+  }
+
+  /**
+   * Deliberately NOT the review-suggested "missing fallback provenance is always INTEGRITY_FAILURE"
+   * rule. Reading the live V5 path ({@code DiagnosticService.resolveHypothesisProbeSelection} +
+   * {@code HypothesisDrivenProbeDiagnosticSelector.adjustForHypothesisProbe}) shows a real, code-level
+   * reason a fallback with actionable candidates can legitimately leave no
+   * {@code core.diagnostic_probe_provenance} row: {@code adjustForHypothesisProbe}'s own doc records
+   * that V3's mastery-band cap can exclude the chosen candidate from the packet entirely ("that skill
+   * simply contributes nothing this round"), and {@code DiagnosticService} only writes provenance
+   * when the chosen item actually lands in the assembled packet. Whether that band-cap exclusion
+   * applied at decision time is a fact about historical mastery/evidence state the Amendment 4
+   * snapshot deliberately never persists, so it is not reconstructable at replay time -- treating
+   * absence here as corruption would be a false positive on legitimate historical data, not a real
+   * integrity check.
+   */
+  @Test
+  @DisplayName("V6 fallback with actionable candidates but no recorded final probe -> still VERIFIED "
+      + "(a legitimate V3 band-cap exclusion, not reconstructable from the persisted snapshot)")
+  void replay_fallbackWithNoRecordedFinalProbe_isStillVerified() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.ALL_SCORES_ZERO)));
+    stubAllScoresZeroFallback();
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of());
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.VERIFIED);
+    assertThat(result.verifiedProbeProvenance()).isNull();
+  }
+
+  @Test
+  @DisplayName("fallback provenance source_attempt_id diverges from the persisted snapshot's "
+      + "sourceAttemptId -> INTEGRITY_FAILURE")
+  void replay_fallbackProvenanceSourceAttemptMismatch_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.ALL_SCORES_ZERO)));
+    stubAllScoresZeroFallback();
+    UUID unrelatedSourceAttempt = UUID.fromString("01900000-0000-7000-8000-0000000a9999");
+    ProbeProvenance wrongSource = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, ITEM_A1,
+        unrelatedSourceAttempt, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        TARGET_A, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(wrongSource));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("source_attempt_id");
+  }
+
+  @Test
+  @DisplayName("fallback provenance item is unrelated to every persisted candidate, and V6's own "
+      + "working-set walk completed without hitting MAX_AUTHORIZED_HYPOTHESES_V6 -> INTEGRITY_FAILURE")
+  void replay_fallbackProvenanceItemNotInSnapshot_capNotHit_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.ALL_SCORES_ZERO)));
+    stubAllScoresZeroFallback();
+    UUID unrelatedItem = UUID.fromString("01900000-0000-7000-8000-0000000a5099");
+    UUID unrelatedTargetObjective = UUID.fromString("01900000-0000-7000-8000-0000000a3099");
+    ProbeProvenance unrelated = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, unrelatedItem,
+        SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE,
+        unrelatedTargetObjective, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(unrelated));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail())
+        .contains("does not match any persisted candidate probe")
+        .contains("MAX_AUTHORIZED_HYPOTHESES_V6");
+  }
+
+  @Test
+  @DisplayName("fallback provenance hypothesis identity (relationshipType) diverges from the "
+      + "matching item's own persisted candidate -> INTEGRITY_FAILURE")
+  void replay_fallbackProvenanceHypothesisIdentityMismatch_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.ALL_SCORES_ZERO)));
+    stubAllScoresZeroFallback();
+    // Same item (ITEM_A1) and source attempt as the real persisted CandidateProbe(ITEM_A1,
+    // HYPOTHESIS_A, ...), but a different relationshipType -- the one field that alone makes this
+    // not the same hypothesis identity.
+    ProbeProvenance wrongRelationshipType = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID,
+        ITEM_A1, SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE,
+        ProbeRelationshipType.CONTRADICTION_CHECK, TARGET_A, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(wrongRelationshipType));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("does not match any persisted candidate probe");
+  }
+
+  @Test
+  @DisplayName("fallback provenance item not in the persisted snapshot IS accepted when V6's own "
+      + "working-set walk hit MAX_AUTHORIZED_HYPOTHESES_V6 -- V5's own uncapped walk can legitimately "
+      + "reach a candidate V6's own snapshot never recorded")
+  void replay_fallbackProvenanceItemNotInSnapshot_capHit_isStillVerified() {
+    UUID targetC = UUID.fromString("01900000-0000-7000-8000-0000000a3003");
+    UUID targetD = UUID.fromString("01900000-0000-7000-8000-0000000a3004");
+    UUID itemC1 = UUID.fromString("01900000-0000-7000-8000-0000000a5003");
+    UUID itemD1 = UUID.fromString("01900000-0000-7000-8000-0000000a5004");
+    DiagnosticHypothesis hypothesisC = new DiagnosticHypothesis(
+        TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE, targetC, AUTHORIZING_RELATIONSHIP);
+    DiagnosticHypothesis hypothesisD = new DiagnosticHypothesis(
+        TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.ROOT_CAUSE_PROBE, targetD, AUTHORIZING_RELATIONSHIP);
+
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    // actionableHypothesisCount == MAX_AUTHORIZED_HYPOTHESES_V6 (4): V6's own walk stopped early.
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(
+        header(SOURCE_ATTEMPT_ID, false, V6FallbackReason.ALL_SCORES_ZERO, 4, 4, 4, 4, "APPLICABLE", "SCORABLE")));
+    HypothesisUncertaintyContext context =
+        new HypothesisUncertaintyContext(SOURCE_ATTEMPT_ID, "KAFKA", List.of(), List.of());
+    when(assembler.assemble(eq(SOURCE_ATTEMPT_ID), any())).thenReturn(context);
+    when(uncertaintyCalculator.calculate(context)).thenReturn(new HypothesisUncertaintyResult(
+        "HYPOTHESIS_UNCERTAINTY_V1", HypothesisUncertaintyStatus.APPLICABLE,
+        List.of(
+            new CandidateUncertainty(HYPOTHESIS_A, DiagnosticConfidenceBand.MODERATE, true, new BigDecimal("0.2500")),
+            new CandidateUncertainty(HYPOTHESIS_B, DiagnosticConfidenceBand.MODERATE, true, new BigDecimal("0.2500")),
+            new CandidateUncertainty(hypothesisC, DiagnosticConfidenceBand.MODERATE, true, new BigDecimal("0.2500")),
+            new CandidateUncertainty(hypothesisD, DiagnosticConfidenceBand.MODERATE, true, new BigDecimal("0.2500")))));
+    when(discriminationCalculator.calculate(any())).thenReturn(new HypothesisDiscriminationResult(
+        "HYPOTHESIS_DISCRIMINATION_V1", HypothesisDiscriminationStatus.SCORABLE,
+        List.of(
+            new CandidateDiscrimination(ITEM_A1, HYPOTHESIS_A, BigDecimal.ZERO),
+            new CandidateDiscrimination(ITEM_B1, HYPOTHESIS_B, BigDecimal.ZERO),
+            new CandidateDiscrimination(itemC1, hypothesisC, BigDecimal.ZERO),
+            new CandidateDiscrimination(itemD1, hypothesisD, BigDecimal.ZERO))));
+    when(replayInputRepository.findCandidateProbes(REPLAY_INPUT_ID)).thenReturn(List.of(
+        new CandidateProbe(ITEM_A1, HYPOTHESIS_A, true), new CandidateProbe(ITEM_B1, HYPOTHESIS_B, true),
+        new CandidateProbe(itemC1, hypothesisC, true), new CandidateProbe(itemD1, hypothesisD, true)));
+    when(replayInputRepository.findActionableHypotheses(REPLAY_INPUT_ID))
+        .thenReturn(List.of(HYPOTHESIS_A, HYPOTHESIS_B, hypothesisC, hypothesisD));
+    lenient().when(repository.findAdaptiveEligibleItemsForItemVersions(any())).thenReturn(List.of(
+        eligibleItem(ITEM_A1, "SKILL_A"), eligibleItem(ITEM_B1, "SKILL_B"),
+        eligibleItem(itemC1, "SKILL_C"), eligibleItem(itemD1, "SKILL_D")));
+    // V5's own uncapped walk reached a fifth (miss, type) pair V6 never got to -- a real item,
+    // unrelated to any of the four persisted candidates above.
+    UUID fifthItem = UUID.fromString("01900000-0000-7000-8000-0000000a5005");
+    UUID fifthTargetObjective = UUID.fromString("01900000-0000-7000-8000-0000000a3005");
+    ProbeProvenance beyondTheCap = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID, fifthItem,
+        SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE, ProbeRelationshipType.SAME_OBJECTIVE_CONFIRMATION,
+        fifthTargetObjective, null);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(beyondTheCap));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.VERIFIED);
+    assertThat(result.verifiedProbeProvenance()).isEqualTo(beyondTheCap);
+  }
+
+  @Test
+  @DisplayName("V6-activated provenance matches itemVersionId but diverges on relationshipType -> "
+      + "INTEGRITY_FAILURE (a matching item id alone is insufficient historical integrity)")
+  void replay_activatedProvenanceFullIdentityMismatch_returnsIntegrityFailure() {
+    when(repository.findAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(Optional.of(destinationAttempt));
+    when(replayInputRepository.findByDestinationAttempt(DESTINATION_ATTEMPT_ID))
+        .thenReturn(Optional.of(header(SOURCE_ATTEMPT_ID, true, null)));
+    stubGenuineTieActivation();
+    // Same winning item (ITEM_B1) and source attempt, but a relationshipType that does not match
+    // HYPOTHESIS_B's own ROOT_CAUSE_PROBE.
+    ProbeProvenance wrongRelationshipType = new ProbeProvenance(UUID.randomUUID(), DESTINATION_ATTEMPT_ID,
+        ITEM_B1, SOURCE_ATTEMPT_ID, TRIGGER_ITEM, TRIGGER_OBJECTIVE,
+        ProbeRelationshipType.PREREQUISITE_VALIDATION, TARGET_B, AUTHORIZING_RELATIONSHIP);
+    when(probeProvenanceRepository.findByAttempt(DESTINATION_ATTEMPT_ID)).thenReturn(List.of(wrongRelationshipType));
+
+    DiagnosticSelectionV6ReplayResult result = service.replay(DESTINATION_ATTEMPT_ID);
+
+    assertThat(result.status()).isEqualTo(DiagnosticSelectionV6ReplayStatus.INTEGRITY_FAILURE);
+    assertThat(result.integrityFailureDetail()).contains("no matching core.diagnostic_probe_provenance row");
+  }
+
   // -- Additional review hardening: persisted audit counts/statuses are integrity-checked too -----
 
   @Test
